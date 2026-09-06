@@ -36,6 +36,62 @@ pub(crate) struct IntakeWrite {
     pub(crate) record_json: String,
 }
 
+/// A job the edge has rendered and is handing to an agent's queue
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// The document arrives pre-serialised to JSON, like [`IntakeWrite`] and [`SubjectWrite`], so the
+/// writer thread stays free of `pos_ports` types — and so this file never has to know that the JSON
+/// it is moving is a receipt that may name a buyer.
+#[derive(Debug, Clone)]
+pub struct QueuedPrintJob {
+    /// The idempotency key, and this table's primary key.
+    pub job_id: String,
+    /// Which store.
+    pub store_id: String,
+    /// The printer the bytes are for.
+    pub printer_device_id: String,
+    /// The agent whose transport reaches that printer.
+    pub agent_device_id: String,
+    /// The rendered `PrintJob`, as JSON.
+    pub document: String,
+}
+
+/// A job an agent has just claimed, with the lease it holds it under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedPrintJob {
+    /// The id the agent acknowledges with.
+    pub job_id: String,
+    /// The printer to open.
+    pub printer_device_id: String,
+    /// The rendered `PrintJob`, as JSON.
+    pub document: String,
+    /// Unix ms after which an unacknowledged claim lapses and the job is claimable again.
+    pub claim_expires_at: i64,
+}
+
+/// What an enqueue did.
+///
+/// There is deliberately no `AgentUnavailable` here. That refusal is decided *before* this table is
+/// touched, from the agent binding and the last time it was heard from — facts the queue does not
+/// hold — and the ordering matters: a queue must not start building behind a box that is not there.
+/// This type reports only what the table itself can decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintEnqueue {
+    /// The row is written.
+    Queued,
+    /// That printer already holds its full allowance of unexpired jobs. Nothing was written.
+    ///
+    /// Not a dead agent — that is refused earlier. This is a *live* agent whose printer is not
+    /// consuming: paper out, cover open, a write that errors and a job that returns to the queue at
+    /// the claim lease, while the till keeps firing.
+    QueueFull,
+    /// A job with this id is already queued, so nothing was written and nothing was duplicated.
+    ///
+    /// `job_id` is the idempotency key, so a redelivered enqueue is the same ticket, not a second
+    /// one. The primary key is what enforces it; this is the outcome the caller sees.
+    AlreadyQueued,
+}
+
 /// A subject row buffered for the settle's transaction
 /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)). The fields arrive pre-serialised
 /// to JSON by the store, so the writer thread stays free of `pos_ports` types — and so this file
@@ -189,6 +245,31 @@ pub(crate) enum Command {
     MaskSubjects {
         store_id: StoreId,
         cutoff_ms: i64,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<u64, PortError>>,
+    },
+    /// Puts a rendered job on an agent's queue, unless the printer is at its cap (ADR-0112).
+    EnqueuePrintJob {
+        job: QueuedPrintJob,
+        queued_at_ms: i64,
+        expires_at_ms: i64,
+        cap: u32,
+        reply: oneshot::Sender<Result<PrintEnqueue, PortError>>,
+    },
+    /// Leases the oldest unexpired, unclaimed job for each printer this agent owns (ADR-0112).
+    ClaimPrintJobs {
+        agent_device_id: String,
+        now_ms: i64,
+        claim_expires_at_ms: i64,
+        reply: oneshot::Sender<Result<Vec<ClaimedPrintJob>, PortError>>,
+    },
+    /// Deletes an acknowledged job, reporting whether it was still there (ADR-0112).
+    AcknowledgePrintJob {
+        job_id: String,
+        reply: oneshot::Sender<Result<bool, PortError>>,
+    },
+    /// Deletes every job past its TTL, reporting how many (ADR-0112).
+    ExpirePrintJobs {
         now_ms: i64,
         reply: oneshot::Sender<Result<u64, PortError>>,
     },
@@ -374,6 +455,40 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(take_lease(&conn, store_id, generation));
+            }
+            Command::EnqueuePrintJob {
+                job,
+                queued_at_ms,
+                expires_at_ms,
+                cap,
+                reply,
+            } => {
+                let _ = reply.send(enqueue_print_job(
+                    &conn,
+                    &job,
+                    queued_at_ms,
+                    expires_at_ms,
+                    cap,
+                ));
+            }
+            Command::ClaimPrintJobs {
+                agent_device_id,
+                now_ms,
+                claim_expires_at_ms,
+                reply,
+            } => {
+                let _ = reply.send(claim_print_jobs(
+                    &conn,
+                    &agent_device_id,
+                    now_ms,
+                    claim_expires_at_ms,
+                ));
+            }
+            Command::AcknowledgePrintJob { job_id, reply } => {
+                let _ = reply.send(acknowledge_print_job(&conn, &job_id));
+            }
+            Command::ExpirePrintJobs { now_ms, reply } => {
+                let _ = reply.send(expire_print_jobs(&conn, now_ms));
             }
             Command::HeldLease { store_id, reply } => {
                 let _ = reply.send(held_lease(&conn, store_id));
@@ -883,6 +998,172 @@ fn take_lease(conn: &Connection, store_id: StoreId, generation: i64) -> Result<i
         |row| row.get::<_, i64>(0),
     )
     .map_err(|error| db_error(port, error))
+}
+
+/// Puts a rendered job on an agent's queue, unless that printer is already at `cap`
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// **The cap is counted per printer and over unexpired rows only.** Per printer, because one jammed
+/// kitchen printer must not consume the receipt printer's budget on the same terminal. Over unexpired
+/// rows, because a job past its TTL is already dead — counting it would refuse a healthy printer on
+/// the strength of tickets nobody will ever collect.
+///
+/// **The count and the insert are one transaction.** Two enqueues racing on the same printer could
+/// otherwise both read `cap - 1` and both write. The single writer thread already serialises them,
+/// but the transaction is what makes that a property of the statement rather than of the thread that
+/// happens to run it.
+///
+/// A second enqueue of the same `job_id` writes nothing and reports [`PrintEnqueue::AlreadyQueued`]:
+/// the id is the idempotency key, so a redelivery is the same ticket.
+fn enqueue_print_job(
+    conn: &Connection,
+    job: &QueuedPrintJob,
+    queued_at_ms: i64,
+    expires_at_ms: i64,
+    cap: u32,
+) -> Result<PrintEnqueue, PortError> {
+    let port = PortName::PrinterDriver;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| db_error(port, error))?;
+    let queued: i64 = tx
+        .query_row(
+            "SELECT COUNT(*) FROM print_jobs WHERE printer_device_id = ?1 AND expires_at > ?2",
+            params![job.printer_device_id, queued_at_ms],
+            |row| row.get(0),
+        )
+        .map_err(|error| db_error(port, error))?;
+    if queued >= i64::from(cap) {
+        return Ok(PrintEnqueue::QueueFull);
+    }
+    let written = tx
+        .execute(
+            "INSERT INTO print_jobs
+                 (job_id, store_id, printer_device_id, agent_device_id, document,
+                  queued_at, expires_at, claim_expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+             ON CONFLICT (job_id) DO NOTHING",
+            params![
+                job.job_id,
+                job.store_id,
+                job.printer_device_id,
+                job.agent_device_id,
+                job.document,
+                queued_at_ms,
+                expires_at_ms,
+            ],
+        )
+        .map_err(|error| db_error(port, error))?;
+    tx.commit().map_err(|error| db_error(port, error))?;
+    if written == 0 {
+        return Ok(PrintEnqueue::AlreadyQueued);
+    }
+    Ok(PrintEnqueue::Queued)
+}
+
+/// Leases the oldest unexpired, claimable job for **each** printer this agent owns
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// One job per printer, never one job per agent: ESC/POS is a byte stream and two concurrent writers
+/// to one printer interleave garbage, so a printer holds at most one job in doubt at a time — which
+/// is also what lets an agent persist a single last-written id per printer rather than a history. But
+/// a jammed device must not stall its neighbours, so an agent with three printers may hold three
+/// jobs, one each.
+///
+/// A job is claimable when it has not expired **and** either was never claimed or its claim has
+/// lapsed. The lapse is what stops an agent that died holding a job from holding it forever.
+///
+/// The `GROUP BY` picks the oldest per printer by `MIN(queued_at)`; SQLite's bare-column rule returns
+/// the row that minimum came from, which is exactly the row wanted. Selection and lease are one
+/// transaction, so two agents cannot both lease the same row.
+fn claim_print_jobs(
+    conn: &Connection,
+    agent_device_id: &str,
+    now_ms: i64,
+    claim_expires_at_ms: i64,
+) -> Result<Vec<ClaimedPrintJob>, PortError> {
+    let port = PortName::PrinterDriver;
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|error| db_error(port, error))?;
+    let claimable: Vec<(String, String, String)> = {
+        let mut statement = tx
+            .prepare(
+                // The `NOT IN` is the one-at-a-time rule, and it is not the same as excluding the
+                // claimed row. Filter only the row and a printer holding a live claim simply yields
+                // its *next* job — two jobs in flight to one print head, which on a byte stream is
+                // interleaved garbage. So a printer with any unexpired live claim is skipped whole.
+                "SELECT job_id, printer_device_id, document, MIN(queued_at)
+                 FROM print_jobs
+                 WHERE agent_device_id = ?1
+                   AND expires_at > ?2
+                   AND (claim_expires_at IS NULL OR claim_expires_at <= ?2)
+                   AND printer_device_id NOT IN (
+                       SELECT printer_device_id FROM print_jobs
+                       WHERE agent_device_id = ?1
+                         AND expires_at > ?2
+                         AND claim_expires_at > ?2
+                   )
+                 GROUP BY printer_device_id",
+            )
+            .map_err(|error| db_error(port, error))?;
+        let rows = statement
+            .query_map(params![agent_device_id, now_ms], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|error| db_error(port, error))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| db_error(port, error))?
+    };
+    let mut claimed = Vec::with_capacity(claimable.len());
+    for (job_id, printer_device_id, document) in claimable {
+        tx.execute(
+            "UPDATE print_jobs SET claim_expires_at = ?2 WHERE job_id = ?1",
+            params![job_id, claim_expires_at_ms],
+        )
+        .map_err(|error| db_error(port, error))?;
+        claimed.push(ClaimedPrintJob {
+            job_id,
+            printer_device_id,
+            document,
+            claim_expires_at: claim_expires_at_ms,
+        });
+    }
+    tx.commit().map_err(|error| db_error(port, error))?;
+    Ok(claimed)
+}
+
+/// Deletes an acknowledged job, reporting whether it was still there
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// `false` is not an error and is a case that happens in service: an acknowledgement that arrives
+/// after the job expired, or a second acknowledgement of a job whose first one was lost on the wire
+/// and redelivered. Both mean *the queue no longer holds this*, which is what the agent wanted, so
+/// the caller reports success either way and this value is for the log.
+fn acknowledge_print_job(conn: &Connection, job_id: &str) -> Result<bool, PortError> {
+    let port = PortName::PrinterDriver;
+    let deleted = conn
+        .execute("DELETE FROM print_jobs WHERE job_id = ?1", params![job_id])
+        .map_err(|error| db_error(port, error))?;
+    Ok(deleted > 0)
+}
+
+/// Deletes every job past its TTL, reporting how many
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+///
+/// Deleted rather than delivered late, and that is the whole argument for the TTL: a ticket printed
+/// an hour late is cooked against a bill that settled and walks out to a table that left, which costs
+/// the food twice. A ticket that visibly failed is a cashier reading a refusal while the guest is
+/// still standing there.
+fn expire_print_jobs(conn: &Connection, now_ms: i64) -> Result<u64, PortError> {
+    let port = PortName::PrinterDriver;
+    let deleted = conn
+        .execute(
+            "DELETE FROM print_jobs WHERE expires_at <= ?1",
+            params![now_ms],
+        )
+        .map_err(|error| db_error(port, error))?;
+    Ok(deleted as u64)
 }
 
 /// The lease generation the store holds, or `None` if it has never taken one — a box the cloud has
