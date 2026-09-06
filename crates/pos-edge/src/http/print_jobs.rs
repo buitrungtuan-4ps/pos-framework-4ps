@@ -8,6 +8,19 @@
 //! `POST /api/print/jobs/{job_id}/ack` says the job is written. There is no third route and no
 //! frame on `/ws` — the queue is the only delivery path.
 //!
+//! # A leased job carries everything the agent needs and nothing it decides
+//!
+//! ADR-0112 states the agent's whole contract: *open this address, write these bytes, report this
+//! id*. So the address, the connection and the capabilities travel **with** the job, resolved here
+//! against the live published `devices` node rather than stored on the queue row — a printer that
+//! was re-addressed since the job was queued is dialled at where it is now, not where it was. The
+//! capabilities are the ones the edge itself assumed when it prepared the document, so an agent
+//! cannot hold a second opinion about a printer's column width, and cannot refuse a raster the
+//! edge had just drawn for it.
+//!
+//! A job whose printer is no longer published is skipped rather than handed over: there is nowhere
+//! to send it, and it expires at its TTL like any other undeliverable job.
+//!
 //! # The paired gate, and no second one
 //!
 //! Both routes carry the paired-device gate **alone**. An agent is an unattended process: nobody is
@@ -45,18 +58,23 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 
-use pos_ports::printer::PrintJob;
+use pos_ports::event_store::EventStore;
+use pos_ports::printer::{PrintJob, PrinterCapabilities, PrinterConnection};
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, EventId};
 
+use crate::app::Edge;
 use crate::clock::SystemClock;
 use crate::http::{bad_request, parse_ulid};
 use crate::print_agent::{AGENT_PARK, CLAIM_LEASE, PrintAgents};
 use crate::print_queue::PrintQueue;
 use crate::print_wake::PrintWake;
+use crate::printing::{Printers, assumed_capabilities, connection_of};
 
-/// The binding, the queue and the wake, plus who is currently parked.
-pub(crate) struct PrintJobDeps<A, Q, W> {
+/// The edge (for the published printer a job names), the binding, the queue and the wake, plus who
+/// is currently parked.
+pub(crate) struct PrintJobDeps<S, A, Q, W> {
+    pub(crate) edge: Arc<Edge<S>>,
     pub(crate) agents: A,
     pub(crate) queue: Q,
     pub(crate) wake: W,
@@ -73,6 +91,13 @@ struct LeasedJob {
     /// The printer to open. Not on the job — a [`PrintJob`] names a *station*, and a receipt has
     /// none at all.
     printer_device_id: String,
+    /// Where to open it: a host and port for a network printer, a device path for a directly
+    /// attached one ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)).
+    address: String,
+    /// Which of those it is. The agent picks its transport from this and nothing else.
+    connection: PrinterConnection,
+    /// What the **edge** assumed this printer can do when it prepared the document below.
+    capabilities: PrinterCapabilities,
     /// Unix milliseconds after which this lease lapses and the job returns to the queue. The agent
     /// has until then to write the bytes and acknowledge.
     claim_expires_at: i64,
@@ -87,17 +112,22 @@ struct LeasedJobs {
     jobs: Vec<LeasedJob>,
 }
 
-/// The two routes, over the binding, the queue and the wake.
-pub(crate) fn router<A, Q, W>(agents: A, queue: Q, wake: W) -> Router
+/// The two routes, over the edge, the binding, the queue and the wake.
+pub(crate) fn router<S, A, Q, W>(edge: Arc<Edge<S>>, agents: A, queue: Q, wake: W) -> Router
 where
+    S: EventStore + Send + Sync + 'static,
     A: PrintAgents + 'static,
     Q: PrintQueue + 'static,
     W: PrintWake + 'static,
 {
     Router::new()
-        .route("/api/print/jobs", get(claim::<A, Q, W>))
-        .route("/api/print/jobs/{job_id}/ack", post(acknowledge::<A, Q, W>))
+        .route("/api/print/jobs", get(claim::<S, A, Q, W>))
+        .route(
+            "/api/print/jobs/{job_id}/ack",
+            post(acknowledge::<S, A, Q, W>),
+        )
         .with_state(Arc::new(PrintJobDeps {
+            edge,
             agents,
             queue,
             wake,
@@ -154,41 +184,76 @@ impl Drop for ParkedOnce<'_> {
 }
 
 /// Renders a claim's result, or the `503` a failed claim gets.
-async fn claim_now<Q: PrintQueue>(
+///
+/// `can_rasterise` is the dispatching [`Printers`]', so the capabilities handed to the agent are
+/// the ones the document was prepared under. A composition with no dispatcher — a route test — is
+/// `false`, which is the truth for it.
+async fn claim_now<S, Q: PrintQueue>(
+    edge: &Edge<S>,
     queue: &Q,
     agent: DeviceId,
     now_ms: i64,
-) -> Result<Vec<LeasedJob>, Response> {
+    can_rasterise: bool,
+) -> Result<Vec<LeasedJob>, Response>
+where
+    S: EventStore + Send + Sync,
+{
     let lease_ms = i64::try_from(CLAIM_LEASE.as_millis()).unwrap_or(i64::MAX);
-    match queue
+    let claimed = match queue
         .claim(agent, now_ms, now_ms.saturating_add(lease_ms))
         .await
     {
-        Ok(claimed) => Ok(claimed
-            .into_iter()
-            .map(|job| LeasedJob {
+        Ok(claimed) => claimed,
+        Err(error) => {
+            tracing::warn!(%agent, %error, "a print agent could not claim from the queue");
+            return Err(store_unavailable("the print queue is unavailable"));
+        }
+    };
+    // Read once, so every job in this answer is resolved against one snapshot of the node.
+    let session = edge.session();
+    Ok(claimed
+        .into_iter()
+        .filter_map(|job| {
+            let Some(printer) = session
+                .devices
+                .devices()
+                .iter()
+                .find(|device| device.device_id == job.printer)
+            else {
+                // Unpublished since the job was queued. There is nowhere to send it, so it is left
+                // to expire rather than handed over with an address made up here.
+                tracing::warn!(
+                    printer = %job.printer,
+                    %agent,
+                    "a queued job names a printer this store no longer publishes"
+                );
+                return None;
+            };
+            Some(LeasedJob {
                 printer_device_id: job.printer.to_string(),
+                address: printer.address.clone(),
+                connection: connection_of(printer),
+                capabilities: assumed_capabilities(printer, can_rasterise),
                 claim_expires_at: job.claim_expires_ms,
                 job: job.job,
             })
-            .collect()),
-        Err(error) => {
-            tracing::warn!(%agent, %error, "a print agent could not claim from the queue");
-            Err(store_unavailable("the print queue is unavailable"))
-        }
-    }
+        })
+        .collect())
 }
 
 /// An agent asks for work, parking for up to [`AGENT_PARK`] if there is none.
-async fn claim<A, Q, W>(
-    State(deps): State<Arc<PrintJobDeps<A, Q, W>>>,
+async fn claim<S, A, Q, W>(
+    State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
+    printers: Option<Extension<Arc<Printers>>>,
 ) -> Response
 where
+    S: EventStore + Send + Sync,
     A: PrintAgents,
     Q: PrintQueue,
     W: PrintWake,
 {
+    let can_rasterise = printers.is_some_and(|Extension(printers)| printers.can_rasterise());
     let agent = match resolve(&deps.agents, device).await {
         Some(Ok(agent)) => agent,
         Some(Err(response)) => return response,
@@ -215,7 +280,7 @@ where
 
     // One park per agent. A second concurrent request reads once and answers, held socket or not.
     let Some(_parked) = ParkedOnce::take(&deps.parked, agent) else {
-        return match claim_now(&deps.queue, agent, now_ms).await {
+        return match claim_now(&deps.edge, &deps.queue, agent, now_ms, can_rasterise).await {
             Ok(jobs) => (StatusCode::OK, Json(LeasedJobs { jobs })).into_response(),
             Err(response) => response,
         };
@@ -229,9 +294,11 @@ where
         // Subscribe, *then* read, never the other way round (ADR-0062).
         let subscription = deps.wake.subscribe(agent);
         let jobs = match claim_now(
+            &deps.edge,
             &deps.queue,
             agent,
             SystemClock.now().as_milliseconds_since_epoch(),
+            can_rasterise,
         )
         .await
         {
@@ -251,12 +318,13 @@ where
 }
 
 /// An agent reports a job written.
-async fn acknowledge<A, Q, W>(
-    State(deps): State<Arc<PrintJobDeps<A, Q, W>>>,
+async fn acknowledge<S, A, Q, W>(
+    State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
     Path(job_id): Path<String>,
 ) -> Response
 where
+    S: EventStore + Send + Sync,
     A: PrintAgents,
     Q: PrintQueue,
     W: PrintWake,

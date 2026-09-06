@@ -191,6 +191,25 @@ picker, the drawer following the printer, and silence reported to the console be
 A store can bind an agent and the edge will queue for it; nothing ships yet that claims from that
 queue in the field.
 
+### Correction — 2026-09-06, the leased job had no address
+
+The slice above shipped `GET /api/print/jobs` handing over the job id and the bytes and **not the
+address**, against this record's own sentence three sections up: *"Its whole contract is open this
+address, write these bytes, report this id."* No agent could have been written against that
+response. A leased job now carries the printer's `address`, its `connection`, and the
+`PrinterCapabilities` the edge assumed when it prepared the document.
+
+All three are resolved at claim time from the live published `devices` node rather than stored on
+the queue row, because a printer re-addressed since the job was queued should be dialled where it is
+now. And the capabilities are the **edge's**, which is the same argument this record makes four
+paragraphs above about rendering, read one step further: an agent computing its own would be a
+second opinion about a printer's column width, and one whose `prints_bitmaps` disagreed would refuse
+a raster the edge had just drawn for it.
+
+A job whose printer the store no longer publishes is skipped rather than handed over with an address
+invented at the route. There is nowhere to send it; it expires at its TTL like any other
+undeliverable job, and the agent's other printers still get their work.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not

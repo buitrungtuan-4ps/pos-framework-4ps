@@ -173,6 +173,7 @@ where
     // Cloned before `edge` and `sessions` move into the routers below.
     let counter_edge = Arc::clone(&edge);
     let agent_edge = Arc::clone(&edge);
+    let jobs_edge = Arc::clone(&edge);
     let sessions_for_counter = Arc::clone(&sessions);
     let sessions_for_agents = Arc::clone(&sessions);
 
@@ -255,7 +256,7 @@ where
     // ticket (ADR-0112). They join the five paired-only routes the edge already serves rather than
     // inventing a sixth kind of gate. The binding is what says which terminal the caller answers
     // for; nothing in the request gets to claim it.
-    let jobs = print_jobs::router(agents, jobs, wake);
+    let jobs = print_jobs::router(jobs_edge, agents, jobs, wake);
 
     guarded
         .merge(session)

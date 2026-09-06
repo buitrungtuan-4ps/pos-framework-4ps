@@ -684,7 +684,12 @@ const ASSUMED_DOTS_PER_LINE: u16 = 576;
 ///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).
 /// - `kicks_drawer: false` — no drawer is opened from here at all. ADR-0100 is explicit that the
 ///   drawer is not this module's decision.
-fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> PrinterCapabilities {
+///
+/// Public because a printer's agent needs the capabilities the **edge** assumed, not its own: the
+/// document it receives was prepared under these, so `prints_bitmaps` disagreeing would make an
+/// agent refuse a raster the edge had just drawn for it (ADR-0112).
+#[must_use]
+pub fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> PrinterCapabilities {
     PrinterCapabilities {
         connection: connection_of(device),
         code_page: CodePage::Ascii,
