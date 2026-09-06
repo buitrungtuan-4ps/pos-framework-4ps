@@ -9,14 +9,17 @@
 [ADR-0112](0112-print-agents.md)
 · Closes the [`server.rs`](../../crates/pos-edge/src/server.rs) drain gap ADR-0110 made load-bearing
 · Does per host what [ADR-0055](0055-edge-ota-updater.md) Amendment 1 does per box
+· Produces the per-store hostname
+[ADR-0111](0111-a-second-origin-may-address-the-edge.md) decides who may use
+· Carries on every job the region
+[ADR-0114](0114-region-is-required-recorded-visible.md) requires
 · Relates to [ADR-0090](0090-tls-postures.md), [ADR-0088](0088-ota-artifact-hosting.md),
 [ADR-0048](0048-ota-rollout-model.md), [ADR-0068](0068-fleet-liveness.md),
 [ADR-0049](0049-single-active-lease.md), [ADR-0108](0108-the-lease-generation-is-authority.md),
-[ADR-0003](0003-cattle-not-pets.md), [ADR-0044](0044-fork-and-deploy.md)
+[ADR-0003](0003-cattle-not-pets.md), [ADR-0044](0044-fork-and-deploy.md),
+[ADR-0037](0037-api-keys.md), [ADR-0046](0046-backups-and-restore.md)
 
-Fourth of the five records on the **Edge Anywhere** programme. **ADR-0111** (a second origin may
-address the edge) and **ADR-0114** (region) are reserved numbers with no files, so they are named
-here in plain text and not linked: `xtask links` fails a build on a link that does not resolve.
+Fourth of the five records on the **Edge Anywhere** programme.
 
 ## The problem
 
@@ -49,7 +52,7 @@ out is a message. Reaching a shell on a machine to start a process is administra
 thing that holds the store's database, and it needs an inbound port on every host, a credential that
 opens it, and a NAT traversal story for regions where there is none.
 
-### A hosted placement that is torn down loses the last minutes of trading
+### A hosted edge placement that is torn down loses the last minutes of trading
 
 Graceful shutdown in [`server.rs`](../../crates/pos-edge/src/server.rs) is
 `axum::serve(listener, …).with_graceful_shutdown(wait_for_shutdown(shutdown_rx))`, and
@@ -59,9 +62,9 @@ requests"*. The publish loop is one of the background tasks that takes the same
 
 In-store that costs little: the machine boots again in the same shop, and
 [`event_publish.rs`](../../crates/pos-edge/src/event_publish.rs) drains from where it left off, because
-*"the outbox holds, and the counter keeps trading"*. A hosted placement being stopped for a move, a
-host being decommissioned, a container being replaced — none of those necessarily come back. ADR-0110
-made this gap load-bearing and named this record as the one that closes it.
+*"the outbox holds, and the counter keeps trading"*. A hosted edge placement being stopped for a move,
+a host being decommissioned, a container being replaced — none of those necessarily come back.
+ADR-0110 made this gap load-bearing and named this record as the one that closes it.
 
 ### A container has no service manager, and the binary has no way to ask for one
 
@@ -105,8 +108,8 @@ the job carries is an ADR-0050 activation code.**
 The store-facing surface grows one family, and it is a copy of the one
 [`relay.rs`](../../crates/pos-cloud/src/relay.rs) already serves:
 
-- `GET /sync/hosts/{host_id}/jobs` — a bounded long-poll returning the pending batch immediately if
-  any, else holding open to a cap.
+- `GET /sync/hosts/{host_id}/jobs` — a bounded long-poll returning the pending batch for this
+  host's region immediately if any, else holding open to a cap.
 - `POST /sync/hosts/{host_id}/jobs/{job_id}/ack` — the agent reports what it did.
 - `POST /sync/hosts/{host_id}/heartbeat` — liveness and capacity, the shape
   [ADR-0068](0068-fleet-liveness.md) already defines.
@@ -130,14 +133,70 @@ NAT works with no port forward, exactly as a store on a 4G SIM does. `pos_cloud`
 dials anything, so ADR-0062's refusal is not weakened by a special case for machines the platform
 happens to own — and machines the platform owns today are machines an operator owns tomorrow.
 
-### A job carries a store id, a release, a hostname and a single-use code
+### A host key is bound to one host in one tenant, and a host is enrolled before it has one
+
+**The scope says what a key may do; the binding says whose data it may do it to, and the binding is
+the isolation.** In the family this copies, `StoredApiKey`
+([`apikey.rs`](../../crates/pos-cloud/src/auth/apikey.rs)) carries a `tenant_id` — *"the one field
+isolation rests on"* — and an optional `store_id`, and every `/sync/stores/{store_id}/…` handler calls
+`require_store(&grant, store_id)` ([`bearer.rs`](../../crates/pos-cloud/src/auth/bearer.rs)) so a key
+issued for store A cannot read store B. Without the equivalent here, any key carrying `run_host_jobs`
+could long-poll `GET /sync/hosts/{any_host_id}/jobs` and collect another host's spawn jobs — each one
+carrying a live single-use activation code for a store — which is fleet-wide credential harvesting in
+the record whose title promises the opposite.
+
+So **`StoredApiKey` gains an optional `host_id` beside `store_id`**, `bearer.rs` gains
+`require_host(&grant, host_id)` as the exact mirror of `require_store`, and all four host routes —
+the three above and the artifact fetch below — call it before they read anything. A key with no
+`host_id` is refused on every one of them: absent is not a wildcard, for the same reason
+[ADR-0114](0114-region-is-required-recorded-visible.md) gives about the region — a wildcard here means
+"any agent may start this store", and that arrives as a race with no human in it.
+
+**A host registration belongs to exactly one tenant, and that is a cost taken deliberately.** The
+alternative is a platform-level host table outside the tenant RLS pattern, and a second isolation model
+in a cloud where every isolation claim rests on one column is how the first cross-tenant read happens.
+One physical machine may carry more than one registration — one per tenant it serves, each with its own
+`host_id`, its own key, its own declared ceiling and its own job stream. The cost is real and is stated
+rather than hidden: nothing sums two registrations' ceilings, so a machine serving two tenants is two
+hosts to the console and to capacity planning. What would change that is a platform-scoped grant kind,
+which is a change to the auth model and needs its own record, not a paragraph in this one.
+
+**A host exists because a person enrolled it.** `POST /admin/hosts` writes the registry row — the
+region, the declared ceiling, a human label — under `ConsolePermission::ManageStores`
+([ADR-0067](0067-multi-admin-console-rbac.md)), the same permission that bumps the lease and sets
+`edge_placement`, because enrolling a machine that may run stores is that class of act. It carries
+`If-Match` ([ADR-0094](0094-console-optimistic-concurrency.md)) and writes an audit entry
+([ADR-0069](0069-audit-trail.md)) under `host.register`, with `host.retire` at the other end. The key
+is minted by the route that already mints keys, `/admin/api-keys`, bound to that `host_id`, carrying
+`run_host_jobs` and nothing else, shown once and never stored — the shape a store's own key already
+has. The agent holds one credential, and it is its own.
+
+### A job carries a store id, a region, a release, a hostname and a single-use code
 
 Three kinds, and no others:
 
-- **`spawn`** — store id, the release tag this store's ring says it should run, its `cloud_url`, its
-  per-store hostname, and a **single-use activation code**.
-- **`stop_and_drain`** — store id, and the drain budget below.
-- **`update`** — store id and a release tag.
+- **`spawn`** — store id, the **region**, the release tag this store's ring says it should run, its
+  `cloud_url`, its per-store hostname, and a **single-use activation code**.
+- **`stop_and_drain`** — store id, the region, and the drain budget below.
+- **`update`** — store id, the region, and a release tag.
+
+The kind is a published enum on the job wire and takes the naming standard's shape
+([ADR-0010](0010-naming-standard.md)): `JOB_KIND_UNSPECIFIED` is the mandatory zero value, and an agent
+that reads it refuses the job rather than guessing which of the three a newer cloud meant, beside
+`JOB_KIND_SPAWN`, `JOB_KIND_STOP_AND_DRAIN` and `JOB_KIND_UPDATE`. The ack's outcome is the same shape
+— `ACK_OUTCOME_UNSPECIFIED`, `ACK_OUTCOME_STARTED`, `ACK_OUTCOME_DRAINED`, `ACK_OUTCOME_NOT_DRAINED`,
+`ACK_OUTCOME_REFUSED` — so a cloud meeting an outcome it predates records an unspecified ack instead of
+reading an unknown token as success.
+
+**Every job carries the region, and the long-poll filters on it.**
+`GET /sync/hosts/{host_id}/jobs` returns only jobs whose region equals the region on that host's
+registry row, and **a job with no region is returned to nobody**. That is the rule ADR-0114 depends on
+and it is not a second vocabulary: the job carries that record's `region_country` and `region_label`
+verbatim, and the match is exact equality on both, with no parsing — `region_label` is opaque there and
+stays opaque here. Equality is safe by construction rather than by luck, because in
+`hosted-by-platform` the console offers the regions enrolled hosts actually declared, so the value on
+the store is one a host already wrote. A job whose region matches no enrolled host stays pending in the
+queue and shows as pending in the console. It is never widened to a host that happens to be free.
 
 The code is minted by the cloud through the route that already mints codes,
 `/admin/activation-codes`, with the same `Issued → Redeemed` single-use rule, the same `Revoked` state
@@ -149,11 +208,11 @@ variable and one branch. `POST /api/activate` is unchanged and is still how a hu
 a shop.
 
 **A fresh code rides every `spawn`, including a restart, and that is correct rather than wasteful.**
-If the container's vault already holds a credential, the second activation is the conflict ADR-0050
-specifies and the edge carries on with what it holds. If it holds none — a first spawn, a rebuilt
-container, a vault that did not survive — it redeems and gets one. Either way the store comes up with
-nobody typing anything, which is what the Start button promised. An unredeemed code is revoked by the
-cloud when the store's next heartbeat proves it did not need one.
+If the container's vault already holds a credential the boot gate never reads the variable, so the code
+is never presented and no second exchange is attempted: it is simply left unredeemed, and the cloud
+revokes it when the store's next heartbeat proves it did not need one. If the vault holds none — a
+first spawn, a rebuilt container, a vault that did not survive — it redeems and gets one. Either way
+the store comes up with nobody typing anything, which is what the Start button promised.
 
 **Minting a second kind of credential would be wrong three times over.**
 
@@ -207,10 +266,23 @@ Each hosted store answers on its own hostname, and the host runs Caddy in front 
 inputs checked and refused loudly when absent, the chosen mode recorded on the box, and `secrets/tls/`
 as the one certificate location with a named populator per mode.
 
-The host's site file is a fifth file in [`deploy/Caddyfile.d/`](../../deploy/Caddyfile.d/) in the same
-shape as the four that exist, importing the shared part exactly as
-[`site.caddy`](../../deploy/Caddyfile.d/site.caddy) is imported today, with the per-store
-`reverse_proxy` pointing at that store's loopback port instead of `pos_cloud:8080`.
+**The host's proxy configuration is its own, and it does not touch the cloud's.** The files in
+[`deploy/Caddyfile.d/`](../../deploy/Caddyfile.d/) are not a library of site fragments: four of them
+are `TLS_MODE` selectors, one of which [`bootstrap.sh`](../../deploy/bootstrap.sh) copies into
+`secrets/Caddyfile` after validating the name against a closed list of exactly those four. Another file
+there would be a fifth posture — the thing the paragraph above forbids — and nothing would ever install
+it. Nor can the host import the shared part: `reverse_proxy pos_cloud:8080` lives *inside*
+[`site.caddy`](../../deploy/Caddyfile.d/site.caddy), so importing it is precisely what pins the
+upstream to the cloud. And that whole directory is mounted by
+[`compose.yml`](../../deploy/compose.yml) into the cloud's Caddy, on a different machine entirely.
+
+So a new `deploy/host/` holds the host's own compose file and one per-store site template the agent
+renders per store: a site address that is the store's hostname, and a health-checked `reverse_proxy` at
+that store's loopback port. What is reused is ADR-0090's **vocabulary and its refusals**, which is
+where that record's content actually is — the same four `TLS_MODE` values, the same per-mode input
+checks that stop the run rather than downgrading, the same `secrets/tls/` as the one certificate
+location with a named populator per mode. Two proxy files that share no lines is the honest cost of two
+machines; the duplication worth refusing is the other one.
 
 Inventing a second posture vocabulary would be wrong for a reason that is not tidiness. ADR-0090's
 real content is its **refusals** — `acme-dns01` with no `CF_DNS_API_TOKEN` stops the run rather than
@@ -223,8 +295,9 @@ translate.
 
 What the hostname is *for* — a browser on a counter reaching an edge that is not on its LAN, and what
 that does to [ADR-0030](0030-pairing-and-offline-auth.md)'s raw-IP pairing URL and to
-`ui/src/api/client.ts`'s same-origin `fetch` — is ADR-0111's subject. This record produces the name;
-that one decides what may use it.
+`ui/src/api/client.ts`'s same-origin `fetch` — is
+[ADR-0111](0111-a-second-origin-may-address-the-edge.md)'s subject. This record produces the name; that
+one decides what may use it.
 
 ### Drain before stop, bounded, and loud when it could not finish
 
@@ -242,18 +315,35 @@ and a host would hang on a container it was told to remove. It is 60 seconds rat
 `event_publish.rs`'s own `RETRY_BACKOFF` is 15 seconds, so a budget under that gives a link that
 hiccuped once no second attempt at all.
 
-**When the budget runs out, the process says so, by name and by count**, and the agent acks
-`not_drained` with the residual depth rather than `drained`. The log line carries the store id and the
-number of undelivered events and nothing else — an outbox record is a domain event, and `AGENTS.md`
-§2 keeps personally identifiable information out of logs. The cloud records the failed drain, and
-ADR-0110's handover states do the rest: a `not_drained` placement is **not `settled`**, so nothing
-about it may be retired and its volume is not deleted. Between the last successful publish and the
-teardown, that volume holds the only copy of those events.
+**When the budget runs out, the process says so in two places the agent can actually read**, and a log
+line is neither of them: this record refused a supervisor that reads log lines two sections above, and
+that refusal stands here. The channel is the pair the agent already owns.
+
+- **An exit code.** `ServeOutcome` gains a third value, `DrainIncomplete`, and
+  [`main.rs`](../../crates/pos-edge/src/main.rs) maps the three onto exit codes — `0` stopped and
+  drained, `10` restart wanted, `11` drain budget spent. An exit code is what a supervisor gets from the
+  runtime it started the process in, with no channel into the container at all.
+- **A status file on the store's own volume.** Before exiting, the edge overwrites one bounded JSON
+  object at `<state>/drain-status.json`: the store id, the outbox depth it stopped at, the budget it
+  spent, and the finish time. The agent reads it because it **owns the volume** — not by exec'ing into a
+  container, not over a debug port, and not by parsing prose. It holds no personally identifiable
+  information: a count is a count, and the outbox records themselves stay where they are, which is what
+  `AGENTS.md` §2 requires.
+
+The agent then acks `ACK_OUTCOME_NOT_DRAINED` carrying that residual count rather than
+`ACK_OUTCOME_DRAINED`. If the file is missing — a `SIGKILL`, a machine that lost power mid-flush — the
+ack still says `not_drained` and carries no count, and the cloud treats an unknown residual exactly as
+it treats a positive one, because both mean *this outbox was not proven empty*. The cloud records the
+failed drain, and ADR-0110's handover states do the rest: a `not_drained` edge placement is **not
+`settled`**, so nothing about it may be retired and its volume is not deleted. Between the last
+successful publish and the teardown, that volume holds the only copy of those events.
 
 One coordinated edit follows and is easy to miss: `TimeoutStopSec=30` in
 [`pos-edge.service`](../../deploy/edge/pos-edge.service) is shorter than a 60-second drain budget, so
 an in-store box would be `SIGKILL`ed mid-flush by the very unit that was supposed to let it finish.
-The unit's stop timeout rises with the budget, in the same change.
+**It becomes 90 seconds**: the 60-second drain budget, plus the in-flight HTTP drain that runs before
+it, plus margin, so systemd is never the thing that ends a flush still inside its own budget. The
+number is the budget's and moves with it; the unit may not be the tighter of the two.
 
 ### Updates: the host re-points the binary, the edge still decides nothing about its own image
 
@@ -261,6 +351,12 @@ An edge in a container **must not install its own release**, and it already does
 `SystemdInstaller::is_ready` looks for `<state>/bin/current` and a container has none, so the box
 *"logs that it found no layout and starts no updater"* and keeps trading. That existing behaviour is
 the correct one and needs no change.
+
+It is also why this section exists, and ADR-0110's Consequences say it in the same words: an operator's
+Linux VPS running [`pos-edge.service`](../../deploy/edge/pos-edge.service) gets the `StateDirectory`,
+the two slots and the atomic symlink rename exactly as an in-shop box does, **so mode 2 gets OTA for
+free and mode 3 does not**. A container is not going to grow a service manager to fix that. The swap
+moves up one level instead, to the agent.
 
 So the host performs the swap, per store, honouring that store's ring. The ring is not the host's to
 choose: it lives in the `device_ota` node the cloud publishes per store
@@ -290,10 +386,11 @@ keeps reporting through the route it already reports on.
 
 **The image contains no release, which is what keeps the trust chain single.** There is one signed
 artifact in this system — the binary, with its detached minisign signature, verified against keys baked
-in at compile time ([`trusted_keys.rs`](../../crates/pos-edge/src/trusted_keys.rs),
-[ADR-0047](0047-minisign-verification.md), [ADR-0092](0092-artifact-trust-chain.md)) — and adding a
-second, image signatures, would mean two answers to "is this release trustworthy" and a day when they
-disagree. So `deploy/edge/Dockerfile` builds a *runtime* image only: CA roots, a fixed uid, and an
+in at compile time ([ADR-0047](0047-minisign-verification.md),
+[ADR-0092](0092-artifact-trust-chain.md)) — and adding a second, image signatures, would mean two
+answers to "is this release trustworthy" and a day when they disagree.
+
+So `deploy/edge/Dockerfile` builds a *runtime* image only: CA roots, a fixed uid, and an
 entrypoint that execs `/opt/pos-edge/current`. It is versionless and the whole platform runs one of
 them. The releases are files on the host, fetched over `GET /sync/hosts/{host_id}/artifact` — the same
 blob [ADR-0088](0088-ota-artifact-hosting.md) already serves to stores at
@@ -302,32 +399,60 @@ blob [ADR-0088](0088-ota-artifact-hosting.md) already serves to stores at
 dumb host ADR-0088 made it; a swapped blob makes an update fail and can never make a store run
 unsigned code.
 
+**There is also one key list, which is the same decision one level down, and it has to move for the
+host to exist at all.** The mechanism that bakes the anchor lives today in
+[`trusted_keys.rs`](../../crates/pos-edge/src/trusted_keys.rs), *inside* `pos-edge`, reading
+`option_env!` at that crate's compile time behind a deliberately private parser — *"there is no public
+function anywhere in `pos-edge` that turns a runtime string into a `PublicKey`"*, so a key can never
+arrive from the channel it protects. `pos_host` may not depend on `pos-edge`, and the same danger
+applies to it: the cloud composes the job, so a host that could take keys from the wire would be
+verifying the composer's artifact against the composer's key. **The module moves to the verifier's own
+crate, [`updater-minisign`](../../crates/adapters/updater-minisign/), unchanged in shape** — the same
+`option_env!`, the same private parser, the same `NotBakedIn` refusal for a build with no anchor — and
+`pos-edge` re-exports it, so no caller of `trusted_keys()` changes. It reads `POS_TRUSTED_KEYS` and
+falls back to `POS_EDGE_TRUSTED_KEYS`, which is the additive rule applied to a build-time input: an
+existing fork's build keeps working untouched.
+
+Sharing the list is not a convenience either. The host verifies *the edge's* release. A second key list
+for one artifact is exactly the "two answers to is this release trustworthy" this section opened by
+refusing, one layer down, and the day they disagree is the day a signed release installs on five hundred
+in-store boxes and is refused by the host that was supposed to check it first.
+
 This is also the honest answer to ADR-0110's *"there is no edge image"*: there is now an edge runtime
 image, and it is empty of edge.
 
 ### Capacity and liveness land in the fleet read model that exists
 
-A host heartbeats on the shape [ADR-0068](0068-fleet-liveness.md) already defines, into the same
-liveness capture (`store_liveness`, migration
-[`0020_store_liveness.sql`](../../crates/adapters/store-postgres/migrations/0020_store_liveness.sql)),
-and surfaces on the routes that already exist: `/admin/fleet` and `/admin/fleet/{store_id}`.
-`FleetStoreView` gains the host that runs the store; the fleet list gains host rows beside store rows.
-Online/offline stays derived at read time against `FLEET_ONLINE_THRESHOLD_MS`, never stored, exactly as
-that record settled.
+A host heartbeats in the **shape** [ADR-0068](0068-fleet-liveness.md) defines — one `last_seen_at`,
+upserted on contact, with online/offline derived at read time against `FLEET_ONLINE_THRESHOLD_MS` and
+never stored, exactly as that record settled — but **not into `store_liveness`**. That table is
+[`0020_store_liveness.sql`](../../crates/adapters/store-postgres/migrations/0020_store_liveness.sql),
+`PRIMARY KEY (tenant_id, store_id)` with both columns `NOT NULL`, and its header says why: *"the
+store's liveness is its tenant's data"*. A host is not a store and has no store id, so it has no row to
+occupy there, and widening the key of the table the fleet console reads so it can admit a different
+kind of thing is how a read model stops meaning one thing.
 
-Capacity is two numbers on a host's row: how many edges it is running, and the ceiling the operator
-**declared** for it. Declared, never inferred — an inferred ceiling is a bin-packer that nobody named
-and nobody can predict.
+So the host's `last_seen_at` sits on its own registry row in `0052_host_agents.sql`, keyed
+`(tenant_id, host_id)` and RLS-isolated by the same policy shape — which it can be, because the section
+above bound a host registration to exactly one tenant. `/admin/fleet` and `/admin/fleet/{store_id}` are
+still the only fleet routes: the list renders host rows beside store rows by reading both captures, and
+the store detail shows the store's own liveness and, under it, the liveness of the host running it.
+`FleetStoreView` gains the host that runs the store.
+
+Capacity is two more numbers on that same row: how many edges it is running, and the ceiling the
+operator **declared** for it. Declared, never inferred — an inferred ceiling is a bin-packer that
+nobody named and nobody can predict.
 
 A second console would be wrong for one reason that outranks the others. During an incident the
 question is "is this store trading?", and for a hosted store the answer is two facts stacked: the
 store's own liveness and the liveness of the host under it. Two screens means the second one is not
 open at 19:30 on a Friday, which is the hour ADR-0110 and
 [ADR-0001](0001-offline-first-store-autonomy.md) both keep pointing at. O2
-([ADR-0073](0073-alerting.md), [`alerts/model.rs`](../../crates/pos-cloud/src/alerts/model.rs)) gains
-one kind beside `StoreOffline` and `RelayBacklog`: `host_unreachable`, `Critical`, because every store
-on a silent host is a hosted store, and ADR-0110 established that a hosted store nobody can reach is a
-store that is not selling.
+([ADR-0073](0073-alerting.md), [`alerts/model.rs`](../../crates/pos-cloud/src/alerts/model.rs)) gains a
+sixth kind beside the five it has: `host_unreachable`. Its severity is `Critical`, which is one more
+arm in `default_severity`'s match on kind rather than a stored field, because every store on a silent
+host is a hosted store, and ADR-0110 established that a hosted store nobody can reach is a store that
+is not selling.
 
 ### ADR-0002 settled: a third binary, `pos_host`
 
@@ -365,9 +490,12 @@ today, and nobody ships those as one artifact.
 device-level artifacts that decide nothing.** `pos_edge` and `pos_cloud` are unchanged.
 `pos_print_agent` (ADR-0112) and `pos_host` are the two exceptions, each named, each with the tier it
 serves, and each bound by the rule that keeps the exception from becoming a habit: **no domain code.**
-`pos_host` may depend on `pos-proto` for the job wire and on the signature verifier, and on nothing
-else in the workspace — no `pos-core`, no `pos-edge`, no `store-sqlite`. That is a dependency list a
-`cargo-deny`-style check can hold, exactly as ADR-0112 said of the print agent.
+`pos_host` may depend on exactly three workspace crates and no others: `pos-proto` for the job wire,
+`updater-minisign` for the signature check, and `pos-ports` for the `PublicKey` and signer types that
+verifier speaks in. `pos-ports` is named rather than implied because a list that omits a transitive
+requirement is a list no check can be written against. No `pos-core`, no `pos-edge`, no `store-sqlite`:
+the host holds no domain code, no store schema, and nothing that can open a store's database. That is a
+dependency list a `cargo-deny`-style check can hold, exactly as ADR-0112 said of the print agent.
 
 ### When a host dies, a person moves the store, and open orders are lost
 
@@ -384,11 +512,11 @@ worst possible moment: a host is declared dead when it is *unreachable*, and an 
 most often a host that is still running. A supervisor that reasons "I cannot see it, therefore it has
 stopped" is a supervisor that starts a second copy of a shop that is currently selling.
 
-So a dead host is a **placement move**, run by a person, through the choreography ADR-0110 already
-fixed and already made boring: stand the new placement up, activate it, bump the lease, wait for
-`settled`, retire the old. Pressing Start on a host in another region is the "stand up" step. Nothing
-else about the procedure changes, and it is the same procedure whether the store is moving between
-hosts, from a host back into a shop, or from a shop onto a host.
+So a dead host is an **edge-placement move**, run by a person, through the choreography ADR-0110
+already fixed and already made boring: stand the new edge placement up, activate it, bump the lease,
+wait for `settled`, retire the old. Pressing Start on a host in another region is the "stand up"
+step. Nothing else about the procedure changes, and it is the same procedure whether the store is
+moving between hosts, from a host back into a shop, or from a shop onto a host.
 
 What is lost, plainly:
 
@@ -411,6 +539,27 @@ What is lost, plainly:
   guests. There is no version of this record in which that is not true, and softening it in the
   console would only mean somebody discovers it during service.
 
+**And there is no per-store backup tier, which is the answer to ADR-0110's assignment rather than a
+silence about it.** That record hands this one "the per-store isolation and the backups that follow
+from it", and what follows from it is none. Take the three things a store's volume holds. Committed and
+published events are already in the cloud, whose own backups
+[ADR-0046](0046-backups-and-restore.md) owns — WAL archiving, the tiers, the weekly restore drill —
+and nothing here changes them. The local projection is derived and rebuilds from the log. What is left
+is the unpublished tail, and a snapshot cannot bound *that*: the events that matter are by definition
+the ones written since the last successful publish, and a nightly copy taken at 03:00 does not contain
+the sale taken at 19:45. What actually bounds the tail is in this record already — the drain that must
+empty the outbox before a stop may report success, and ADR-0110's rule that nothing is deleted before
+`settled`.
+
+The second reason is one a framework may not decide on an operator's behalf. A store's volume holds
+employee records and order history, so a snapshot of it is a **second resting place for that data**,
+with its own country, its own retention and its own lawful basis.
+[ADR-0114](0114-region-is-required-recorded-visible.md) is explicit that the framework never sees where
+[`backup.sh`](../../deploy/backup.sh) ships bytes, and
+[ADR-0035](0035-retention-and-pii-masking.md) owns how long anything is kept. A fork that wants
+per-store snapshots adds them at the host with those two answers written down first; it does not get
+them by default from a framework that can answer neither.
+
 ## What this deliberately does not do
 
 - **The cloud still never dials a host.** Every job is pulled, every ack is pushed by the agent, and
@@ -428,8 +577,8 @@ What is lost, plainly:
   a person and a job that would exceed it is refused at the ack, not queued and not "fitted
   somewhere". Any scheduler that moves stores between hosts is a scheduler that *starts* stores, and
   starting a store is a lease act with a named admin and an audit entry on it. At 500 stores over
-  around five countries the arithmetic does not ask for one either: a placement is a long-lived fact
-  about a shop, not a workload with a duration.
+  around five countries the arithmetic does not ask for one either: an edge placement is a long-lived
+  fact about a shop, not a workload with a duration.
 - **It makes no promise about a host pool the operator has not provisioned.** The Start button is
   offered only where a host with declared capacity exists in the chosen region; where none does, the
   console says so and offers `in-store` and `hosted-by-operator`. ADR-0110 kept the framework neutral
@@ -438,7 +587,9 @@ What is lost, plainly:
 - **It does not give the host a way into a running store.** No exec, no debug endpoint, no log tail
   into a container from the job wire. A host that can exec into a store's container can read that
   store's database, and then every isolation claim above is a claim about intent rather than about
-  capability.
+  capability. The drain's status file is not an exception to this and is why it takes the shape it
+  does: the agent reads a file on a volume it already owns, after the process has exited, and gains
+  nothing it did not already have.
 - **It does not solve the container's vault durability, and it is built so that it does not have to.**
   [ADR-0086](0086-edge-keyvault-and-activation.md) flagged headless Linux: the `linux-native` kernel
   keyring is sessionless but volatile, and the durable answer is a TPM-sealed credential that a
@@ -450,40 +601,65 @@ What is lost, plainly:
   reasoned from `RETRY_BACKOFF` and a plausible batch, and no hosted store has ever been torn down.
   Both live in one module as constants rather than published configuration, so changing one is a
   release and not a schema change, and that is where they stay until a real teardown produces a number.
-- **It does not fix Windows.** A hosted placement is a Linux placement, as ADR-0110 said; issue #182 is
-  neither blocked by this record nor closed by it.
+- **It does not put a hosted edge on Windows.** A hosted edge placement is a Linux one, as ADR-0110
+  said, and nothing here changes what an in-shop Windows box already has: a service wrapper
+  ([`service.rs`](../../crates/pos-edge/src/service.rs)) and a generated installer
+  ([`install-pos-edge.ps1`](../../deploy/edge/install-pos-edge.ps1), emitted by
+  [`installers.mjs`](../../dashboard/src/installers.mjs), regenerated and diff-checked by the
+  `dashboard` CI job and syntax-checked by
+  [`installer-syntax.mjs`](../../dashboard/scripts/installer-syntax.mjs)). It keeps both. Mode 3 is
+  Linux containers because that is what the isolation above is written in.
 - **It does not put `pos_host` in the OTA rings.** The host ships on the cloud's cadence, because it is
   a platform machine. Putting a supervisor in the same rollout as the thing it supervises is how a
   canary takes out its own observer.
-- **It does not choose a region, and does not say what may rest in one.** That is ADR-0114. This record
-  hands it a pool to choose from.
+- **It does not choose *which* region a store goes in, and does not say what may rest in one.** Every
+  job carries a region and the long-poll filters on it, as decided above — that much is this record's,
+  because it is a property of the wire. What the region *means* — whether an edge placement is lawful,
+  whether a transfer is covered, who was told — is
+  [ADR-0114](0114-region-is-required-recorded-visible.md)'s, and this record hands it a pool to choose
+  from.
 - **It does not re-provision an existing store's scoped key.** The `ActivationGrant` field is filled on
   a *new* activation; every box already holding a key keeps it and keeps ADR-0086's env-override path.
 
 ## Consequences
 
-- A third workspace binary, `pos_host`, permitted to depend on `pos-proto` and the signature verifier
-  and nothing else in the workspace. [ADR-0002](0002-one-binary-per-tier.md) is amended to three tiers
-  plus two named device-level artifacts, and gains the "decides nothing" rule that bounds the
-  exception.
+- A third workspace binary, `pos_host`, permitted to depend on `pos-proto`, `updater-minisign` and
+  `pos-ports` — and on nothing else in the workspace. [ADR-0002](0002-one-binary-per-tier.md) is
+  amended to three tiers plus two named device-level artifacts, and gains the "decides nothing" rule
+  that bounds the exception.
 - The cloud serves four new store-family routes — `GET /sync/hosts/{host_id}/jobs`,
   `POST /sync/hosts/{host_id}/jobs/{job_id}/ack`, `POST /sync/hosts/{host_id}/heartbeat` and
   `GET /sync/hosts/{host_id}/artifact` — all behind one new deny-by-default scope,
-  `Scope::RunHostJobs` (`run_host_jobs`). Internal to the fleet, so they stay out of
+  `Scope::RunHostJobs` (`run_host_jobs`), and all four calling `require_host(&grant, host_id)` before
+  they read anything. `StoredApiKey` gains an optional `host_id` beside `store_id`, and
+  [`bearer.rs`](../../crates/pos-cloud/src/auth/bearer.rs) gains `require_host` as the mirror of
+  `require_store`. Internal to the fleet, so the routes stay out of
   [`docs/openapi.json`](../openapi.json) exactly as the other `/sync` routes do.
-- `crates/adapters/store-postgres/migrations/0052_host_agents.sql`: the host registry, its declared
-  capacity, and the job queue the long-poll reads — the `order_queue` shape one table over, RLS-isolated
-  like every other cloud table, additive per [ADR-0017](0017-migrations.md).
-- `RelayWake` gains a third and fourth waiter class for the job legs, and inherits the clamp that keeps
-  the fallback re-read from computing to zero.
+- Two new `/admin` routes enrol and retire a host — `POST /admin/hosts` and
+  `POST /admin/hosts/{host_id}/retire` — under `ConsolePermission::ManageStores`, with `If-Match` and
+  the audit actions `host.register` and `host.retire`. The agent's key is issued through the existing
+  `/admin/api-keys`, bound to that `host_id` and carrying `run_host_jobs` alone.
+- `crates/adapters/store-postgres/migrations/0052_host_agents.sql`: the host registry — one row per
+  registration, keyed `(tenant_id, host_id)`, carrying the region, the declared ceiling, the running
+  count and `last_seen_at` — and the job queue the long-poll reads, the `order_queue` shape one table
+  over, carrying the region every job is filtered on. RLS-isolated by the same policy shape as
+  `store_liveness`, additive per [ADR-0017](0017-migrations.md). Host liveness lives here rather than in
+  `store_liveness`, which is keyed on a store id a host does not have.
+- `RelayWake` gains a third and fourth waiter class for the job legs, and the job long-poll takes the
+  *store* long-poll's shape rather than the parked-submit one: `FALLBACK_INTERVAL` under the fixed
+  `LONGPOLL_CAP` ([`relay.rs`](../../crates/pos-cloud/src/relay.rs)). It does not use `fallback_for`,
+  whose `min(wait / 2)` clamp exists for the submit park's caller-supplied deadline and has nothing to
+  clamp against a fixed interval under a fixed cap.
 - `/admin/fleet` and `/admin/fleet/{store_id}` render hosts beside stores off one read model.
   `FleetStoreView` gains the host that runs the store. Online/offline stays derived at read time.
-- O2 gains `AlertKind::HostUnreachable`, `Critical`, and one more row in the alert kind's `ALL`.
+- O2 gains `AlertKind::HostUnreachable`: one more variant, one more row in `ALL`, one more token in
+  `as_str`, and one more arm in `default_severity` returning `Critical` — severity is derived from the
+  kind there, not stored on the alert.
 - Standing a store up in mode 3 is an `/admin` write and inherits what that implies:
   `ConsolePermission::ManageStores` ([ADR-0067](0067-multi-admin-console-rbac.md)) — the same
-  permission that bumps the lease and sets placement, because they are one class of act — `If-Match`
-  ([ADR-0094](0094-console-optimistic-concurrency.md)), and an audit entry naming the admin and the
-  host ([ADR-0069](0069-audit-trail.md)).
+  permission that bumps the lease and sets `edge_placement`, because they are one class of act —
+  `If-Match` ([ADR-0094](0094-console-optimistic-concurrency.md)), and an audit entry naming the admin
+  and the host ([ADR-0069](0069-audit-trail.md)).
 - `ActivationGrant` gains an optional scoped key.
   [`activation.rs`](../../crates/pos-edge/src/activation.rs) stores it under `SecretName::SyncKey`
   before it announces success, in the order the vault-is-the-truth rule already requires. Additive,
@@ -492,24 +668,46 @@ What is lost, plainly:
   vault is empty. It is not a config field and not a secret worth protecting: a spent code grants
   nothing.
 - [`server.rs`](../../crates/pos-edge/src/server.rs) gains a bounded outbox flush in the shutdown path
-  and a named log line when it does not finish; `TimeoutStopSec` in
-  [`pos-edge.service`](../../deploy/edge/pos-edge.service) rises with the budget in the same change.
-  ADR-0110's `settled` state stops depending on reading `outbox_depth` off a heartbeat and hoping.
-- [`main.rs`](../../crates/pos-edge/src/main.rs) turns `ServeOutcome` into an exit code. `systemd` does
-  not care, the Windows wrapper already reads the outcome, and a host agent finally can.
-- `deploy/edge/Dockerfile`: a versionless runtime image with no release in it, and a fifth file under
-  [`deploy/Caddyfile.d/`](../../deploy/Caddyfile.d/) for the per-store host site, importing the same
-  shared part so the proxy configuration still exists once.
-- **The word `placement` now has two meanings in the tree and one of them is older.**
-  [`ota_state.rs`](../../crates/pos-edge/src/ota_state.rs) calls the `device_ota` ring-and-canary
-  assignment a placement — *"no placement means the device cannot be weighed"* — and ADR-0110 gave the
-  word to the store attribute. This record reads both in the same paragraph, so the OTA one is renamed
-  to `assignment` (its type is already `DeviceOtaAssignment`) in the same change. A word that means two
-  things is a bug report waiting to be misfiled.
+  and writes `<state>/drain-status.json` when it does not finish; `TimeoutStopSec` in
+  [`pos-edge.service`](../../deploy/edge/pos-edge.service) becomes 90 seconds in the same change.
+  ADR-0110's `settled` gains a **second and stronger proof beside the one it has**, not a replacement:
+  that record proves a handover settled by reading `outbox_depth` off the heartbeat *rather than by
+  stopping the process and hoping*, and a process that exited having emptied its outbox proves the same
+  fact without waiting for another heartbeat. The heartbeat reading stays, and `settled` still requires
+  it.
+- `ServeOutcome` gains `DrainIncomplete`, and [`main.rs`](../../crates/pos-edge/src/main.rs) turns the
+  three outcomes into exit codes `0`, `10` and `11`. `systemd` does not care, the Windows wrapper
+  already reads the outcome, and a host agent finally can.
+- `trusted_keys.rs` moves from `pos-edge` to
+  [`updater-minisign`](../../crates/adapters/updater-minisign/) with its private parser and its
+  `option_env!` discipline intact, re-exported from `pos-edge` so no caller changes. It reads
+  `POS_TRUSTED_KEYS` and falls back to `POS_EDGE_TRUSTED_KEYS`, so an existing fork's build keeps
+  working.
+- `deploy/edge/Dockerfile`: a versionless runtime image with no release in it. A new `deploy/host/`
+  holds the host's compose file and the per-store site template the agent renders;
+  [`deploy/Caddyfile.d/`](../../deploy/Caddyfile.d/) is untouched, because its four mode files are
+  `TLS_MODE` selectors [`bootstrap.sh`](../../deploy/bootstrap.sh) validates against a closed list, and
+  a fifth would be a fifth posture.
+- **The vocabulary is `edge_placement`, and this record renames neither older `placement`.** ADR-0110
+  settled it: `MenuPlacement`'s `/admin/catalog/menus/{menu_id}/placements` and the OTA rollout's
+  `/admin/config/ota/placement` — whose refusal in
+  [`ota_state.rs`](../../crates/pos-edge/src/ota_state.rs) reads *"no placement means the device cannot
+  be weighed"* — keep their names, because renaming a published route to free up a word would break the
+  additive rule for a problem a longer name already solves. The store attribute is `edge_placement` in
+  the column, the JSON field and the configuration vocabulary, `EdgePlacement` in Rust, and
+  `EDGE_PLACEMENT_UNSPECIFIED`, `EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR`,
+  `EDGE_PLACEMENT_HOSTED_BY_PLATFORM` on the wire per [ADR-0010](0010-naming-standard.md). This record
+  uses that word and never the bare one for this concept.
+- **No backup tier is added, and no `deploy/backup.sh` behaviour changes.** A store's volume is not
+  snapshotted: the published events are in the cloud under [ADR-0046](0046-backups-and-restore.md), the
+  projection is derived, and the unpublished tail is bounded by the drain and by ADR-0110's rule that
+  nothing is deleted before `settled`. That is this record's answer to the backups ADR-0110 assigned
+  it, and it is an answer rather than a deferral.
 - [`docs/glossary.md`](../glossary.md) gains **Host agent** — *the supervisor that starts and stops
-  platform-hosted edges on one machine* — beside ADR-0110's **Placement** and ADR-0112's **Print
+  platform-hosted edges on one machine* — beside ADR-0110's **Edge placement** and ADR-0112's **Print
   agent**.
-- Nothing published is removed or renamed. One scope, four routes, one migration, one alert kind, one
-  optional grant field, one environment variable, one exit code and one runtime image are all
-  additions, and no `PROTOCOL_VERSION` moves — the edge is not told it is hosted, because it does not
-  need to know.
+- Nothing published is removed or renamed. One scope, four `/sync` routes, two `/admin` routes, one
+  optional key binding, one migration, one alert kind, two audit actions, one optional grant field, one
+  environment variable, two job-wire enums with their `*_UNSPECIFIED` zero values, one exit code and one
+  runtime image are all additions, and no `PROTOCOL_VERSION` moves — the edge is not told it is hosted,
+  because it does not need to know.

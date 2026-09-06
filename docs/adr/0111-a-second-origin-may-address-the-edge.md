@@ -262,16 +262,24 @@ not a use case; a shell that wants the app bundles it.
 
 [ADR-0112](0112-print-agents.md) adds four `/api/*` routes in the same programme —
 `POST /api/print/agent`, `POST /api/print/agent/revoke`, `GET /api/print/jobs` and
-`POST /api/print/jobs/{job_id}/ack` — all behind the paired-device token, all called by a paired
-device that has claimed an agent identity. A print agent running in a native shell is precisely the
+`POST /api/print/jobs/{job_id}/ack`. A print agent running in a native shell is precisely the
 cross-origin caller this record exists for: it is a paired device, it is not served by the edge, and
 if its long-poll is refused by the browser rule then nothing prints.
 
-**All four are covered**, on the same paired-device basis as `/api/pair/devices` and
-`/api/pair/revoke`. The rule at the top of this section already says so — a paired device calls them
-in the course of trading — and this paragraph exists only to record that the two records were
-checked against each other rather than left to assume. When ADR-0112 lands, the edge serves
-thirty-one `/api/*` routes and thirty are covered.
+**All four are covered, and they do not all carry the same gates.** ADR-0112 sets them and the census
+above has to match it, so it is spelled out rather than summarised. `POST /api/print/agent` and
+`POST /api/print/agent/revoke` sit behind the paired-device gate **and** a signed-in employee holding
+`Permission::ManageDevices` — claiming or releasing a printer is a human act, so those two are
+*stronger* than `/api/pair/revoke`, not equal to it. `GET /api/print/jobs` and
+`POST /api/print/jobs/{job_id}/ack` sit behind the paired-device gate alone, because an agent is an
+unattended process and a PIN before every kitchen ticket would be absurd; those two are the ones
+comparable to `/api/pair/devices`.
+
+The distinction is not pedantry here: this record's census turns on which routes lack the signed-in
+gate, and the wildcard argument below is about exactly those. The two job routes join that group; the
+two human acts do not. This paragraph exists only to record that the two records were checked against
+each other rather than left to assume. When ADR-0112 lands, the edge serves thirty-one `/api/*`
+routes, thirty are covered, and nine rather than seven lack a signed-in employee.
 
 A `pos_print_agent` that is a headless native process rather than a browser is not bound by CORS at
 all; it sends whatever `Origin` it likes, or none. The coverage matters for the shell case, where the
@@ -744,11 +752,16 @@ the whole answer, and the S4 budget was never designed to be one for an internet
   ([`config_client.rs`](../../crates/pos-edge/src/config_client.rs)) gains an `origins` branch
   **beside** `session_from_config` rather than inside it — `session_from_config` returns an
   `EdgeSession` for the application layer and the router cannot read one — parsing and validating the
-  node under the never-blank rule and calling `Origins::replace`. The cloud gains a publish route
-  behind
-  `ConsolePermission::ManageStores` ([ADR-0067](0067-multi-admin-console-rbac.md)) with `If-Match`
-  ([ADR-0094](0094-console-optimistic-concurrency.md)) and an audit entry naming the acting admin
-  ([ADR-0069](0069-audit-trail.md)) — the same three things every other `/admin` write carries.
+  node under the never-blank rule and calling `Origins::replace`. The cloud gains a publish route of the
+  shape every other config node already uses: behind
+  `ConsolePermission::PublishConfig` ([ADR-0067](0067-multi-admin-console-rbac.md)), with an audit
+  entry naming the acting admin ([ADR-0069](0069-audit-trail.md)), and — like its eleven siblings —
+  **no `If-Match`**. That is not an omission. `publish_config_nodes`
+  ([`http.rs`](../../crates/pos-cloud/src/http.rs)) takes no `HeaderMap`, so it could not read one,
+  and the code gives the reason: *"a node publish sets one key and commutes with the others, so it
+  retries."* Conditional writes on the config tree are `PUT /admin/config` and the version restore
+  ([ADR-0095](0095-conditional-writes-for-collections.md)), not a node publish. `origins` is a node, so
+  it takes the node's contract rather than inventing a twelfth.
 - **`origins` makes ADR-0033's deferred fan-out cost visible.** Its value is identical for every store
   under a brand, and ADR-0033 records that *"a shared Tenant/Brand layer that fans out to every store
   under it is a future modeling step; today each store's tree holds its own four layers."* So
