@@ -26,6 +26,17 @@
 //! the thirtieth record's position and re-sends the rest on the next pass. Acknowledging the whole
 //! batch would silently drop the tail, and re-sending the whole batch would make a link that is 60%
 //! healthy behave like one that is 0% healthy.
+//!
+//! # Why a stopping store drains first
+//!
+//! On a box in a shop, a stop that leaves events in the outbox costs nothing: the SQLite file
+//! survives, and the next boot publishes them. That stops being true the moment the *placement* is
+//! torn down rather than restarted
+//! ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)) — a hosted edge's
+//! container and its volume go together, and unsent events go with them. So a stop asks the loop
+//! for one last drain, bounded by [`DRAIN_BUDGET`], and says plainly in the log whether it
+//! finished. The budget is what keeps a stop a stop: a store whose cloud is unreachable must still
+//! exit, and its events must still be in its own database when it does.
 
 use core::future::Future;
 use core::num::NonZeroU32;
@@ -51,6 +62,39 @@ const RETRY_BACKOFF: Duration = Duration::from_secs(15);
 /// retry in seconds will not fix; back off far enough to be visible in a log rather than to drown it
 /// ([`pos_proto::protocol`] is explicit that a refusal must not become a tight loop).
 const REFUSED_BACKOFF: Duration = Duration::from_secs(300);
+
+/// How long a stopping store spends emptying its outbox before it exits anyway.
+///
+/// Bounded, and bounded *well* under the service manager's own patience: `pos-edge.service` sets
+/// `TimeoutStopSec=30`, and a drain that outlived it would be killed mid-batch rather than allowed
+/// to finish — the same outcome as not draining, reached more slowly. Ten seconds leaves the
+/// in-flight HTTP drain and process teardown the rest.
+const DRAIN_BUDGET: Duration = Duration::from_secs(10);
+
+/// How long [`crate::server::serve_until`] waits for that last drain before it stops waiting.
+///
+/// The drain bounds itself to [`DRAIN_BUDGET`], so this is that budget plus the headroom one
+/// in-flight publish needs to return — enough that a loop obeying its own budget is always waited
+/// out, and short enough that a link wedged inside a single call cannot hold the process open past
+/// `TimeoutStopSec`. Whoever waits owns the deadline; the loop does not get to overrun it.
+pub(crate) const STOP_GRACE: Duration = Duration::from_secs(15);
+
+/// What one pass over the outbox did.
+///
+/// Three outcomes rather than a count, because `0` was ambiguous in the one place it mattered: an
+/// empty outbox and a link that accepted nothing both published nothing, and only the first means
+/// the store is safe to stop. The main loop idles on either; the stopping drain must tell them
+/// apart, and a log line that called a stalled link "drained" would be a lie told at exactly the
+/// wrong moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drained {
+    /// The outbox held nothing: every committed event has been acknowledged.
+    Empty,
+    /// This many records were acknowledged. More may be waiting.
+    Published(usize),
+    /// Records were read and the link accepted none of them. Nothing is lost; nothing moved.
+    Stalled,
+}
 
 /// The position to acknowledge through for an accepted prefix, and how many records that is.
 ///
@@ -150,7 +194,7 @@ where
     /// [`pos_ports::PortError`] if the outbox could not be read, the publish failed, or the
     /// acknowledgement did not land. Every one of those leaves the outbox intact: the same records
     /// are re-read next pass.
-    async fn drain_once(&self) -> Result<usize, pos_ports::PortError> {
+    async fn drain_once(&self) -> Result<Drained, pos_ports::PortError> {
         let store_id = self.edge.store_id();
         let batch: Vec<OutboxRecord> = self
             .edge
@@ -158,7 +202,7 @@ where
             .outbox_batch(store_id, OutboxPosition::START, self.batch_size())
             .await?;
         if batch.is_empty() {
-            return Ok(0);
+            return Ok(Drained::Empty);
         }
 
         let envelopes: Vec<_> = batch.iter().map(|record| record.envelope.clone()).collect();
@@ -170,13 +214,74 @@ where
                 batch = batch.len(),
                 "event publish: the link accepted nothing; the outbox holds and will retry"
             );
-            return Ok(0);
+            return Ok(Drained::Stalled);
         };
         self.edge
             .store()
             .acknowledge_outbox(store_id, through)
             .await?;
-        Ok(accepted)
+        Ok(Drained::Published(accepted))
+    }
+
+    /// How many events are still waiting, for a log line that has to be true.
+    ///
+    /// `None` when the store could not be read — which is itself worth saying rather than
+    /// reporting a zero nobody measured.
+    async fn waiting(&self) -> Option<u64> {
+        self.edge
+            .store()
+            .outbox_depth(self.edge.store_id())
+            .await
+            .ok()
+    }
+
+    /// One last drain before the process exits, bounded by [`DRAIN_BUDGET`].
+    ///
+    /// Returns when the outbox is empty, the budget is spent, or the link stops taking events —
+    /// and says which in the log. It never sleeps between passes: this is the one moment where
+    /// going straight round again is right, because every pass is racing a service manager.
+    ///
+    /// A failure here is not an error to propagate. The outbox is durable, so the events are in the
+    /// store's own database either way; what a stop owes the operator is a truthful line about
+    /// whether they also reached the cloud.
+    async fn drain_before_stop(&self) {
+        let deadline = tokio::time::Instant::now() + DRAIN_BUDGET;
+        let mut published: usize = 0;
+
+        let reason = loop {
+            if tokio::time::Instant::now() >= deadline {
+                break "the drain budget ran out";
+            }
+            match self.drain_once().await {
+                Ok(Drained::Empty) => {
+                    tracing::info!(
+                        published,
+                        "event publish: the outbox is empty; every committed event reached the cloud"
+                    );
+                    return;
+                }
+                Ok(Drained::Published(count)) => published = published.saturating_add(count),
+                Ok(Drained::Stalled) => break "the link accepted nothing",
+                Err(error) => {
+                    tracing::warn!(%error, "event publish: the last drain could not complete");
+                    break "the link or the store failed";
+                }
+            }
+        };
+
+        // Read the depth before the macro, not inside it: `tracing`'s formatter holds a
+        // `core::fmt::Arguments<'_>`, which is not `Send`, so an await under the macro would make
+        // the whole publish future unspawnable.
+        let waiting = self.waiting().await;
+        tracing::error!(
+            published,
+            waiting,
+            reason,
+            "event publish: stopping with events still in the outbox. They are durable in this \
+             store's own database and the next boot will publish them — but if this placement is \
+             being torn down rather than restarted, its database goes with it \
+             (ADR-0110, production-readiness D8)"
+        );
     }
 
     /// Runs until `shutdown` resolves: handshake, then drain the outbox as fast as it fills.
@@ -184,6 +289,11 @@ where
     /// A full batch means there is probably more waiting, so the loop goes straight round again; an
     /// empty one idles. Every failure is logged and backed off from — the store keeps selling either
     /// way, and the outbox is what makes that safe.
+    ///
+    /// **A stop does not return here immediately.** It runs one last bounded drain
+    /// ([`Self::drain_before_stop`]) so a placement that is about to be torn down takes its
+    /// committed events with it. A stop that arrives before the handshake ever succeeded skips the
+    /// drain — there is no link to publish over — and says what is left behind instead.
     pub async fn run<F>(self, shutdown: F)
     where
         F: Future<Output = ()> + Send,
@@ -198,15 +308,31 @@ where
                 break;
             }
             tokio::select! {
-                () = &mut shutdown => return,
+                () = &mut shutdown => {
+                    // No link was ever negotiated, so there is nothing to drain over. Say what is
+                    // still held rather than exiting quietly on a store that never reached the
+                    // cloud at all.
+                    let waiting = self.waiting().await.unwrap_or(0);
+                    if waiting > 0 {
+                        tracing::error!(
+                            waiting,
+                            "event publish: stopping before the link ever came up. The events are \
+                             durable in this store's own database, but nothing has reached the \
+                             cloud at all (ADR-0110, production-readiness D8)"
+                        );
+                    }
+                    return;
+                }
                 () = tokio::time::sleep(REFUSED_BACKOFF) => {}
             }
         }
 
         loop {
             let wait = match self.drain_once().await {
-                Ok(0) => IDLE_INTERVAL,
-                Ok(published) => {
+                // An empty outbox and a link taking nothing both mean this pass moved no records,
+                // so both idle. Only the stopping drain needs to tell them apart.
+                Ok(Drained::Empty | Drained::Stalled) => IDLE_INTERVAL,
+                Ok(Drained::Published(published)) => {
                     tracing::debug!(published, "event publish: batch acknowledged");
                     // A full batch almost certainly means more is waiting; go straight round.
                     if published >= batch_size {
@@ -223,7 +349,10 @@ where
                 }
             };
             tokio::select! {
-                () = &mut shutdown => return,
+                () = &mut shutdown => {
+                    self.drain_before_stop().await;
+                    return;
+                }
                 () = tokio::time::sleep(wait) => {}
             }
         }

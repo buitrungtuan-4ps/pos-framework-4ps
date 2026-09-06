@@ -199,6 +199,13 @@ where
 /// loop after it has installed a release, and the two are told apart by the returned
 /// [`ServeOutcome`].
 ///
+/// It also means the *outbox* gets a last pass. Draining in-flight HTTP alone left every event
+/// committed since the publish loop's previous pass sitting in the store's own database — free on a
+/// box that restarts, lost on a placement that is torn down
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md), production-readiness
+/// **D8**). So this waits for that loop, bounded by
+/// [`STOP_GRACE`](crate::event_publish::STOP_GRACE), before it returns.
+///
 /// # Errors
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
@@ -318,10 +325,36 @@ where
         "pos_edge listening",
     );
 
-    axum::serve(listener, composed.app.into_make_service())
+    let served = axum::serve(listener, composed.app.into_make_service())
         .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
-        .await
-        .map_err(EdgeError::Serve)?;
+        .await;
+
+    // The publish loop's last drain (ADR-0110, production-readiness **D8**). It started the moment
+    // the shutdown watch flipped — the same instant `axum` began draining in-flight requests — so by
+    // here it has usually already finished and this waits for nothing. Waiting is nonetheless what
+    // makes the drain real: this function returning is what stops the runtime polling that task, and
+    // an outbox that never drained costs nothing on a box in a shop (the SQLite file survives the
+    // restart) but loses events on a hosted placement, whose container and volume go together.
+    //
+    // It is waited for even when serving failed, and especially then: a store whose HTTP surface
+    // fell over still has committed events, and that is exactly when they should be pushed out
+    // before the process goes.
+    if let Some(publisher) = composed.publisher {
+        match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::error!(
+                %error,
+                "the event-publish loop ended abnormally; the outbox may not have drained"
+            ),
+            Err(_elapsed) => tracing::error!(
+                grace_secs = crate::event_publish::STOP_GRACE.as_secs(),
+                "the event-publish loop did not finish its last drain in time; exiting with events \
+                 still in the outbox"
+            ),
+        }
+    }
+
+    served.map_err(EdgeError::Serve)?;
 
     let outcome = if restart.wanted() {
         ServeOutcome::RestartWanted
@@ -363,6 +396,15 @@ pub struct Composed {
     /// than of composing. A test that composes gets `None` and no OTA loop, which is correct: it
     /// has no cloud to fetch a release from.
     pub cloud: Option<CloudHttpClient>,
+    /// The event-publish loop, when this store has a stream to publish to — `None` for a box with
+    /// no `[nats]` section, no server URL, or no reachable stream at boot.
+    ///
+    /// Handed back for the same reason `cloud` is: what to do with it belongs to whoever owns the
+    /// process. A stop asks this loop for one last bounded drain of the outbox, and only the caller
+    /// that owns the lifetime can wait for it — see
+    /// [`crate::event_publish::STOP_GRACE`]. A test that composes and drops this simply detaches
+    /// the task, exactly as before.
+    pub publisher: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Builds the state, the router and the background loops — everything [`serve`] does except
@@ -490,8 +532,9 @@ where
     // loops. An unactivated or LAN-only box still binds, pairs, and serves the counter offline
     // (ADR-0001); the gate withholds cloud sync, never local trading.
     let mut cloud = None;
+    let mut publisher = None;
     if let Some(cloud_url) = cloud_url {
-        let (composed_app, keyed_client) = compose_cloud_surface(
+        let surface = compose_cloud_surface(
             app,
             &cloud_url,
             store_id,
@@ -503,8 +546,9 @@ where
             shutdown_rx,
         )
         .await;
-        app = composed_app;
-        cloud = keyed_client;
+        app = surface.app;
+        cloud = surface.cloud;
+        publisher = surface.publisher;
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
@@ -514,7 +558,17 @@ where
         pairing,
         sessions,
         cloud,
+        publisher,
     })
+}
+
+/// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
+/// the two things whose lifetime outlives composing — the keyed client the OTA loop dials on, and
+/// the publish loop a stop has to wait for.
+struct CloudSurface {
+    app: axum::Router,
+    cloud: Option<CloudHttpClient>,
+    publisher: Option<tokio::task::JoinHandle<()>>,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the OS-keyring
@@ -540,7 +594,7 @@ async fn compose_cloud_surface<S, Q, L>(
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> (axum::Router, Option<CloudHttpClient>)
+) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
@@ -558,7 +612,11 @@ where
                 %error,
                 "cloud_url is set but the cloud transport could not be built; running LAN-only"
             );
-            return (app, None);
+            return CloudSurface {
+                app,
+                cloud: None,
+                publisher: None,
+            };
         }
     };
     // Activation only, so the store id and target carried here are never used for a path: `/activate`
@@ -579,6 +637,7 @@ where
     // the vault can itself fail (a locked or absent keyring) — that is not "unactivated", so it is
     // logged and the box runs without cloud sync rather than refusing to start.
     let mut keyed_client = None;
+    let mut publisher = None;
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
             let sync_key = resolve_sync_key(&*vault).await;
@@ -595,7 +654,7 @@ where
             // The event stream is a second rail with its own endpoint and its own credential, so it
             // is spawned beside the `/sync` loops rather than inside them: a store with no sync key
             // still ships the events it has committed (ADR-0087).
-            spawn_event_publish(edge, nats, shutdown_rx).await;
+            publisher = spawn_event_publish(edge, nats, shutdown_rx).await;
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
@@ -606,7 +665,11 @@ where
             tracing::warn!(%error, "could not read the vault to check activation; running without cloud sync");
         }
     }
-    (app, keyed_client)
+    CloudSurface {
+        app,
+        cloud: keyed_client,
+        publisher,
+    }
 }
 
 /// Runs the store's retention sweep on a timer until shutdown
@@ -995,14 +1058,15 @@ async fn spawn_event_publish<S>(
     edge: &Arc<Edge<S>>,
     nats: Option<&NatsConfig>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) where
+) -> Option<tokio::task::JoinHandle<()>>
+where
     S: EventStore + Send + Sync + 'static,
 {
     let Some(nats) = nats else {
         tracing::info!(
             "no [nats] section; the outbox is not being published (the store still trades and keeps every event)"
         );
-        return;
+        return None;
     };
     let Some(url) = std::env::var(NATS_URL_ENV)
         .ok()
@@ -1011,7 +1075,7 @@ async fn spawn_event_publish<S>(
         tracing::warn!(
             "a [nats] stream is configured but {NATS_URL_ENV} is unset; the outbox is not being published"
         );
-        return;
+        return None;
     };
 
     let config = StreamConfig {
@@ -1030,7 +1094,7 @@ async fn spawn_event_publish<S>(
                 %error,
                 "could not connect to the event stream; the outbox holds and the store keeps trading"
             );
-            return;
+            return None;
         }
     };
 
@@ -1038,12 +1102,18 @@ async fn spawn_event_publish<S>(
     // which is `0.0.0` in every artifact — so every store told the cloud the same thing and the
     // OTA progress model could not tell one release from another.
     let publisher = EventPublisher::new(Arc::clone(edge), link, crate::version::tag());
-    tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())));
+    // The handle is kept, not dropped. A stop asks this loop for one last drain, and a drain nobody
+    // waits for is a drain that does not happen: `serve_until` returns as soon as `axum::serve` has
+    // finished, and the runtime it returns into stops polling every detached task. On a placement
+    // that is torn down rather than restarted, those unpublished events go with the volume
+    // ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    let handle = tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())));
     tracing::info!(
         stream = %nats.stream,
         subject = %nats.subject,
         "event publish enabled: the outbox is draining to the cloud"
     );
+    Some(handle)
 }
 
 /// Resolves when the shutdown flag flips true (or its sender drops) — one per background consumer.
