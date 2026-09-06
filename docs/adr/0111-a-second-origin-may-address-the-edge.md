@@ -1,7 +1,7 @@
 # ADR-0111 — A second origin may address the edge, from a list the cloud publishes
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-06
-· Serves [ADR-0110](0110-edge-placement-is-a-deployment-axis.md)'s hosted placements
+· Serves [ADR-0110](0110-edge-placement-is-a-deployment-axis.md)'s hosted edge placements
 · Extends [ADR-0030](0030-pairing-and-offline-auth.md)'s pairing and
 [ADR-0084](0084-device-authentication.md)'s bearer gate without moving either
 · Sources its list from [ADR-0004](0004-cloud-owned-configuration.md) over
@@ -11,10 +11,19 @@
 [ADR-0086](0086-edge-keyvault-and-activation.md),
 [ADR-0091](0091-durable-edge-auth-state.md)
 
-This is the second of the five records ADR-0110 names. **ADR-0112** (the print agent), **ADR-0113**
-(the host tier and the console's Start button) and **ADR-0114** (region as a required, recorded
-attribute) are still reserved numbers with no files, so they are named in plain text and not linked
-— `xtask links` fails a build on a link that does not resolve.
+This is the second of the five records on the **Edge Anywhere** programme, after
+[ADR-0110](0110-edge-placement-is-a-deployment-axis.md) and beside
+[ADR-0112](0112-print-agents.md) (the print agent), [ADR-0113](0113-the-host-agent.md) (the host
+tier and the console's Start button) and
+[ADR-0114](0114-region-is-required-recorded-visible.md) (region as a required, recorded attribute).
+All five are on disk, so all five are linked.
+
+The store attribute those records select on is `edge_placement`, never a bare "placement" — the word
+is already taken by `MenuPlacement`, an item's placement in a menu, and by the OTA rollout placement
+at `/admin/config/ota/placement`. [ADR-0110](0110-edge-placement-is-a-deployment-axis.md) states the
+rule in full; this record follows it. The Rust type is `EdgePlacement` and the wire values are
+`EDGE_PLACEMENT_UNSPECIFIED`, `EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` and
+`EDGE_PLACEMENT_HOSTED_BY_PLATFORM`.
 
 ## The problem
 
@@ -47,13 +56,14 @@ once.
 webview's origin is the shell's own. It is not the edge's. Every `fetch` it makes is cross-origin
 from the first one, including the one that pairs it.
 
-**A hosted placement.** [ADR-0110](0110-edge-placement-is-a-deployment-axis.md) puts `pos_edge` on a
-VPS or a platform region. A browser on the counter reaches it over a WAN by hostname, which is fine
-— that path is still same-origin, because the app is still served by the edge. But the record's own
-closing bullet is the honest statement of what is missing: `EdgeConfig::advertised_ip` has nothing
-to mean, and the client's "so it works on the store LAN with no configuration" keeps its first
-clause and loses its second. A device that is not on the edge's LAN has no supported way to be told
-where the edge is.
+**A hosted edge placement.** [ADR-0110](0110-edge-placement-is-a-deployment-axis.md) puts `pos_edge`
+on a VPS or a platform region. A browser on the counter reaches it over a WAN by hostname, which is
+fine — that path is still same-origin, because the app is still served by the edge. But one of
+ADR-0110's own "what this deliberately does not do" bullets, *"It does not give the edge a second
+address"*, is the honest statement of what is missing: `EdgeConfig::advertised_ip` has nothing to
+mean, and the client's "so it works on the store LAN with no configuration" keeps its first clause
+and loses its second. A device that is not on the edge's LAN has no supported way to be told where
+the edge is.
 
 **A second front-end.** A kitchen display built by an operator, a self-order kiosk, a manager's
 phone app: each is its own origin and each is refused today.
@@ -85,8 +95,8 @@ pub fn pairing_url(host: IpAddr, port: u16, code: &Code) -> String {
 It takes an `IpAddr`. It cannot carry a hostname, and it cannot emit `https`. Both were deliberate:
 [ADR-0030](0030-pairing-and-offline-auth.md) chose a raw-IP `http` URL because Chrome on Android
 does not resolve mDNS and a DHCP reservation pins the address, and it is the path that needs no name
-resolution at all. Every word of that is still true on a shop LAN. None of it describes a placement
-that is reachable only over the internet, where there is no LAN IP to print, and where a bearer
+resolution at all. Every word of that is still true on a shop LAN. None of it describes an edge
+placement reachable only over the internet, where there is no LAN IP to print, and where a bearer
 token crossing a WAN in clear text is not a thing anyone should ship.
 
 ### Two release trains, and nothing tells anyone they have diverged
@@ -95,11 +105,21 @@ The edge ships through OTA rings. An app in an app store ships when a review boa
 devices that update when their owners let them. Those two clocks do not agree, and at 500+ stores
 they will not even agree within one brand.
 
-Today nothing would report the disagreement. `/healthz` reports `version` and `protocol_version`,
-but the app has no reason to call it and no rule about what to do with the answer. So the first
-symptom of drift is a `404` on a route one side has and the other does not, surfacing to a cashier
-as `ApiError` with whatever `statusText` the response carried. That is a support call that starts
-with "it just stopped working" and ends, hours later, with somebody comparing version strings.
+Today nothing would report the disagreement, and the shape of the failure is worse than a bad error
+message. `/healthz` reports `version` and `protocol_version`, but the app has no reason to call it
+and no rule about what to do with the answer. And a call to a route the edge does not have does not
+`404`: [`http/mod.rs`](../../crates/pos-edge/src/http/mod.rs) ends with `.fallback(assets::serve)`,
+and [`assets.rs`](../../crates/pos-edge/src/http/assets.rs) is explicit about what that means —
+*"An unknown path is not a 404: it is a client-routed path the single-page app will resolve, so it
+receives `index.html`."* So the app asks for a route its edge has never heard of and gets **`200
+text/html`**. `request()` in [`client.ts`](../../ui/src/api/client.ts) takes the `response.ok`
+branch, calls `await response.json()` on a page of HTML, and throws a `SyntaxError` — not an
+`ApiError`, with no status and no `statusText` for anyone to read.
+
+That is a support call that starts with "it just stopped working", produces a JSON parse error in a
+console nobody is looking at, and ends hours later with somebody comparing version strings. The
+client cannot currently tell a missing route from a valid response, and no amount of care in the
+screens fixes that, because the information is not in the response.
 
 ## The decision
 
@@ -117,7 +137,7 @@ auditable, and it does not survive the machine being replaced.
 
 So the list is a new config-tree node, `origins`, authored on the **Brand** layer
 ([ADR-0033](0033-config-tree.md)'s Tenant → Brand → Store → Device), published like every other node,
-and applied by `apply_document` in
+and applied by the config-pull loop in
 [`config_client.rs`](../../crates/pos-edge/src/config_client.rs) alongside `floor`, `stations`,
 `tender` and the rest. It is authored, not derived — unlike `lease`
 ([ADR-0108](0108-the-lease-generation-is-authority.md)), which is a table the cloud projects — because
@@ -148,26 +168,86 @@ The node follows the config tree's never-blank rule exactly as `lease` does: a d
 `origins`, or carries one that does not parse, leaves the previously-applied list alone and logs.
 A malformed publish must not silently open the edge to nobody — or to everybody.
 
-### Twenty-five routes are reachable cross-origin. Two are not, and neither is the probe or the app
+### The list needs a carrier the router can read, and `session_from_config` is not one
 
-The edge serves twenty-seven `/api/*` routes (two of them, `/api/activate` and `/api/activation`,
-only on a box provisioned for a cloud) plus `/ws` and `/healthz`.
+This is the seam the node needs and the tree does not have, so it is decided here rather than left
+to implementation.
 
-**Covered — twenty-five.** Everything a till does: the eighteen guarded domain routes, the three
-session routes, `/api/orders/open`, `/api/pair/devices`, `/api/pair/revoke`, and `/api/pair`. These
-are the surface the app is for. Twenty-two of them already sit behind two gates —
-`require_paired_device` then `require_signed_in`
-([`http/auth.rs`](../../crates/pos-edge/src/http/auth.rs)) — so a cross-origin caller reaching them
-still needs a device token *and* an employee signed in on that device. CORS adds a third
-condition to routes that already had two.
+[`session_from_config`](../../crates/pos-edge/src/config_client.rs) is what actually applies a
+pulled document today — `menu`, `permissions`, `capabilities`, `floor`, `stations`, `tax`,
+`campaigns`, `inventory`, `channels`, `tender`, `qr`, `locale`, `fleet_update`, `device_ota`,
+`lease` — and it is the wrong shape for this one. It is a pure function from a base `EdgeSession` and
+a document to a new `EdgeSession`, and an `EdgeSession` is what the *application* layer decides
+against. The CORS layer is not in the application layer; it runs on the front of every HTTP request,
+before any handler, and what it reads has to be reachable from
+[`AppState`](../../crates/pos-edge/src/state.rs) — which holds `config`, `build`, `fanout`, `clock`
+and `pairing`, and is built once at start-up.
 
-**Not covered — `/api/activate` and `/api/activation`.** Activation is the box's own setup: an
-operator types a code from the store's setup sheet into the `/setup` screen the box serves
-([ADR-0086](0086-edge-keyvault-and-activation.md)), and the credential lands in that box's OS
-keyring. There is no cross-origin actor in that story, and a route that exchanges a code for a
-long-lived machine credential should not be reachable from a page. These stay same-origin-only, and
-a hosted placement that must be activated is activated from the console-driven flow ADR-0113 builds,
-not from a till.
+**So `origins` gets a carrier shaped exactly like `pairing`: an `Origins` value with interior
+mutability, held as `Arc<Origins>` on `AppState`, constructed in `compose` and cloned into the CORS
+layer.** `Pairing` already solved this problem — it is state that a request path reads and a
+background path writes, so it holds its `Mutex` inside and everything shares one `Arc`. `Origins`
+holds one `Mutex<Vec<Origin>>`, bounded at eight, with a `replace` the config-pull loop calls and a
+`contains` the layer calls. No new dependency: `std::sync::Mutex` is what `Pairing` uses.
+
+The config-pull loop gets a handle to the same `Arc<Origins>`, the same way it already holds a handle
+to the `Edge` it hot-swaps sessions into. The `origins` branch is therefore *beside*
+`session_from_config` rather than inside it — the loop parses and validates the node and calls
+`Origins::replace`, and the never-blank rule is enforced there: a document with no `origins`, or a
+list that does not validate, is not replaced.
+
+Doing it any other way means the router reading application state on every request, which is the one
+thing `AppState`'s cheap-to-clone shape exists to avoid.
+
+### One rule decides membership, and today it covers twenty-six of the edge's twenty-seven routes
+
+**A route is covered if a paired device calls it in the course of trading or of becoming a paired
+device. A route that provisions the machine itself is not, and neither is anything that is not part
+of the app.** That is the rule, stated before the list, so a route added next month inherits an
+answer instead of needing an amendment to this record.
+
+The edge serves twenty-seven `/api/*` routes today (two of them, `POST /api/activate` and
+`GET /api/activation`, only on a box provisioned for a cloud) plus `/ws` and `/healthz`.
+
+**Covered — twenty-six.** Everything a till does: the eighteen guarded domain routes, the three
+session routes, `/api/orders/open`, `/api/pair`, `/api/pair/devices`, `/api/pair/revoke`, and
+`GET /api/activation`. These are the surface the app is for, and they do not all carry the same
+gates ([`http/auth.rs`](../../crates/pos-edge/src/http/auth.rs)):
+
+- **Nineteen sit behind both gates** — `require_paired_device` then `require_signed_in`. Those are
+  the eighteen in `domain_router`'s `guarded` sub-router plus `/api/orders/open`, which
+  `counter::router` is layered with separately. A cross-origin caller reaching one of them still
+  needs a device token *and* an employee signed in on that device, so CORS adds a third condition to
+  routes that already had two.
+- **Five sit behind the paired-device gate only.** The three session routes, because signing in is
+  how a device passes the second gate and `http/mod.rs` says so in as many words — *"a paired device
+  signs a person in and out here, so these sit behind the paired gate but not the signed-in one"* —
+  and `/api/pair/devices` and `/api/pair/revoke`, which retire a device and are as strong as pairing
+  and no stronger.
+- **Two sit behind neither.** `POST /api/pair` is unauthenticated by design, argued below.
+  `GET /api/activation` returns one boolean.
+
+That distribution is the honest picture, and it matters: `POST /api/session/sign-in` takes a badge
+code and a PIN and is one of the five, so a cross-origin caller reaching it needs a device token and
+nothing else. The next section is about what the allow-list does and does not buy for exactly those
+six.
+
+**Covered — `GET /api/activation`, and this is a change from the obvious answer.** It reads as an
+activation route and belongs with `POST /api/activate`, but the shipped app disagrees:
+[`App.tsx`](../../ui/src/App.tsx)'s `onMount` calls it on **every boot**, ahead of pairing and ahead
+of sign-in, and routes the operator to `/setup` when the box is not activated. It is the first call
+any front-end makes. Leaving it same-origin-only means a second origin's very first request fails —
+softly, because the call is wrapped in `.catch(() => routeDevice())`, which is worse than loudly: an
+unactivated hosted box would silently never route anyone to `/setup`. And the route returns a
+standing boolean, not a secret. So it is covered.
+
+**Not covered — `POST /api/activate`.** This is where the argument for excluding activation actually
+lives. It exchanges a code from the store's setup sheet for a long-lived machine credential that
+lands in that box's OS keyring ([ADR-0086](0086-edge-keyvault-and-activation.md)); a route that mints
+a machine credential should not be reachable from a page on another origin, and there is no
+cross-origin actor in that story. An operator activates at the `/setup` screen the box itself serves,
+and a hosted edge placement that must be activated is activated from the console-driven flow
+[ADR-0113](0113-the-host-agent.md) builds, not from a till.
 
 **Not covered — `/healthz`.** It is what a service manager polls. A service manager is not a browser
 and never sends `Origin`, so CORS headers on it would serve nobody, and putting it on the list would
@@ -175,6 +255,27 @@ publish `store_id` to a page for no gain.
 
 **Not covered — the asset fallback** (`http::assets::serve`). Cross-origin `fetch` of `index.html` is
 not a use case; a shell that wants the app bundles it.
+
+**`/ws` is covered by a different mechanism**, not by CORS, for the reason its own sub-heading gives.
+
+### The print agent's four routes are covered, by the rule and not by an amendment
+
+[ADR-0112](0112-print-agents.md) adds four `/api/*` routes in the same programme —
+`POST /api/print/agent`, `POST /api/print/agent/revoke`, `GET /api/print/jobs` and
+`POST /api/print/jobs/{job_id}/ack` — all behind the paired-device token, all called by a paired
+device that has claimed an agent identity. A print agent running in a native shell is precisely the
+cross-origin caller this record exists for: it is a paired device, it is not served by the edge, and
+if its long-poll is refused by the browser rule then nothing prints.
+
+**All four are covered**, on the same paired-device basis as `/api/pair/devices` and
+`/api/pair/revoke`. The rule at the top of this section already says so — a paired device calls them
+in the course of trading — and this paragraph exists only to record that the two records were
+checked against each other rather than left to assume. When ADR-0112 lands, the edge serves
+thirty-one `/api/*` routes and thirty are covered.
+
+A `pos_print_agent` that is a headless native process rather than a browser is not bound by CORS at
+all; it sends whatever `Origin` it likes, or none. The coverage matters for the shell case, where the
+agent's polling runs inside a webview on the shell's own origin.
 
 ### Pairing is on the list, and the reason it is safe is not the allow-list
 
