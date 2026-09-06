@@ -40,10 +40,47 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use pos_ports::PortError;
 use pos_proto::ids::DeviceId;
 use store_sqlite::SqliteStore;
+
+/// How many unexpired jobs one **printer** may hold before an enqueue refuses.
+///
+/// Per printer, not per agent, so one jammed kitchen printer cannot consume the receipt printer's
+/// budget on the same terminal. The table's total bound follows and is finite by construction: this
+/// many rows times the printers the published `devices` node lists, a list only the console grows.
+pub const MAX_QUEUED_PER_PRINTER: u32 = 200;
+
+/// How long a queued job stays deliverable.
+///
+/// **A ticket printed an hour late is worse than a ticket that visibly failed.** The late one is
+/// cooked against a bill that settled, walks out to a table that left, and costs the food twice; the
+/// failed one is a cashier reading a refusal while the guest is still standing there. That is the
+/// whole argument for the TTL, and why it is ten minutes rather than a number chosen to look
+/// generous.
+pub const JOB_TTL: Duration = Duration::from_secs(600);
+
+/// How long a claimed job stays leased before it returns to the queue.
+///
+/// An agent that dies holding a job does not hold it forever.
+pub const CLAIM_LEASE: Duration = Duration::from_secs(30);
+
+/// How long an agent may go without asking for work before the enqueue treats it as gone.
+///
+/// Read *before* the queue is touched: a queue must not start building behind a box that is not
+/// there. Longer than [`AGENT_PARK`] by design — a healthy agent re-asks as soon as its park ends,
+/// so one missed cycle must not read as silence.
+pub const AGENT_SILENCE: Duration = Duration::from_secs(60);
+
+/// How long `GET /api/print/jobs` holds a request open before answering empty.
+///
+/// Bounded on both axes. A held socket that is never answered is indistinguishable from a dead one,
+/// and 4G NAT bindings are reaped; so the park ends, the agent asks again, and the fallback re-read
+/// inside it is derived as `AGENT_PARK / 2` rather than declared — a separate constant could be set
+/// to a value that computes to zero re-reads and silently removes the safety net.
+pub const AGENT_PARK: Duration = Duration::from_secs(20);
 
 /// What a claim did.
 ///
@@ -101,6 +138,26 @@ pub trait PrintAgents: Send + Sync {
         device: DeviceId,
     ) -> impl Future<Output = Result<bool, PortError>> + Send;
 
+    /// Records that a bound agent asked for work, reporting whether the binding was still there.
+    ///
+    /// Liveness is written by the act that proves it — asking the queue for work — rather than by a
+    /// ping of its own, because a separate ping is a second thing that can be true while printing
+    /// is broken.
+    ///
+    /// It never *creates* a binding. This runs on every claim and can race a manager revoking the
+    /// binding at the till; a write that inserted would resurrect what the revoke just released,
+    /// which is the one thing a revoke has to be able to guarantee.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the record cannot be written.
+    fn heard_from(
+        &self,
+        agent: DeviceId,
+        device: DeviceId,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<bool, PortError>> + Send;
+
     /// The terminal a paired device answers for, if any — the first thing every agent route asks.
     ///
     /// # Errors
@@ -144,6 +201,15 @@ impl<T: PrintAgents + ?Sized> PrintAgents for std::sync::Arc<T> {
         device: DeviceId,
     ) -> impl Future<Output = Result<bool, PortError>> + Send {
         (**self).revoke(agent, device)
+    }
+
+    fn heard_from(
+        &self,
+        agent: DeviceId,
+        device: DeviceId,
+        now_ms: i64,
+    ) -> impl Future<Output = Result<bool, PortError>> + Send {
+        (**self).heard_from(agent, device, now_ms)
     }
 
     fn agent_for(
@@ -191,6 +257,15 @@ impl PrintAgents for SqliteStore {
 
     async fn revoke(&self, agent: DeviceId, device: DeviceId) -> Result<bool, PortError> {
         SqliteStore::revoke_print_agent(self, agent.to_string(), device.to_string()).await
+    }
+
+    async fn heard_from(
+        &self,
+        agent: DeviceId,
+        device: DeviceId,
+        now_ms: i64,
+    ) -> Result<bool, PortError> {
+        SqliteStore::touch_print_agent(self, agent.to_string(), device.to_string(), now_ms).await
     }
 
     async fn agent_for(&self, device: DeviceId) -> Result<Option<DeviceId>, PortError> {
@@ -275,6 +350,23 @@ impl PrintAgents for InMemoryPrintAgents {
             return Ok(true);
         }
         Ok(false)
+    }
+
+    async fn heard_from(
+        &self,
+        agent: DeviceId,
+        device: DeviceId,
+        now_ms: i64,
+    ) -> Result<bool, PortError> {
+        let mut bindings = self.locked();
+        match bindings.get_mut(&agent) {
+            Some(standing) if standing.paired_device == device => {
+                standing.last_seen_ms = now_ms;
+                Ok(true)
+            }
+            // Never an insert: see the trait's doc comment.
+            _ => Ok(false),
+        }
     }
 
     async fn agent_for(&self, device: DeviceId) -> Result<Option<DeviceId>, PortError> {

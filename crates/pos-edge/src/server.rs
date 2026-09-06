@@ -164,13 +164,14 @@ pub enum ServeOutcome {
 /// # Errors
 ///
 /// As [`serve_until`].
-pub async fn serve<S, Q, A, L, P>(
+pub async fn serve<S, Q, A, L, P, J>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
     lease_authority: L,
     print_agents: P,
+    print_queue: J,
 ) -> Result<ServeOutcome, EdgeError>
 where
     S: EventStore
@@ -185,6 +186,7 @@ where
     A: OtaStateAuthority + 'static,
     L: LeaseAuthority + Clone + 'static,
     P: crate::print_agent::PrintAgents + 'static,
+    J: crate::print_queue::PrintQueue + 'static,
 {
     serve_until(
         config,
@@ -193,6 +195,7 @@ where
         ota_authority,
         lease_authority,
         print_agents,
+        print_queue,
         shutdown_signal(),
     )
     .await
@@ -222,13 +225,14 @@ where
 ///
 /// [`EdgeError::Bind`] if the address is unavailable (most often already in use), or
 /// [`EdgeError::Serve`] if the server stops with an error after starting.
-pub async fn serve_until<S, Q, A, L, P, F>(
+pub async fn serve_until<S, Q, A, L, P, J, F>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     ota_authority: A,
     lease_authority: L,
     print_agents: P,
+    print_queue: J,
     stop: F,
 ) -> Result<ServeOutcome, EdgeError>
 where
@@ -244,6 +248,7 @@ where
     A: OtaStateAuthority + 'static,
     L: LeaseAuthority + Clone + 'static,
     P: crate::print_agent::PrintAgents + 'static,
+    J: crate::print_queue::PrintQueue + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
     // Read what binding and the startup banner need before `config` moves into the composition.
@@ -291,6 +296,7 @@ where
         queue,
         lease_authority.clone(),
         print_agents,
+        print_queue,
         &shutdown_rx,
     )
     .await?;
@@ -518,12 +524,13 @@ impl FarewellBeat {
 /// [`EdgeError::Config`] if the configuration would misbehave, [`EdgeError::Country`] if the
 /// compiled-in country modules disagree, or [`EdgeError::DeviceRegistry`] if the pairing or sign-in
 /// table could not be read.
-pub async fn compose<S, Q, L, P>(
+pub async fn compose<S, Q, L, P, J>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
     queue: Q,
     lease_authority: L,
     print_agents: P,
+    print_queue: J,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Result<Composed, EdgeError>
 where
@@ -538,6 +545,7 @@ where
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
+    J: crate::print_queue::PrintQueue + 'static,
 {
     // Refuse a configuration that would misbehave rather than starting with it (ADR-0091).
     config.validate()?;
@@ -612,20 +620,42 @@ where
     // same way and for the same reason: the routes that bind it and the dispatch that reads it must
     // agree, and `PrintAgents` returns `impl Future` so it cannot be erased behind `dyn`.
     let agents = Arc::new(print_agents);
+    // The queue between the edge that renders and the agent that writes the bytes, shared for the
+    // third time and for the third identical reason (ADR-0112).
+    let jobs = Arc::new(print_queue);
+    // And the in-process wake a parked agent listens on. Built here rather than passed in: it holds
+    // no durable state, and its whole correctness argument is that the process which writes the row
+    // is the process the waiter is parked in (ADR-0062) — which is only true if there is exactly
+    // one of these per composition.
+    let wake = Arc::new(crate::print_wake::SharedPrintWake::new());
     // The printers the settle and fire paths dispatch to (ADR-0100, production-readiness C2). Layered
     // rather than threaded through `domain_router`'s signature because a printer is an *effect* the
     // routes run after a commit, not state a route reads: the application loop deliberately holds no
     // printer, and every composition that omits this — the fakes-backed example, a route test —
     // reports `NO_PRINTER`, which is the truth for it rather than a silent no-op.
-    let printers = Arc::new(match fonts {
-        Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
-        None => crate::printing::Printers::tcp(),
-    });
+    let printers = Arc::new(
+        match fonts {
+            Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
+            None => crate::printing::Printers::tcp(),
+        }
+        // The lane a printer that names an agent is reached through (ADR-0112). It holds the *same*
+        // three values the agent's routes hold, which is the whole point of the three `Arc::clone`s
+        // above: the dispatch that writes the row and the route the agent claims it from are two
+        // halves of one table, and the wake only works because the writer and the waiter are in one
+        // process.
+        .with_agents(Arc::new(crate::printing::AgentLane::new(
+            Arc::clone(&agents),
+            Arc::clone(&jobs),
+            Arc::clone(&wake),
+        ))),
+    );
     let mut app = crate::http::router(state)
         .merge(crate::http::domain_router(
             edge,
             Arc::clone(&queue),
             Arc::clone(&agents),
+            Arc::clone(&jobs),
+            Arc::clone(&wake),
             Arc::clone(&pairing),
             Arc::clone(&sessions),
             &origins,

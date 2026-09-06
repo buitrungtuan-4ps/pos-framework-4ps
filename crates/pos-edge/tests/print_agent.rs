@@ -99,7 +99,9 @@ async fn paired_pair() -> (Router, String, String) {
     let router = pos_edge::http::domain_router(
         edge,
         InMemoryQueueNumbers::new(),
-        pos_edge::print_agent::InMemoryPrintAgents::new(),
+        Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new()),
+        pos_edge::print_queue::InMemoryPrintQueue::new(),
+        pos_edge::print_wake::SharedPrintWake::new(),
         pairing,
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),

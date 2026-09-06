@@ -41,6 +41,15 @@ function receiptPrintKey(outcome: string | undefined): MessageKey {
       return "pay.print_unavailable";
     case "UNPRINTABLE_TEXT":
       return "pay.print_unprintable";
+    // A printer whose transport belongs to another device (ADR-0112). Three answers rather than
+    // one, because they send a cashier to three different places: wait, go and look at the
+    // terminal, or go and look at the printer.
+    case "QUEUED_TO_AGENT":
+      return "pay.print_queued";
+    case "PRINT_AGENT_UNAVAILABLE":
+      return "pay.print_agent_unavailable";
+    case "PRINT_QUEUE_FULL":
+      return "pay.print_queue_full";
     default:
       return "pay.printing";
   }

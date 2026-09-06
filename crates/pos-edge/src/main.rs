@@ -119,6 +119,10 @@ where
     // reason again: the binding is a managerial act performed once at the box, and re-doing it after
     // every restart would mean a manager at the till in the middle of service.
     let print_agents = store.clone();
+    // …and the durable print queue itself (ADR-0112). Same writer thread again, and it must be the
+    // same *store*: the dispatch that enqueues a ticket and the route the agent claims it from are
+    // two halves of one table.
+    let print_queue = store.clone();
     let edge = Arc::new(
         Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
             .map_err(EdgeError::Entropy)?,
@@ -135,6 +139,7 @@ where
         ota_state,
         lease_state,
         print_agents,
+        print_queue,
         stop,
     )
     .await

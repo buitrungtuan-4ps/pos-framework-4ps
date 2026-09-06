@@ -23,10 +23,22 @@
 //! is false for anything but USB, because port 9100 has no authentication and the drawer-kick rides
 //! the same channel as everything else (`docs/architecture.md` §5). A published node naming a network
 //! printer with a drawer is accepted here and the drawer command is still not sent.
+//!
+//! # A printer may name another device as the one that writes the bytes
+//!
+//! [ADR-0112](../../../docs/adr/0112-print-agents.md): a published printer may carry an
+//! `agent_device_id`, and **absent means the edge is the agent**, which is why a fleet that takes
+//! this release prints tomorrow the way it printed today. When it is present the last hop moves —
+//! and only the last hop. Everything above [`Printers::dispatch`] is unchanged, the rasterising in
+//! [`Printers::prepare`] still runs *here*, and what crosses to the agent is a finished
+//! [`PrintJob`]: a device that drew its own glyphs would draw them from whatever fonts that device
+//! happens to have, and a store with three terminals would print three different tickets from one
+//! order.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU16;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use pos_render::TextRenderer;
@@ -47,7 +59,10 @@ use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
 use pos_proto::store_profile::StoreProfile;
 
+use pos_proto::ClockSource;
+
 use crate::app::{BuyerDetails, EdgeSession, FiredLine};
+use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
 
 /// The store's receipt printer: the printer bound to no station.
 ///
@@ -386,9 +401,10 @@ fn format_money(amount: Money) -> String {
 
 /// What came of a print attempt, as the till reports it.
 ///
-/// Four outcomes, and three of them are not errors. The till has spent every release since P5 saying
+/// Seven outcomes, and six of them are not errors. The till has spent every release since P5 saying
 /// "Printing receipt…" over a store with no printer wired at all; naming what actually happened is
-/// most of what this slice is for (ADR-0100).
+/// most of what this was for (ADR-0100). The last three are ADR-0112's: a printer whose transport
+/// belongs to another device is reached through a queue, and a queue has answers a socket does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrintOutcome {
     /// The bytes reached a printer.
@@ -406,6 +422,27 @@ pub enum PrintOutcome {
     /// answer available — sending the bytes anyway prints a line of question marks in front of a
     /// customer. The kitchen still sees the order on its display; it is the *paper* that is missing.
     Unprintable,
+    /// The printer names an agent, and the finished document is on that agent's queue (ADR-0112).
+    ///
+    /// Not [`Self::Printed`], because no paper has come out yet and the till must not claim it has.
+    /// The agent claims within its park — twenty seconds at the outside — so what the cashier reads
+    /// is *on its way*, not *done*. A job that never gets claimed expires at `JOB_TTL` and the
+    /// console hears about the silence before the night ends.
+    QueuedToAgent,
+    /// The printer names an agent that holds no binding, or that has not asked for work within
+    /// `AGENT_SILENCE`. **Nothing was written.**
+    ///
+    /// Checked before the queue is touched, which is the whole point of the ordering: a queue must
+    /// not start building behind a box that is not there.
+    AgentUnavailable,
+    /// That printer already holds its full allowance of unexpired jobs. Nothing was written.
+    ///
+    /// Not a dead agent — that is refused a step earlier. This is a *live* agent whose printer is
+    /// not consuming: paper out, cover open, a write that errors and a job that returns to the queue
+    /// at the claim lease, while the till keeps firing. Adding a 201st job to a printer that has not
+    /// consumed 200 is promising paper that is not coming, so the enqueue refuses and the operator
+    /// learns it at the till rather than from the absence of a ticket.
+    QueueFull,
 }
 
 impl PrintOutcome {
@@ -417,13 +454,164 @@ impl PrintOutcome {
             Self::NoPrinter => "NO_PRINTER",
             Self::Unavailable => "PRINTER_UNAVAILABLE",
             Self::Unprintable => "UNPRINTABLE_TEXT",
+            Self::QueuedToAgent => "QUEUED_TO_AGENT",
+            Self::AgentUnavailable => "PRINT_AGENT_UNAVAILABLE",
+            Self::QueueFull => "PRINT_QUEUE_FULL",
         }
     }
 
     /// Whether paper came out.
+    ///
+    /// [`Self::QueuedToAgent`] is deliberately `false`. Paper has not come out; a job is on a queue
+    /// that a device the edge cannot see is expected to claim. Reporting a queued job as printed
+    /// would put the one outcome the edge cannot verify into the one answer that claims certainty.
     #[must_use]
     pub const fn printed(self) -> bool {
         matches!(self, Self::Printed)
+    }
+}
+
+/// Where a job goes when its printer names an agent.
+///
+/// **Dyn-compatible on purpose, unlike the three seams underneath it.** `PrintAgents`, `PrintQueue`
+/// and `PrintWake` all return `impl Future`, so none of them can be erased — and [`Printers`] is
+/// held as one `Arc<Printers>` in an axum extension by every composition and every route test. Making
+/// it generic over three more parameters would push those three into the signature of every caller
+/// that only ever wanted to print a receipt. So the erasure happens once, here, at the point where
+/// the three become one question: *can this agent take this job, and does it now have it?*
+pub trait AgentDispatch: Send + Sync {
+    /// Offers `job` to `agent` for `printer`, answering with what the till should say.
+    ///
+    /// Never an error: a printer that is down must not roll back a bill the guest has already paid,
+    /// which is the same rule the direct path follows.
+    fn enqueue<'a>(
+        &'a self,
+        agent: DeviceId,
+        printer: DeviceId,
+        job: PrintJob,
+    ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>>;
+}
+
+/// The shipped [`AgentDispatch`]: the binding, the queue and the wake, in ADR-0112's order.
+pub struct AgentLane<A, Q, W> {
+    agents: A,
+    queue: Q,
+    wake: W,
+}
+
+impl<A, Q, W> fmt::Debug for AgentLane<A, Q, W> {
+    /// The name and nothing else. Hand-written rather than derived because the three seams are not
+    /// required to be `Debug` — and because the queue holds rendered documents, which
+    /// `pos_ports::printer` says are never written to a log.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AgentLane")
+    }
+}
+
+impl<A, Q, W> AgentLane<A, Q, W> {
+    /// A lane over one binding record, one queue and one wake.
+    ///
+    /// All three must be the *same* values the agent's routes hold. Two queues over one store would
+    /// be two answers to "what is waiting", and a wake nobody is parked on is a wake that never
+    /// arrives.
+    pub const fn new(agents: A, queue: Q, wake: W) -> Self {
+        Self {
+            agents,
+            queue,
+            wake,
+        }
+    }
+}
+
+impl<A, Q, W> AgentDispatch for AgentLane<A, Q, W>
+where
+    A: crate::print_agent::PrintAgents,
+    Q: crate::print_queue::PrintQueue,
+    W: crate::print_wake::PrintWake,
+{
+    fn enqueue<'a>(
+        &'a self,
+        agent: DeviceId,
+        printer: DeviceId,
+        job: PrintJob,
+    ) -> Pin<Box<dyn Future<Output = PrintOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            let now_ms = crate::clock::SystemClock
+                .now()
+                .as_milliseconds_since_epoch();
+
+            // 1. The agent, before the table is touched. A queue must not start building behind a
+            //    box that is not there, and the ordering is what makes the cap's refusal below mean
+            //    something specific.
+            let standing = match self.agents.standing(agent).await {
+                Ok(standing) => standing,
+                Err(error) => {
+                    // A store that will not say whether the agent is there is treated as *not*
+                    // there: nothing is written, and the till reads a named refusal.
+                    tracing::warn!(%agent, %error, "a print agent's standing could not be read");
+                    return PrintOutcome::AgentUnavailable;
+                }
+            };
+            let silence_ms = i64::try_from(AGENT_SILENCE.as_millis()).unwrap_or(i64::MAX);
+            let heard_from = standing.map(|standing| standing.last_seen_ms);
+            if heard_from.is_none_or(|last| now_ms.saturating_sub(last) > silence_ms) {
+                tracing::warn!(
+                    %agent,
+                    %printer,
+                    bound = heard_from.is_some(),
+                    "the printer's agent is unbound or silent; nothing was queued"
+                );
+                return PrintOutcome::AgentUnavailable;
+            }
+
+            // 2. The cap. The instants are computed here rather than in the adapter, because the TTL
+            //    is a constant in one edge module and a store that held it would be a second place
+            //    to change it.
+            let ttl_ms = i64::try_from(JOB_TTL.as_millis()).unwrap_or(i64::MAX);
+            let job_id = job.job_id;
+            let queued = self
+                .queue
+                .enqueue(
+                    agent,
+                    printer,
+                    job,
+                    now_ms,
+                    now_ms.saturating_add(ttl_ms),
+                    MAX_QUEUED_PER_PRINTER,
+                )
+                .await;
+
+            // 3. And the row, or the refusal the table decided.
+            match queued {
+                Ok(
+                    crate::print_queue::Enqueued::Queued
+                    | crate::print_queue::Enqueued::AlreadyQueued,
+                ) => {
+                    // Signalled on both. `AlreadyQueued` is a redelivery of the *same* ticket, so
+                    // nothing is duplicated — and if the first enqueue signalled while nobody was
+                    // parked, this one may be the signal that finally lands. The wake is an
+                    // optimisation either way; the row is the truth (ADR-0062).
+                    self.wake.queued(agent);
+                    // The job's identifier and its destination, never its content
+                    // (`pos_ports::printer`).
+                    tracing::info!(%job_id, %agent, %printer, "queued to a print agent");
+                    PrintOutcome::QueuedToAgent
+                }
+                Ok(crate::print_queue::Enqueued::QueueFull) => {
+                    tracing::warn!(
+                        %job_id,
+                        %agent,
+                        %printer,
+                        "that printer holds its full allowance of unexpired jobs; nothing was queued"
+                    );
+                    PrintOutcome::QueueFull
+                }
+                Err(error) => {
+                    tracing::warn!(%job_id, %agent, %printer, %error, "the print queue refused the job");
+                    PrintOutcome::Unavailable
+                }
+            }
+        })
     }
 }
 
@@ -519,6 +707,11 @@ pub struct Printers {
     /// The renderer that turns a line no code page covers into a raster, or `None` on a box with no
     /// font installed — which prints ASCII and refuses the rest, the behaviour before ADR-0102.
     renderer: Option<TextRenderer>,
+    /// Where a job goes when its printer names an agent (ADR-0112), or `None` in a composition that
+    /// has no queue — a route test, the fakes-backed example. A printer that names an agent then
+    /// reports [`PrintOutcome::AgentUnavailable`], which is the truth for that composition rather
+    /// than a silent no-op.
+    agents: Option<Arc<dyn AgentDispatch>>,
 }
 
 /// One printer held open for the life of the process.
@@ -537,6 +730,9 @@ impl fmt::Debug for Printers {
             // Whether fonts are loaded, not which — the list is long and says nothing an operator
             // reading a log needs. `load_fonts` logs the faces and the script coverage at boot.
             .field("can_rasterise", &self.renderer.is_some())
+            // Whether an agent lane is composed, not what is on it: a queue holds rendered
+            // documents.
+            .field("has_agent_lane", &self.agents.is_some())
             .finish()
     }
 }
@@ -555,7 +751,19 @@ impl Printers {
             transports,
             open: Mutex::new(HashMap::new()),
             renderer: None,
+            agents: None,
         }
+    }
+
+    /// Gives this dispatcher the queue a printer's named agent claims from (ADR-0112).
+    ///
+    /// Without it a printer that names an agent reports [`PrintOutcome::AgentUnavailable`]: there is
+    /// nowhere for the job to go, and saying so beats opening the address the agent was supposed to
+    /// own — which in a hosted edge placement is a device path that is not on this machine.
+    #[must_use]
+    pub fn with_agents(mut self, agents: Arc<dyn AgentDispatch>) -> Self {
+        self.agents = Some(agents);
+        self
     }
 
     /// Gives this dispatcher the fonts to rasterise with.
@@ -697,9 +905,14 @@ impl Printers {
         Ok(PrintDocument { blocks })
     }
 
-    /// Sends one job to one device.
+    /// Sends one job to one device — down the wire itself, or onto the queue of the agent that
+    /// owns that device's transport (ADR-0112).
     async fn dispatch(&self, device: &PublishedDevice, mut job: PrintJob) -> PrintOutcome {
         let capabilities = assumed_capabilities(device, self.can_rasterise());
+        // Rendered **before** the branch, deliberately. The agent receives a finished document and
+        // decides nothing about it, so the rasterising, the code-page decision and the width all
+        // happen here whichever way the bytes leave. Moving any of it across would mean a store
+        // with three terminals printing three different tickets from one order.
         match self.prepare(&capabilities, job.document) {
             Ok(document) => job.document = document,
             Err(line) => {
@@ -713,6 +926,20 @@ impl Printers {
                 );
                 return PrintOutcome::Unprintable;
             }
+        }
+        // A printer that names an agent is reached through the queue and never through a socket
+        // this process opens. Absent — every printer in every store that has not configured one —
+        // falls through to exactly the path ADR-0103 shipped.
+        if let Some(agent) = device.agent_device_id {
+            let Some(lane) = self.agents.as_ref() else {
+                tracing::warn!(
+                    device = %device.device_id,
+                    %agent,
+                    "this printer names an agent but no print queue is composed"
+                );
+                return PrintOutcome::AgentUnavailable;
+            };
+            return lane.enqueue(agent, device.device_id, job).await;
         }
         let printer = match self.printer_for(device, capabilities) {
             Ok(printer) => printer,
@@ -769,14 +996,15 @@ impl Printers {
 mod tests {
     use super::TcpTransports;
     use super::{
-        ASSUMED_DOTS_PER_LINE, PrintOutcome, Printers, TicketLine, TransportFactory,
+        ASSUMED_DOTS_PER_LINE, AgentLane, PrintOutcome, Printers, TicketLine, TransportFactory,
         assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
         station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
-    use pos_ports::printer::{PrintBlock, PrinterConnection};
+    use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
+    use pos_proto::ClockSource as _;
     use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
     use pos_proto::floor::{KitchenStation, StationPlan};
     use pos_proto::ids::{DeviceId, MenuItemId, StationId};
@@ -828,9 +1056,17 @@ mod tests {
             address: format!("192.0.2.{seed}:9100"),
             name: DisplayName::new("Printer"),
             station_id: at,
-            // Absent is the in-store case and the one this module still implements: the edge opens
-            // the address itself. The agent branch lands with the claim and acknowledge routes.
+            // Absent is the in-store case: the edge opens the address itself, which is what every
+            // store that configures no agent still does (ADR-0112).
             agent_device_id: None,
+        }
+    }
+
+    /// The same printer, but with its transport owned by `agent` (ADR-0112).
+    fn device_via_agent(seed: u128, at: Option<StationId>, agent: DeviceId) -> PublishedDevice {
+        PublishedDevice {
+            agent_device_id: Some(agent),
+            ..device(seed, DeviceKind::Printer, at)
         }
     }
 
@@ -1584,5 +1820,226 @@ mod tests {
             TcpTransports.open(&network).is_ok(),
             "and the LAN still works"
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // ADR-0112: a printer whose transport belongs to another device.
+    // ---------------------------------------------------------------------
+
+    /// The three seams the agent lane needs, in memory, plus the agent's own id.
+    struct Lane {
+        queue: Arc<crate::print_queue::InMemoryPrintQueue>,
+        agent: DeviceId,
+    }
+
+    /// A dispatcher whose printers are reached through an agent bound `heard_from_ms` ago, or that
+    /// nobody holds at all when `heard_from_ms` is `None`.
+    async fn with_agent_lane(heard_from_ms: Option<i64>) -> (Printers, Arc<Recorder>, Lane) {
+        use crate::print_agent::PrintAgents as _;
+
+        let (printers, recorder) = recorder(true);
+        let agents = Arc::new(crate::print_agent::InMemoryPrintAgents::new());
+        let queue = Arc::new(crate::print_queue::InMemoryPrintQueue::new());
+        let agent = DeviceId::new(Ulid::from_u128(0xA6E7));
+        if let Some(ago) = heard_from_ms {
+            let now = crate::clock::SystemClock
+                .now()
+                .as_milliseconds_since_epoch();
+            agents
+                .claim(
+                    agent,
+                    DeviceId::new(Ulid::from_u128(0x00DE_71CE)),
+                    now - ago,
+                )
+                .await
+                .expect("the binding is recorded");
+        }
+        let printers = printers.with_agents(Arc::new(AgentLane::new(
+            Arc::clone(&agents),
+            Arc::clone(&queue),
+            Arc::new(crate::print_wake::SharedPrintWake::new()),
+        )));
+        (printers, recorder, Lane { queue, agent })
+    }
+
+    /// What the agent would be handed if it asked right now.
+    async fn claimable(lane: &Lane) -> Vec<crate::print_queue::ClaimedJob> {
+        use crate::print_queue::PrintQueue as _;
+        let now = crate::clock::SystemClock
+            .now()
+            .as_milliseconds_since_epoch();
+        lane.queue
+            .claim(lane.agent, now, now + 30_000)
+            .await
+            .expect("the queue answers")
+    }
+
+    #[tokio::test]
+    async fn a_printer_that_names_a_live_agent_is_queued_rather_than_dialled() {
+        // The last hop moves and nothing above it does: the document is rendered here, and what
+        // reaches the queue is the finished job.
+        let (printers, recorder, lane) = with_agent_lane(Some(0)).await;
+        let session = session_with(PublishedDevices::new(vec![device_via_agent(
+            2, None, lane.agent,
+        )]));
+        let outcome = printers
+            .print_receipt(
+                &session,
+                store_id(),
+                event_id(7),
+                41,
+                &totals_of(Money::new(CurrencyCode::VND, 90_000)),
+                None,
+            )
+            .await;
+
+        assert_eq!(outcome, PrintOutcome::QueuedToAgent);
+        assert_eq!(outcome.as_wire(), "QUEUED_TO_AGENT");
+        assert!(
+            !outcome.printed(),
+            "no paper has come out; the till must not claim it has"
+        );
+        assert!(
+            recorder.written.lock().expect("lock").is_empty(),
+            "the edge must not also dial a printer it handed to an agent"
+        );
+
+        let queued = claimable(&lane).await;
+        assert_eq!(queued.len(), 1, "one job, for one printer");
+        assert_eq!(queued[0].job.job_id, event_id(7));
+        assert!(
+            lines_of(&queued[0].job.document)
+                .iter()
+                .any(|line| line.contains("41")),
+            "the agent receives the rendered receipt, not the ingredients for one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_printer_with_no_agent_still_opens_its_own_transport() {
+        // The absent field is the whole compatibility story: a lane being composed changes nothing
+        // for a store that configured no agent.
+        let (printers, recorder, _lane) = with_agent_lane(Some(0)).await;
+        let session = session_with(PublishedDevices::new(vec![device(
+            2,
+            DeviceKind::Printer,
+            None,
+        )]));
+        let outcome = printers
+            .print_receipt(
+                &session,
+                store_id(),
+                event_id(8),
+                42,
+                &totals_of(Money::new(CurrencyCode::VND, 10_000)),
+                None,
+            )
+            .await;
+        assert_eq!(outcome, PrintOutcome::Printed);
+        assert!(!recorder.written.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_unbound_or_silent_agent_is_refused_before_the_queue_is_touched() {
+        // ADR-0112's ordering: a queue must not start building behind a box that is not there.
+        for heard_from in [
+            None,
+            Some(i64::try_from(crate::print_agent::AGENT_SILENCE.as_millis()).expect("fits") + 1),
+        ] {
+            let (printers, recorder, lane) = with_agent_lane(heard_from).await;
+            let session = session_with(PublishedDevices::new(vec![device_via_agent(
+                2, None, lane.agent,
+            )]));
+            let outcome = printers
+                .print_receipt(
+                    &session,
+                    store_id(),
+                    event_id(9),
+                    43,
+                    &totals_of(Money::new(CurrencyCode::VND, 10_000)),
+                    None,
+                )
+                .await;
+            assert_eq!(outcome, PrintOutcome::AgentUnavailable);
+            assert_eq!(outcome.as_wire(), "PRINT_AGENT_UNAVAILABLE");
+            assert!(
+                claimable(&lane).await.is_empty(),
+                "nothing was written: the refusal comes before the table"
+            );
+            assert!(
+                recorder.written.lock().expect("lock").is_empty(),
+                "and the edge does not fall back to dialling the printer itself"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_printer_whose_agent_is_alive_but_not_consuming_fills_and_then_refuses() {
+        // The state the cap exists for: a *live* agent whose printer is not consuming. Adding one
+        // more job is promising paper that is not coming, so the enqueue refuses and the operator
+        // learns it at the till rather than from the absence of a ticket.
+        use crate::print_queue::PrintQueue as _;
+
+        let (printers, _recorder, lane) = with_agent_lane(Some(0)).await;
+        let printer = device_via_agent(2, None, lane.agent);
+        let now = crate::clock::SystemClock
+            .now()
+            .as_milliseconds_since_epoch();
+        for filler in 0..crate::print_agent::MAX_QUEUED_PER_PRINTER {
+            lane.queue
+                .enqueue(
+                    lane.agent,
+                    printer.device_id,
+                    PrintJob {
+                        job_id: event_id(u128::from(filler) + 1_000),
+                        store_id: store_id(),
+                        station_id: None,
+                        document: pos_ports::printer::PrintDocument { blocks: Vec::new() },
+                    },
+                    now,
+                    now + 600_000,
+                    crate::print_agent::MAX_QUEUED_PER_PRINTER,
+                )
+                .await
+                .expect("the queue fills");
+        }
+
+        let session = session_with(PublishedDevices::new(vec![printer]));
+        let outcome = printers
+            .print_receipt(
+                &session,
+                store_id(),
+                event_id(10),
+                44,
+                &totals_of(Money::new(CurrencyCode::VND, 10_000)),
+                None,
+            )
+            .await;
+        assert_eq!(outcome, PrintOutcome::QueueFull);
+        assert_eq!(outcome.as_wire(), "PRINT_QUEUE_FULL");
+    }
+
+    #[tokio::test]
+    async fn a_named_agent_with_no_queue_composed_refuses_rather_than_dialling() {
+        // A route test or the fakes-backed example. Opening the address anyway is the wrong
+        // direction: in a hosted edge placement it is a device path that is not on this machine.
+        let (printers, recorder) = recorder(true);
+        let session = session_with(PublishedDevices::new(vec![device_via_agent(
+            2,
+            None,
+            DeviceId::new(Ulid::from_u128(0xA6E7)),
+        )]));
+        let outcome = printers
+            .print_receipt(
+                &session,
+                store_id(),
+                event_id(11),
+                45,
+                &totals_of(Money::new(CurrencyCode::VND, 10_000)),
+                None,
+            )
+            .await;
+        assert_eq!(outcome, PrintOutcome::AgentUnavailable);
+        assert!(recorder.written.lock().expect("lock").is_empty());
     }
 }

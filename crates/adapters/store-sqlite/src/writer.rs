@@ -296,6 +296,7 @@ pub(crate) enum Command {
     /// Deletes an acknowledged job, reporting whether it was still there (ADR-0112).
     AcknowledgePrintJob {
         job_id: String,
+        agent_device_id: String,
         reply: oneshot::Sender<Result<bool, PortError>>,
     },
     /// Deletes every job past its TTL, reporting how many (ADR-0112).
@@ -308,6 +309,13 @@ pub(crate) enum Command {
     RevokePrintAgent {
         agent_device_id: String,
         paired_device_id: String,
+        reply: oneshot::Sender<Result<bool, PortError>>,
+    },
+    /// Records that a bound agent asked for work, without ever creating a binding (ADR-0112).
+    TouchPrintAgent {
+        agent_device_id: String,
+        paired_device_id: String,
+        now_ms: i64,
         reply: oneshot::Sender<Result<bool, PortError>>,
     },
     PrintAgentForDevice {
@@ -533,8 +541,12 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     claim_expires_at_ms,
                 ));
             }
-            Command::AcknowledgePrintJob { job_id, reply } => {
-                let _ = reply.send(acknowledge_print_job(&conn, &job_id));
+            Command::AcknowledgePrintJob {
+                job_id,
+                agent_device_id,
+                reply,
+            } => {
+                let _ = reply.send(acknowledge_print_job(&conn, &job_id, &agent_device_id));
             }
             Command::ExpirePrintJobs { now_ms, reply } => {
                 let _ = reply.send(expire_print_jobs(&conn, now_ms));
@@ -561,6 +573,19 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                     &conn,
                     &agent_device_id,
                     &paired_device_id,
+                ));
+            }
+            Command::TouchPrintAgent {
+                agent_device_id,
+                paired_device_id,
+                now_ms,
+                reply,
+            } => {
+                let _ = reply.send(touch_print_agent(
+                    &conn,
+                    &agent_device_id,
+                    &paired_device_id,
+                    now_ms,
                 ));
             }
             Command::PrintAgentForDevice {
@@ -1225,10 +1250,17 @@ fn claim_print_jobs(
 /// after the job expired, or a second acknowledgement of a job whose first one was lost on the wire
 /// and redelivered. Both mean *the queue no longer holds this*, which is what the agent wanted, so
 /// the caller reports success either way and this value is for the log.
-fn acknowledge_print_job(conn: &Connection, job_id: &str) -> Result<bool, PortError> {
+fn acknowledge_print_job(
+    conn: &Connection,
+    job_id: &str,
+    agent_device_id: &str,
+) -> Result<bool, PortError> {
     let port = PortName::PrinterDriver;
     let deleted = conn
-        .execute("DELETE FROM print_jobs WHERE job_id = ?1", params![job_id])
+        .execute(
+            "DELETE FROM print_jobs WHERE job_id = ?1 AND agent_device_id = ?2",
+            params![job_id, agent_device_id],
+        )
         .map_err(|error| db_error(port, error))?;
     Ok(deleted > 0)
 }
@@ -1326,6 +1358,29 @@ fn revoke_print_agent(
         )
         .map_err(|error| db_error(port, error))?;
     Ok(removed == 1)
+}
+
+/// Stamps `last_seen_at` on an existing binding, reporting whether one was there.
+///
+/// An `UPDATE`, deliberately, where [`claim_print_agent`] is an upsert. This runs on every claim
+/// against the queue — the act that proves liveness — and a claim can race a manager revoking the
+/// binding at the till. An upsert here would resurrect the binding the manager just released, which
+/// is the one thing a revoke has to be able to guarantee. Nothing found means nothing written.
+fn touch_print_agent(
+    conn: &Connection,
+    agent_device_id: &str,
+    paired_device_id: &str,
+    now_ms: i64,
+) -> Result<bool, PortError> {
+    let port = PortName::PrinterDriver;
+    let stamped = conn
+        .execute(
+            "UPDATE print_agents SET last_seen_at = ?3 \
+             WHERE agent_device_id = ?1 AND paired_device_id = ?2",
+            params![agent_device_id, paired_device_id, now_ms],
+        )
+        .map_err(|error| db_error(port, error))?;
+    Ok(stamped == 1)
 }
 
 /// The terminal identity a paired device answers for, if any.
