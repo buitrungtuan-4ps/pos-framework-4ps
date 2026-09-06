@@ -1554,6 +1554,37 @@ mod config_tree_store {
 // The fleet read model: identity + liveness + config drift + relay backlog (ADR-0068 slice 3).
 // ---------------------------------------------------------------------------
 
+/// A bump that must be issued, with its `If-Match` expectation and any acknowledgement spelled
+/// out at the call site.
+///
+/// Every bump now carries a precondition, so a test that does not name one is not testing the
+/// route callers use. `expected` is the generation the row must be at — `None` asserts the store
+/// has never been issued a lease — and `acknowledge` names an undrained generation the bump is
+/// knowingly abandoning.
+async fn issue(
+    trees: &store_postgres::PostgresConfigTrees,
+    tenant: TenantId,
+    store_id: StoreId,
+    at_ms: i64,
+    placement: Option<&str>,
+    acknowledge: Option<i64>,
+    expected: Option<i64>,
+) -> store_postgres::StoredBump {
+    match trees
+        .bump_store_lease(tenant, store_id, at_ms, placement, acknowledge, expected)
+        .await
+        .expect("the bump reached the database")
+    {
+        store_postgres::BumpOutcome::Issued(stored) => Some(stored),
+        // Both refusals are a test-authoring mistake here, not a behaviour under test: the caller
+        // named the wrong precondition, or failed to acknowledge a handover it had itself caused.
+        // The refusals get their own cases, where they are the assertion rather than the accident.
+        store_postgres::BumpOutcome::VersionMismatch { .. }
+        | store_postgres::BumpOutcome::Undrained { .. } => None,
+    }
+    .expect("the bump was issued; check the If-Match generation and any acknowledgement")
+}
+
 mod fleet_store {
     use super::{block_on, prepared};
     use pos_proto::{StoreId, TenantId, Ulid};
@@ -1600,10 +1631,16 @@ mod fleet_store {
                 .expect("register the store");
 
             // A first lease supersedes nobody: the INSERT branch writes NULL.
-            let first = trees
-                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
-                .await
-                .expect("first bump");
+            let first = super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_000_000,
+                None,
+                None,
+                None,
+            )
+            .await;
             assert_eq!(first.generation, 0);
             assert_eq!(
                 first.superseded_generation, None,
@@ -1611,10 +1648,16 @@ mod fleet_store {
             );
 
             // The second bump displaces generation 0 and must say so.
-            let second = trees
-                .bump_store_lease(tenant, store_id, 1_777_000_001_000, None)
-                .await
-                .expect("second bump");
+            let second = super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_001_000,
+                None,
+                None,
+                Some(0),
+            )
+            .await;
             assert_eq!(second.generation, 1);
             assert_eq!(
                 second.superseded_generation,
@@ -1686,14 +1729,26 @@ mod fleet_store {
                 )
                 .await
                 .expect("register the store");
-            trees
-                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
-                .await
-                .expect("first bump");
-            trees
-                .bump_store_lease(tenant, store_id, 1_777_000_001_000, None)
-                .await
-                .expect("second bump");
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_000_000,
+                None,
+                None,
+                None,
+            )
+            .await;
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_001_000,
+                None,
+                None,
+                Some(0),
+            )
+            .await;
 
             for (depth, generation, why) in [
                 (
@@ -1755,15 +1810,16 @@ mod fleet_store {
                 "a store with no lease row must report no placement, not a default"
             );
 
-            trees
-                .bump_store_lease(
-                    tenant,
-                    store_id,
-                    1_777_000_000_000,
-                    Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
-                )
-                .await
-                .expect("bump with a placement");
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_000_000,
+                Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
+                None,
+                None,
+            )
+            .await;
 
             let rows = fleet
                 .list(&tenant.to_string())
@@ -6772,33 +6828,50 @@ mod edge_placement {
 
             // First bump, no placement named: generation 0, and the column falls to its schema
             // default rather than to the wire's UNSPECIFIED. This is the INSERT branch's COALESCE.
-            let first = trees
-                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
-                .await
-                .expect("the first bump");
+            let first = super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_000_000,
+                None,
+                None,
+                None,
+            )
+            .await;
             assert_eq!(first.generation, 0);
             assert_eq!(first.edge_placement, "EDGE_PLACEMENT_IN_STORE");
 
             // Named: the store moves, and the generation advances in the same statement.
-            let moved = trees
-                .bump_store_lease(
-                    tenant,
-                    store_id,
-                    1_777_000_001_000,
-                    Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
-                )
-                .await
-                .expect("the move");
+            let moved = super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_001_000,
+                Some("EDGE_PLACEMENT_HOSTED_BY_PLATFORM"),
+                None,
+                Some(0),
+            )
+            .await;
             assert_eq!(moved.generation, 1);
             assert_eq!(moved.edge_placement, "EDGE_PLACEMENT_HOSTED_BY_PLATFORM");
 
             // Not named: ADR-0003's swap of the hosted machine. The ON CONFLICT branch's COALESCE
             // keeps the stored value. Drop that COALESCE and this returns IN_STORE — a store
             // silently re-promised offline trading it cannot do.
-            let swapped = trees
-                .bump_store_lease(tenant, store_id, 1_777_000_002_000, None)
-                .await
-                .expect("the swap");
+            //
+            // It also acknowledges generation 0, which the move above left undrained. Without that
+            // this bump is refused — which is the point of the refusal, and is asserted on its own
+            // below.
+            let swapped = super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_002_000,
+                None,
+                Some(0),
+                Some(1),
+            )
+            .await;
             assert_eq!(swapped.generation, 2);
             assert_eq!(
                 swapped.edge_placement, "EDGE_PLACEMENT_HOSTED_BY_PLATFORM",
@@ -6824,6 +6897,8 @@ mod edge_placement {
                     store_id,
                     1_777_000_000_000,
                     Some("EDGE_PLACEMENT_ON_THE_MOON"),
+                    None,
+                    None,
                 )
                 .await;
             assert!(

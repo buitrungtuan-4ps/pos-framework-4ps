@@ -793,11 +793,29 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         store: StoreId,
         _issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
-    ) -> Result<pos_cloud::lease::LeaseBump, pos_cloud::lease::LeaseStoreError> {
+        acknowledge_undrained: Option<pos_core::lease::LeaseGeneration>,
+        expected_generation: Option<pos_core::lease::LeaseGeneration>,
+    ) -> Result<pos_cloud::lease::LeaseBumpOutcome, pos_cloud::lease::LeaseStoreError> {
         let mut leases = self.leases.lock().expect("lock");
         let mut placements = self.placements.lock().expect("lock");
         let mut superseded = self.superseded.lock().expect("lock");
         let held = leases.get(&(tenant, store)).copied();
+        // The two conditions the real statement evaluates in its own `WHERE`, in the same order and
+        // for the same reason: a caller holding a stale read is told *that*, rather than being sent
+        // to acknowledge a handover it has not seen. Checked before anything is written, because in
+        // the adapter the check and the write are one statement.
+        if held.map(pos_core::lease::LeaseGeneration::new) != expected_generation {
+            return Ok(pos_cloud::lease::LeaseBumpOutcome::VersionMismatch {
+                current: held.map(pos_core::lease::LeaseGeneration::new),
+            });
+        }
+        if let Some(undrained) = superseded.get(&(tenant, store)).copied()
+            && acknowledge_undrained != Some(pos_core::lease::LeaseGeneration::new(undrained))
+        {
+            return Ok(pos_cloud::lease::LeaseBumpOutcome::Undrained {
+                superseded: pos_core::lease::LeaseGeneration::new(undrained),
+            });
+        }
         let next = held.map_or(0, |value| value.saturating_add(1));
         leases.insert((tenant, store), next);
         // The generation just displaced, mirroring `superseded_generation = store_lease.generation`
@@ -814,14 +832,16 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
                 .unwrap_or(EdgePlacement::InStore)
         });
         placements.insert((tenant, store), placement);
-        Ok(pos_cloud::lease::LeaseBump {
-            generation: pos_core::lease::LeaseGeneration::new(next),
-            edge_placement: placement,
-            superseded_generation: superseded
-                .get(&(tenant, store))
-                .copied()
-                .map(pos_core::lease::LeaseGeneration::new),
-        })
+        Ok(pos_cloud::lease::LeaseBumpOutcome::Issued(
+            pos_cloud::lease::LeaseBump {
+                generation: pos_core::lease::LeaseGeneration::new(next),
+                edge_placement: placement,
+                superseded_generation: superseded
+                    .get(&(tenant, store))
+                    .copied()
+                    .map(pos_core::lease::LeaseGeneration::new),
+            },
+        ))
     }
 
     async fn current(
@@ -1184,6 +1204,24 @@ fn post_with_cookie(uri: &str, body: &serde_json::Value, cookie: &str) -> Reques
         .uri(uri)
         .header("content-type", "application/json")
         .header("cookie", cookie)
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialise the body"),
+        ))
+        .expect("build the request")
+}
+
+/// A POST for `uri` with a JSON body, a `Cookie` header, and an `If-Match` naming a lease
+/// generation — or `*` for a store that has never been issued one.
+///
+/// The lease bump is conditional (ADR-0110, ADR-0094), so a test that omits the header is testing
+/// the refusal rather than the route.
+fn bump_with_if_match(body: &serde_json::Value, cookie: &str, if_match: &str) -> Request<Body> {
+    Request::builder()
+        .method("POST")
+        .uri("/admin/config/lease/bump")
+        .header("content-type", "application/json")
+        .header("cookie", cookie)
+        .header("if-match", if_match)
         .body(Body::from(
             serde_json::to_vec(body).expect("serialise the body"),
         ))
@@ -10521,10 +10559,10 @@ async fn a_lease_bump_advances_the_authority_and_publishes_the_node_the_store_re
     // The first bump establishes the counter at generation 0 and supersedes nobody.
     let first = router
         .clone()
-        .oneshot(post_with_cookie(
-            "/admin/config/lease/bump",
+        .oneshot(bump_with_if_match(
             &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
             &cookie,
+            "*",
         ))
         .await
         .expect("route the first bump");
@@ -10541,10 +10579,10 @@ async fn a_lease_bump_advances_the_authority_and_publishes_the_node_the_store_re
     // now carries a `lease` node the edge will weigh its held generation against.
     let second = router
         .clone()
-        .oneshot(post_with_cookie(
-            "/admin/config/lease/bump",
+        .oneshot(bump_with_if_match(
             &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
             &cookie,
+            "\"0\"",
         ))
         .await
         .expect("route the second bump");
@@ -10634,10 +10672,10 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
     // console that never learned the field keeps working and keeps telling the truth.
     let first = router
         .clone()
-        .oneshot(post_with_cookie(
-            "/admin/config/lease/bump",
+        .oneshot(bump_with_if_match(
             &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
             &cookie,
+            "*",
         ))
         .await
         .expect("route the first bump");
@@ -10653,14 +10691,14 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
     // has an answer that does not require reading a second table at a second time (ADR-0110).
     let moved = router
         .clone()
-        .oneshot(post_with_cookie(
-            "/admin/config/lease/bump",
+        .oneshot(bump_with_if_match(
             &serde_json::json!({
                 "tenant_id": tenant_ulid,
                 "store_id": store_ulid,
                 "edge_placement": "EDGE_PLACEMENT_HOSTED_BY_PLATFORM",
             }),
             &cookie,
+            "\"0\"",
         ))
         .await
         .expect("route the move");
@@ -10677,10 +10715,17 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
     // not, which is the one direction ADR-0110 calls dangerous.
     let swapped = router
         .clone()
-        .oneshot(post_with_cookie(
-            "/admin/config/lease/bump",
-            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                // Generation 0 was left undrained by the move above, so this swap has to say it is
+                // abandoning it. Without the acknowledgement the route refuses — which is the whole
+                // point, and is asserted on its own elsewhere.
+                "acknowledge_undrained": 0,
+            }),
             &cookie,
+            "\"1\"",
         ))
         .await
         .expect("route the swap");

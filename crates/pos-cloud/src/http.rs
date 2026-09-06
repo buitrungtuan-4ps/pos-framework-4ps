@@ -172,7 +172,7 @@ use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::images::{self, ImagePipelineError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
-use crate::lease::{LeaseStore, LeaseStoreError, lease_node};
+use crate::lease::{LeaseBumpOutcome, LeaseStore, LeaseStoreError, lease_node};
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
 use crate::openapi_admin::AdminApiDoc;
@@ -10413,6 +10413,58 @@ where
     }
 }
 
+/// The generation a lease bump's `If-Match` names, or `None` for `*`.
+///
+/// **This parses; it does not check.** Unlike [`if_match_config`], which compares against a version
+/// it has already read, the expectation here is handed to the write and evaluated inside the
+/// statement's own `WHERE` — so there is no read-then-write window for a second admin to land in.
+/// That matters more here than elsewhere: two bumps racing do not merely produce a lost update, they
+/// let the second overwrite `superseded_generation`, destroying the record that the *first*
+/// displaced machine never drained — with the very column that exists to hold that record.
+///
+/// `*` means "this store has never been issued a lease", the same claim `if_match_config` uses it
+/// for, and the insert branch is the one that honours it: a numbered tag against a store with no
+/// lease row inserts nothing.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
+)]
+fn if_match_lease(
+    headers: &HeaderMap,
+) -> Result<Option<pos_core::lease::LeaseGeneration>, Response> {
+    let Some(raw) = headers.get(IF_MATCH) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a lease bump must carry the generation it was read at, as an If-Match header; \
+             If-Match: * asserts the store has never been issued a lease",
+            &[("if-match", "REQUIRED")],
+        ));
+    };
+    let Ok(raw) = raw.to_str() else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must be a strong entity-tag",
+            &[("if-match", "INVALID_FORMAT")],
+        ));
+    };
+    match parse_entity_tag(raw.trim()) {
+        Ok(tag) => match tag.as_str().parse::<u64>() {
+            Ok(generation) => Ok(Some(pos_core::lease::LeaseGeneration::new(generation))),
+            Err(_) => Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a lease If-Match names a generation, which is a whole number",
+                &[("if-match", "INVALID_FORMAT")],
+            )),
+        },
+        Err(EntityTagRefusal::Wildcard) => Ok(None),
+        Err(EntityTagRefusal::Malformed) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "if-match must be a strong entity-tag",
+            &[("if-match", "INVALID_FORMAT")],
+        )),
+    }
+}
+
 /// The `If-Match` a config publish must carry, compared against the version the tree holds.
 ///
 /// A store that has never been published to has no current version, and says so: `If-Match: *` is
@@ -10867,6 +10919,14 @@ struct BumpLeaseRequest {
     store_id: String,
     #[serde(default)]
     edge_placement: Option<String>,
+    /// The undrained generation this bump is knowingly abandoning, or absent.
+    ///
+    /// It names the value already sitting in `superseded_generation` — *not* the generation this
+    /// bump is about to displace. So an acknowledged bump does not clear the column; it rolls it
+    /// forward, and the fact that the older generation was abandoned survives in the audit trail,
+    /// which is why the entry carries both numbers.
+    #[serde(default)]
+    acknowledge_undrained: Option<u64>,
 }
 
 /// A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —
@@ -11424,12 +11484,50 @@ where
     //
     // The placement rides inside that same write rather than following it, so there is no interval
     // in which the store record and the lease disagree (ADR-0110).
+    let expected_generation = match if_match_lease(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let acknowledged = request
+        .acknowledge_undrained
+        .map(pos_core::lease::LeaseGeneration::new);
     let bump = match state
         .config_trees
-        .bump(tenant_id, store_id, state.clock.now(), requested_placement)
+        .bump(
+            tenant_id,
+            store_id,
+            state.clock.now(),
+            requested_placement,
+            acknowledged,
+            expected_generation,
+        )
         .await
     {
-        Ok(bump) => bump,
+        Ok(LeaseBumpOutcome::Issued(bump)) => bump,
+        // Both refusals return *before* `lease_node` and `publish_ota_node` below. That ordering is
+        // the point: the comment above explains why the counter moves before the publish, and a
+        // request that issued no generation must not reach a publish that would have to name one.
+        Ok(LeaseBumpOutcome::VersionMismatch { current }) => {
+            return api_error_with_details(
+                ErrorStatus::FailedPrecondition,
+                "the store's lease has moved since you read it; re-read and retry",
+                &[(
+                    "if-match",
+                    &current.map_or_else(
+                        || "NO_LEASE_ISSUED".to_owned(),
+                        |generation| generation.value().to_string(),
+                    ),
+                )],
+            );
+        }
+        Ok(LeaseBumpOutcome::Undrained { superseded }) => {
+            return api_error_with_details(
+                ErrorStatus::Unprocessable,
+                "this store's previous machine still holds events this cloud has never seen; \
+                 acknowledge that generation to move the store anyway, which abandons them",
+                &[("acknowledge_undrained", &superseded.value().to_string())],
+            );
+        }
         Err(error) => return lease_store_error_response(&error),
     };
     let node = lease_node(bump.generation);

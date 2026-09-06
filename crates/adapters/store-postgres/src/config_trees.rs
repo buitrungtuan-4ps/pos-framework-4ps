@@ -25,6 +25,39 @@ pub struct PostgresConfigTrees {
     pool: Pool,
 }
 
+/// What a conditional bump did.
+///
+/// `Result<StoredBump, PortError>` has no arm for a well-formed request the *row's state* refuses,
+/// and both refusals here are exactly that: the caller can fix them and retry, where `PortError`
+/// funnels to `503 the service is unavailable` and invites retrying the same losing request. The
+/// same reasoning [`UpdateOutcome`](../../../pos-cloud/src/version.rs) applies to conditional writes
+/// on the config tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BumpOutcome {
+    /// The generation was issued.
+    Issued(StoredBump),
+    /// The row is not at the generation the caller's `If-Match` named — someone else bumped in
+    /// between, or the caller is holding a stale read. Answers `412`.
+    ///
+    /// `current` is the generation the row is actually at, or `None` when the store has no lease
+    /// row at all and the caller named a number rather than `*`. It is read by a second statement
+    /// *after* the refusal, so another admin can move it again in between: the number is advisory,
+    /// for the message. The decision was made by the write's own `WHERE`, which cannot race.
+    VersionMismatch {
+        /// The generation the row is actually at, or `None` when there is no row.
+        current: Option<i64>,
+    },
+    /// A handover is still in flight: `superseded_generation` names a machine whose events this
+    /// cloud has never seen, and the request did not acknowledge that generation. Answers `422`
+    /// ([ADR-0096](../../../../docs/adr/0096-unprocessable-status.md)).
+    ///
+    /// Advisory in the same way and for the same reason as `current` above.
+    Undrained {
+        /// The generation whose machine still owes this cloud events.
+        superseded: i64,
+    },
+}
+
 /// What one lease bump wrote: the generation it issued and the edge placement the store now has
 /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md),
 /// [ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
@@ -265,7 +298,9 @@ impl PostgresConfigTrees {
         store_id: StoreId,
         issued_at_ms: i64,
         edge_placement: Option<&str>,
-    ) -> Result<StoredBump, PortError> {
+        acknowledge_undrained: Option<i64>,
+        expected_generation: Option<i64>,
+    ) -> Result<BumpOutcome, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         // `$4` is NULL for a bump that names no placement. On insert the column falls to its schema
         // default (`IN_STORE`, what every store in the fleet already is); on conflict `COALESCE`
@@ -285,30 +320,77 @@ impl PostgresConfigTrees {
         // is the cloud's only durable memory of the question \"has N drained?\".
         let requested = edge_placement.map(ToOwned::to_owned);
         let row = connection
-            .query_one(
-                "INSERT INTO store_lease \
+            .query_opt("INSERT INTO store_lease \
                  (tenant_id, store_id, generation, issued_at, edge_placement, superseded_generation) \
-                 VALUES ($1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL) \
+                 SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL \
+                 WHERE $6::bigint IS NULL \
                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
                  generation = store_lease.generation + 1, \
                  superseded_generation = store_lease.generation, \
                  issued_at = EXCLUDED.issued_at, \
                  edge_placement = COALESCE($4, store_lease.edge_placement) \
+                 WHERE store_lease.generation = $6::bigint \
+                   AND (store_lease.superseded_generation IS NULL \
+                        OR store_lease.superseded_generation = $5::bigint) \
                  RETURNING generation, edge_placement, superseded_generation",
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),
                     &issued_at_ms,
                     &requested,
+                    &acknowledge_undrained,
+                    &expected_generation,
                 ],
             )
             .await
             .map_err(unavailable)?;
-        Ok(StoredBump {
+
+        let Some(row) = row else {
+            // No row came back, so nothing was written — both branches of the statement are
+            // conditional. Which refusal it was is not encoded in the absence, so read the row once
+            // to choose the message. Racy by construction: another admin can bump between the
+            // refusal and this read. That is acceptable because the *decision* was already made,
+            // atomically, by the statement's own `WHERE`; this only picks what to say about it.
+            let probe = connection
+                .query_opt(
+                    "SELECT generation, superseded_generation FROM store_lease \
+                     WHERE tenant_id = $1 AND store_id = $2",
+                    &[&tenant.to_string(), &store_id.to_string()],
+                )
+                .await
+                .map_err(unavailable)?;
+            let Some(probe) = probe else {
+                // No lease row at all, and the caller named a generation rather than `*` — the
+                // insert's own `WHERE` refused it. `*` would have inserted.
+                return Ok(BumpOutcome::VersionMismatch { current: None });
+            };
+            let current: i64 = probe.get(0);
+            let superseded: Option<i64> = probe.get(1);
+            // Order matters, and this is the order the statement itself evaluates: the generation
+            // check comes first, so a caller holding a stale read is told *that* rather than being
+            // sent to acknowledge a handover it has not seen yet.
+            if Some(current) != expected_generation {
+                return Ok(BumpOutcome::VersionMismatch {
+                    current: Some(current),
+                });
+            }
+            return Ok(match superseded {
+                Some(superseded) => BumpOutcome::Undrained { superseded },
+                // The row satisfies both conditions now, so the refusal was a race that has since
+                // resolved. Report it as a version mismatch: the caller re-reads and retries, which
+                // is the correct next move either way, and claiming a handover that is not there
+                // would send them to acknowledge nothing.
+                None => BumpOutcome::VersionMismatch {
+                    current: Some(current),
+                },
+            });
+        };
+
+        Ok(BumpOutcome::Issued(StoredBump {
             generation: row.get(0),
             edge_placement: row.get(1),
             superseded_generation: row.get(2),
-        })
+        }))
     }
 
     /// The store's authoritative lease generation, or `None` if it has never been issued one.

@@ -126,6 +126,43 @@ impl StorePlacement {
     }
 }
 
+/// What a conditional bump did ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// Two of the three arms are refusals a caller can fix and retry, which is why they are outcomes and
+/// not [`LeaseStoreError`]s: that type funnels to `503 the service is unavailable`, and a caller told
+/// `503` retries the same losing request. The same reasoning
+/// [`UpdateOutcome`](crate::version::UpdateOutcome) applies on the config tree.
+///
+/// **The two refusals are genuinely different questions, and a retry separates them.** A caller that
+/// re-sends a bump which actually landed is *stale*, not *blocked*: the row moved on, so it gets
+/// `VersionMismatch` — and telling it `Undrained` instead would send it to acknowledge a handover it
+/// has already caused. Order matters for the same reason, and the write's own `WHERE` evaluates the
+/// generation first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseBumpOutcome {
+    /// The generation was issued.
+    Issued(LeaseBump),
+    /// The row is not at the generation the request's `If-Match` named. Answers `412`.
+    ///
+    /// `current` is what the row holds now, or `None` for a store with no lease row at all. Read
+    /// after the refusal, so it can be stale by the time it is rendered — it is for the message, not
+    /// for a decision. The decision was the write's `WHERE`, which cannot race.
+    VersionMismatch {
+        /// What the row holds now, or `None` for a store with no lease row.
+        current: Option<LeaseGeneration>,
+    },
+    /// A handover is still in flight and the request did not acknowledge it: `superseded` names a
+    /// machine holding events this cloud has never seen. Answers `422`
+    /// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+    ///
+    /// You do not move a store off a machine whose events are still on it — not without a person
+    /// saying, by name and in the trail, that those events are being abandoned.
+    Undrained {
+        /// The generation whose machine still owes this cloud events.
+        superseded: LeaseGeneration,
+    },
+}
+
 /// Issues and reads a store's authoritative lease generation.
 pub trait LeaseStore {
     /// Issues this store's **next** generation and returns it: the act of saying "a different
@@ -150,7 +187,9 @@ pub trait LeaseStore {
         store: StoreId,
         issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
-    ) -> impl Future<Output = Result<LeaseBump, LeaseStoreError>> + Send;
+        acknowledge_undrained: Option<LeaseGeneration>,
+        expected_generation: Option<LeaseGeneration>,
+    ) -> impl Future<Output = Result<LeaseBumpOutcome, LeaseStoreError>> + Send;
 
     /// The store's authoritative generation, or `None` if it has never been issued a lease.
     ///

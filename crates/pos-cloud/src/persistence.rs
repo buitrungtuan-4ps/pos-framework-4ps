@@ -97,7 +97,7 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
-use crate::lease::{LeaseBump, LeaseStore, LeaseStoreError, StorePlacement};
+use crate::lease::{LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, StorePlacement};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -480,17 +480,34 @@ impl LeaseStore for PostgresConfigTrees {
         store: StoreId,
         issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
-    ) -> Result<LeaseBump, LeaseStoreError> {
-        let stored = self
+        acknowledge_undrained: Option<LeaseGeneration>,
+        expected_generation: Option<LeaseGeneration>,
+    ) -> Result<LeaseBumpOutcome, LeaseStoreError> {
+        let outcome = self
             .bump_store_lease(
                 tenant,
                 store,
                 issued_at.as_milliseconds_since_epoch(),
                 edge_placement.map(EdgePlacement::as_wire),
+                acknowledge_undrained.map(stored_generation_out),
+                expected_generation.map(stored_generation_out),
             )
             .await
             .map_err(|error| LeaseStoreError::new(error.to_string()))?;
-        Ok(LeaseBump {
+        let stored = match outcome {
+            store_postgres::BumpOutcome::Issued(stored) => stored,
+            store_postgres::BumpOutcome::VersionMismatch { current } => {
+                return Ok(LeaseBumpOutcome::VersionMismatch {
+                    current: current.map(stored_lease_generation).transpose()?,
+                });
+            }
+            store_postgres::BumpOutcome::Undrained { superseded } => {
+                return Ok(LeaseBumpOutcome::Undrained {
+                    superseded: stored_lease_generation(superseded)?,
+                });
+            }
+        };
+        Ok(LeaseBumpOutcome::Issued(LeaseBump {
             generation: stored_lease_generation(stored.generation)?,
             edge_placement: stored_edge_placement(&stored.edge_placement)?,
             // Same refusal posture as the generation beside it, and for the same reason: a negative
@@ -500,7 +517,7 @@ impl LeaseStore for PostgresConfigTrees {
                 .superseded_generation
                 .map(stored_lease_generation)
                 .transpose()?,
-        })
+        }))
     }
 
     async fn current(
@@ -521,6 +538,16 @@ impl LeaseStore for PostgresConfigTrees {
 /// `bigint` is signed and this cloud is the only writer, so a negative value cannot have been issued
 /// — it is a tampered or corrupt row. Refusing it beats clamping: generation `0` is a store's real
 /// *first* lease, so a silent clamp would tell every box in the store it had been superseded.
+/// A domain generation as the `bigint` the column holds.
+///
+/// The counterpart to [`stored_lease_generation`]. Saturating rather than fallible because the
+/// domain type is a `u64` and the column a signed 64-bit integer: a generation past `i64::MAX` is
+/// unreachable in any fleet — it would take one bump per nanosecond for longer than the universe has
+/// existed — and a saturating conversion keeps the caller free of an error arm nothing can produce.
+fn stored_generation_out(generation: LeaseGeneration) -> i64 {
+    i64::try_from(generation.value()).unwrap_or(i64::MAX)
+}
+
 fn stored_lease_generation(value: i64) -> Result<LeaseGeneration, LeaseStoreError> {
     u64::try_from(value)
         .map(LeaseGeneration::new)

@@ -16,6 +16,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The lease bump is conditional: it carries `If-Match`, and it refuses to move a store off a
+  machine that still owes events** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+  Program C Phase 1 slice 3, second of two).
+
+  **Upgrade note.** `POST /admin/config/lease/bump` now **requires** an `If-Match` header naming the
+  generation the caller read — or `*` for a store that has never been issued a lease. A request
+  without one is refused. Any caller outside the console must be updated.
+
+  Two refusals, and they answer different questions:
+
+  - `412` — the row is not at the generation you named. Someone else bumped, or you are holding a
+    stale read. The case that motivated it: two admins bump one store at once with different
+    placements; the single statement serialises them, so **both** used to get a success while the
+    second placement won, leaving the first believing they had moved a store somewhere it is not.
+  - `422` — the store's previous machine still holds events this cloud has never seen. Send
+    `acknowledge_undrained` naming that generation to move the store anyway, which abandons them.
+
+  **Both conditions live inside the write statement, never in the handler.** A read-then-write check
+  is a TOCTOU whose failure mode is worse than a duplicate number: two admins both read a clear row,
+  both bump, and the second's `superseded_generation` overwrites the first's — destroying the record
+  that the first displaced machine never drained, with the very column added to hold that record. The
+  insert branch is conditional too (`INSERT … SELECT … WHERE`), so a numbered `If-Match` against a
+  store with no lease inserts nothing rather than quietly creating generation 0.
+
+### Changed
+
 - **Three Program C decisions settled, and the records that disagreed now say the same thing**
   ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 
