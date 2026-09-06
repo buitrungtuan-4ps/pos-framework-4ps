@@ -335,6 +335,28 @@ of its own — `store_lease.retired_at` and `retired_by`, both nullable, written
 `/admin` write. The audit entry still records *who decided and when*; the columns record *that it was
 decided*, which is the part a reader must not lose.
 
+*Added 2026-09-06, with the implementation.* Three rules the states above imply and this paragraph
+did not say. **Retiring refuses while a handover is in flight**, naming `superseded_generation`: a
+machine that may hold the only copy of a night's sales is not one anybody gets to call unnecessary,
+so `retired` really is reachable only from `settled`. **A second retirement is refused, not
+applied** — it would replace the first decision's who and when in the row whose entire job is to
+hold the first. And **a bump clears both columns in the same statement that records the new
+`superseded_generation`**: a bump starts a new handover with a new outgoing machine, so a retirement
+from the previous one stops describing the row. These columns are the *current* handover; the
+history of every retirement is the trail's, and it has it.
+
+The hand-made half of `settled` is the mirror image and ships with them: an audited `/admin` write
+in which a person names the generation whose machine they checked. It takes that number rather than
+an `If-Match`, because here the named value is the stronger precondition — any bump necessarily
+*changes* `superseded_generation`, so a concurrent bump makes the write refuse on its own. It is an
+attestation about one specific machine, so naming the wrong one is refused rather than treated as
+idempotent: a silent success would put a false attestation in the trail.
+
+`retired_by` holds the admin's ULID and not their email. The trail already carries the address as it
+stood at action time, which is where a human-readable actor belongs; copying it into an operational
+row the fleet console reads would spread staff personal data into a table nobody classified as
+holding any, for no gain.
+
 **A bump while `superseded_generation` is set is refused, naming the field**
 ([ADR-0096](0096-unprocessable-status.md)) — you do not move a store off a machine whose events are
 still on it. The refusal takes an explicit acknowledgement that names the undrained generation,

@@ -14,6 +14,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A handover can be closed by hand, and a retired machine is recorded rather than only audited**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  Two audited `/admin` writes behind `console.stores.manage`, neither of which publishes a config
+  node — nothing about them changes what a till is told:
+
+  - `POST /admin/config/lease/settle` — a person attests that a superseded machine holds no events,
+    closing a handover that will never close itself: a box already powered off, or one whose disk an
+    operator has read directly. The body **names the generation** whose machine they checked, and
+    that number is the whole precondition. There is no `If-Match` and none would add anything: any
+    bump necessarily *changes* `superseded_generation`, so a concurrent bump makes the write refuse
+    on its own. Naming the wrong machine is a `422` reporting which one is actually in flight —
+    **not** an idempotent success, because a silent `204` would put an attestation about a different
+    machine into the trail as though it were about this one.
+  - `POST /admin/config/lease/retire` — a person decides a settled handover's outgoing machine, its
+    database and its hosting are no longer needed. It refuses (`422`) while a handover is in flight:
+    a machine that may hold the only copy of a night's sales is not one anybody gets to call
+    unnecessary. A second retirement is refused rather than applied, because it would replace the
+    first decision's who and when in the row whose entire job is to hold the first.
+
+  **Migration `0054`** adds `store_lease.retired_at` and `retired_by`, both nullable. Storage,
+  because `AuditRecorder::record` is best-effort by its own contract — a trail permitted to drop an
+  entry cannot be the durable record of a decision, and one swallowed failure would leave a retired
+  machine reading as merely settled. `retired_by` is the admin's **ULID, never their email**: the
+  trail already carries the address as it stood, and an operational row the fleet console reads has
+  no business accumulating staff personal data.
+
+  The two columns describe the *current* handover, so **a bump clears them in the same `SET` clause**
+  that records the new `superseded_generation`. Without that, a retirement from three handovers ago
+  would sit on a row describing a machine still in the shop. The history of every retirement is the
+  audit trail's, and it has it.
+
+  Also: an acknowledged bump's audit entry now carries `abandoned_generation`. The field's own
+  documentation already promised it and the handler did not write it — and the number is nowhere
+  else, because an acknowledged bump *rolls* `superseded_generation` forward rather than clearing
+  it. The trail is the only record that an earlier machine's sales were written off, and by whom.
+
 ### Fixed
 
 - **A stopping store now reports the outbox it drained, so a handover can close itself**

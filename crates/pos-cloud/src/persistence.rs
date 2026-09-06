@@ -97,7 +97,10 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
-use crate::lease::{LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, StorePlacement};
+use crate::lease::{
+    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome, SettleOutcome,
+    StorePlacement,
+};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -531,13 +534,69 @@ impl LeaseStore for PostgresConfigTrees {
             .map_err(|error| LeaseStoreError::new(error.to_string()))?;
         stored.map(stored_lease_generation).transpose()
     }
+
+    async fn settle_handover(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        superseded: LeaseGeneration,
+    ) -> Result<SettleOutcome, LeaseStoreError> {
+        let outcome = self
+            .settle_handover(tenant, store, stored_generation_out(superseded))
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            store_postgres::StoredSettle::Settled => SettleOutcome::Settled,
+            store_postgres::StoredSettle::NotSuperseded { current } => {
+                SettleOutcome::NotSuperseded {
+                    current: current.map(stored_lease_generation).transpose()?,
+                }
+            }
+            store_postgres::StoredSettle::NoLease => SettleOutcome::NoLease,
+        })
+    }
+
+    async fn retire(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        retired_at: Timestamp,
+        retired_by: &str,
+    ) -> Result<RetireOutcome, LeaseStoreError> {
+        let outcome = self
+            .retire_handover(
+                tenant,
+                store,
+                retired_at.as_milliseconds_since_epoch(),
+                retired_by,
+            )
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            store_postgres::StoredRetire::Retired => RetireOutcome::Retired,
+            store_postgres::StoredRetire::Undrained { superseded } => RetireOutcome::Undrained {
+                superseded: stored_lease_generation(superseded)?,
+            },
+            store_postgres::StoredRetire::AlreadyRetired { at, by } => {
+                RetireOutcome::AlreadyRetired {
+                    // A stored instant this cloud wrote itself. If it will not read back, the row
+                    // has been tampered with or corrupted — the same posture the generation beside
+                    // it takes, and for the same reason: inventing an instant would put a
+                    // fabricated decision time in front of a person deciding what to switch off.
+                    at: Timestamp::from_milliseconds_since_epoch(at).map_err(|error| {
+                        LeaseStoreError::new(format!(
+                            "the stored retirement instant is not a time this cloud writes: {error}"
+                        ))
+                    })?,
+                    by,
+                }
+            }
+            store_postgres::StoredRetire::Raced => RetireOutcome::Raced,
+            store_postgres::StoredRetire::NoLease => RetireOutcome::NoLease,
+        })
+    }
 }
 
-/// Reads a stored generation back into the domain's `u64`.
-///
-/// `bigint` is signed and this cloud is the only writer, so a negative value cannot have been issued
-/// — it is a tampered or corrupt row. Refusing it beats clamping: generation `0` is a store's real
-/// *first* lease, so a silent clamp would tell every box in the store it had been superseded.
 /// A domain generation as the `bigint` the column holds.
 ///
 /// The counterpart to [`stored_lease_generation`]. Saturating rather than fallible because the
@@ -548,6 +607,11 @@ fn stored_generation_out(generation: LeaseGeneration) -> i64 {
     i64::try_from(generation.value()).unwrap_or(i64::MAX)
 }
 
+/// Reads a stored generation back into the domain's `u64`.
+///
+/// `bigint` is signed and this cloud is the only writer, so a negative value cannot have been issued
+/// — it is a tampered or corrupt row. Refusing it beats clamping: generation `0` is a store's real
+/// *first* lease, so a silent clamp would tell every box in the store it had been superseded.
 fn stored_lease_generation(value: i64) -> Result<LeaseGeneration, LeaseStoreError> {
     u64::try_from(value)
         .map(LeaseGeneration::new)

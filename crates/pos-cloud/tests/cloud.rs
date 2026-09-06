@@ -749,6 +749,12 @@ type RecordedSeen = (Option<ConfigVersionId>, i64);
 /// `xmin` columns of one `config_trees` row.
 type ConfigRows = HashMap<(TenantId, StoreId), Versioned<ConfigTreeState>>;
 
+/// When each store's handover was retired and by whom — `store_lease.retired_at`/`retired_by`
+/// (migration 0054). Named because the two columns are written and cleared together and mean
+/// nothing apart: a schema in which one can exist without the other is one that will hold exactly
+/// that.
+type Retirements = HashMap<(TenantId, StoreId), (i64, String)>;
+
 /// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
 /// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
@@ -771,6 +777,12 @@ struct FakeConfigTrees {
     /// placement's own note gives: a fake that updated them separately would pass tests the real
     /// column — one row, one statement — could not.
     superseded: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
+    /// When a handover was retired and by whom, mirroring `store_lease.retired_at`/`retired_by`
+    /// (migration 0054, ADR-0110). Written under the same lock section as the three maps above for
+    /// the same reason, and — like the real statement — **cleared by every bump**: a new handover
+    /// has a new outgoing machine, so a retirement from the previous one no longer describes
+    /// anything.
+    retired: Arc<Mutex<Retirements>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -799,6 +811,7 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         let mut leases = self.leases.lock().expect("lock");
         let mut placements = self.placements.lock().expect("lock");
         let mut superseded = self.superseded.lock().expect("lock");
+        let mut retired = self.retired.lock().expect("lock");
         let held = leases.get(&(tenant, store)).copied();
         // The two conditions the real statement evaluates in its own `WHERE`, in the same order and
         // for the same reason: a caller holding a stale read is told *that*, rather than being sent
@@ -825,6 +838,9 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         if let Some(previous) = held {
             superseded.insert((tenant, store), previous);
         }
+        // `retired_at = NULL, retired_by = NULL` in the same SET clause. A bump starts a new
+        // handover, so the previous one's retirement stops describing this row.
+        retired.remove(&(tenant, store));
         let placement = edge_placement.unwrap_or_else(|| {
             placements
                 .get(&(tenant, store))
@@ -856,6 +872,66 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
             .get(&(tenant, store))
             .copied()
             .map(pos_core::lease::LeaseGeneration::new))
+    }
+
+    /// The adapter's `UPDATE … WHERE superseded_generation = $3`: clears only when the column holds
+    /// the named value, and reports what it holds instead when it does not.
+    async fn settle_handover(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        superseded: pos_core::lease::LeaseGeneration,
+    ) -> Result<pos_cloud::lease::SettleOutcome, pos_cloud::lease::LeaseStoreError> {
+        let leases = self.leases.lock().expect("lock");
+        let mut in_flight = self.superseded.lock().expect("lock");
+        if !leases.contains_key(&(tenant, store)) {
+            return Ok(pos_cloud::lease::SettleOutcome::NoLease);
+        }
+        let current = in_flight.get(&(tenant, store)).copied();
+        if current != Some(superseded.value()) {
+            return Ok(pos_cloud::lease::SettleOutcome::NotSuperseded {
+                current: current.map(pos_core::lease::LeaseGeneration::new),
+            });
+        }
+        in_flight.remove(&(tenant, store));
+        Ok(pos_cloud::lease::SettleOutcome::Settled)
+    }
+
+    /// The adapter's `UPDATE … WHERE superseded_generation IS NULL AND retired_at IS NULL`: both
+    /// preconditions checked before anything is written, in the statement's own order, so a person
+    /// looking at an in-flight handover is told *that* rather than being told it is already retired.
+    async fn retire(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        retired_at: Timestamp,
+        retired_by: &str,
+    ) -> Result<pos_cloud::lease::RetireOutcome, pos_cloud::lease::LeaseStoreError> {
+        let leases = self.leases.lock().expect("lock");
+        let in_flight = self.superseded.lock().expect("lock");
+        let mut retired = self.retired.lock().expect("lock");
+        if !leases.contains_key(&(tenant, store)) {
+            return Ok(pos_cloud::lease::RetireOutcome::NoLease);
+        }
+        if let Some(superseded) = in_flight.get(&(tenant, store)).copied() {
+            return Ok(pos_cloud::lease::RetireOutcome::Undrained {
+                superseded: pos_core::lease::LeaseGeneration::new(superseded),
+            });
+        }
+        if let Some((at, by)) = retired.get(&(tenant, store)).cloned() {
+            return Ok(pos_cloud::lease::RetireOutcome::AlreadyRetired {
+                at: Timestamp::from_milliseconds_since_epoch(at).expect("a stored instant"),
+                by,
+            });
+        }
+        retired.insert(
+            (tenant, store),
+            (
+                retired_at.as_milliseconds_since_epoch(),
+                retired_by.to_owned(),
+            ),
+        );
+        Ok(pos_cloud::lease::RetireOutcome::Retired)
     }
 }
 
@@ -10747,6 +10823,261 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
         .await
         .expect("route the lease read");
     assert_eq!(json_body(read).await["generation"], 2);
+}
+
+/// A handover that does not exist cannot be settled or retired, and neither route invents one.
+#[tokio::test]
+async fn neither_hand_made_act_works_on_a_store_with_no_handover() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let named = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "store_id": store_ulid,
+        "superseded_generation": 0,
+    });
+
+    // No lease at all: both are 404, rather than a handover conjured on a store that has none.
+    for uri in ["/admin/config/lease/settle", "/admin/config/lease/retire"] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(uri, &named, &cookie))
+            .await
+            .expect("route the request");
+        assert_eq!(
+            refused.status(),
+            StatusCode::NOT_FOUND,
+            "{uri} on a store with no lease is a 404, not a handover"
+        );
+    }
+
+    // A first lease supersedes nobody, so there is still nothing to settle — and the refusal says
+    // so rather than succeeding quietly and putting an attestation about nothing in the trail.
+    let issued = router
+        .clone()
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the first issue");
+    assert_eq!(issued.status(), StatusCode::OK);
+
+    let nothing_to_settle = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/settle",
+            &named,
+            &cookie,
+        ))
+        .await
+        .expect("route the settle");
+    assert_eq!(nothing_to_settle.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(nothing_to_settle).await["error"]["details"][0]["reason"],
+        "NO_HANDOVER_IN_FLIGHT",
+        "a settle against a store with no handover says so rather than succeeding quietly"
+    );
+}
+
+/// The handover's two hand-made steps over the routes, in the order an operator lives them.
+///
+/// One test rather than four, because the states only mean anything in sequence: `retired` is
+/// reachable only from `settled`, and `settled` only from an in-flight handover. Split apart, each
+/// assertion would have to fabricate the state before it — which is the fabrication the
+/// preconditions exist to prevent.
+#[tokio::test]
+async fn a_handover_settles_then_retires_and_each_step_refuses_out_of_order() {
+    let audit = FakeAudit::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let store = serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid });
+    let named = |generation: u64| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "superseded_generation": generation,
+        })
+    };
+
+    // Generation 0, then 1 — so generation 0's machine is now the one being displaced.
+    for if_match in ["*", "\"0\""] {
+        let bumped = router
+            .clone()
+            .oneshot(bump_with_if_match(&store, &cookie, if_match))
+            .await
+            .expect("route the bump");
+        assert_eq!(bumped.status(), StatusCode::OK);
+    }
+
+    // Retiring now is the refusal that matters most: the outgoing machine may hold the only copy of
+    // a night's sales, and nobody gets to call it unnecessary until that is settled.
+    let too_early = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/retire",
+            &store,
+            &cookie,
+        ))
+        .await
+        .expect("route the early retire");
+    assert_eq!(too_early.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(too_early).await["error"]["details"][0]["reason"],
+        "0",
+        "the refusal names the generation still owing events"
+    );
+
+    // Attesting about the wrong machine is refused, and the body says which one is actually in
+    // flight. This is the guard against a stale console closing a handover nobody looked at.
+    let wrong_machine = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/lease/settle",
+            &named(7),
+            &cookie,
+        ))
+        .await
+        .expect("route the mis-aimed settle");
+    assert_eq!(wrong_machine.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(wrong_machine).await["error"]["details"][0]["reason"],
+        "0",
+        "the refusal names the handover that is actually in flight"
+    );
+
+    // The operator has read the powered-off box and attests it is empty; now the machine can be
+    // decided unnecessary. A second retirement is refused rather than overwriting the first
+    // decision's who and when — the row's entire job is to hold the first.
+    for (uri, body, expected) in [
+        (
+            "/admin/config/lease/settle",
+            named(0),
+            StatusCode::NO_CONTENT,
+        ),
+        (
+            "/admin/config/lease/retire",
+            store.clone(),
+            StatusCode::NO_CONTENT,
+        ),
+        (
+            "/admin/config/lease/retire",
+            store.clone(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(uri, &body, &cookie))
+            .await
+            .expect("route the request");
+        assert_eq!(response.status(), expected, "{uri}");
+    }
+
+    assert_both_decisions_are_in_the_trail(&audit).await;
+}
+
+/// Both hand-made decisions reached the trail, and the retirement names its decider **by id**.
+///
+/// The identifier matters: the row carries the admin's ULID and the trail carries the email as it
+/// stood, so a reader with the standing to resolve one gets a person and a reader without one gets
+/// an opaque id. Asserting both halves here is what keeps an address from drifting into the
+/// operational row later.
+async fn assert_both_decisions_are_in_the_trail(audit: &FakeAudit) {
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let actions: Vec<&str> = recorded.iter().map(|entry| entry.action.as_str()).collect();
+    assert!(
+        actions.contains(&"config.lease.settle") && actions.contains(&"config.lease.retire"),
+        "both hand-made decisions are recorded, found {actions:?}"
+    );
+    let retire = recorded
+        .iter()
+        .find(|entry| entry.action == "config.lease.retire")
+        .expect("the retirement is recorded");
+    let after = retire
+        .after
+        .clone()
+        .expect("a retirement records what it wrote");
+    assert_eq!(
+        after["retired_by"], retire.actor.admin_id,
+        "the row's decider and the trail's actor are the same admin, by id"
+    );
+    assert!(
+        after["retired_by"] != *retire.actor.email,
+        "the operational row carries the id, never the address — the trail is where an email belongs"
+    );
+}
+
+/// A bump that abandons an undrained machine records *which* generation it abandoned.
+///
+/// The number is nowhere else. An acknowledged bump does not clear `superseded_generation`; it rolls
+/// it forward to the machine being displaced now. So without this the fact that an earlier
+/// machine's sales were written off, and by whom, would exist in no record at all.
+#[tokio::test]
+async fn an_acknowledged_bump_records_the_generation_it_abandoned() {
+    let audit = FakeAudit::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let store = serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid });
+
+    for if_match in ["*", "\"0\""] {
+        let response = router
+            .clone()
+            .oneshot(bump_with_if_match(&store, &cookie, if_match))
+            .await
+            .expect("route the bump");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // Generation 0 is still in flight, so this third bump has to say it is abandoning it.
+    let abandoning = router
+        .clone()
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "acknowledge_undrained": 0,
+            }),
+            &cookie,
+            "\"1\"",
+        ))
+        .await
+        .expect("route the abandoning bump");
+    assert_eq!(abandoning.status(), StatusCode::OK);
+
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let latest = recorded
+        .iter()
+        .find(|entry| entry.action == "config.lease.bump")
+        .expect("a bump was audited")
+        .after
+        .clone()
+        .expect("a bump records what it wrote");
+    assert_eq!(
+        latest["abandoned_generation"], 0,
+        "the trail names the generation whose events were written off"
+    );
+    assert_eq!(
+        latest["generation"], 2,
+        "and the generation the store moved to, which is a different number"
+    );
 }
 
 #[tokio::test]

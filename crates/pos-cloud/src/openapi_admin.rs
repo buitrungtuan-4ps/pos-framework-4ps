@@ -214,6 +214,8 @@ const UNDOCUMENTED: &[&str] = &[
     // deliberately: the node is derived from the counter, never authored.
     "/admin/config/lease",
     "/admin/config/lease/bump",
+    "/admin/config/lease/retire",
+    "/admin/config/lease/settle",
     "/admin/config/locale",
     "/admin/config/ota",
     "/admin/config/ota/halt",

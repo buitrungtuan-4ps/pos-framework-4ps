@@ -58,6 +58,52 @@ pub enum BumpOutcome {
     },
 }
 
+/// What settling a handover by hand did
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredSettle {
+    /// `superseded_generation` held the named value and is now null.
+    Settled,
+    /// It held something else — `current`, or `None` for a handover already settled. Answers `422`.
+    ///
+    /// Advisory in the same way `BumpOutcome::VersionMismatch { current }` is: read after the
+    /// refusal, so it can be stale by the time it is rendered. The decision was the write's `WHERE`.
+    NotSuperseded {
+        /// What the column holds now.
+        current: Option<i64>,
+    },
+    /// There is no lease row for this store, so no handover to settle. Answers `404`.
+    NoLease,
+}
+
+/// What retiring a handover did
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredRetire {
+    /// The decision is recorded on the row.
+    Retired,
+    /// A handover is still in flight, so the outgoing machine may still hold events. Answers `422`.
+    Undrained {
+        /// The generation whose machine has not been proved drained.
+        superseded: i64,
+    },
+    /// This handover is already retired. Answers `422` rather than overwriting the first decision.
+    AlreadyRetired {
+        /// Unix ms of the recorded decision.
+        at: i64,
+        /// The deciding admin's id.
+        by: String,
+    },
+    /// The write refused, yet the row satisfies both of its conditions by the time it was read:
+    /// another admin resolved the race in between. The caller re-reads and retries. Answers `409`.
+    ///
+    /// Reported rather than retried here, because a retry from inside the adapter would be a second
+    /// attempt at a decision the caller made once, against a row that has changed underneath them.
+    Raced,
+    /// There is no lease row for this store, so no handover to retire. Answers `404`.
+    NoLease,
+}
+
 /// What one lease bump wrote: the generation it issued and the edge placement the store now has
 /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md),
 /// [ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
@@ -334,6 +380,11 @@ impl PostgresConfigTrees {
         // Why the column is needed at all: `store_liveness` holds one row per store, so the instant
         // the incoming machine heartbeats, the outgoing machine's final `outbox_depth` is gone. This
         // is the cloud's only durable memory of the question \"has N drained?\".
+        //
+        // `retired_at`/`retired_by` are cleared in the same breath, and that is not tidiness. They
+        // describe *this* store's current handover, and a bump starts a new one with a new outgoing
+        // machine. Left in place they would say a machine still in the shop had been decided
+        // unnecessary. Every retirement's history is the audit trail's, which keeps it.
         let requested = edge_placement.map(ToOwned::to_owned);
         let row = connection
             .query_opt(
@@ -341,6 +392,8 @@ impl PostgresConfigTrees {
                      UPDATE store_lease SET \
                      generation = generation + 1, \
                      superseded_generation = generation, \
+                     retired_at = NULL, \
+                     retired_by = NULL, \
                      issued_at = $3, \
                      edge_placement = COALESCE($4, edge_placement) \
                      WHERE tenant_id = $1 AND store_id = $2 \
@@ -416,6 +469,117 @@ impl PostgresConfigTrees {
             edge_placement: row.get(1),
             superseded_generation: row.get(2),
         }))
+    }
+
+    /// Settles a handover by hand: clears `superseded_generation` when it holds `superseded`.
+    ///
+    /// One conditional statement, then at most one probe to phrase the refusal — the same shape as
+    /// the bump, and for the same reason: the `WHERE` is the decision and cannot race, while the
+    /// number in the message is advisory.
+    ///
+    /// There is no `If-Match` here and none is needed. Any bump necessarily *changes*
+    /// `superseded_generation` — it writes the generation being displaced, which by construction is
+    /// not the one already there — so a concurrent bump makes this `WHERE` fail on its own. A second
+    /// precondition would refuse exactly the same requests while implying the two could disagree.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn settle_handover(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        superseded: i64,
+    ) -> Result<StoredSettle, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let settled = connection
+            .query_opt(
+                "UPDATE store_lease SET superseded_generation = NULL \
+                 WHERE tenant_id = $1 AND store_id = $2 \
+                   AND superseded_generation = $3::bigint \
+                 RETURNING generation",
+                &[&tenant.to_string(), &store_id.to_string(), &superseded],
+            )
+            .await
+            .map_err(unavailable)?;
+        if settled.is_some() {
+            return Ok(StoredSettle::Settled);
+        }
+        let probe = connection
+            .query_opt(
+                "SELECT superseded_generation FROM store_lease \
+                 WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant.to_string(), &store_id.to_string()],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(match probe {
+            None => StoredSettle::NoLease,
+            Some(row) => StoredSettle::NotSuperseded {
+                current: row.get(0),
+            },
+        })
+    }
+
+    /// Records that a settled handover's outgoing machine is no longer needed.
+    ///
+    /// Both preconditions live in the `WHERE`, so two admins retiring the same handover at once
+    /// produce one recorded decision and one refusal naming the person who made it — rather than the
+    /// second silently replacing the first in a row whose entire job is to hold the first.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn retire_handover(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        retired_at_ms: i64,
+        retired_by: &str,
+    ) -> Result<StoredRetire, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let retired = connection
+            .query_opt(
+                "UPDATE store_lease SET retired_at = $3, retired_by = $4 \
+                 WHERE tenant_id = $1 AND store_id = $2 \
+                   AND superseded_generation IS NULL \
+                   AND retired_at IS NULL \
+                 RETURNING generation",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &retired_at_ms,
+                    &retired_by,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        if retired.is_some() {
+            return Ok(StoredRetire::Retired);
+        }
+        let probe = connection
+            .query_opt(
+                "SELECT superseded_generation, retired_at, retired_by FROM store_lease \
+                 WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant.to_string(), &store_id.to_string()],
+            )
+            .await
+            .map_err(unavailable)?;
+        let Some(probe) = probe else {
+            return Ok(StoredRetire::NoLease);
+        };
+        // The handover first, in the statement's own order: a person told "already retired" would
+        // stop looking, and an in-flight handover is the fact that actually needs their attention.
+        if let Some(superseded) = probe.get::<_, Option<i64>>(0) {
+            return Ok(StoredRetire::Undrained { superseded });
+        }
+        Ok(match (probe.get(1), probe.get::<_, Option<String>>(2)) {
+            (Some(at), Some(by)) => StoredRetire::AlreadyRetired { at, by },
+            // Both conditions hold now, so the refusal was a race another admin has since resolved
+            // — or resolved and then a bump reopened. Either way the caller re-reads, which is the
+            // right next move, and this reports the state honestly rather than inventing a decider.
+            _ => StoredRetire::Raced,
+        })
     }
 
     /// The store's authoritative lease generation, or `None` if it has never been issued one.

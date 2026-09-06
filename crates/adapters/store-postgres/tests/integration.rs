@@ -1607,6 +1607,177 @@ mod fleet_store {
     /// `ON CONFLICT DO UPDATE` is the *pre-update* value, and that the clear reads the request's
     /// numbers rather than the stored liveness row — are properties of the statements, not of the
     /// Rust around them.
+    /// Opens a handover on a fresh store: registers it, issues generation 0, then bumps to 1 so
+    /// generation 0 is in flight. The setup both hand-made cases need, and neither is about.
+    async fn opened(
+        store: &store_postgres::PostgresStore,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> store_postgres::PostgresConfigTrees {
+        let trees = store.config_trees();
+        store
+            .registry()
+            .insert_store(
+                &store_id.to_string(),
+                &tenant.to_string(),
+                None,
+                "Xuân Thủy",
+            )
+            .await
+            .expect("register the store");
+        super::issue(
+            &trees,
+            tenant,
+            store_id,
+            1_777_000_000_000,
+            None,
+            None,
+            None,
+        )
+        .await;
+        super::issue(
+            &trees,
+            tenant,
+            store_id,
+            1_777_000_001_000,
+            None,
+            None,
+            Some(0),
+        )
+        .await;
+        trees
+    }
+
+    /// Settling by hand, against the real statement
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// What only a database shows: the precondition lives in the `WHERE`, so an attestation about a
+    /// machine the row does not name changes nothing — and a second attestation about the same one
+    /// is refused rather than being a quiet no-op.
+    #[test]
+    fn a_handover_settles_only_on_the_machine_the_caller_names() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let tenant = TenantId::new(Ulid::from_u128(0x0E3A));
+            let store_id = StoreId::new(Ulid::from_u128(0x0E3B));
+
+            // Nothing issued yet: there is no handover to settle.
+            assert_eq!(
+                store
+                    .config_trees()
+                    .settle_handover(tenant, store_id, 0)
+                    .await
+                    .expect("settle reached the database"),
+                store_postgres::StoredSettle::NoLease,
+            );
+
+            let trees = opened(&store, tenant, store_id).await;
+
+            // Attesting about a machine that is not the one in flight reports what is.
+            assert_eq!(
+                trees
+                    .settle_handover(tenant, store_id, 7)
+                    .await
+                    .expect("settle reached the database"),
+                store_postgres::StoredSettle::NotSuperseded { current: Some(0) },
+            );
+            assert_eq!(
+                trees
+                    .settle_handover(tenant, store_id, 0)
+                    .await
+                    .expect("settle reached the database"),
+                store_postgres::StoredSettle::Settled,
+            );
+            // Settling twice is refused for the same reason: the second attestation would be about
+            // a machine the row no longer names.
+            assert_eq!(
+                trees
+                    .settle_handover(tenant, store_id, 0)
+                    .await
+                    .expect("settle reached the database"),
+                store_postgres::StoredSettle::NotSuperseded { current: None },
+            );
+        });
+    }
+
+    /// Retiring by hand, and the clear a bump performs in the same `SET` clause (migration `0054`).
+    ///
+    /// The last assertion is the one only a database can make: a new bump *removes* the previous
+    /// retirement rather than leaving it, so a machine still in the shop never reads as decided
+    /// unnecessary.
+    #[test]
+    fn a_retirement_needs_a_settled_handover_is_recorded_once_and_a_bump_reopens_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let tenant = TenantId::new(Ulid::from_u128(0x0E4A));
+            let store_id = StoreId::new(Ulid::from_u128(0x0E4B));
+
+            assert_eq!(
+                store
+                    .config_trees()
+                    .retire_handover(tenant, store_id, 1_777_000_000_000, "admin-a")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::NoLease,
+            );
+
+            let trees = opened(&store, tenant, store_id).await;
+
+            // Generation 0 may still hold a night's sales, so nobody gets to call it unnecessary.
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_002_000, "admin-a")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::Undrained { superseded: 0 },
+            );
+            trees
+                .settle_handover(tenant, store_id, 0)
+                .await
+                .expect("settle reached the database");
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_003_000, "admin-a")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::Retired,
+            );
+            // A second retirement does not overwrite the first decision; it reports it.
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_004_000, "admin-b")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::AlreadyRetired {
+                    at: 1_777_000_003_000,
+                    by: "admin-a".to_owned(),
+                },
+                "the row holds the person who decided, not the last person to ask"
+            );
+
+            // A new bump starts a new handover with a new outgoing machine, so the retirement stops
+            // describing this row — cleared by the same statement, not by a second write.
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_005_000,
+                None,
+                None,
+                Some(1),
+            )
+            .await;
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_006_000, "admin-c")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::Undrained { superseded: 1 },
+                "the new handover is in flight, and the old retirement is gone rather than stale"
+            );
+        });
+    }
+
     #[test]
     fn a_bump_records_the_superseded_generation_and_only_a_matching_drain_clears_it() {
         block_on(async {
