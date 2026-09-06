@@ -89,6 +89,17 @@ pub struct Config {
     /// The bearer token this device was issued when it was paired
     /// ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)). The only gate the agent's
     /// two routes carry, and the thing that resolves which terminal it answers for.
+    ///
+    /// **Better supplied through `POS_PRINT_AGENT_TOKEN`**, which [`Config::load`] prefers. It is a
+    /// credential, and the generated installers put it in the service's own environment — a
+    /// registry key readable only by accounts that can read the service on Windows, a root-owned
+    /// `EnvironmentFile` on Linux — rather than in a file that sits beside the state and gets read
+    /// by whoever is diagnosing a printer. The same split the edge makes for `POS_EDGE_SYNC_KEY`
+    /// ([ADR-0086](../../../docs/adr/0086-edge-keyvault-and-activation.md)).
+    ///
+    /// Kept readable from the file too, because a technician bringing one terminal up by hand
+    /// should not need to learn a second mechanism to do it.
+    #[serde(default)]
     pub device_token: String,
     /// Where to keep the one id per printer. Defaults beside the configuration file.
     #[serde(default = "default_state_path")]
@@ -101,13 +112,16 @@ fn default_state_path() -> PathBuf {
 }
 
 impl Config {
-    /// Reads a configuration from a TOML file.
+    /// The environment variable the generated installers put the device token in.
+    pub const TOKEN_VARIABLE: &'static str = "POS_PRINT_AGENT_TOKEN";
+
+    /// Reads a configuration from a TOML file, taking the device token from
+    /// [`Self::TOKEN_VARIABLE`] when that is set.
     ///
     /// # Errors
     ///
-    /// [`AgentError::Config`] if the file cannot be read or does not parse. Refusing to start beats
-    /// starting with a token that is not there: an agent that silently never claims looks exactly
-    /// like a printer nobody plugged in.
+    /// [`AgentError::Config`] if the file cannot be read, does not parse, or leaves the token
+    /// nowhere.
     pub fn load(path: &Path) -> Result<Self, AgentError> {
         let text = std::fs::read_to_string(path).map_err(|error| {
             AgentError::Config(format!("{} could not be read: {error}", path.display()))
@@ -115,12 +129,44 @@ impl Config {
         let config: Self = toml::from_str(&text).map_err(|error| {
             AgentError::Config(format!("{} is not valid: {error}", path.display()))
         })?;
-        if config.device_token.trim().is_empty() {
-            return Err(AgentError::Config(
-                "device_token is empty; pair this device with the store first".to_owned(),
-            ));
+        config.with_token(std::env::var(Self::TOKEN_VARIABLE).ok(), path)
+    }
+
+    /// Settles where the device token came from.
+    ///
+    /// Split out from [`Self::load`] and public so it can be driven directly: `std::env` is
+    /// process-wide, and a test that mutated it would race every other test in the binary — and
+    /// would need `unsafe`, which this crate denies.
+    ///
+    /// **The environment wins.** The token is a credential, and the generated installers put it in
+    /// the service's own environment — a registry key readable only by accounts that can read the
+    /// service on Windows, a root-owned `EnvironmentFile` on Linux — rather than in a file that
+    /// sits beside the state and is read by whoever is diagnosing a printer. That is the split the
+    /// edge already makes for `POS_EDGE_SYNC_KEY`. The file is still honoured, because a technician
+    /// bringing one terminal up by hand should not have to learn a second mechanism.
+    ///
+    /// # Errors
+    ///
+    /// [`AgentError::Config`] when the token is in neither place. Refusing to start beats starting
+    /// without one: an agent that silently never claims looks exactly like a printer nobody
+    /// plugged in.
+    pub fn with_token(
+        mut self,
+        from_environment: Option<String>,
+        path: &Path,
+    ) -> Result<Self, AgentError> {
+        if let Some(token) = from_environment.filter(|token| !token.trim().is_empty()) {
+            self.device_token = token;
         }
-        Ok(config)
+        if self.device_token.trim().is_empty() {
+            return Err(AgentError::Config(format!(
+                "no device token: set {} or put device_token in {}, after pairing this device \
+                 with the store",
+                Self::TOKEN_VARIABLE,
+                path.display()
+            )));
+        }
+        Ok(self)
     }
 }
 

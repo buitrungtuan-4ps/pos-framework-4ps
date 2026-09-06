@@ -254,3 +254,55 @@ async fn a_record_that_will_not_parse_starts_empty_rather_than_refusing_to_run()
         .expect("and it is writable");
     assert!(written.already_written(PRINTER, event(1)));
 }
+
+#[test]
+fn the_device_token_comes_from_the_environment_and_the_file_is_the_fallback() {
+    // A credential in a file that sits beside the state is a credential read by whoever is
+    // diagnosing a printer. The generated installers put it in the service's own environment, so
+    // this has to prefer that — and has to refuse when it is nowhere, because an agent that
+    // silently never claims looks exactly like a printer nobody plugged in.
+    let path = std::path::Path::new("print-agent.toml");
+    let bare = || pos_print_agent::Config {
+        edge_url: "http://192.0.2.10:8787".to_owned(),
+        device_token: String::new(),
+        state_path: "state.json".into(),
+    };
+
+    let refused = bare()
+        .with_token(None, path)
+        .expect_err("no token anywhere is a refusal");
+    assert!(
+        refused.to_string().contains("POS_PRINT_AGENT_TOKEN"),
+        "the refusal says where to put it: {refused}"
+    );
+    assert!(
+        bare().with_token(Some("   ".to_owned()), path).is_err(),
+        "an empty variable is the same as an unset one, not a token of spaces"
+    );
+
+    let from_service = bare()
+        .with_token(Some("from-the-service".to_owned()), path)
+        .expect("the environment supplies it");
+    assert_eq!(from_service.device_token, "from-the-service");
+
+    let in_file = pos_print_agent::Config {
+        device_token: "from-the-file".to_owned(),
+        ..bare()
+    };
+    assert_eq!(
+        in_file
+            .clone()
+            .with_token(Some("from-the-service".to_owned()), path)
+            .expect("still loads")
+            .device_token,
+        "from-the-service",
+        "the service environment is the credential's home, so it wins"
+    );
+    assert_eq!(
+        in_file
+            .with_token(None, path)
+            .expect("a technician's hand-written file still works")
+            .device_token,
+        "from-the-file"
+    );
+}

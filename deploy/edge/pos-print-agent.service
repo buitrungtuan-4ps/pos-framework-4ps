@@ -1,0 +1,71 @@
+# systemd unit for the print agent (ADR-0112).
+#
+# Only stores whose edge runs somewhere other than the shop need one. It runs on the terminal whose
+# USB or serial port physically reaches a printer, claims rendered jobs from that store's edge, and
+# writes them. It decides nothing: no domain code, no rendering, one small file holding the id of
+# the last job written to each printer.
+#
+# Install (as root):
+#   install -d -o pos-agent -g pos-agent /var/lib/pos-print-agent
+#   install -o root -g root -m 0755 pos_print_agent /usr/local/bin/pos_print_agent
+#   $EDITOR /var/lib/pos-print-agent/print-agent.toml     # edge_url + state_path, no credential
+#   install -d -m 0750 /etc/pos-print-agent
+#   printf 'POS_PRINT_AGENT_TOKEN=%s\n' "<the paired device's token>" \
+#       > /etc/pos-print-agent/env && chmod 0600 /etc/pos-print-agent/env
+#   cp pos-print-agent.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now pos-print-agent
+#
+# Then, at the till: sign in as a manager and bind this device to the terminal entry the console
+# created. Until that is done the agent runs and is told, on every claim, that it answers for no
+# print agent — which is the honest state, not a fault.
+#
+# NO UPDATE SLOTS, unlike pos-edge.service. The agent is not over-the-air updatable and holds
+# nothing that matters: reinstalling it from scratch costs at most one duplicated ticket, which
+# ADR-0112 accepts by name. So ExecStart is the binary, and upgrading is replacing the file and
+# restarting.
+
+[Unit]
+Description=Pizza 4P's print agent (writes this terminal's printers)
+Documentation=https://github.com/buitrungtuan-4ps/pos-framework-4ps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Its own unprivileged user. It needs write access to exactly two things: its state directory, and
+# the printer device node — which is why it is in the `lp` group rather than running as root.
+User=pos-agent
+Group=pos-agent
+SupplementaryGroups=lp
+StateDirectory=pos-print-agent
+WorkingDirectory=/var/lib/pos-print-agent
+Environment=POS_PRINT_AGENT_CONFIG=/var/lib/pos-print-agent/print-agent.toml
+Environment=RUST_LOG=info
+# The device token, which is a credential and therefore never in the config file. Root-owned, mode
+# 0600, never committed. The leading '-' means the agent starts without it and refuses at load with
+# a message naming this variable — which is a readable failure rather than a silent one.
+EnvironmentFile=-/etc/pos-print-agent/env
+ExecStart=/usr/local/bin/pos_print_agent
+# A stop mid-job leaves that job unacknowledged, so the queue hands it back at the claim lease and
+# the next start prints it. There is nothing to drain, which is why this timeout is short.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+# A crashed agent means a kitchen printing nothing while the till keeps reporting QUEUED_TO_AGENT,
+# because the queue is doing its job. `always` is what makes that self-correcting.
+Restart=always
+RestartSec=2
+
+# Hardening: the agent needs its state directory and a printer device, and nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# The one hole in ProtectSystem=strict, and the reason it is here rather than implied: a directly
+# attached printer is a device node, and ADR-0103 is explicit that its address is a path like
+# /dev/usb/lp0 or /dev/ttyUSB0 rather than a host. A network printer needs none of this.
+DeviceAllow=char-lp rw
+DeviceAllow=char-ttyUSB rw
+DeviceAllow=char-tty rw
+
+[Install]
+WantedBy=multi-user.target
