@@ -510,10 +510,33 @@ disagreeing:
 - `retired` **gets storage** (`retired_at`, `retired_by`), because `AuditRecorder` is best-effort by
   contract and a trail allowed to drop an entry cannot be the durable record of a decision.
 
-**Not started:** the refusal of a bump while a handover is in flight, the
-`taking-over`/`settled`/`retired` states and their console surface, the post-drain heartbeat the
-automatic clear depends on, the edge container image, the CORS layer, the print queue and the host
-agent.
+**The three decisions above are built** (#204, #205), and with them the handover is closed end to
+end:
+
+- The bump is a **conditional write**. `If-Match` on the row's generation answers `412`; an
+  undrained `superseded_generation` answers `422` and takes an explicit `acknowledge_undrained`
+  naming the abandoned generation. Both conditions live inside the write statement, never in the
+  handler — a read-then-write check is a TOCTOU whose failure mode overwrites the record that a
+  displaced machine never drained, using the column added to hold that record.
+- A **stopping store beats once more, after its drain**. The automatic clear waits on a heartbeat
+  carrying the superseded generation with an empty outbox, and no store had ever sent one: the
+  heartbeat loop ended at the stop signal and D8's drain runs after it, so the last thing a cleanly
+  stopping machine said was the tick reporting the backlog it was about to clear. Every handover, however
+  well it went, needed a person to close it.
+- **`retired_at`/`retired_by`** (migration `0054`) plus two audited `/admin` writes: `…/lease/settle`
+  (a person attests a powered-off machine is empty, naming the generation they checked) and
+  `…/lease/retire` (refused while a handover is in flight, and refused twice rather than overwriting
+  the first decision). A bump clears both columns in the same `SET` clause, because they describe the
+  *current* handover.
+- The **`taking-over`/`settled`/`retired` states** are derived on the fleet row and rendered by the
+  console, which offers each act only from the state it is reachable from. `settled` requires the
+  generation and the empty outbox to come from *one* heartbeat, because the liveness row COALESCEs
+  them independently. A store on generation `0` reports **no state at all** — `0` is a first lease,
+  which supersedes nobody, and ADR-0110's wording read literally would have badged a fleet that has
+  handed nothing over.
+
+**Not started:** the edge container image, the CORS layer, the print queue and the host agent — and
+the two spikes above still gate every estimate on them.
 
 ## Debates settled
 
