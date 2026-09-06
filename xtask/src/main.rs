@@ -27,6 +27,7 @@ cargo xtask <check>
   actions-pinned  every GitHub action is pinned to a commit SHA
   countries       every country module is named, wired into the workspace, and selectable
   mirrored-files  files duplicated across the ui/ and dashboard/ build roots stay identical
+  print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
 ";
@@ -48,6 +49,7 @@ fn main() -> ExitCode {
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),
         "mirrored-files" => checks::mirrored_files::run(&rest),
+        "print-agent-deps" => checks::print_agent_deps::run(&rest),
         "tls-modes" => checks::tls_modes::run(&rest),
         "vendor-neutral-core" => checks::vendor_neutral_core::run(&rest),
         "-h" | "--help" | "help" => {

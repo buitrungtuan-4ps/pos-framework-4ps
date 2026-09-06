@@ -14,6 +14,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **`pos_print_agent`: the binary that claims a store's tickets and writes them to a printer this
+  machine owns** ([ADR-0112](docs/adr/0112-print-agents.md)).
+
+  A printer may name the device whose transport reaches it. This is that device's side, and it is
+  the last runtime piece of that record: claim a rendered job from the store's edge, open the
+  address the edge named, write the bytes, say the id back. It renders nothing, holds no domain
+  code, and has no configuration of its own beyond where the edge is and the token proving this
+  device is paired.
+
+  It persists **one value per printer: the id of the last job it wrote successfully**. When the edge
+  redelivers a job after a lost acknowledgement, the agent recognises the id and acknowledges
+  without printing a second ticket. Losing that file reprints one job, which is the correct
+  direction: a duplicate ticket costs a strip of paper and a missing one costs a dish.
+
+  The order is write, **record, then acknowledge** — a crash in between costs nothing, and a write
+  that fails is never acknowledged at all, so the queue's lease hands the job back. One printer out
+  of paper does not hold up another printer's ticket.
+
+  It talks to the edge over `http` or `https`, because [ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)
+  made where the edge runs a deployment axis and both are real. `--self-test` answers whether these
+  bytes run on this box and can read its configuration, without opening a printer or dialling the
+  edge.
+
+  **Upgrade note** A third binary, which [ADR-0113](docs/adr/0113-the-host-agent.md) names as one of
+  two exceptions to ADR-0002's "exactly two". It is installed only on stores whose edge runs
+  somewhere other than the shop; a store that configures no print agent installs nothing and prints
+  exactly as before. A new CI gate, `xtask print-agent-deps`, holds the crate to the three workspace
+  dependencies ADR-0112 allows. No migration, no `PROTOCOL_VERSION` change.
+
 ### Fixed
 
 - **A leased print job named a printer but never said where it was**

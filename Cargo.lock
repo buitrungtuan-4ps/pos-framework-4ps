@@ -1775,6 +1775,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-print-agent"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pos-ports",
+ "pos-proto",
+ "printer-escpos",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "webpki-roots 1.0.9",
+]
+
+[[package]]
 name = "pos-proto"
 version = "0.1.0"
 dependencies = [

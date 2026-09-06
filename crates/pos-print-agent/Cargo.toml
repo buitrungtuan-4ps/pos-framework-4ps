@@ -1,0 +1,73 @@
+[package]
+name        = "pos-print-agent"
+version     = "0.1.0"
+description = "The print agent: claims rendered jobs from a store's edge and writes them to a printer whose transport this machine owns."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[[bin]]
+name = "pos_print_agent"
+path = "src/main.rs"
+
+# ADR-0112 fixes this list at three workspace crates, and `cargo xtask print-agent-deps` holds it:
+# `printer-escpos` for the one ESC/POS encoder in the tree, and the two backbone crates that define
+# what a print job *is*. No `pos-core`, no `pos-edge`, no `store-sqlite` — the agent decides nothing,
+# so it needs no domain. That list is what keeps one ESC/POS encoder in the tree rather than two.
+[dependencies]
+printer-escpos = { path = "../adapters/printer-escpos" }
+pos-ports      = { path = "../pos-ports" }
+pos-proto      = { path = "../pos-proto" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+toml       = "1"
+tracing    = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# ADR-0054's client stack, the same one `cloud-sync-http` and the edge's own cloud client pin, so the
+# agent adds no third-party subtree the tree does not already build. `ring` is pinned so feature
+# unification cannot pull aws-lc-rs; the roots are the bundled Mozilla set, hermetic for a machine
+# somebody carries into a shop.
+hyper           = { version = "1", features = ["client", "http1"] }
+hyper-util      = { version = "0.1", features = ["tokio"] }
+http-body-util  = "0.1"
+bytes           = "1"
+tokio           = { version = "1", features = ["net", "time", "rt", "rt-multi-thread", "macros", "signal"] }
+tokio-rustls    = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots    = "1"
+url             = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+# A binary, so it declares its own lints table rather than inheriting the strict library baseline
+# (Cargo rejects a manifest that does both). The rules that matter for a process writing to a
+# printer stay on; `unwrap` is left at its default for the startup path, where a failure is fatal
+# anyway.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+# A print document may carry a buyer's name and tax code (`pos_ports::printer`), so this process
+# never writes one anywhere but the print head.
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"

@@ -14,6 +14,7 @@ pub mod links;
 pub mod lint_config;
 pub mod migrations;
 pub mod mirrored_files;
+pub mod print_agent_deps;
 pub mod snapshot;
 pub mod tls_modes;
 pub mod vendor_neutral_core;

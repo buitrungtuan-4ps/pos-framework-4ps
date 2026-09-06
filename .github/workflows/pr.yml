@@ -51,6 +51,8 @@ jobs:
         run: cargo run -q -p xtask -- mirrored-files
       - name: no vendor brand name in pos-core / pos-proto production code
         run: cargo run -q -p xtask -- vendor-neutral-core
+      - name: the print agent links only the three workspace crates ADR-0112 allows
+        run: cargo run -q -p xtask -- print-agent-deps
       - name: every accepted TLS_MODE has its Caddyfile and imports the shared block
         run: cargo run -q -p xtask -- tls-modes
       - name: nothing removed from a committed snapshot
