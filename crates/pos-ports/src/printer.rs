@@ -27,14 +27,86 @@
 //! [`PrintDocument`] is deliberately **not** covered by any no-personal-data marker. The
 //! rule that applies instead: a document is never logged, and `tracing` records the job's
 //! identifier and outcome, never its content.
+//!
+//! # A rendered job is serialisable, because it may have to be stored and handed on
+//!
+//! [ADR-0112](../../../docs/adr/0112-print-agents.md) lets a printer name another device as the
+//! one whose transport reaches it. The edge still renders every byte — that record spends four
+//! paragraphs on why a device that rendered any of them would be wrong — so what crosses to that
+//! device is a *finished* [`PrintJob`], parked on a durable queue until the agent claims it. That
+//! is the only reason these types carry `serde` derives, and it is why they carry them **here**
+//! rather than in a second definition somewhere else: two shapes for one document is two
+//! renderings of a legal document that can disagree.
+//!
+//! [`PrintBlock::Bitmap`]'s raster goes as lowercase hex rather than as a JSON array of numbers.
+//! An array spends three to four characters on every byte and a 576-dot line is 72 bytes a row, so
+//! a Vietnamese ticket's rasters would be the bulk of a queue row; hex is two characters flat, and
+//! it keeps a raster one field instead of a thousand.
 
 use core::fmt;
 use core::future::Future;
 use core::num::NonZeroU16;
 
+use serde::{Deserialize, Serialize};
+
 use pos_proto::ids::{StationId, StoreId};
 
 use crate::error::PortError;
+
+/// [`PrintBlock::Bitmap`]'s raster, as lowercase hex.
+///
+/// Hand-rolled rather than pulled from a crate: `pos-ports` is a backbone crate, so every
+/// dependency it declares needs an architecture reviewer and an entry in
+/// `tools/backbone-allowlist.toml`, and this is twenty lines with no decisions in it.
+mod hex_bits {
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    /// Writes the bytes as `2 * len` lowercase hex characters.
+    pub(super) fn serialize<S: Serializer>(bits: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        let mut hex = String::with_capacity(bits.len().saturating_mul(2));
+        for byte in bits {
+            // Two nibbles, most significant first, so the string reads in memory order.
+            for nibble in [byte >> 4, byte & 0x0f] {
+                hex.push(char::from_digit(u32::from(nibble), 16).unwrap_or('0'));
+            }
+        }
+        serializer.serialize_str(&hex)
+    }
+
+    /// Reads them back, refusing an odd length or a character that is not hex.
+    ///
+    /// Refusing is the only safe direction: a raster whose byte count is wrong shears on the print
+    /// head, and half a row of pixels is not a partial success.
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        // `String` rather than `&str`: a borrowed form cannot be read back by a streaming
+        // deserializer, and one allocation per raster is not worth the constraint.
+        let hex = String::deserialize(deserializer)?;
+        if hex.len() % 2 != 0 {
+            return Err(serde::de::Error::custom(
+                "a raster needs an even number of hex characters",
+            ));
+        }
+        let bytes = hex.as_bytes();
+        let mut bits = Vec::with_capacity(hex.len() / 2);
+        for pair in bytes.chunks_exact(2) {
+            // Destructured rather than indexed: `chunks_exact(2)` guarantees the length, and
+            // saying so in the pattern is what keeps the guarantee visible where it is relied on.
+            let [high, low] = pair else {
+                return Err(serde::de::Error::custom("a raster must be hex"));
+            };
+            let nibble = |byte: &u8| {
+                char::from(*byte)
+                    .to_digit(16)
+                    .ok_or_else(|| serde::de::Error::custom("a raster must be hex"))
+            };
+            // Both digits are < 16, so the shift and the `or` are exact in a byte.
+            bits.push(u8::try_from(nibble(high)? << 4 | nibble(low)?).unwrap_or(0));
+        }
+        Ok(bits)
+    }
+}
 
 /// How a printer is attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -169,7 +241,7 @@ impl PrinterCapabilities {
 }
 
 /// Text styling. Deliberately minimal — a receipt is a document, not a design.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct TextStyle {
     /// Bold.
     pub emphasised: bool,
@@ -180,7 +252,7 @@ pub struct TextStyle {
 }
 
 /// One element of a printed document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum PrintBlock {
     /// A line of text.
@@ -201,6 +273,7 @@ pub enum PrintBlock {
         /// Pixels per row.
         width: NonZeroU16,
         /// Row-major bits, `width.div_ceil(8)` bytes per row.
+        #[serde(with = "hex_bits")]
         bits: Vec<u8>,
     },
     /// A one-dimensional barcode.
@@ -223,7 +296,7 @@ pub enum PrintBlock {
 }
 
 /// A document to print.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrintDocument {
     /// The blocks, in order.
     pub blocks: Vec<PrintBlock>,
@@ -234,7 +307,7 @@ pub struct PrintDocument {
 /// `job_id` is the idempotency key. Reprinting is a deliberate act with its own permission
 /// and its own audit trail (`docs/pos-spec.md` §12 counts reprint rates per employee), so a
 /// retry after an ambiguous failure must not silently produce a second ticket.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PrintJob {
     /// Idempotency key. A retry reuses it; a reprint mints a new one.
     pub job_id: pos_proto::ids::EventId,
@@ -347,7 +420,10 @@ pub trait PrinterDriver: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodePage, PrinterCapabilities, PrinterConnection, PrinterStatus};
+    use super::{
+        CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
+        PrinterStatus, TextStyle,
+    };
     use core::num::NonZeroU16;
 
     fn capabilities(connection: PrinterConnection, code_page: CodePage) -> PrinterCapabilities {
@@ -433,5 +509,63 @@ mod tests {
             ..unknown
         };
         assert_eq!(offline.to_string(), "offline");
+    }
+
+    #[test]
+    fn a_rendered_job_survives_the_round_trip_through_json() {
+        // The queue ADR-0112 parks a job on stores the rendered document as JSON, so a job that
+        // does not come back byte-identical is a ticket that prints differently on the agent's
+        // printer than it would have on the edge's.
+        let job = PrintJob {
+            job_id: pos_proto::ids::EventId::new(pos_proto::ulid::Ulid::from_u128(7)),
+            store_id: pos_proto::ids::StoreId::new(pos_proto::ulid::Ulid::from_u128(3)),
+            station_id: Some(pos_proto::ids::StationId::new(
+                pos_proto::ulid::Ulid::from_u128(9),
+            )),
+            document: PrintDocument {
+                blocks: vec![
+                    PrintBlock::Text {
+                        line: "Phở bò tái".to_owned(),
+                        style: TextStyle {
+                            emphasised: true,
+                            double_size: false,
+                            centred: true,
+                        },
+                    },
+                    PrintBlock::Bitmap {
+                        width: NonZeroU16::new(576).expect("positive"),
+                        bits: vec![0x00, 0x0f, 0xf0, 0xff],
+                    },
+                    PrintBlock::Barcode {
+                        value: "4901234567894".to_owned(),
+                    },
+                    PrintBlock::QrCode {
+                        value: "https://example.test/i/7".to_owned(),
+                    },
+                    PrintBlock::Feed { lines: 3 },
+                    PrintBlock::Cut,
+                ],
+            },
+        };
+        let json = serde_json::to_string(&job).expect("a rendered job serialises");
+        assert!(
+            json.contains("\"000ff0ff\""),
+            "the raster goes as hex, not as an array of numbers: {json}"
+        );
+        let back: PrintJob = serde_json::from_str(&json).expect("and comes back");
+        assert_eq!(back, job);
+    }
+
+    #[test]
+    fn a_raster_that_is_not_whole_bytes_is_refused_rather_than_truncated() {
+        // Half a row of pixels is not a partial success — it shears on the print head.
+        let odd = r#"{"Bitmap":{"width":576,"bits":"000f0"}}"#;
+        let error = serde_json::from_str::<PrintBlock>(odd).expect_err("an odd length is refused");
+        assert!(error.to_string().contains("even number"), "{error}");
+
+        let not_hex = r#"{"Bitmap":{"width":576,"bits":"00zz"}}"#;
+        let error =
+            serde_json::from_str::<PrintBlock>(not_hex).expect_err("a non-hex digit is refused");
+        assert!(error.to_string().contains("must be hex"), "{error}");
     }
 }

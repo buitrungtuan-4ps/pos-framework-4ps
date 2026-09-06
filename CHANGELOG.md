@@ -14,6 +14,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A print agent claims its store's rendered tickets, and the edge queues them for it**
+  ([ADR-0112](docs/adr/0112-print-agents.md)).
+
+  A published printer may name the device whose transport reaches it. That device now has somewhere
+  to ask: `GET /api/print/jobs` hands out at most one job per printer it owns and holds the request
+  open for up to twenty seconds when there is nothing to hand out, and
+  `POST /api/print/jobs/{job_id}/ack` says the bytes are written. Both carry the paired-device gate
+  and no second one — an agent is an unattended process, and requiring a sign-in would mean a
+  manager's PIN before every kitchen ticket. Nothing in either request names a terminal: the binding
+  a manager made at the till is what says which one the caller answers for.
+
+  A settle or a fire whose printer names an agent now reports one of three new outcomes instead of
+  dialling a socket. `QUEUED_TO_AGENT` means the ticket is on its way and no paper has come out yet.
+  `PRINT_AGENT_UNAVAILABLE` means that terminal holds no binding, or has not asked for work in a
+  minute — refused *before* the queue is touched, because a queue must not start building behind a
+  box that is not there. `PRINT_QUEUE_FULL` means the printer has two hundred unexpired jobs waiting
+  and is not consuming them; check the paper. The till says which, in English and Vietnamese.
+
+  **A printer that names no agent is untouched.** That is every printer in every store that has not
+  configured one, and it is the whole compatibility story: the edge opens the address itself, as it
+  has since [ADR-0103](docs/adr/0103-directly-attached-printers.md).
+
+  The edge still renders every byte. What crosses to the agent is a finished document — the
+  rasterising, the code-page decision and the raster width all happen on the edge, so a store with
+  three terminals cannot print three different tickets from one order.
+
+  **Upgrade note** No migration and no `PROTOCOL_VERSION` change: the queue table and the binding
+  shipped in earlier slices, and `agent_device_id` is an optional field an older edge ignores. An
+  acknowledgement is now scoped to the agent holding the job, so a device can no longer delete a
+  ticket queued for another terminal.
+
 ### Fixed
 
 - **An approved USB printer reached its store as a network device, so its cash drawer never opened**

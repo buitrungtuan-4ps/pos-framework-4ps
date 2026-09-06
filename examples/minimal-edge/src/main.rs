@@ -107,6 +107,9 @@ async fn main() -> Result<(), EdgeError> {
         // manager signed in on a paired device — so the two routes exist and refuse, which is the
         // truth for this example rather than a silent no-op.
         pos_edge::print_agent::InMemoryPrintAgents::new(),
+        // …and the queue itself. With no agent bound, nothing is ever enqueued into it: a printer
+        // this example published would name no agent, so the dispatch opens the address directly.
+        pos_edge::print_queue::InMemoryPrintQueue::new(),
     )
     .await
     .map(|_outcome| ())

@@ -227,10 +227,23 @@ fn a_lapsed_claim_returns_the_job_and_an_acknowledged_one_is_gone() {
             "a claim nobody acknowledged does not hold the job forever"
         );
 
-        // Acknowledged, the row is gone: nothing to redeliver and nothing left holding PII.
+        // Another agent cannot acknowledge this job. The scope is in the statement rather than in a
+        // check made first, because acknowledging *deletes* a document that exists nowhere else: a
+        // paired device answering for the counter must not be able to make the kitchen's ticket
+        // vanish unprinted.
+        assert!(
+            !store
+                .acknowledge_print_job("only".to_owned(), "agent-2".to_owned())
+                .await
+                .expect("the acknowledgement reached the database"),
+            "an agent may only acknowledge the jobs queued for it"
+        );
+
+        // Acknowledged by its own agent, the row is gone: nothing to redeliver and nothing left
+        // holding PII.
         assert!(
             store
-                .acknowledge_print_job("only".to_owned())
+                .acknowledge_print_job("only".to_owned(), "agent-1".to_owned())
                 .await
                 .expect("the acknowledgement reached the database")
         );
@@ -238,7 +251,7 @@ fn a_lapsed_claim_returns_the_job_and_an_acknowledged_one_is_gone() {
         // the wire and the agent asks again, and the queue no longer holding it is what it wanted.
         assert!(
             !store
-                .acknowledge_print_job("only".to_owned())
+                .acknowledge_print_job("only".to_owned(), "agent-1".to_owned())
                 .await
                 .expect("the acknowledgement reached the database")
         );
@@ -489,6 +502,77 @@ fn a_terminal_nobody_holds_has_no_standing() {
                 .await
                 .expect("resolve"),
             None
+        );
+    });
+}
+
+/// Liveness is stamped by the act that proves it, and stamping never creates a binding.
+///
+/// The race this closes is real and ordinary: an agent asks for work in the same second a manager
+/// releases the terminal at the till. An upsert here would put back what the revoke just took away,
+/// and a revoke that a busy agent can undo is not a revoke.
+#[test]
+fn being_heard_from_stamps_a_binding_and_never_resurrects_a_revoked_one() {
+    let dir = TempDir::new().expect("temp dir");
+    block_on(async {
+        let store = open(&dir.path().join("store.sqlite"));
+        store
+            .claim_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 1_000)
+            .await
+            .expect("claim");
+
+        assert!(
+            store
+                .touch_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 7_000)
+                .await
+                .expect("touch"),
+            "the holder asking for work is heard from"
+        );
+        assert_eq!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing")
+                .map(|standing| standing.last_seen_at),
+            Some(7_000),
+            "and the standing the enqueue reads moves with it"
+        );
+
+        assert!(
+            !store
+                .touch_print_agent("TILL1".to_owned(), "PAIR-B".to_owned(), 8_000)
+                .await
+                .expect("touch"),
+            "a device that does not hold this terminal is not heard from for it"
+        );
+        assert_eq!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing")
+                .map(|standing| standing.last_seen_at),
+            Some(7_000),
+            "and it certainly does not move the holder's clock"
+        );
+
+        store
+            .revoke_print_agent("TILL1".to_owned(), "PAIR-A".to_owned())
+            .await
+            .expect("revoke");
+        assert!(
+            !store
+                .touch_print_agent("TILL1".to_owned(), "PAIR-A".to_owned(), 9_000)
+                .await
+                .expect("touch"),
+            "an agent mid-claim when the manager revoked learns it holds nothing"
+        );
+        assert_eq!(
+            store
+                .print_agent_standing("TILL1".to_owned())
+                .await
+                .expect("standing"),
+            None,
+            "and the binding stays released"
         );
     });
 }

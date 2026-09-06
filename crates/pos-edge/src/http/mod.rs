@@ -28,6 +28,7 @@ pub mod locale;
 pub mod menu;
 pub mod pair;
 mod print_agent;
+mod print_jobs;
 pub mod shifts;
 pub mod tables;
 pub mod ws;
@@ -151,10 +152,12 @@ pub fn router(state: AppState) -> Router {
 /// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
 /// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
 /// successes).
-pub fn domain_router<S, Q, A>(
+pub fn domain_router<S, Q, A, J, W>(
     edge: Arc<Edge<S>>,
     queue: Q,
     agents: A,
+    jobs: J,
+    wake: W,
     pairing: Arc<Pairing>,
     sessions: Arc<Sessions>,
     origins: &Arc<crate::origins::Origins>,
@@ -162,7 +165,9 @@ pub fn domain_router<S, Q, A>(
 where
     S: EventStore + SubjectStore + Send + Sync + 'static,
     Q: crate::queue::QueueNumberAuthority + 'static,
-    A: crate::print_agent::PrintAgents + 'static,
+    A: crate::print_agent::PrintAgents + Clone + 'static,
+    J: crate::print_queue::PrintQueue + 'static,
+    W: crate::print_wake::PrintWake + 'static,
 {
     let lockout = Arc::new(Lockout::new());
     // Cloned before `edge` and `sessions` move into the routers below.
@@ -242,14 +247,21 @@ where
     // Binding a terminal's print agent, in its own sub-router for the same reason and behind the
     // same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
     // behind a *manager* — the permission is checked in the handler, over the published roster.
-    let agents = print_agent::router(agent_edge, agents).layer(
+    let binding = print_agent::router(agent_edge, agents.clone()).layer(
         axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
     );
+    // And the agent's own two routes, which carry the paired gate **and no second one**: an agent is
+    // an unattended process, so requiring a sign-in would mean a manager's PIN before every kitchen
+    // ticket (ADR-0112). They join the five paired-only routes the edge already serves rather than
+    // inventing a sixth kind of gate. The binding is what says which terminal the caller answers
+    // for; nothing in the request gets to claim it.
+    let jobs = print_jobs::router(agents, jobs, wake);
 
     guarded
         .merge(session)
         .merge(counter)
-        .merge(agents)
+        .merge(binding)
+        .merge(jobs)
         .layer(axum::middleware::from_fn_with_state(
             pairing,
             auth::require_paired_device,

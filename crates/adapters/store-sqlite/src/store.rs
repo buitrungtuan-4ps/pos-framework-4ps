@@ -294,12 +294,25 @@ impl SqliteStore {
     /// `false` is not a failure: an acknowledgement can legitimately arrive after the job expired,
     /// or a second time after a lost reply.
     ///
+    /// **Scoped to the agent that holds the job**, so a paired device answering for one terminal
+    /// cannot acknowledge — and so delete, unprinted — a job queued for another. The scope is in the
+    /// statement rather than in a check the route makes first: a check and a delete are two steps a
+    /// race can get between, and this is a delete of a document that exists nowhere else.
+    ///
     /// # Errors
     ///
     /// [`PortError`] if the store cannot be reached or the delete fails.
-    pub async fn acknowledge_print_job(&self, job_id: String) -> Result<bool, PortError> {
+    pub async fn acknowledge_print_job(
+        &self,
+        job_id: String,
+        agent_device_id: String,
+    ) -> Result<bool, PortError> {
         self.ask(PortName::PrinterDriver, move |reply| {
-            Command::AcknowledgePrintJob { job_id, reply }
+            Command::AcknowledgePrintJob {
+                job_id,
+                agent_device_id,
+                reply,
+            }
         })
         .await
     }
@@ -359,6 +372,32 @@ impl SqliteStore {
             Command::RevokePrintAgent {
                 agent_device_id,
                 paired_device_id,
+                reply,
+            }
+        })
+        .await
+    }
+
+    /// Records that a bound agent asked for work, reporting whether a binding was there
+    /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
+    ///
+    /// `false` means this device does not hold that terminal — a binding a manager revoked while
+    /// the agent was mid-claim. It never creates one.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn touch_print_agent(
+        &self,
+        agent_device_id: String,
+        paired_device_id: String,
+        now_ms: i64,
+    ) -> Result<bool, PortError> {
+        self.ask(PortName::PrinterDriver, move |reply| {
+            Command::TouchPrintAgent {
+                agent_device_id,
+                paired_device_id,
+                now_ms,
                 reply,
             }
         })

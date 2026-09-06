@@ -194,7 +194,9 @@ export interface BillResponse {
   print_receipt: boolean;
   /**
    * What came of the receipt: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or `UNPRINTABLE_TEXT`
-   * (ADR-0100). Absent when the settle asked for no receipt, or from an edge built before C2.
+   * (ADR-0100), plus `QUEUED_TO_AGENT`, `PRINT_AGENT_UNAVAILABLE` and `PRINT_QUEUE_FULL` when the
+   * printer's transport belongs to another device (ADR-0112). Absent when the settle asked for no
+   * receipt, or from an edge built before C2.
    */
   receipt_print?: string;
 }

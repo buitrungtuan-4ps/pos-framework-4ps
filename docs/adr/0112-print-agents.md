@@ -137,6 +137,60 @@ Four things settled during the work:
 branch that makes the queue live — the slice this one swapped with, now next. Nothing enqueues yet.
 A store that binds an agent today changes nothing about where its tickets print.
 
+## Delivery — 2026-09-06, the agent claims, acknowledges, and the edge enqueues
+
+The queue is live. `GET /api/print/jobs` and `POST /api/print/jobs/{job_id}/ack`
+([`http/print_jobs.rs`](../../crates/pos-edge/src/http/print_jobs.rs)) sit behind the paired-device
+gate and no second one; the branch in
+[`Printers::dispatch`](../../crates/pos-edge/src/printing.rs) sends a job whose printer names an
+agent to that agent's queue and leaves every other printer on the path
+[ADR-0103](0103-directly-attached-printers.md) shipped. `PrintOutcome` gained the three answers this
+record specified — `QUEUED_TO_AGENT`, `PRINT_AGENT_UNAVAILABLE`, `PRINT_QUEUE_FULL` — and the till
+says which.
+
+Five things settled during the work, three of them departures from what this record sketched:
+
+- **`PrintWake` is a `broadcast`, not a `Notify`.** This record sketches `tokio::sync::Notify` and
+  also states the rule *"a waiter subscribes before it reads, never after"*. A bare `Notify` cannot
+  honour that rule: `notify_waiters` stores no permit and wakes only waiters already parked, so a
+  signal landing between the subscribe and the first poll is lost — which here is a ticket sitting
+  in the queue for the whole park while a guest waits at a table. A `broadcast::Receiver` buffers
+  from the moment it subscribes, which is exactly the property the rule needs. This is the same
+  choice, for the same reason, that [`pos_cloud::wake`](../../crates/pos-cloud/src/wake.rs) made
+  under [ADR-0062](0062-the-relay-wake.md). The sketch is superseded; the rule it was serving is
+  not.
+- **The acknowledgement is scoped to the holding agent in the statement, not by a check first.**
+  An acknowledgement *deletes* a document that exists nowhere else. A check and a delete are two
+  steps a race can get between, so the scope is in the `DELETE`'s own `WHERE`. Without it, any
+  paired device answering for any terminal could delete another's ticket unprinted — a dish the
+  kitchen never sees, on a machine nobody is looking at.
+- **Liveness is stamped by an `UPDATE` that can never insert.** This record says `last_seen_at` is
+  written by the act that proves liveness, and that act — asking for work — runs constantly. It can
+  land in the same second a manager releases the terminal at the till. An upsert would put back what
+  the revoke had just taken away, so `PrintAgents::heard_from` updates a binding that is there and
+  reports `false` when it is not. A revoke a busy agent can undo is not a revoke.
+- **A rendered `PrintJob` is `serde`-serialisable, in `pos-ports`, once.** The queue row holds the
+  finished document, so something has to encode it. It carries the derives where the type already
+  lives rather than in a second wire shape somewhere else: two definitions of a printed document is
+  two renderings of a legal document that can disagree, which is the thing four paragraphs of this
+  record are about. A raster goes as hex rather than as a JSON array of numbers — two characters a
+  byte instead of three or four, and one field instead of a thousand.
+- **`AgentDispatch` is dyn-compatible where the three seams under it are not.** `PrintAgents`,
+  `PrintQueue` and `PrintWake` all return `impl Future`, and `Printers` is held as one
+  `Arc<Printers>` in an axum extension by every composition and every route test. Erasing once, at
+  the point where the three become a single question, keeps three generic parameters out of the
+  signature of every caller that only ever wanted to print a receipt.
+
+Two properties are pinned by tests that were verified red first: a job enqueued while an agent is
+parked reaches it without waiting out `AGENT_PARK` (remove the signal and the test times out), and
+a second concurrent request on one binding is answered rather than parked (remove the guard and it
+takes the full park).
+
+**Not in this slice.** The `pos_print_agent` binary itself, the console's `TERMINAL` entry and agent
+picker, the drawer following the printer, and silence reported to the console before the night ends.
+A store can bind an agent and the edge will queue for it; nothing ships yet that claims from that
+queue in the field.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not
