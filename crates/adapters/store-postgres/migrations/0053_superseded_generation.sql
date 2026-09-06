@@ -1,0 +1,37 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0053 — the generation a bump superseded, until it is known drained (ADR-0110, Program C Phase 1).
+--
+-- **Why a column exists at all.** `store_liveness` is one row per store. The moment the incoming
+-- machine sends its first heartbeat, the outgoing machine's final `outbox_depth` is overwritten and
+-- gone — and that number is the only evidence that a night's trading did or did not leave the old
+-- box. So the bump records, on the lease row it is already writing, the generation it just
+-- superseded. The cloud then has a durable question ("has N drained?") that survives every
+-- subsequent heartbeat from the new machine.
+--
+-- **Nullable, and null is the normal state.** A store whose handovers have all settled carries
+-- `NULL`, as does a store that has never been bumped. There is no default and there cannot be one:
+-- a default would claim every existing row is mid-handover, which is false for the entire fleet.
+--
+-- **What clears it.** A heartbeat that reports *this* generation with `outbox_depth = 0` — both
+-- facts from the same message, never from the stored row, because `store_liveness` COALESCEs the
+-- depth and the generation independently and the pair it holds may come from two different beats.
+-- Or an audited `/admin` write by a person who has read a powered-off machine's outbox directly.
+-- Neither mechanism is a timer: a store cut off for three days is normal in `IN_STORE` mode, and a
+-- clock here would declare a handover settled while the old machine still holds the only copy.
+--
+-- **What this file deliberately does not do.** It does not refuse a bump while the column is set,
+-- and it does not carry the `taking-over`/`settled`/`retired` states. Those are code, not schema —
+-- and shipping the refusal before the clears exist would leave an operator who bumped twice with no
+-- working lease action at all. Clears first is the safe direction; the refusal follows.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+
+-- `bigint` to match `store_lease.generation`, which it names. No `REFERENCES` and no `CHECK`: the
+-- value is a *former* generation of this same row, so there is no other table to point at, and the
+-- only constraint that would mean anything — "less than the current generation" — is already
+-- guaranteed by the one statement that writes it, which sets it to the pre-update value of the
+-- column it is incrementing.
+ALTER TABLE store_lease
+    ADD COLUMN IF NOT EXISTS superseded_generation bigint;

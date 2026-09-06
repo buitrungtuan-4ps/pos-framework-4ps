@@ -80,6 +80,13 @@ pub struct FleetStoreRow {
     /// bumped has no lease row at all, so the joined value is SQL `NULL` — which today is most of
     /// the fleet. Typing it `String` would panic in `row.get` on the commonest store there is.
     pub edge_placement: Option<String>,
+    /// The generation the last bump displaced and nothing has yet proved drained, or `None`
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// `None` for three different stores — never bumped, no handover in flight, or a handover that
+    /// settled — and that is fine here: none of the three has a machine owing events, which is the
+    /// only question this column answers.
+    pub superseded_generation: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -105,7 +112,8 @@ const FLEET_SELECT: &str = "SELECT \
      l.lease_generation, \
      l.lease_reported_at, \
      lease.generation AS lease_generation_authoritative, \
-     lease.edge_placement \
+     lease.edge_placement, \
+     lease.superseded_generation \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -187,5 +195,6 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         lease_reported_at_ms: row.get(15),
         lease_generation_authoritative: row.get(16),
         edge_placement: row.get(17),
+        superseded_generation: row.get(18),
     }
 }

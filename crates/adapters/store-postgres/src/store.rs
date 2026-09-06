@@ -185,6 +185,7 @@ const MIGRATION_0051: &str = include_str!("../migrations/0051_store_lease.sql");
 /// bump is the only write that table has, which makes "no other way to write it" structural instead
 /// of a rule somebody has to keep.
 const MIGRATION_0052: &str = include_str!("../migrations/0052_edge_placement.sql");
+const MIGRATION_0053: &str = include_str!("../migrations/0053_superseded_generation.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -452,6 +453,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0052)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0053)
             .await
             .map_err(unavailable)
     }

@@ -1567,6 +1567,165 @@ mod fleet_store {
     /// visible to `FLEET_SELECT`. This is also the assertion that catches the failure the adapter's
     /// positional decode invites: `edge_placement` is column 17, and reading it at the wrong index
     /// would return a neighbouring value or panic, with nothing at compile time to notice.
+    /// The bump records the generation it displaced, and only a heartbeat that names *that*
+    /// generation with an empty outbox clears it
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Every assertion here is unavailable anywhere else in the tree. The fake models the maps but
+    /// not the SQL, and the two facts the clear turns on — that `store_lease.generation` inside
+    /// `ON CONFLICT DO UPDATE` is the *pre-update* value, and that the clear reads the request's
+    /// numbers rather than the stored liveness row — are properties of the statements, not of the
+    /// Rust around them.
+    #[test]
+    fn a_bump_records_the_superseded_generation_and_only_a_matching_drain_clears_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+            let tenant = TenantId::new(Ulid::from_u128(0x0E2A));
+            let store_id = StoreId::new(Ulid::from_u128(0x0E2B));
+            let superseded = |rows: &[store_postgres::FleetStoreRow]| {
+                rows.first().expect("one store").superseded_generation
+            };
+
+            registry
+                .insert_store(
+                    &store_id.to_string(),
+                    &tenant.to_string(),
+                    None,
+                    "Thảo Điền",
+                )
+                .await
+                .expect("register the store");
+
+            // A first lease supersedes nobody: the INSERT branch writes NULL.
+            let first = trees
+                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
+                .await
+                .expect("first bump");
+            assert_eq!(first.generation, 0);
+            assert_eq!(
+                first.superseded_generation, None,
+                "a store's first-ever lease displaces no machine"
+            );
+
+            // The second bump displaces generation 0 and must say so.
+            let second = trees
+                .bump_store_lease(tenant, store_id, 1_777_000_001_000, None)
+                .await
+                .expect("second bump");
+            assert_eq!(second.generation, 1);
+            assert_eq!(
+                second.superseded_generation,
+                Some(0),
+                "the bump records the number it displaced, read from the pre-update row"
+            );
+            let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
+            assert_eq!(superseded(&rows), Some(0), "and the fleet read carries it");
+
+            // A heartbeat from the NEW machine, empty, does not clear: generation 1 says nothing
+            // about whether generation 0's box drained.
+            trees
+                .record_heartbeat(tenant, store_id, 1_777_000_002_000, Some(0), Some(1))
+                .await
+                .expect("heartbeat from the new machine");
+            let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
+            assert_eq!(
+                superseded(&rows),
+                Some(0),
+                "an empty outbox at the wrong generation is not evidence about the right one"
+            );
+
+            // The old machine reporting generation 0 but still holding events does not clear either.
+            trees
+                .record_heartbeat(tenant, store_id, 1_777_000_003_000, Some(40), Some(0))
+                .await
+                .expect("heartbeat with a backlog");
+            let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
+            assert_eq!(
+                superseded(&rows),
+                Some(0),
+                "forty unsent sales is exactly the state the column exists to hold open"
+            );
+
+            // Both facts, from one message: generation 0, empty. Now it clears.
+            trees
+                .record_heartbeat(tenant, store_id, 1_777_000_004_000, Some(0), Some(0))
+                .await
+                .expect("the drained heartbeat");
+            let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
+            assert_eq!(
+                superseded(&rows),
+                None,
+                "the old machine reported its own generation empty, so the handover is released"
+            );
+        });
+    }
+
+    /// A beat that omits either fact clears nothing — ADR-0110's "an older edge that sends neither
+    /// simply is not yet provably settled", which falls out of SQL's three-valued logic rather than
+    /// needing a branch. Worth its own case because the omission is the *common* path: the edge
+    /// reports `outbox_depth: None` whenever its event log will not read.
+    #[test]
+    fn a_heartbeat_missing_either_fact_clears_nothing() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let registry = store.registry();
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+            let tenant = TenantId::new(Ulid::from_u128(0x0E3A));
+            let store_id = StoreId::new(Ulid::from_u128(0x0E3B));
+
+            registry
+                .insert_store(
+                    &store_id.to_string(),
+                    &tenant.to_string(),
+                    None,
+                    "Bến Thành",
+                )
+                .await
+                .expect("register the store");
+            trees
+                .bump_store_lease(tenant, store_id, 1_777_000_000_000, None)
+                .await
+                .expect("first bump");
+            trees
+                .bump_store_lease(tenant, store_id, 1_777_000_001_000, None)
+                .await
+                .expect("second bump");
+
+            for (depth, generation, why) in [
+                (
+                    None,
+                    Some(0),
+                    "a beat with no depth cannot prove an empty outbox",
+                ),
+                (
+                    Some(0),
+                    None,
+                    "a beat with no generation cannot say which machine drained",
+                ),
+                (
+                    None,
+                    None,
+                    "an older edge that sends neither is not provably settled",
+                ),
+            ] {
+                trees
+                    .record_heartbeat(tenant, store_id, 1_777_000_002_000, depth, generation)
+                    .await
+                    .expect("heartbeat");
+                let rows = fleet.list(&tenant.to_string()).await.expect("fleet");
+                assert_eq!(
+                    rows.first().expect("one store").superseded_generation,
+                    Some(0),
+                    "{why}"
+                );
+            }
+        });
+    }
+
     #[test]
     fn a_bumped_placement_reaches_the_fleet_row() {
         block_on(async {
