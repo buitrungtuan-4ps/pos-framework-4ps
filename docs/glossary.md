@@ -8,6 +8,7 @@
 | **Edge** | The `pos_edge` runtime and the machine it runs on. Not necessarily in the shop: see **Edge placement** |
 | **Edge placement** | Where a store's edge runs — `IN_STORE`, `HOSTED_BY_OPERATOR` or `HOSTED_BY_PLATFORM` ([ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md)). It decides what a store can *promise*: [ADR-0001](adr/0001-offline-first-store-autonomy.md)'s offline guarantee belongs to `IN_STORE` alone. Always the two words or the field name `edge_placement`, never a bare "placement" — that word already names a menu item's position on a channel (`MenuPlacement`) and a store's OTA rollout group |
 | **Cloud** | The control plane (`pos_cloud`) plus PostgreSQL, NATS and object storage |
+| **Print agent** | The device that owns a printer's transport and writes the bytes the edge rendered ([ADR-0112](adr/0112-print-agents.md)). A printer plugged into a till is unreachable from a box that is not in the shop, so an approved device may name a `TERMINAL` whose agent opens the transport for it. The edge still renders every byte and still owns the queue; the agent claims a job under a lease and acknowledges it. `pos_print_agent` is the binary |
 | **Cell** | One complete, independent cloud deployment serving one country |
 | **Outbox** | Durable local queue of domain events awaiting upload, written in the same transaction as the state change |
 | **Lease** | Cloud-issued token proving that a given machine is the single active server for a store; prevents split-brain and duplicate receipt numbers |
