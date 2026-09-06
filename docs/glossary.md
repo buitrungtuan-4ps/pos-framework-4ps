@@ -1,11 +1,12 @@
 # Glossary
 
-**Status** Accepted · **Owner** @maintainers-domain · **Last reviewed** 2026-08-18
+**Status** Accepted · **Owner** @maintainers-domain · **Last reviewed** 2026-09-06
 
 | Term | Meaning |
 |---|---|
 | **Tenant → Brand → Store** | Three-level ownership tree. Configuration inherits downwards and may be overridden at each level |
-| **Edge** | The in-store runtime (`pos_edge`) and the machine it runs on |
+| **Edge** | The `pos_edge` runtime and the machine it runs on. Not necessarily in the shop: see **Edge placement** |
+| **Edge placement** | Where a store's edge runs — `IN_STORE`, `HOSTED_BY_OPERATOR` or `HOSTED_BY_PLATFORM` ([ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md)). It decides what a store can *promise*: [ADR-0001](adr/0001-offline-first-store-autonomy.md)'s offline guarantee belongs to `IN_STORE` alone. Always the two words or the field name `edge_placement`, never a bare "placement" — that word already names a menu item's position on a channel (`MenuPlacement`) and a store's OTA rollout group |
 | **Cloud** | The control plane (`pos_cloud`) plus PostgreSQL, NATS and object storage |
 | **Cell** | One complete, independent cloud deployment serving one country |
 | **Outbox** | Durable local queue of domain events awaiting upload, written in the same transaction as the state change |

@@ -803,6 +803,14 @@ export interface FleetStore {
    * it, so the console does not re-implement `lease_standing`.
    */
   readonly lease_superseded: boolean;
+  /** Where the machine holding the authoritative generation runs (ADR-0110), or `null`.
+   *
+   *  `null` is not a mode. It means either that the cloud has never bumped this store, or that the
+   *  stored token is one the server could not decode — and the server deliberately does not say
+   *  which, because the difference matters for alert *severity*, which the server has already
+   *  applied, and not for what a reader should display. Never `EDGE_PLACEMENT_UNSPECIFIED`: on the
+   *  wire that token means "this message did not say". */
+  readonly edge_placement: string | null;
 }
 
 /**

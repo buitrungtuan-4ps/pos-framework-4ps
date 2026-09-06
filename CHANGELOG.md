@@ -16,6 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The fleet console shows where each store's edge runs**, beside the presence badge rather than on
+  a settings page nobody opens during an incident ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+  `GET /admin/fleet` and `/admin/fleet/{store_id}` carry `edge_placement`; the Fleet screen badges
+  the two hosted modes in `en` and `vi`. In-store gets no badge — it is the fleet's norm, and marking
+  every store would say nothing.
+
+  `docs/glossary.md` defined **Edge** as *"the in-store runtime and the machine it runs on"*, which
+  has been false for two of three modes since the placement column landed. Corrected, with an **Edge
+  placement** row that also disambiguates the word: "placement" already names a menu item's position
+  on a channel and a store's OTA rollout group, so this axis is always `edge_placement` or the two
+  words, never a bare "placement".
+
+  `api.bumpStoreLease` could not name a placement, so the console had no way to reach the field the
+  route gained. It takes an optional one now, and omits the key entirely when the caller has nothing
+  to say — never `EDGE_PLACEMENT_UNSPECIFIED`, which the server refuses.
+
 - **A quiet store now alerts by where its edge runs** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
   Program C Phase 1 slice 2).
 

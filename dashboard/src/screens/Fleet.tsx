@@ -41,6 +41,20 @@ function taskLabel(task: string): string {
   return key ? t(key) : task;
 }
 
+/** Friendly labels for the three edge placements (ADR-0110). Same shape and same fallback rule as
+ *  TASK_LABELS above: a token this build does not know shows verbatim rather than blank, which is
+ *  what a console older than its server should do. */
+const PLACEMENT_LABELS: Record<string, MessageKey> = {
+  EDGE_PLACEMENT_IN_STORE: "fleet.placement.inStore",
+  EDGE_PLACEMENT_HOSTED_BY_OPERATOR: "fleet.placement.hostedByOperator",
+  EDGE_PLACEMENT_HOSTED_BY_PLATFORM: "fleet.placement.hostedByPlatform",
+};
+
+function placementLabel(token: string): string {
+  const key = PLACEMENT_LABELS[token];
+  return key ? t(key) : token;
+}
+
 /** The age, in whole seconds, of a Unix-ms instant against the browser clock (clamped at zero). */
 function ageSeconds(atMs: number): number {
   return Math.max(0, (Date.now() - atMs) / 1000);
@@ -102,6 +116,23 @@ export function Fleet() {
     />
   );
 
+  // Beside the presence badge, never on a settings page: a store's mode decides what its silence
+  // *means*, so it belongs where somebody reads that silence during an incident (ADR-0110).
+  // In-store is the fleet's norm and gets no badge — marking every store would say nothing. `null`
+  // also gets none: it means the store has never been bumped, or the server could not read its
+  // token, and the console is not the place that difference is resolved.
+  const placementBadge = (row: FleetStore) => (
+    <Show
+      when={
+        row.edge_placement && row.edge_placement !== "EDGE_PLACEMENT_IN_STORE"
+          ? row.edge_placement
+          : undefined
+      }
+    >
+      {(token) => <StatusBadge tone="neutral" label={placementLabel(token())} />}
+    </Show>
+  );
+
   const configBadge = (row: FleetStore) => (
     <StatusBadge
       tone={row.config_current ? "active" : "neutral"}
@@ -146,7 +177,12 @@ export function Fleet() {
       key: "online",
       header: t("fleet.presence"),
       sortValue: (row) => (row.online ? 1 : 0),
-      cell: (row) => onlineBadge(row.online),
+      cell: (row) => (
+        <div class="flex flex-wrap items-center gap-1">
+          {onlineBadge(row.online)}
+          {placementBadge(row)}
+        </div>
+      ),
     },
     {
       key: "lastSeen",
@@ -317,6 +353,7 @@ export function Fleet() {
               <div class="flex flex-col gap-4">
                 <div class="flex flex-wrap gap-2">
                   {onlineBadge(store().online)}
+                  {placementBadge(store())}
                   {configBadge(store())}
                   {leaseBadge(store())}
                 </div>

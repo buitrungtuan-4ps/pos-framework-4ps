@@ -6489,6 +6489,19 @@ struct FleetStoreView {
     /// *superseded*; it is simply not under the lease yet, and saying otherwise would put a red
     /// badge on every store the day this shipped.
     lease_superseded: bool,
+    /// Where the machine holding the authoritative generation runs — the `EDGE_PLACEMENT_*` token,
+    /// or `null` ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// `null` covers two different things on purpose, and the console must not read it as a mode:
+    /// the cloud has never bumped this store, or the stored token is one this build cannot decode.
+    /// Neither is `EDGE_PLACEMENT_UNSPECIFIED` — on the wire that token means *this message did not
+    /// say*, and a server that emitted it would be saying something. A field that is simply absent
+    /// is the honest shape for both.
+    ///
+    /// What the two absences mean for *urgency* is deliberately not on this view, because the
+    /// console does not decide it: the alert engine reads the same `FleetRow` and scores an
+    /// undecodable token with the hosted case rather than the in-store one.
+    edge_placement: Option<&'static str>,
 }
 
 impl FleetStoreView {
@@ -6544,6 +6557,7 @@ impl FleetStoreView {
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
             lease_generation_authoritative: row.lease_generation_authoritative,
             lease_superseded,
+            edge_placement: row.edge_placement.as_wire(),
         }
     }
 }
