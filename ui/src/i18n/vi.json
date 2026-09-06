@@ -128,5 +128,7 @@
   "today.no_shift": "chưa mở",
   "today.open_bills": "Hóa đơn đang mở",
   "today.shift": "Ca",
-  "today.title": "Hôm nay"
+  "today.title": "Hôm nay",
+  "version.behind_detail": "Ứng dụng cần bản {required} trở lên; máy chủ cửa hàng đang chạy bản {running}. Việc bán hàng vẫn diễn ra bình thường — báo cho người phụ trách máy chủ cửa hàng.",
+  "version.behind_title": "Máy bán hàng này mới hơn máy chủ cửa hàng"
 }

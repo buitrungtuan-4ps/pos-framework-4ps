@@ -61,6 +61,54 @@ keychain, the second pairing-URL form, the `PROTOCOL_VERSION` response header, t
 [ADR-0112](0112-print-agents.md) builds). The allow-list is what those need to exist first; none of
 them is blocked on a decision.
 
+## Delivery — 2026-09-06, the version handshake
+
+`pos-edge-version` ships, and — as this record requires — it ships with the client that reads it and
+the banner that shows it. The lesson it cites is `pos-api-version`, removed because *"every route
+ignored it, so an integrator who sent it believed they had pinned something and had not"*. A header
+nothing reads is worse than no header.
+
+**The edge stamps every `/api/*` response**, including the asset fallback's. That last part is the
+whole point and is what decided where the layer goes. The CORS layer is applied per sub-router
+because coverage there is a *policy* — a route is covered because a constructor named it. This is a
+fact about the binary, true of every `/api` answer it gives, and the answer that most needs it comes
+from no `/api` sub-router at all: a path one side moved does not `404` on this edge, because
+`assets::serve` returns `200 text/html` for anything unmatched. So the layer sits on the merged
+application and tests the path itself. `/healthz` is not stamped — it serves a service manager, and
+it already reports the version in its body.
+
+`Access-Control-Expose-Headers` carries it, because without that a browser hides the header from the
+page and the mechanism does nothing for the only caller that can drift from its edge at all.
+
+**The app's side of the comparison is a build stamp, not a hand-maintained constant.** The release
+workflow injects `VITE_MINIMUM_EDGE_VERSION` from the same tag, with the same `v` stripped, that
+stamps the binary — so the bundle embedded in an edge always matches the binary serving it and never
+warns about itself, while a shell built from that bundle and later pointed at an older edge is
+exactly the case the banner is for. A local build sets nothing and reads `0.0.0`, which never warns,
+the same honesty `version.rs` applies to a hand-built binary. A hand-maintained minimum was the
+alternative and it rots in the direction that matters: nobody remembers to raise it the release they
+start depending on a newer edge.
+
+All three `fetch` call sites observe the header, not just `request()`. `signIn` and `signOut` bypass
+that helper on purpose — one reads a structured refusal, the other wants no body — and they are three
+of the routes a second origin most needs. The observation happens **before** the `ok` check, because
+the call that just failed is the one an operator is looking at when they ask what version this box is
+running.
+
+Four properties verified red first, on the edge side: an `/api` answer carries the release; the asset
+fallback's answer carries it too; `/healthz` does not; and a cross-origin response says the page may
+read it. Removing the path test fails the third; removing `expose_headers` fails the fourth.
+
+**Not verified by an automated test: the client comparison itself.** `ui/` has no unit-test runner —
+its gates are `tsc`, the i18n lint and parity, contrast, and the step budget — so `edgeIsBehind`'s
+three rules (`0.0.0` never warns on either side, an unparseable version never warns, strictly-older
+warns) are held only by reading. The failure that escapes is a banner shown or hidden wrongly; it
+cannot refuse a sale, which is why this was not the slice to add a test framework in. Adding one to
+`ui/` is a decision on its own.
+
+**Still open from this record.** The base-URL default, the token in the operating system's keychain,
+and the second pairing-URL form.
+
 ## Delivery — 2026-09-06, the additive-route rule and its snapshot
 
 The rule this record *extends* is now enforced. `AGENTS.md` §2 forbade removing or renaming a

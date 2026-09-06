@@ -1,9 +1,11 @@
-import { onCleanup, onMount, type ParentProps } from "solid-js";
+import { Show, onCleanup, onMount, type ParentProps } from "solid-js";
 import { Route, Router } from "@solidjs/router";
 
 import { ApiError, api, deviceToken } from "./api/client";
+import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
+import { t } from "./i18n";
 import { Devices } from "./screens/Devices";
 import { Expo } from "./screens/Expo";
 import { Floor } from "./screens/Floor";
@@ -18,12 +20,36 @@ import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
 import { fold, loadStore, setLink } from "./state/store";
 
+// Shown when this app is newer than the store server answering it (ADR-0111). It names both
+// versions and nothing else: the operator cannot fix it, and the person who can needs the two
+// numbers. It never blocks a sale — ADR-0024 settled that principle one tier down, and a version
+// string is not a reason to refuse a customer.
+function VersionDrift() {
+  return (
+    <Show when={edgeIsBehind()}>
+      <div
+        role="status"
+        class="border-b border-line border-l-4 border-l-accent bg-surface-raised px-4 py-2"
+      >
+        <p class="text-sm font-semibold text-ink">{t("version.behind_title")}</p>
+        <p class="text-sm text-ink-muted">
+          {t("version.behind_detail", {
+            required: MINIMUM_EDGE_VERSION,
+            running: edgeVersion() ?? "",
+          })}
+        </p>
+      </div>
+    </Show>
+  );
+}
+
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
 function Shell(props: ParentProps) {
   return (
     <div class="flex min-h-full flex-col">
       <StatusBar />
+      <VersionDrift />
       <main class="flex-1 overflow-y-auto">{props.children}</main>
     </div>
   );

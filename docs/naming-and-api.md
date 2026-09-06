@@ -93,6 +93,7 @@ convention the cloud actually implements.
 | `pos-signature` | Webhook HMAC-SHA256, as `v1=<hex>` |
 | `pos-signature-time` | Signing timestamp, Unix seconds (replay window ±5 minutes) |
 | `pos-delivery-id` | Webhook idempotency key: the page being delivered, stable across retries |
+| `pos-edge-version` | **Response** header on every edge `/api/*` answer: the release that replied ([ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)). Not `PROTOCOL_VERSION`, which is the edge↔cloud wire language and is §11's axis — an app is not on that wire |
 
 HTTP header names use hyphens by convention — this is HTTP, not a violation of the snake_case rule.
 They carry no `X-` prefix: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated it for new

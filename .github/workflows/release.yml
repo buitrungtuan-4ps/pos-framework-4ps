@@ -101,7 +101,17 @@ jobs:
         # (ui/dist is gitignored) and would embed the placeholder. Build it first so the release
         # binary serves the real UI.
         working-directory: ui
+        env:
+          # The oldest edge this bundle knows it works against (ADR-0111). Stamped from the same tag
+          # the binary below is stamped with, and with the same `v` stripped, so the bundle embedded
+          # in an edge always matches the binary serving it and never warns about itself. A shell
+          # built from this bundle and later pointed at an *older* edge is the case the banner is
+          # for. A local build sets nothing and reads `0.0.0`, which never warns.
+          RELEASE_TAG: ${{ env.TAG }}
         run: |
+          set -euo pipefail
+          export VITE_MINIMUM_EDGE_VERSION="${RELEASE_TAG#v}"
+          echo "the app requires edge ${VITE_MINIMUM_EDGE_VERSION} or later"
           npm install --global pnpm@10
           pnpm install --frozen-lockfile
           pnpm build
