@@ -100,6 +100,15 @@ const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(30);
 /// still reads as online in the fleet view ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How long a stop waits for its last heartbeat to reach the cloud ([`FarewellBeat`]).
+///
+/// Short on purpose. It is spent *after* the drain has already spent up to
+/// [`event_publish::STOP_GRACE`](crate::event_publish), and by then the useful work is done: the
+/// events are published and durable either way, and this beat only tells the console what happened.
+/// A cloud that is unreachable must not hold a shop's machine open — so the budget is under the
+/// heartbeat transport's own request timeout, and a beat that misses it is logged and abandoned.
+const FAREWELL_GRACE: Duration = Duration::from_secs(5);
+
 /// How often the store scrubs personal records past its retention period
 /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
 ///
@@ -354,6 +363,19 @@ where
         }
     }
 
+    // Only now is there anything true to say. The drain above is what makes the outbox depth mean
+    // something, and this beat is the only one that carries it: the heartbeat loop stopped ticking
+    // when the shutdown watch flipped, long before the drain ran. Without it a machine that drained
+    // perfectly and a machine that never drained at all look identical from the console — and the
+    // cloud, which releases a handover only on a beat carrying a drained outbox
+    // (ADR-0110), would never release one at all.
+    //
+    // Placed after `served` is awaited and before it is unwrapped, so a store whose HTTP surface
+    // fell over still reports its stop. That is the case where the report matters most.
+    if let Some(farewell) = composed.farewell {
+        farewell.deliver().await;
+    }
+
     served.map_err(EdgeError::Serve)?;
 
     let outcome = if restart.wanted() {
@@ -405,6 +427,70 @@ pub struct Composed {
     /// [`crate::event_publish::STOP_GRACE`]. A test that composes and drops this simply detaches
     /// the task, exactly as before.
     pub publisher: Option<tokio::task::JoinHandle<()>>,
+    /// The stopping store's last heartbeat, held until its final drain has finished — `None` when
+    /// no heartbeat loop is running (a LAN-only, unactivated or unkeyed box).
+    ///
+    /// Handed back for the same reason `publisher` is: only whoever owns the lifetime can order the
+    /// two in the right sequence, and the order is the whole point. See [`FarewellBeat`].
+    pub farewell: Option<FarewellBeat>,
+}
+
+/// The last heartbeat a stopping store sends, and the signal that releases it.
+///
+/// # What it fixes
+///
+/// [`HeartbeatClient::run`](crate::heartbeat_client::HeartbeatClient::run) leaves its loop the
+/// instant shutdown resolves, and the publish loop's last drain runs *afterwards*, in
+/// [`serve_until`]. So the last thing a cleanly-stopping machine ever said was the tick that
+/// reported a backlog, and the zero the drain went on to achieve reached nobody.
+///
+/// That zero is what the cloud waits for. A superseded lease generation clears only on a heartbeat
+/// carrying **both** a drained outbox and the generation being superseded
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)) — so with no beat
+/// after the drain the automatic clear could never fire at all, and a machine that had done
+/// everything right still left a handover open for an operator to close by hand.
+///
+/// # Why the ordering lives here and not in either loop
+///
+/// The drain and the heartbeat are two independent tasks that know nothing of each other, and
+/// neither could sequence itself against the other without holding the other's handle. This
+/// function does hold both, so it is where "drain, *then* beat" can be stated once and be true.
+///
+/// A store whose drain overruns still beats: the report is read from the outbox, so it carries the
+/// events actually being left behind, and the cloud's clear — guarded on that depth being zero —
+/// refuses itself. A truthful non-zero is more use to the console than silence.
+#[derive(Debug)]
+pub struct FarewellBeat {
+    drained: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl FarewellBeat {
+    /// Tells the heartbeat loop the drain is over, then waits [`FAREWELL_GRACE`] for the beat to
+    /// land. Nothing here can fail a stop: every outcome is a log line and a return.
+    async fn deliver(self) {
+        if self.drained.send(()).is_err() {
+            // The loop is already gone — it panicked, or the runtime took it. Either way there is
+            // no beat to wait for, and the console will read this store as having fallen silent.
+            tracing::warn!(
+                "the heartbeat loop ended before the final drain; this store's stop was not reported"
+            );
+            return;
+        }
+        match tokio::time::timeout(FAREWELL_GRACE, self.task).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(
+                %error,
+                "the heartbeat loop ended abnormally while reporting the stop"
+            ),
+            Err(_elapsed) => tracing::warn!(
+                grace_secs = FAREWELL_GRACE.as_secs(),
+                "the final heartbeat did not reach the cloud in time; the console will see this \
+                 store fall silent rather than stop cleanly, and a handover waiting on it stays \
+                 open for an operator to close"
+            ),
+        }
+    }
 }
 
 /// Builds the state, the router and the background loops — everything [`serve`] does except
@@ -533,6 +619,7 @@ where
     // (ADR-0001); the gate withholds cloud sync, never local trading.
     let mut cloud = None;
     let mut publisher = None;
+    let mut farewell = None;
     if let Some(cloud_url) = cloud_url {
         let surface = compose_cloud_surface(
             app,
@@ -549,6 +636,7 @@ where
         app = surface.app;
         cloud = surface.cloud;
         publisher = surface.publisher;
+        farewell = surface.farewell;
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
@@ -559,6 +647,7 @@ where
         sessions,
         cloud,
         publisher,
+        farewell,
     })
 }
 
@@ -569,6 +658,7 @@ struct CloudSurface {
     app: axum::Router,
     cloud: Option<CloudHttpClient>,
     publisher: Option<tokio::task::JoinHandle<()>>,
+    farewell: Option<FarewellBeat>,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the OS-keyring
@@ -616,6 +706,7 @@ where
                 app,
                 cloud: None,
                 publisher: None,
+                farewell: None,
             };
         }
     };
@@ -638,10 +729,15 @@ where
     // logged and the box runs without cloud sync rather than refusing to start.
     let mut keyed_client = None;
     let mut publisher = None;
+    let mut farewell = None;
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
             let sync_key = resolve_sync_key(&*vault).await;
-            keyed_client = spawn_cloud_loops(
+            // The signal that releases the stopping store's last beat. Created here so the sender
+            // travels back out to whoever owns the lifetime and the receiver goes into the loop —
+            // the two halves of "drain, *then* beat" (see [`FarewellBeat`]).
+            let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
+            if let Some(loops) = spawn_cloud_loops(
                 cloud_url,
                 store_id,
                 edge,
@@ -650,7 +746,14 @@ where
                 sync_key,
                 held_config_version,
                 shutdown_rx,
-            );
+                drained_rx,
+            ) {
+                keyed_client = Some(loops.client);
+                farewell = Some(FarewellBeat {
+                    drained: drained_tx,
+                    task: loops.heartbeat,
+                });
+            }
             // The event stream is a second rail with its own endpoint and its own credential, so it
             // is spawned beside the `/sync` loops rather than inside them: a store with no sync key
             // still ships the events it has committed (ADR-0087).
@@ -669,6 +772,7 @@ where
         app,
         cloud: keyed_client,
         publisher,
+        farewell,
     }
 }
 
@@ -729,10 +833,27 @@ async fn resolve_sync_key<V: KeyVault>(vault: &V) -> Option<String> {
         .filter(|key| !key.trim().is_empty())
 }
 
+/// What [`spawn_cloud_loops`] hands back when it starts: the keyed client the OTA loop dials on, and
+/// the heartbeat task a stop has to release and then wait for.
+struct CloudLoops {
+    client: CloudHttpClient,
+    heartbeat: tokio::task::JoinHandle<()>,
+}
+
 /// Spawns the config-pull, heartbeat, and order-relay loops for an activated store, keyed by
 /// `sync_key`. A `None` key (neither in the vault nor the environment) is logged and skipped — the box
 /// is activated but has nothing to authenticate the `/sync` surface with, so it trades locally and
 /// awaits a provisioned key. The loops share the passed shutdown, so they drain with the server.
+///
+/// `drained` is the one exception to sharing that shutdown: the heartbeat loop stops *ticking* with
+/// the others and then waits for this before sending its last report, so the report carries the
+/// outbox as the final drain left it rather than as the stop found it ([`FarewellBeat`]).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the ninth is the drain signal, and it is a parameter precisely because the heartbeat \
+              loop must not decide for itself when a stopping store has finished draining — the \
+              publish loop it has no handle on decides that"
+)]
 fn spawn_cloud_loops<S, Q, L>(
     cloud_url: &url::Url,
     store_id: StoreId,
@@ -742,7 +863,8 @@ fn spawn_cloud_loops<S, Q, L>(
     sync_key: Option<String>,
     held_config_version: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> Option<CloudHttpClient>
+    drained: tokio::sync::oneshot::Receiver<()>,
+) -> Option<CloudLoops>
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
@@ -783,7 +905,14 @@ where
         StoreReport::new(Arc::clone(edge), lease),
         HEARTBEAT_INTERVAL,
     );
-    tokio::spawn(heartbeat_client.run(wait_for_shutdown(shutdown_rx.clone())));
+    // A dropped sender resolves the receiver too, so a caller that never signals still gets the last
+    // beat rather than a task parked forever — the beat simply reports whatever the outbox holds.
+    let heartbeat = tokio::spawn(heartbeat_client.run(
+        wait_for_shutdown(shutdown_rx.clone()),
+        async move {
+            let _ignored = drained.await;
+        },
+    ));
 
     // The order relay (ADR-0061, ADR-0087): pull the store's parked orders, make each one through the
     // edge's own `OrderIn` — repriced from this store's menu, deduped in the order's transaction — and
@@ -799,8 +928,9 @@ where
         %cloud_url,
         "cloud sync enabled: config-pull, heartbeat, and order-relay loops running"
     );
-    // Handed back for the OTA loop, which `serve` composes because it needs the shutdown sender.
-    Some(client)
+    // Handed back for the OTA loop, which `serve` composes because it needs the shutdown sender, and
+    // for the stop, which has to release the heartbeat's last beat once the drain is done.
+    Some(CloudLoops { client, heartbeat })
 }
 
 // -------------------------------------------------------------------------------------------------

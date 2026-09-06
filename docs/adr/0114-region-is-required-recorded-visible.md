@@ -312,7 +312,9 @@ the policy shape `config_trees` already uses — `USING (tenant_id = current_set
 `store_lease` ([`0051_store_lease.sql`](../../crates/adapters/store-postgres/migrations/0051_store_lease.sql))
 carries no policy of its own, in one additive migration
 ([ADR-0017](0017-migrations.md)) under `crates/adapters/store-postgres/migrations/`, taking the next
-free number after ADR-0113's `0052_host_agents.sql`.
+free number in the tree when it lands. (Migration numbers are allocated by landing order, never
+reserved: ADR-0113 originally named `0052_host_agents.sql`, and 0052 and 0053 were taken by
+`edge_placement` and `superseded_generation` before it was written.)
 
 **Nothing clears the row; the comparison does.** An acknowledgement counts as current only while both
 stored codes still equal the pair the console reads now. Change the region, or publish a profile with a
@@ -468,7 +470,7 @@ per-store secrets. Not a paragraph in an ADR nobody opens twice.
 - `crates/adapters/store-postgres/migrations/` gains one additive migration for
   `store_region_acknowledgement` — one row per store, keyed `(tenant_id, store_id)`, carrying
   `profile_country`, `region_country`, `reason` and `acknowledged_at`, RLS-isolated by `tenant_id` on
-  the policy shape `config_trees` uses — numbered after ADR-0113's `0052_host_agents.sql`. Nothing clears the
+  the policy shape `config_trees` uses — taking the next free migration number when it lands. Nothing clears the
   row; a changed pair stops matching, and the next acknowledgement overwrites it.
 - `/admin/fleet`, `/admin/fleet/{store_id}`, `/admin/stores` and `/admin/stores/{store_id}` each carry
   the two region fields, on the same routes ADR-0110 extends with `edge_placement`.

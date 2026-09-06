@@ -322,9 +322,40 @@ the lease while the old one still has forty unsent sales is not settled; it is m
 deadline nobody set.
 
 **`retired`.** A person has looked at a settled handover and decided that the old machine, its
-database and its hosting are no longer needed. The decision *is* the state, and it is observable the
-only way a decision can be: an audited `/admin` write naming the admin who made it
-([ADR-0069](0069-audit-trail.md)). Nothing transitions into `retired` on its own.
+database and its hosting are no longer needed. Nothing transitions into `retired` on its own.
+
+*Amended 2026-09-06.* This paragraph first said the decision *is* the state, observable only as an
+audited `/admin` write. That does not hold, and the audit module says why in its own contract:
+`AuditRecorder::record` is **best-effort** — *"a store failure is the recorder's to log and swallow,
+never the caller's to propagate"*, because a mutation that succeeded must not fail because its audit
+write did ([ADR-0069](0069-audit-trail.md)). A trail that is allowed to drop an entry cannot be the
+durable record of a decision: one swallowed failure and a retired machine silently reads as merely
+settled, which is an invitation to keep paying for it or to trust it again. So `retired` gets storage
+of its own — `store_lease.retired_at` and `retired_by`, both nullable, written by that audited
+`/admin` write. The audit entry still records *who decided and when*; the columns record *that it was
+decided*, which is the part a reader must not lose.
+
+*Added 2026-09-06, with the implementation.* Three rules the states above imply and this paragraph
+did not say. **Retiring refuses while a handover is in flight**, naming `superseded_generation`: a
+machine that may hold the only copy of a night's sales is not one anybody gets to call unnecessary,
+so `retired` really is reachable only from `settled`. **A second retirement is refused, not
+applied** — it would replace the first decision's who and when in the row whose entire job is to
+hold the first. And **a bump clears both columns in the same statement that records the new
+`superseded_generation`**: a bump starts a new handover with a new outgoing machine, so a retirement
+from the previous one stops describing the row. These columns are the *current* handover; the
+history of every retirement is the trail's, and it has it.
+
+The hand-made half of `settled` is the mirror image and ships with them: an audited `/admin` write
+in which a person names the generation whose machine they checked. It takes that number rather than
+an `If-Match`, because here the named value is the stronger precondition — any bump necessarily
+*changes* `superseded_generation`, so a concurrent bump makes the write refuse on its own. It is an
+attestation about one specific machine, so naming the wrong one is refused rather than treated as
+idempotent: a silent success would put a false attestation in the trail.
+
+`retired_by` holds the admin's ULID and not their email. The trail already carries the address as it
+stood at action time, which is where a human-readable actor belongs; copying it into an operational
+row the fleet console reads would spread staff personal data into a table nobody classified as
+holding any, for no gain.
 
 **A bump while `superseded_generation` is set is refused, naming the field**
 ([ADR-0096](0096-unprocessable-status.md)) — you do not move a store off a machine whose events are
@@ -445,17 +476,41 @@ it. It moves the machine; the lease still names which machine is the store.
 
 ## Consequences
 
-- The cloud's store registry gains an `edge_placement` column, `NOT NULL`, carrying
+- **`store_lease`** gains an `edge_placement` column, `NOT NULL`, carrying
   `EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or
   `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`. Every existing store is `EDGE_PLACEMENT_IN_STORE`, which is not
-  a default — it is what those stores actually are. `EDGE_PLACEMENT_UNSPECIFIED` exists because
+  a default — it is what those stores actually are.
+
+  *Amended 2026-09-06, after the implementation (#200).* This bullet first said the column went on the
+  **store registry**. It went on `store_lease` instead, and the reason is the rule two bullets down:
+  the only writer is the bump. On `stores` that is a convention somebody has to keep, because the
+  table already carries a rename-and-archive `UPDATE` path, so the column would sit one careless
+  statement away from being editable — and an edited column is the repair this ADR names as always
+  wrong, because it makes the record agree with a superseded box instead of with the machine holding
+  authority. On `store_lease` the property is structural: that table's only write *is* the bump, so
+  the placement cannot drift from the generation beside it. It also reads more truthfully — the value
+  does not mean "where this shop's computer is", it means *the placement of the machine holding the
+  authoritative generation*, which is a fact about the lease. `EDGE_PLACEMENT_UNSPECIFIED` exists because
   [ADR-0010](0010-naming-standard.md) requires every published enum to have a zero value, and it is
   never stored and never accepted on a write: it is what an older reader sees in place of a value a
   newer server added, which is the rule that keeps adding a fourth mode non-breaking.
 - `store_lease` gains a nullable `superseded_generation`, and the heartbeat's liveness write clears
-  it when the generation it names reports an empty outbox. That column is the whole of the handover
+  it when the generation it names reports an empty outbox — both facts from the *same* message, never
+  from the stored liveness row, which COALESCEs depth and generation independently and can therefore
+  hold a pair that came from two different beats. That column is the whole of the handover
   machinery: `taking-over` and `settled` are read off it and the liveness row, with no timer and no
   new table.
+
+  *Amended 2026-09-06, after the implementation.* The clear above describes a heartbeat that, at the
+  time this was written, **no stopping store ever sent**. `HeartbeatClient::run` left its loop the
+  instant the shutdown watch flipped, and production-readiness **D8**'s last drain runs afterwards in
+  `serve_until` — so the final thing a cleanly-stopping machine said was the tick reporting the
+  backlog it was about to clear, and the zero it went on to achieve reached nobody. The automatic
+  clear could not fire, and every handover, however well it went, still needed a person. The edge now
+  holds that last beat back until the drain is done and then sends it
+  (`pos_edge::server::FarewellBeat`). It reports the outbox rather than the drain's opinion of the
+  outbox, so a drain that ran out of budget reports a truthful non-zero and this clause refuses
+  itself, with no error path to plumb.
 - `edge_placement` is read on `/admin/fleet` and `/admin/fleet/{store_id}`
   ([ADR-0068](0068-fleet-liveness.md)) and on `/admin/stores` and `/admin/stores/{store_id}`, and the
   fleet console renders it beside liveness rather than on a settings page nobody opens during an

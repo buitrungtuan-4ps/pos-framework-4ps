@@ -152,7 +152,14 @@ export function Fleet() {
   const bumpLease = async (row: FleetStore) => {
     setBumpBusy(true);
     try {
-      await api.bumpStoreLease(tenantId(), row.store_id);
+      // The generation this row was read at, as the write's precondition. A store with no lease
+      // yet sends `*`. If another admin bumped since this table loaded, the server refuses rather
+      // than letting both of us believe we moved the store.
+      await api.bumpStoreLease(
+        tenantId(),
+        row.store_id,
+        row.lease_generation_authoritative,
+      );
       toast.ok(t("fleet.leaseBumped"));
       setBumping(null);
       await load();

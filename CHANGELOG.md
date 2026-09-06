@@ -16,6 +16,127 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A handover can be closed by hand, and a retired machine is recorded rather than only audited**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  Two audited `/admin` writes behind `console.stores.manage`, neither of which publishes a config
+  node — nothing about them changes what a till is told:
+
+  - `POST /admin/config/lease/settle` — a person attests that a superseded machine holds no events,
+    closing a handover that will never close itself: a box already powered off, or one whose disk an
+    operator has read directly. The body **names the generation** whose machine they checked, and
+    that number is the whole precondition. There is no `If-Match` and none would add anything: any
+    bump necessarily *changes* `superseded_generation`, so a concurrent bump makes the write refuse
+    on its own. Naming the wrong machine is a `422` reporting which one is actually in flight —
+    **not** an idempotent success, because a silent `204` would put an attestation about a different
+    machine into the trail as though it were about this one.
+  - `POST /admin/config/lease/retire` — a person decides a settled handover's outgoing machine, its
+    database and its hosting are no longer needed. It refuses (`422`) while a handover is in flight:
+    a machine that may hold the only copy of a night's sales is not one anybody gets to call
+    unnecessary. A second retirement is refused rather than applied, because it would replace the
+    first decision's who and when in the row whose entire job is to hold the first.
+
+  **Migration `0054`** adds `store_lease.retired_at` and `retired_by`, both nullable. Storage,
+  because `AuditRecorder::record` is best-effort by its own contract — a trail permitted to drop an
+  entry cannot be the durable record of a decision, and one swallowed failure would leave a retired
+  machine reading as merely settled. `retired_by` is the admin's **ULID, never their email**: the
+  trail already carries the address as it stood, and an operational row the fleet console reads has
+  no business accumulating staff personal data.
+
+  The two columns describe the *current* handover, so **a bump clears them in the same `SET` clause**
+  that records the new `superseded_generation`. Without that, a retirement from three handovers ago
+  would sit on a row describing a machine still in the shop. The history of every retirement is the
+  audit trail's, and it has it.
+
+  Also: an acknowledged bump's audit entry now carries `abandoned_generation`. The field's own
+  documentation already promised it and the handler did not write it — and the number is nowhere
+  else, because an acknowledged bump *rolls* `superseded_generation` forward rather than clearing
+  it. The trail is the only record that an earlier machine's sales were written off, and by whom.
+
+### Fixed
+
+- **A stopping store now reports the outbox it drained, so a handover can close itself**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  The cloud releases a handover — clears `store_lease.superseded_generation` — on a heartbeat
+  carrying both the superseded generation and an empty outbox. **No store had ever sent that
+  heartbeat.** The heartbeat loop left its `select!` the instant the shutdown watch flipped, and the
+  last drain (production-readiness **D8**) runs afterwards, so the final thing a cleanly-stopping
+  machine said was the tick reporting the backlog it was about to clear. The zero it went on to
+  achieve reached nobody, the automatic clear could never fire, and every handover needed a person to
+  close it by hand.
+
+  The edge now holds that last beat back until the drain has finished, then sends it. Two details
+  carry the weight:
+
+  - **It reports the outbox, not the drain's opinion of the outbox.** The drain still returns
+    nothing. The beat reads the depth from the store the way every other beat does, so a drain that
+    ran out of budget reports the events it is actually leaving behind — and the cloud's clear, which
+    is guarded on that depth being zero, refuses itself with no error path to plumb. A truthful
+    non-zero is more use to an operator than silence.
+  - **The ordering lives in the composition, not in either loop.** The drain and the heartbeat are
+    independent tasks that hold no handle on each other; only the caller that owns both lifetimes can
+    say "drain, *then* beat" and have it be true.
+
+  A store whose HTTP surface fell over still sends it, which is the case where it matters most. The
+  beat is bounded and never fails a stop: a cloud that cannot be reached in five seconds is logged
+  and the machine goes, exactly as before.
+
+### Changed
+
+- **The lease bump is conditional: it carries `If-Match`, and it refuses to move a store off a
+  machine that still owes events** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+  Program C Phase 1 slice 3, second of two).
+
+  **Upgrade note.** `POST /admin/config/lease/bump` now **requires** an `If-Match` header naming the
+  generation the caller read — or `*` for a store that has never been issued a lease. A request
+  without one is refused. The console sends it (the Fleet screen already reads that generation for
+  its superseded badge); **any caller outside the console must be updated.**
+
+  Two refusals, and they answer different questions:
+
+  - `412` — the row is not at the generation you named. Someone else bumped, or you are holding a
+    stale read. The case that motivated it: two admins bump one store at once with different
+    placements; the single statement serialises them, so **both** used to get a success while the
+    second placement won, leaving the first believing they had moved a store somewhere it is not.
+  - `422` — the store's previous machine still holds events this cloud has never seen. Send
+    `acknowledge_undrained` naming that generation to move the store anyway, which abandons them.
+
+  **Both conditions live inside the write statement, never in the handler.** A read-then-write check
+  is a TOCTOU whose failure mode is worse than a duplicate number: two admins both read a clear row,
+  both bump, and the second's `superseded_generation` overwrites the first's — destroying the record
+  that the first displaced machine never drained, with the very column added to hold that record. The
+  insert branch is conditional too (`INSERT … SELECT … WHERE`), so a numbered `If-Match` against a
+  store with no lease inserts nothing rather than quietly creating generation 0.
+
+### Changed
+
+- **Three Program C decisions settled, and the records that disagreed now say the same thing**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+
+  Each was two accepted documents contradicting each other, or a document contradicting the code that
+  implements it. The amendments are dated and keep the original claim visible, so a reader sees what
+  changed rather than finding a document that was quietly always right.
+
+  - **The lease bump carries `If-Match`.** ADR-0110 already said so; the route never did. The
+    deciding case: two admins bump one store at once with different placements. The single statement
+    serialises them, so *both* get a success — and `COALESCE` lets the second placement win, leaving
+    the first admin believing they moved a store somewhere it is not.
+  - **`edge_placement` lives on `store_lease`, not the store registry.** ADR-0110's Consequences said
+    registry; the implementation chose the lease row, because that table's only write is the bump. On
+    `stores` the same rule would be a convention somebody has to keep, beside an existing
+    rename-and-archive `UPDATE` path.
+  - **`retired` gets storage.** ADR-0110 said the decision *is* the state, recorded only as an
+    audited write. `AuditRecorder::record` is best-effort by its own contract — a store failure is
+    logged and swallowed, so a mutation that succeeded never fails because its audit did — and a
+    trail allowed to drop an entry cannot be the durable record of a decision.
+
+  Also: migration numbers are allocated by landing order, never reserved in advance. ADR-0113 had
+  named `0052_host_agents.sql`, which `edge_placement` and `superseded_generation` took first; both
+  ADR-0113 and ADR-0114 now say "the next free number when it lands".
+
+### Added
+
 - **A bump records the generation it displaced, and only a matching drain clears it**
   ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1 slice 3, first
   of two).

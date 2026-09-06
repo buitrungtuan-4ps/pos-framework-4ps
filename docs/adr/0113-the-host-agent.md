@@ -432,7 +432,7 @@ store's liveness is its tenant's data"*. A host is not a store and has no store 
 occupy there, and widening the key of the table the fleet console reads so it can admit a different
 kind of thing is how a read model stops meaning one thing.
 
-So the host's `last_seen_at` sits on its own registry row in `0052_host_agents.sql`, keyed
+So the host's `last_seen_at` sits on its own registry row in `host_agents.sql`, keyed
 `(tenant_id, host_id)` and RLS-isolated by the same policy shape — which it can be, because the section
 above bound a host registration to exactly one tenant. `/admin/fleet` and `/admin/fleet/{store_id}` are
 still the only fleet routes: the list renders host rows beside store rows by reading both captures, and
@@ -639,7 +639,7 @@ them by default from a framework that can answer neither.
   `POST /admin/hosts/{host_id}/retire` — under `ConsolePermission::ManageStores`, with `If-Match` and
   the audit actions `host.register` and `host.retire`. The agent's key is issued through the existing
   `/admin/api-keys`, bound to that `host_id` and carrying `run_host_jobs` alone.
-- `crates/adapters/store-postgres/migrations/0052_host_agents.sql`: the host registry — one row per
+- `crates/adapters/store-postgres/migrations/<next-free>_host_agents.sql`: the host registry — one row per
   registration, keyed `(tenant_id, host_id)`, carrying the region, the declared ceiling, the running
   count and `last_seen_at` — and the job queue the long-poll reads, the `order_queue` shape one table
   over, carrying the region every job is filtered on. RLS-isolated by the same policy shape as

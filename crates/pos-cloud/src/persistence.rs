@@ -97,7 +97,10 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
-use crate::lease::{LeaseBump, LeaseStore, LeaseStoreError, StorePlacement};
+use crate::lease::{
+    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome, SettleOutcome,
+    StorePlacement,
+};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -480,17 +483,34 @@ impl LeaseStore for PostgresConfigTrees {
         store: StoreId,
         issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
-    ) -> Result<LeaseBump, LeaseStoreError> {
-        let stored = self
+        acknowledge_undrained: Option<LeaseGeneration>,
+        expected_generation: Option<LeaseGeneration>,
+    ) -> Result<LeaseBumpOutcome, LeaseStoreError> {
+        let outcome = self
             .bump_store_lease(
                 tenant,
                 store,
                 issued_at.as_milliseconds_since_epoch(),
                 edge_placement.map(EdgePlacement::as_wire),
+                acknowledge_undrained.map(stored_generation_out),
+                expected_generation.map(stored_generation_out),
             )
             .await
             .map_err(|error| LeaseStoreError::new(error.to_string()))?;
-        Ok(LeaseBump {
+        let stored = match outcome {
+            store_postgres::BumpOutcome::Issued(stored) => stored,
+            store_postgres::BumpOutcome::VersionMismatch { current } => {
+                return Ok(LeaseBumpOutcome::VersionMismatch {
+                    current: current.map(stored_lease_generation).transpose()?,
+                });
+            }
+            store_postgres::BumpOutcome::Undrained { superseded } => {
+                return Ok(LeaseBumpOutcome::Undrained {
+                    superseded: stored_lease_generation(superseded)?,
+                });
+            }
+        };
+        Ok(LeaseBumpOutcome::Issued(LeaseBump {
             generation: stored_lease_generation(stored.generation)?,
             edge_placement: stored_edge_placement(&stored.edge_placement)?,
             // Same refusal posture as the generation beside it, and for the same reason: a negative
@@ -500,7 +520,7 @@ impl LeaseStore for PostgresConfigTrees {
                 .superseded_generation
                 .map(stored_lease_generation)
                 .transpose()?,
-        })
+        }))
     }
 
     async fn current(
@@ -514,6 +534,77 @@ impl LeaseStore for PostgresConfigTrees {
             .map_err(|error| LeaseStoreError::new(error.to_string()))?;
         stored.map(stored_lease_generation).transpose()
     }
+
+    async fn settle_handover(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        superseded: LeaseGeneration,
+    ) -> Result<SettleOutcome, LeaseStoreError> {
+        let outcome = self
+            .settle_handover(tenant, store, stored_generation_out(superseded))
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            store_postgres::StoredSettle::Settled => SettleOutcome::Settled,
+            store_postgres::StoredSettle::NotSuperseded { current } => {
+                SettleOutcome::NotSuperseded {
+                    current: current.map(stored_lease_generation).transpose()?,
+                }
+            }
+            store_postgres::StoredSettle::NoLease => SettleOutcome::NoLease,
+        })
+    }
+
+    async fn retire(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        retired_at: Timestamp,
+        retired_by: &str,
+    ) -> Result<RetireOutcome, LeaseStoreError> {
+        let outcome = self
+            .retire_handover(
+                tenant,
+                store,
+                retired_at.as_milliseconds_since_epoch(),
+                retired_by,
+            )
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            store_postgres::StoredRetire::Retired => RetireOutcome::Retired,
+            store_postgres::StoredRetire::Undrained { superseded } => RetireOutcome::Undrained {
+                superseded: stored_lease_generation(superseded)?,
+            },
+            store_postgres::StoredRetire::AlreadyRetired { at, by } => {
+                RetireOutcome::AlreadyRetired {
+                    // A stored instant this cloud wrote itself. If it will not read back, the row
+                    // has been tampered with or corrupted — the same posture the generation beside
+                    // it takes, and for the same reason: inventing an instant would put a
+                    // fabricated decision time in front of a person deciding what to switch off.
+                    at: Timestamp::from_milliseconds_since_epoch(at).map_err(|error| {
+                        LeaseStoreError::new(format!(
+                            "the stored retirement instant is not a time this cloud writes: {error}"
+                        ))
+                    })?,
+                    by,
+                }
+            }
+            store_postgres::StoredRetire::Raced => RetireOutcome::Raced,
+            store_postgres::StoredRetire::NoLease => RetireOutcome::NoLease,
+        })
+    }
+}
+
+/// A domain generation as the `bigint` the column holds.
+///
+/// The counterpart to [`stored_lease_generation`]. Saturating rather than fallible because the
+/// domain type is a `u64` and the column a signed 64-bit integer: a generation past `i64::MAX` is
+/// unreachable in any fleet — it would take one bump per nanosecond for longer than the universe has
+/// existed — and a saturating conversion keeps the caller free of an error arm nothing can produce.
+fn stored_generation_out(generation: LeaseGeneration) -> i64 {
+    i64::try_from(generation.value()).unwrap_or(i64::MAX)
 }
 
 /// Reads a stored generation back into the domain's `u64`.

@@ -126,6 +126,100 @@ impl StorePlacement {
     }
 }
 
+/// What a conditional bump did ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+///
+/// Two of the three arms are refusals a caller can fix and retry, which is why they are outcomes and
+/// not [`LeaseStoreError`]s: that type funnels to `503 the service is unavailable`, and a caller told
+/// `503` retries the same losing request. The same reasoning
+/// [`UpdateOutcome`](crate::version::UpdateOutcome) applies on the config tree.
+///
+/// **The two refusals are genuinely different questions, and a retry separates them.** A caller that
+/// re-sends a bump which actually landed is *stale*, not *blocked*: the row moved on, so it gets
+/// `VersionMismatch` — and telling it `Undrained` instead would send it to acknowledge a handover it
+/// has already caused. Order matters for the same reason, and the write's own `WHERE` evaluates the
+/// generation first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseBumpOutcome {
+    /// The generation was issued.
+    Issued(LeaseBump),
+    /// The row is not at the generation the request's `If-Match` named. Answers `412`.
+    ///
+    /// `current` is what the row holds now, or `None` for a store with no lease row at all. Read
+    /// after the refusal, so it can be stale by the time it is rendered — it is for the message, not
+    /// for a decision. The decision was the write's `WHERE`, which cannot race.
+    VersionMismatch {
+        /// What the row holds now, or `None` for a store with no lease row.
+        current: Option<LeaseGeneration>,
+    },
+    /// A handover is still in flight and the request did not acknowledge it: `superseded` names a
+    /// machine holding events this cloud has never seen. Answers `422`
+    /// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+    ///
+    /// You do not move a store off a machine whose events are still on it — not without a person
+    /// saying, by name and in the trail, that those events are being abandoned.
+    Undrained {
+        /// The generation whose machine still owes this cloud events.
+        superseded: LeaseGeneration,
+    },
+}
+
+/// What settling a handover by hand did ([`LeaseStore::settle_handover`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettleOutcome {
+    /// The named generation was the one in flight, and the handover is now settled.
+    Settled,
+    /// The row's `superseded_generation` is not the one the request named. Answers `422`
+    /// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+    ///
+    /// `current` is what the row holds instead — `None` when the handover is already settled,
+    /// usually because the outgoing machine's own last heartbeat got there first.
+    ///
+    /// **Not treated as an idempotent success**, and that is the decision worth stating. This write
+    /// records a person attesting to a specific fact: *the machine holding generation N holds no
+    /// events*. If the row is not on N, the attestation is about a different machine, and answering
+    /// `204` would put it in the trail as though it were about this one.
+    NotSuperseded {
+        /// What the row's `superseded_generation` holds now.
+        current: Option<LeaseGeneration>,
+    },
+    /// The cloud has never issued this store a lease, so there is no handover to settle.
+    NoLease,
+}
+
+/// What retiring a handover did ([`LeaseStore::retire`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetireOutcome {
+    /// The handover is recorded as retired.
+    Retired,
+    /// A handover is still in flight: the outgoing machine may still hold events. Answers `422`.
+    ///
+    /// You do not decide a machine is no longer needed while it may be the only place a night's
+    /// trading exists. Settle it first — by draining it, or by attesting that it is empty.
+    Undrained {
+        /// The generation whose machine has not been proved drained.
+        superseded: LeaseGeneration,
+    },
+    /// This store's current handover is already retired. Answers `422`.
+    ///
+    /// Refused rather than overwritten: a second write would replace the first decision's who and
+    /// when with a later person's, and the row is the durable record of exactly that.
+    AlreadyRetired {
+        /// When the decision was made.
+        at: Timestamp,
+        /// The deciding admin's id. An id and not an email — the trail carries the email, and an
+        /// operational row has no business holding one.
+        by: String,
+    },
+    /// The write refused, and by the time the row was read it satisfied both of its conditions:
+    /// another admin resolved the race in between. The caller re-reads and retries. Answers `409`.
+    ///
+    /// Reported rather than retried, because a retry would be a second attempt at a decision the
+    /// caller made once, against a row that has changed underneath them.
+    Raced,
+    /// The cloud has never issued this store a lease, so there is no handover to retire.
+    NoLease,
+}
+
 /// Issues and reads a store's authoritative lease generation.
 pub trait LeaseStore {
     /// Issues this store's **next** generation and returns it: the act of saying "a different
@@ -150,7 +244,9 @@ pub trait LeaseStore {
         store: StoreId,
         issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
-    ) -> impl Future<Output = Result<LeaseBump, LeaseStoreError>> + Send;
+        acknowledge_undrained: Option<LeaseGeneration>,
+        expected_generation: Option<LeaseGeneration>,
+    ) -> impl Future<Output = Result<LeaseBumpOutcome, LeaseStoreError>> + Send;
 
     /// The store's authoritative generation, or `None` if it has never been issued a lease.
     ///
@@ -166,6 +262,56 @@ pub trait LeaseStore {
         tenant: TenantId,
         store: StoreId,
     ) -> impl Future<Output = Result<Option<LeaseGeneration>, LeaseStoreError>> + Send;
+
+    /// Settles a handover by hand: clears `superseded_generation` when it holds `superseded`.
+    ///
+    /// The second of the two ways a handover closes
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)). The first is
+    /// automatic — the outgoing machine's last heartbeat reports that generation with an empty
+    /// outbox. This is the one for a machine that will never send another heartbeat: a box already
+    /// powered off, or one whose disk an operator has read directly. It is an attestation, so it is
+    /// audited, and the person's name is against it.
+    ///
+    /// # Why the caller names the generation rather than sending `If-Match`
+    ///
+    /// The named value *is* the precondition, and here it is strictly stronger than the row's
+    /// version. Any bump necessarily changes `superseded_generation` — it sets it to the generation
+    /// being displaced, which is by construction one the column did not already hold — so a
+    /// concurrent bump makes this write's `WHERE` fail on its own. An `If-Match` on top would refuse
+    /// exactly the same requests, while inviting a caller to think the two could disagree.
+    ///
+    /// # Errors
+    ///
+    /// [`LeaseStoreError`] if the row could not be written.
+    fn settle_handover(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        superseded: LeaseGeneration,
+    ) -> impl Future<Output = Result<SettleOutcome, LeaseStoreError>> + Send;
+
+    /// Records that a settled handover's outgoing machine — its box, its database and its hosting —
+    /// is no longer needed.
+    ///
+    /// Nothing transitions into this on its own, and nothing ever will: it is a judgement about
+    /// money and risk that no fact in this system implies. It refuses while a handover is still in
+    /// flight, because a machine that may hold the only copy of a night's sales is not one anybody
+    /// can decide is unnecessary.
+    ///
+    /// `retired_by` is the acting admin's id. The audit trail carries the email; this row does not,
+    /// because an operational table that accumulates staff addresses is one that has quietly changed
+    /// what it holds.
+    ///
+    /// # Errors
+    ///
+    /// [`LeaseStoreError`] if the row could not be written.
+    fn retire(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        retired_at: Timestamp,
+        retired_by: &str,
+    ) -> impl Future<Output = Result<RetireOutcome, LeaseStoreError>> + Send;
 }
 
 /// A failure of the lease store itself — the row could not be read or written.

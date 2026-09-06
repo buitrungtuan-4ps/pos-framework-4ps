@@ -493,9 +493,27 @@ it yet. The single-store route is `PATCH`-only (there is no `GET`), the registry
 handle on the lease, and ADR-0114 already specifies that the two single-store routes gain a
 `ConfigTreeStore` handle as part of *its* work — so building it now means building it twice.
 
-**Not started:** `superseded_generation` and the `taking-over`/`settled` handover states, the edge
-container image, the CORS layer, the print queue, the host agent, and the console surfaces for all
-of it.
+`superseded_generation` is a column now (#203): the bump records the generation it displaced, and a
+heartbeat reporting *that* generation with an empty outbox clears it — both facts from one message,
+because the liveness row COALESCEs depth and generation independently and can hold a pair from two
+different beats.
+
+**Three decisions the owner settled on 2026-09-06**, each of which had two accepted records
+disagreeing:
+
+- The bump **does** carry `If-Match`. ADR-0110 already said so; the route did not. The deciding case
+  is two admins bumping at once with different placements — the single statement serialises them, so
+  both get a success and the second placement wins, leaving the first admin believing they moved a
+  store somewhere it is not.
+- `edge_placement` stays on **`store_lease`**, not the store registry, because that table's only
+  write is the bump — structural rather than conventional. ADR-0110's Consequences amended.
+- `retired` **gets storage** (`retired_at`, `retired_by`), because `AuditRecorder` is best-effort by
+  contract and a trail allowed to drop an entry cannot be the durable record of a decision.
+
+**Not started:** the refusal of a bump while a handover is in flight, the
+`taking-over`/`settled`/`retired` states and their console surface, the post-drain heartbeat the
+automatic clear depends on, the edge container image, the CORS layer, the print queue and the host
+agent.
 
 ## Debates settled
 
