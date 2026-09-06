@@ -16,6 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A hosted store hands out a pairing URL its devices can actually reach**
+  ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+
+  The pairing URL an edge prints at boot named a LAN address, which is right for a shop and useless
+  for a store whose devices are not on that LAN. `config.toml` gains an optional `public_origin`;
+  when it is set the URL becomes `https://<host>/pair?code=NNNNNN`, and when it is not — every
+  in-store box — nothing changes at all.
+
+  `https` is required, and the edge refuses to start otherwise rather than printing the URL and
+  finding out later: a pairing URL carries a code redeemed for a bearer token, and one crossing a
+  WAN in clear text is one given away.
+
+  **Upgrade note** No migration and no permission change. The field is optional and absent
+  everywhere today; an edge that does not set it behaves exactly as before. An edge that sets it to a
+  non-`https` origin will refuse to start, which is the intended refusal.
+
 - **A till can be told which edge it belongs to, instead of assuming the one that served it**
   ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 

@@ -164,9 +164,16 @@ service run.
 ## Configuration
 
 Both platforms point `POS_EDGE_CONFIG` at a `config.toml` holding the bootstrap configuration
-(`bind`, `store_id`, optionally `advertised_ip`, and — for a store connected to a cloud — `cloud_url`).
-Everything else is the cloud-owned configuration the edge syncs and hot-reloads at runtime
-([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
+(`bind`, `store_id`, optionally `advertised_ip` or `public_origin`, and — for a store connected to a
+cloud — `cloud_url`). Everything else is the cloud-owned configuration the edge syncs and hot-reloads
+at runtime ([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
+
+**`public_origin` is for a store whose devices are not on the edge's LAN** — a hosted placement
+reached by hostname ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)). Set
+it and the pairing URL the edge prints at boot becomes `https://<host>/pair?code=NNNNNN` instead of
+the raw-IP form; leave it unset and an in-store box mints exactly what it always did. It must be
+`https` and the edge refuses to start otherwise: a pairing URL carries a code redeemed for a bearer
+token, and one crossing a WAN in clear text is one given away.
 
 With `cloud_url` set the edge serves the activation routes (`POST /api/activate`), keeps the device
 credential in the OS credential store (Credential Manager on Windows, the kernel keyring on Linux —

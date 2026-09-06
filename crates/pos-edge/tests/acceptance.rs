@@ -189,6 +189,8 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         bind: SocketAddr::from(([127, 0, 0, 1], 0)),
         store_id: store_id(),
         advertised_ip: None,
+        // In-store, so no public origin: this box's devices are on its LAN (ADR-0111).
+        public_origin: None,
         // LAN-only on purpose: no cloud loops, no network, and the shop still trades (ADR-0001).
         cloud_url: None,
         store_path: "unused-in-memory.sqlite".into(),

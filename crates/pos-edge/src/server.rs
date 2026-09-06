@@ -43,7 +43,7 @@ use crate::lease_state::LeaseAuthority;
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
-use crate::pairing::{Pairing, pairing_url};
+use crate::pairing::{Pairing, hosted_pairing_url, pairing_url};
 use crate::queue::QueueNumberAuthority;
 use crate::relay_client::RelayClient;
 use crate::state::AppState;
@@ -201,6 +201,47 @@ where
     .await
 }
 
+/// Mints a pairing code and shows the operator how to reach this edge
+/// ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md),
+/// [ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// The code is a secret and is never logged on its own: it appears only inside the URL an operator
+/// scans. Three cases, in the order of what the box actually knows about itself:
+///
+/// - A **public origin** was configured, so this box's devices are not on its LAN and the raw-IP
+///   form would name an address they cannot reach. That form wins.
+/// - Otherwise an **advertised host** — today's behaviour for every in-store store, unchanged.
+/// - Otherwise a warning naming the two ways to fix it, because a box that cannot say where it is
+///   cannot be paired with, and should say so loudly rather than print a URL with a hole in it.
+///
+/// Extracted from [`serve_until`] rather than inlined: adding the third case took that function past
+/// the hundred-line ceiling, and a boot-time announcement is a whole thought on its own.
+fn announce_pairing(
+    pairing: &Pairing,
+    public_origin: Option<&url::Url>,
+    advertised_host: Option<std::net::IpAddr>,
+    port: u16,
+) {
+    let Ok(code) = pairing.mint(SystemClock.now()) else {
+        tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
+        return;
+    };
+    if let Some(url) = public_origin.and_then(|origin| hosted_pairing_url(origin, &code)) {
+        tracing::info!(pairing_url = %url, "scan or type this to pair a device");
+    } else if let Some(host) = advertised_host {
+        tracing::info!(
+            pairing_url = %pairing_url(host, port, &code),
+            "scan or type this to pair a device",
+        );
+    } else {
+        tracing::warn!(
+            "a device pairs at http://<edge-ip>:{port}/pair?code={} — set advertised_ip or \
+             public_origin, or read the LAN IP off this machine",
+            code.as_str(),
+        );
+    }
+}
+
 /// As [`serve`], but the caller says what a stop is.
 ///
 /// The composed [`Edge`] is generic over the store `S`, so the same server runs against `pos-fakes`
@@ -254,6 +295,7 @@ where
     // Read what binding and the startup banner need before `config` moves into the composition.
     let bind = config.bind;
     let advertised_host = config.advertised_host();
+    let public_origin = config.public_origin.clone();
     let store_id = config.store_id;
 
     // The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
@@ -318,27 +360,12 @@ where
         &shutdown_rx,
     );
 
-    // Mint a pairing code and show the operator how to reach the edge (ADR-0030). The code is a
-    // secret and is not logged on its own; it appears only inside the pairing URL an operator scans.
-    match composed.pairing.mint(SystemClock.now()) {
-        Ok(code) => {
-            if let Some(host) = advertised_host {
-                tracing::info!(
-                    pairing_url = %pairing_url(host, bind.port(), &code),
-                    "scan or type this to pair a device",
-                );
-            } else {
-                tracing::warn!(
-                    "a device pairs at http://<edge-ip>:{}/pair?code={} — set advertised_ip or read the LAN IP off this machine",
-                    bind.port(),
-                    code.as_str(),
-                );
-            }
-        }
-        Err(_) => {
-            tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
-        }
-    }
+    announce_pairing(
+        &composed.pairing,
+        public_origin.as_ref(),
+        advertised_host,
+        bind.port(),
+    );
 
     // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
     // raw-IP pairing URL above still works (ADR-0030).

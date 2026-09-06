@@ -61,6 +61,44 @@ keychain, the second pairing-URL form, the `PROTOCOL_VERSION` response header, t
 [ADR-0112](0112-print-agents.md) builds). The allow-list is what those need to exist first; none of
 them is blocked on a decision.
 
+## Delivery — 2026-09-06, the second pairing-URL form, and this record is complete
+
+`EdgeConfig` gains one optional field, `public_origin`, and a store that sets it mints
+`https://<host>/pair?code=NNNNNN` instead of the raw-IP form. **The raw-IP form does not move.**
+ADR-0030's constraints have not changed — Chrome on Android still does not resolve mDNS, a DHCP
+reservation still pins the address, and an operator in a shop still needs a URL that depends on no
+name resolution at all — so an `EDGE_PLACEMENT_IN_STORE` store mints exactly the string it minted
+yesterday. When the field is set it wins, because a box that has been given a public origin is a box
+whose devices cannot reach it by LAN address.
+
+**`https` is refused at start-up, not at mint time.** Validating here rather than when the URL is
+printed is the difference between a box that will not start and a box that runs happily and gives a
+bearer token away the first time anyone scans what it printed. A pairing URL carries a code redeemed
+for that token; one crossing a WAN in clear text is one given away. ADR-0030's second field
+constraint — an in-browser camera needs a secure context — bites harder here too, because the hosted
+form is the one an operator is most likely to scan rather than type.
+
+The field lives in `config.toml` beside `bind` and `advertised_ip`, **not** in the config tree, and
+that is not an inconsistency with the `origins` node three deliveries above.
+[ADR-0004](0004-cloud-owned-configuration.md) already drew this line and named this exact exception.
+The allow-list says *who may address the edge* — a fleet decision the cloud owns. This says *where
+this box is* — a fact about one machine's network that its operator, or the platform that started it,
+knows and the cloud does not.
+
+`/pair` is joined as an **absolute** path, so an origin carrying a path of its own still pairs at the
+root: the edge serves the pairing screen there and nowhere else. A non-default port survives, because
+a hosted edge behind one is an ordinary deployment and dropping it would hand an operator a URL that
+resolves somewhere else entirely.
+
+Verified red first: accepting any scheme fails the plain-`http` refusal test, and joining `pair`
+rather than `/pair` fails the root test with `https://till.example/store/pair?code=…`.
+
+**ADR-0111 is now delivered in full.** The allow-list, the additive-route snapshot, the version
+handshake, the base URL, the credential seam and both pairing-URL forms. What remains is not this
+record's: a pairing screen field so a shell operator can supply the address (the base is stored the
+moment one is passed, and no screen passes one yet), and the native credential implementation, which
+waits on a shell nobody has spiked.
+
 ## Delivery — 2026-09-06, the base URL and the credential seam
 
 `request()` takes a base, and its default is the empty string — so an in-store till sends the
