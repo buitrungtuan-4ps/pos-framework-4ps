@@ -11892,6 +11892,16 @@ where
                 ],
             );
         }
+        // Not a race and not a missing store: the store exists, holds its first-ever lease, and has
+        // never had a second machine. `422` rather than `404` says exactly that — the resource is
+        // there, the act does not apply to it.
+        Ok(RetireOutcome::NeverSuperseded) => {
+            return api_error_with_details(
+                ErrorStatus::Unprocessable,
+                "this store is on its first lease and has never handed over to another machine, so                  there is no previous machine to retire",
+                &[("generation", "0")],
+            );
+        }
         Ok(RetireOutcome::Raced) => {
             return api_error_with_details(
                 ErrorStatus::FailedPrecondition,

@@ -14,6 +14,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **A store on its first lease can no longer have its "previous machine" retired**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
+
+  `POST /admin/config/lease/retire` checked that no handover was in flight and that none was already
+  retired — both of which are true of a brand-new store, whose first lease supersedes nobody. So the
+  write succeeded on a store that had never handed anything over, recording that the only machine in
+  the shop was no longer needed.
+
+  The route now refuses with **`422`** and `details.field: "generation"`, over a third precondition
+  in the statement itself (`generation > 0`). It is `422` and not `404` because the store is there —
+  the act simply does not apply to it — and a distinct outcome rather than the existing `409` race,
+  because retrying would never succeed.
+
+  The console was never able to reach this: a generation-`0` store derives no handover state, so it
+  offers no Retire button. That is exactly why the guard belongs in the `WHERE` — nothing an operator
+  could see was stopping a direct call.
+
+  **Upgrade note** No migration. A row retired under the previous behaviour keeps its recorded
+  decision and still reports `AlreadyRetired` with who and when, rather than being masked by the new
+  refusal.
+
 ### Added
 
 - **A second origin may address a store's edge, and only the ones that store published**

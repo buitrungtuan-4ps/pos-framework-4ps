@@ -216,6 +216,13 @@ pub enum RetireOutcome {
     /// Reported rather than retried, because a retry would be a second attempt at a decision the
     /// caller made once, against a row that has changed underneath them.
     Raced,
+    /// The store is on generation `0` — its first-ever lease — so no machine has ever been replaced
+    /// and there is nothing to retire. Answers `422`.
+    ///
+    /// The same fact [`handover_state`] reports as `None`, on the write side: generation `0`
+    /// supersedes nobody, so a store that holds it has never handed anything over. Distinct from
+    /// [`Self::NoLease`], where the cloud has issued no lease at all.
+    NeverSuperseded,
     /// The cloud has never issued this store a lease, so there is no handover to retire.
     NoLease,
 }

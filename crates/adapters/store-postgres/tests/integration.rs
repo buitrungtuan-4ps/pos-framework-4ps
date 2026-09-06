@@ -1700,6 +1700,90 @@ mod fleet_store {
         });
     }
 
+    /// A store on its first-ever lease has no previous machine, and the statement says so
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Generation `0` is the store's first lease: the insert in `bump_store_lease` writes
+    /// `superseded_generation = NULL` for exactly that reason — it supersedes nobody. So the other
+    /// two preconditions (`superseded_generation IS NULL AND retired_at IS NULL`) both *hold* on a
+    /// brand-new store, and without `generation > 0` the retire succeeded: an operator could record
+    /// that the only machine the shop has was no longer needed.
+    ///
+    /// Only a database proves this. The condition is three words inside a `WHERE`, and the upstream
+    /// fake mirrors it by hand — a fake agreeing with itself is not evidence about the statement
+    /// Postgres actually runs.
+    #[test]
+    fn a_store_on_its_first_lease_has_no_previous_machine_to_retire() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let tenant = TenantId::new(Ulid::from_u128(0x0E4E));
+            let store_id = StoreId::new(Ulid::from_u128(0x0E4F));
+            let trees = store.config_trees();
+            store
+                .registry()
+                .insert_store(&store_id.to_string(), &tenant.to_string(), None, "Bà Triệu")
+                .await
+                .expect("register the store");
+
+            // One bump only: generation 0, superseded_generation NULL, retired_at NULL.
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_000_000,
+                None,
+                None,
+                None,
+            )
+            .await;
+
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_001_000, "admin-a")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::NeverSuperseded,
+            );
+
+            // Nothing was written, so a second attempt is the same refusal rather than
+            // `AlreadyRetired`. This is the assertion that fails if the precondition is dropped: a
+            // recorded decision would change the answer.
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_002_000, "admin-b")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::NeverSuperseded,
+                "a refused retirement records no decision"
+            );
+
+            // And the store is retirable the moment it has actually handed over: bump to generation
+            // 1, settle the machine that held 0, and the same call now succeeds. Without this the
+            // test would pass just as well against a statement that refused every retirement.
+            super::issue(
+                &trees,
+                tenant,
+                store_id,
+                1_777_000_003_000,
+                None,
+                None,
+                Some(0),
+            )
+            .await;
+            trees
+                .settle_handover(tenant, store_id, 0)
+                .await
+                .expect("settle reached the database");
+            assert_eq!(
+                trees
+                    .retire_handover(tenant, store_id, 1_777_000_004_000, "admin-a")
+                    .await
+                    .expect("retire reached the database"),
+                store_postgres::StoredRetire::Retired,
+            );
+        });
+    }
+
     /// Retiring by hand, and the clear a bump performs in the same `SET` clause (migration `0054`).
     ///
     /// The last assertion is the one only a database can make: a new bump *removes* the previous
