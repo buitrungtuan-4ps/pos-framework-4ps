@@ -141,6 +141,27 @@ pub fn pairing_url(host: IpAddr, port: u16, code: &Code) -> String {
     format!("http://{host}:{port}/pair?code={}", code.as_str())
 }
 
+/// The pairing URL for a store whose devices are **not** on its edge's LAN
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// The raw-IP form above does not move and is still what an `EDGE_PLACEMENT_IN_STORE` store mints:
+/// ADR-0030's constraints have not changed, Chrome on Android still does not resolve mDNS, and an
+/// operator in a shop still needs a URL that depends on no name resolution at all. This is the
+/// second form, for the box that has been given a public origin — and a box that has been given one
+/// is a box whose devices cannot reach it by LAN address.
+///
+/// The scheme is not chosen here: `EdgeConfig::validate` has already refused anything but `https`,
+/// so a non-`https` origin never reaches this function on a running edge.
+///
+/// `None` only if `origin` cannot be joined with a path, which an absolute origin always can — the
+/// caller falls back to the raw-IP form rather than panicking on a till.
+#[must_use]
+pub fn hosted_pairing_url(origin: &url::Url, code: &Code) -> Option<String> {
+    let mut url = origin.join("/pair").ok()?;
+    url.set_query(Some(&format!("code={}", code.as_str())));
+    Some(url.to_string())
+}
+
 /// One paired device as the in-memory table holds it: which device a token digest authenticates as,
 /// and when it paired. The instant is carried so the console can list devices without a second read
 /// of the durable registry — and so an in-memory-only box (`Pairing::new`, the examples and tests)
@@ -561,7 +582,7 @@ fn mint_device_id(now: Timestamp, randomness: &[u8]) -> DeviceId {
 mod tests {
     use super::{
         CODE_TTL, Code, DeviceToken, MAX_FAILED_REDEMPTIONS, PairError, Pairing, REDEEM_LOCKOUT,
-        Redeemed, pairing_url,
+        Redeemed, hosted_pairing_url, pairing_url,
     };
     use pos_proto::time::Timestamp;
 
@@ -593,6 +614,46 @@ mod tests {
     fn a_device_token_is_thirty_two_hex_characters() {
         let token = DeviceToken::from_entropy([0xAB; 16]);
         assert_eq!(token.as_str(), "abababababababababababababababab");
+    }
+
+    #[test]
+    fn a_hosted_store_pairs_over_its_public_origin() {
+        // The second form (ADR-0111): a device that is not on the edge's LAN cannot reach a raw IP,
+        // so the URL names the origin the box was given instead. The code still rides in the query,
+        // so a scan still pairs in one step.
+        let code = Code::from_entropy([1, 2, 3]);
+        let origin = url::Url::parse("https://till.example").expect("an absolute origin");
+        let url = hosted_pairing_url(&origin, &code).expect("an origin joins with a path");
+        assert_eq!(
+            url,
+            format!("https://till.example/pair?code={}", code.as_str())
+        );
+    }
+
+    #[test]
+    fn a_hosted_origin_keeps_the_port_its_operator_gave_it() {
+        // A hosted edge behind a non-default port is an ordinary deployment, and dropping the port
+        // would hand the operator a URL that resolves to something else entirely.
+        let code = Code::from_entropy([9, 9, 9]);
+        let origin = url::Url::parse("https://till.example:8443").expect("an absolute origin");
+        let url = hosted_pairing_url(&origin, &code).expect("an origin joins with a path");
+        assert!(
+            url.starts_with("https://till.example:8443/pair?code="),
+            "the port must survive; got {url}",
+        );
+    }
+
+    #[test]
+    fn a_hosted_origin_with_a_path_still_pairs_at_the_root() {
+        // `/pair` is an absolute path, so it replaces any path the operator's origin carried rather
+        // than nesting under it. The edge serves the pairing screen at the root and nowhere else.
+        let code = Code::from_entropy([4, 5, 6]);
+        let origin = url::Url::parse("https://till.example/store/one").expect("an absolute origin");
+        let url = hosted_pairing_url(&origin, &code).expect("an origin joins with a path");
+        assert!(
+            url.starts_with("https://till.example/pair?code="),
+            "the path must be the edge's own; got {url}",
+        );
     }
 
     #[test]

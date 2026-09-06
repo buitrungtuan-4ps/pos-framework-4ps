@@ -38,6 +38,27 @@ pub struct EdgeConfig {
     /// interface, and otherwise the operator reads the IP off the console.
     #[serde(default)]
     pub advertised_ip: Option<IpAddr>,
+    /// This edge's own public origin, for a store whose devices are **not** on its LAN
+    /// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+    ///
+    /// When set it wins over [`Self::advertised_host`] in the pairing URL, because a box that has
+    /// been given a public origin is a box whose devices cannot reach it by LAN address. When absent
+    /// — every `EDGE_PLACEMENT_IN_STORE` store — nothing changes: the raw-IP form ADR-0030 argues
+    /// for is minted exactly as it is today, and it does not move.
+    ///
+    /// **`https` is required, not preferred**, and [`Self::validate`] refuses anything else at
+    /// start-up. A pairing URL carries a code that is redeemed for a bearer token; a bearer crossing
+    /// a WAN in clear text is a bearer given away. ADR-0030's second field constraint — an in-browser
+    /// camera needs a secure context — bites harder here too, because the hosted form is the one an
+    /// operator is most likely to scan rather than type.
+    ///
+    /// It lives here rather than in the config tree, and that is not an inconsistency with the
+    /// `origins` node: [ADR-0004](../../../docs/adr/0004-configuration-model.md) already drew this
+    /// line and named this exact exception. The allow-list says *who may address the edge*, which is
+    /// a fleet decision the cloud owns; this says *where this box is*, which is a fact about one
+    /// machine's network that its operator knows and the cloud does not.
+    #[serde(default)]
+    pub public_origin: Option<url::Url>,
     /// The base URL of this store's cloud ([ADR-0085](../../../docs/adr/0085-edge-cloud-sync-transport.md)),
     /// written into `config.toml` at provisioning ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
     /// When set, the edge runs its config-pull and heartbeat loops against it (authenticated with the
@@ -152,6 +173,7 @@ impl EdgeConfig {
             bind,
             store_id,
             advertised_ip: None,
+            public_origin: None,
             cloud_url: None,
             store_path: default_store_path(),
             nats: None,
@@ -175,6 +197,10 @@ impl EdgeConfig {
     /// device out between its own two requests, which looks like a broken till rather than like a
     /// policy. A deployment that wants the pre-S0d behaviour uses the revoke-all break-glass after a
     /// restart instead.
+    ///
+    /// [`EdgeError::Config`] when `public_origin` is not `https` with a host. Refused at start-up
+    /// rather than at mint time, because the alternative is a box that runs happily and hands an
+    /// operator a URL that gives away a bearer token the first time anyone scans it (ADR-0111).
     pub fn validate(&self) -> Result<(), EdgeError> {
         if self.sign_in_idle_timeout_minutes == 0 {
             return Err(EdgeError::Config(
@@ -182,6 +208,23 @@ impl EdgeConfig {
                  between its own two requests (ADR-0091)"
                     .to_owned(),
             ));
+        }
+        if let Some(origin) = &self.public_origin {
+            if origin.scheme() != "https" {
+                return Err(EdgeError::Config(format!(
+                    "public_origin must be https, got {}: a pairing URL carries a code redeemed for \
+                     a bearer token, and a bearer crossing a WAN in clear text is a bearer given \
+                     away (ADR-0111)",
+                    origin.scheme(),
+                )));
+            }
+            if origin.host_str().is_none() {
+                return Err(EdgeError::Config(
+                    "public_origin must name a host: it is the address a device pairs against \
+                     (ADR-0111)"
+                        .to_owned(),
+                ));
+            }
         }
         Ok(())
     }
@@ -241,6 +284,52 @@ mod tests {
     #[test]
     fn the_default_bind_literal_parses() {
         assert_eq!(default_bind().to_string(), DEFAULT_BIND);
+    }
+
+    /// A store id, so the fixtures below parse.
+    const STORE_ID: &str = "store_id = \"01J0000000000000000000000A\"";
+
+    #[test]
+    fn a_hosted_store_may_name_its_public_origin() {
+        let config = EdgeConfig::from_toml_str(&format!(
+            "{STORE_ID}\npublic_origin = \"https://till.example\""
+        ))
+        .expect("an https origin parses");
+        config.validate().expect("an https origin is accepted");
+        assert_eq!(
+            config
+                .public_origin
+                .as_ref()
+                .map(url::Url::as_str)
+                .unwrap_or_default(),
+            "https://till.example/",
+        );
+    }
+
+    #[test]
+    fn a_plain_http_public_origin_is_refused_at_start_up() {
+        // A pairing URL carries a code redeemed for a bearer token (ADR-0111). Refusing here rather
+        // than at mint time is the difference between a box that will not start and a box that runs
+        // happily and gives the token away the first time anyone scans the URL it printed.
+        let config = EdgeConfig::from_toml_str(&format!(
+            "{STORE_ID}\npublic_origin = \"http://till.example\""
+        ))
+        .expect("the field parses; it is validate that objects");
+        let refusal = config.validate().expect_err("plain http is refused");
+        let message = refusal.to_string();
+        assert!(
+            message.contains("public_origin must be https"),
+            "the refusal must name the field and the rule; got {message}",
+        );
+    }
+
+    #[test]
+    fn a_store_with_no_public_origin_is_unchanged() {
+        // Every in-store store. The field is absent, validation says nothing about it, and the
+        // raw-IP pairing URL ADR-0030 argues for is what gets minted.
+        let config = EdgeConfig::from_toml_str(STORE_ID).expect("parses");
+        assert!(config.public_origin.is_none());
+        config.validate().expect("an absent origin is not a fault");
     }
 
     #[test]
