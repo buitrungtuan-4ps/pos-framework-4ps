@@ -14,6 +14,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Changed
+
+- **Three Program C decisions settled, and the records that disagreed now say the same thing**
+  ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+
+  Each was two accepted documents contradicting each other, or a document contradicting the code that
+  implements it. The amendments are dated and keep the original claim visible, so a reader sees what
+  changed rather than finding a document that was quietly always right.
+
+  - **The lease bump carries `If-Match`.** ADR-0110 already said so; the route never did. The
+    deciding case: two admins bump one store at once with different placements. The single statement
+    serialises them, so *both* get a success — and `COALESCE` lets the second placement win, leaving
+    the first admin believing they moved a store somewhere it is not.
+  - **`edge_placement` lives on `store_lease`, not the store registry.** ADR-0110's Consequences said
+    registry; the implementation chose the lease row, because that table's only write is the bump. On
+    `stores` the same rule would be a convention somebody has to keep, beside an existing
+    rename-and-archive `UPDATE` path.
+  - **`retired` gets storage.** ADR-0110 said the decision *is* the state, recorded only as an
+    audited write. `AuditRecorder::record` is best-effort by its own contract — a store failure is
+    logged and swallowed, so a mutation that succeeded never fails because its audit did — and a
+    trail allowed to drop an entry cannot be the durable record of a decision.
+
+  Also: migration numbers are allocated by landing order, never reserved in advance. ADR-0113 had
+  named `0052_host_agents.sql`, which `edge_placement` and `superseded_generation` took first; both
+  ADR-0113 and ADR-0114 now say "the next free number when it lands".
+
 ### Added
 
 - **A bump records the generation it displaced, and only a matching drain clears it**
