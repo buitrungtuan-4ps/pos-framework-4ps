@@ -17,8 +17,22 @@
 use super::{Error, base_ref, read_at_ref, repo_root};
 use crate::Finding;
 
-/// Directories holding numbered migration files. The cloud tier (P7) adds its own directory here.
-const MIGRATION_DIRS: &[&str] = &["crates/adapters/store-sqlite/migrations"];
+/// Directories holding numbered migration files.
+///
+/// Both tiers, and the cloud one is here late: the comment on this list read *"the cloud tier (P7)
+/// adds its own directory here"* from the day the gate was written, and the directory arrived
+/// without the line. So `store-postgres` accumulated fifty-two migrations that no gate ever read —
+/// unchecked for the immutability an offline edge depends on and for the destructive statements
+/// ADR-0017 forbids. Nothing was wrong in them when this landed (verified: no `DROP`, no `RENAME`,
+/// no edit to a shipped file), which is the point: the rule held by luck and habit rather than by
+/// enforcement, and the next author would not have been told.
+///
+/// A tier whose directory does not exist yet is skipped rather than failing, so this list may name
+/// a directory before its first migration lands.
+const MIGRATION_DIRS: &[&str] = &[
+    "crates/adapters/store-sqlite/migrations",
+    "crates/adapters/store-postgres/migrations",
+];
 
 /// The exact line a migration must carry to opt a reviewed destructive change past the gate.
 const ESCAPE_HATCH: &str = "-- migrations:allow-destructive";
