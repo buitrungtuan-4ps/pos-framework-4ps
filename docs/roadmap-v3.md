@@ -1,6 +1,6 @@
 # Roadmap v3 — Production-ready, international, plug-and-play
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-04
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-06
 **Supersedes the planning horizon of** `docs/cloud-admin-ux-plan.md` (roadmap v2, delivered through PR #70)
 **Companion** [ADR-0083](adr/0083-integration-doctrine.md) (the integration doctrine this roadmap's plug-and-play principle rests on)
 
@@ -445,7 +445,7 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **B10.3** — A real card-terminal adapter for the pilot country, into the `PaymentTerminal` port wired at B9.2.
 - **B10.4** — Data-residency + legal + pentest (ops): hosting-region decision (APPI/DPDP), independent pentest after WS-F.
 
-## Program C — Edge Anywhere (Phase 0 recorded; nothing implemented)
+## Program C — Edge Anywhere (Phase 0 recorded; Phase 1 under way)
 
 `pos_edge` stays the single unit of a store — one process, one SQLite database, one lease, one API
 key — and gains exactly one new degree of freedom: **where it runs**. Three `edge_placement` modes
@@ -453,7 +453,9 @@ share every line of domain code: `IN_STORE` as today, `HOSTED_BY_OPERATOR` on th
 and `HOSTED_BY_PLATFORM`, which an admin stands up by choosing a region and pressing Start.
 Target shape: 500+ stores, 10+ brands, ~5 countries.
 
-**Phase 0 is done and is the whole of this programme so far: five records, no code.**
+**Phase 0 is done: five records.** Phase 1 has since built the placement column and its readers,
+the handover's conditional bump, the origin allow-list and the whole of the print queue; the container
+image and the host agent are the remainder. Each item below carries its own state.
 
 - **C0.1** — [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md): `edge_placement` is an
   attribute of a store; ADR-0001's offline guarantee is a property of the `IN_STORE` mode only; the
@@ -473,7 +475,8 @@ Target shape: 500+ stores, 10+ brands, ~5 countries.
 
 **Two spikes gate every estimate below Phase 0, and neither has been run:** Tauri v2 on Android
 against the real `ui/dist`, and Android as an ESC/POS print agent over Bluetooth or USB-host. Until
-the second passes, the print agent is the Windows terminal and ADR-0112 stays correct either way.
+the second passes, the print agent is the Windows or Linux terminal — both installers ship — and
+ADR-0112 stays correct either way.
 
 **Shipped ahead of Phase 1, because it needed no record to land and every hosted placement needs
 it:** drain-before-stop. `EventPublisher::run` returned on the stop signal without a last pass, and
@@ -545,8 +548,29 @@ end:
   the OS keychain, the second pairing-URL form, the version response header and the additive-route
   snapshot — are not in it.
 
-**Not started:** the edge container image, the print queue and the host agent — and the two spikes
-above still gate every estimate on them.
+- The **print queue** ([ADR-0112](adr/0112-print-agents.md)), five slices across #208–#217 and now
+  complete. A printer plugged into a till is invisible to a box that is not in the shop, so a paired
+  device may own that printer's transport while the edge still renders every byte. `print_jobs` is a
+  durable, bounded, time-limited table on the edge (`0009`); an approved printer names the terminal
+  whose transport reaches it, and a manager at the till binds that terminal's agent exclusively —
+  refused rather than promoted, because two machines holding one identity split a kitchen's tickets
+  between them and nobody notices until service. The agent claims under a lease and acknowledges;
+  `printing.rs` gained one branch and lost none — no agent, open the transport as always; an agent,
+  enqueue. `pos_print_agent` is the third binary (ADR-0002's stated exception), with a generated
+  Windows installer and a systemd unit, its token read from `POS_PRINT_AGENT_TOKEN` rather than a
+  config file. **Silence behind an agent is reported twice**: the till hears
+  `PRINT_AGENT_UNAVAILABLE` while the guest is still standing there, and the heartbeat carries a
+  per-agent standing that the alert engine turns into `print_agent_stalled` — `Critical` at five
+  minutes, half the queue's TTL by construction, so the alert arrives while the tickets it is about
+  can still be saved. The console creates the `TERMINAL` entry no discovery can find and picks each
+  printer's agent, over an `/admin` read that gained optional `store_id` and `status` filters because
+  none existed that could list a store's *approved* devices.
+
+  **Not in it:** the drawer following the printer. This record settles which machine the kick lands
+  on; ADR-0103's missing console field still means no drawer opens anywhere.
+
+**Not started:** the edge container image and the host agent — and the two spikes above still gate
+every estimate on them.
 
 ## Debates settled
 
