@@ -1982,6 +1982,22 @@ struct DeviceTenantQuery {
     /// receipt printer, which serves the bill rather than a station. Ignored on reject.
     #[serde(default)]
     station_id: Option<String>,
+    /// Narrow a **listing** to one store (a ULID). Absent lists the tenant's whole fleet, which is
+    /// what the onboarding queue wants; the print-agent picker wants one store's devices, because an
+    /// agent may only be a terminal standing in the same shop
+    /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+    #[serde(default)]
+    store_id: Option<String>,
+    /// Which **status** to list: `pending` (the default, and the onboarding queue's whole subject),
+    /// `approved` or `rejected`.
+    ///
+    /// Defaulting to `pending` is what keeps this additive: the read shipped serving pending rows
+    /// only, and every existing caller keeps getting exactly those. The picker needs `approved`,
+    /// because `set_print_agent` acts on a printer that is already in service and names a terminal
+    /// that is already created — and until this parameter existed there was no `/admin` read that
+    /// could show either, so no console could drive that route at all.
+    #[serde(default)]
+    status: Option<String>,
 }
 
 /// A store proposes a discovered device (`manage_devices` scope). Stored `pending` for an operator to
@@ -2132,11 +2148,28 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    match state
-        .devices
-        .list(tenant_id, None, DeviceProposalStatus::Pending)
-        .await
-    {
+    let store_id = match query.store_id.as_deref() {
+        None => None,
+        Some(raw) => match parse_ulid_fields([("store_id", raw)]) {
+            Ok([store_id]) => Some(StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        },
+    };
+    // A closed set, refused by name rather than silently narrowed: a caller who mistypes `aproved`
+    // and is handed the pending queue would read it as "this store has no printers".
+    let status = match query.status.as_deref() {
+        None | Some("pending") => DeviceProposalStatus::Pending,
+        Some("approved") => DeviceProposalStatus::Approved,
+        Some("rejected") => DeviceProposalStatus::Rejected,
+        Some(_) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "status must be one of: pending, approved, rejected",
+                &[("status", "INVALID_VALUE")],
+            );
+        }
+    };
+    match state.devices.list(tenant_id, store_id, status).await {
         Ok(devices) => {
             (StatusCode::OK, Json::<Vec<DeviceProposalSummary>>(devices)).into_response()
         }

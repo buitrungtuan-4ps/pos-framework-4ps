@@ -37,6 +37,7 @@ import type {
   DailyRollup,
   XzReport,
   Device,
+  CreateTerminalResponse,
   DeviceProposalSummary,
   DisplayCategory,
   DisplaySubcategory,
@@ -664,6 +665,16 @@ export const api = {
       "GET",
       `/admin/devices/proposals?${tenantQuery(tenantId)}`,
     ),
+  // The same read, narrowed to one store and one status — what the print-agent picker needs
+  // (ADR-0112). Both halves of a binding are `approved` and stand in the same shop: the printer
+  // whose bytes are being redirected, and the terminal that will write them. The onboarding queue's
+  // read can show neither, which is why the parameters exist.
+  listStoreDevices: (tenantId: string, storeId: string, status: string) =>
+    requestJson<DeviceProposalSummary[]>(
+      "GET",
+      `/admin/devices/proposals?${tenantQuery(tenantId)}` +
+        `&store_id=${encodeURIComponent(storeId)}&status=${encodeURIComponent(status)}`,
+    ),
   // Approving carries the two facts discovery cannot find (ADR-0100): how the device is attached,
   // which decides whether a cash drawer may be opened at all, and the kitchen station it serves —
   // omitted for the counter's receipt printer, which serves the bill rather than a station. The
@@ -679,6 +690,32 @@ export const api = {
     requestVoid(
       "POST",
       `/admin/devices/proposals/${encodeURIComponent(id)}/reject?${tenantQuery(tenantId)}`,
+    ),
+  // A terminal is *created*, never proposed (ADR-0112): nothing on a LAN announces itself as a
+  // till, so there is no discovery for an operator to approve and the console write is itself the
+  // decision. It carries a name and no address — the agent dials out to the edge, and nothing dials
+  // a terminal.
+  createTerminal: (tenantId: string, storeId: string, name: string) =>
+    requestJson<CreateTerminalResponse>("POST", "/admin/devices/terminals", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      name,
+    }),
+  // Picking (or clearing) the terminal whose agent writes a printer's bytes, conditional on the
+  // version the row was read at (ADR-0094). Two managers picking different agents for one printer
+  // is the ordinary race, and last-write-wins would leave the loser believing a decision that is
+  // not in the database. `null` hands the printer back to the edge, which opens the address itself.
+  setPrintAgent: (
+    tenantId: string,
+    id: string,
+    agentDeviceId: string | null,
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/agent`,
+      version,
+      { tenant_id: tenantId, agent_device_id: agentDeviceId },
     ),
 
   // --- webhooks (ADR-0032) ---

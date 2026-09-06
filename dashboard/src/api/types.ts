@@ -68,7 +68,25 @@ export interface DeviceProposalSummary {
   readonly connection: string | null;
   /** The kitchen station it serves, once approval recorded it; `null` for a receipt printer. */
   readonly station_id: string | null;
+  /**
+   * The `terminal` whose agent writes this printer's bytes, if an operator has picked one
+   * (ADR-0112). `null` — the ordinary case — means the edge opens the address itself.
+   */
+  readonly agent_device_id: string | null;
   /** `pending`, `approved` or `rejected`. */
+  readonly status: string;
+  /**
+   * The version this row was read at, for a conditional write (ADR-0094). Opaque: the server mints
+   * it and nothing here may reason about its shape — it is only ever echoed back in `If-Match`.
+   */
+  readonly version: string;
+}
+
+/** The id a freshly created terminal was given (ADR-0112). */
+export interface CreateTerminalResponse {
+  /** The terminal's device id (a ULID) — what a printer names to make it its agent. */
+  readonly id: string;
+  /** `approved`, always: a terminal is created resolved, because the console write *is* the decision. */
   readonly status: string;
 }
 
