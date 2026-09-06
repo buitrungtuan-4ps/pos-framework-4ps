@@ -4,6 +4,13 @@
 // Each is opt-in and never-blank — an unpublished node means "no restriction" — so publishing needs a
 // store chosen in the top bar. The edge applies channels/tender as gates and qr as its staff-confirm
 // source; the live marketplace loop for vendor policy is a flagged follow-up.
+//
+// The fifth card is `origins` (ADR-0111): which other origins that store's edge answers. It sits here
+// rather than on Store settings because it is the same publish-a-node-to-one-store shape as the four
+// above, and because it is a *channel* question in every sense that matters — a native shell or a
+// second front-end is a way orders reach the box. The serving origin is never listed and never needs
+// to be: the edge compares it against the request's own Host, so a store that publishes nothing keeps
+// serving its own UI.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -56,6 +63,14 @@ const AVAILABILITY_LABEL: Record<VendorAvailability, MessageKey> = {
   VENDOR_AVAILABILITY_CLOSED: "channels.vendor.closed",
 };
 
+/**
+ * The most origins a store may publish, mirroring `pos_proto::origins::MAX_ORIGINS`.
+ *
+ * Enforced here only to stop an operator building a list the server will refuse whole; the server
+ * refuses over-long and malformed lists regardless, and its refusal is the authority.
+ */
+const MAX_ORIGINS = 8;
+
 /** The QR guardrail defaults, matching the server's `QrConfig::default` (ADR-0057). */
 const QR_DEFAULTS: QrGuardrails = {
   enabled: true,
@@ -77,6 +92,7 @@ export function Channels() {
   const [qrClose, setQrClose] = createSignal("0");
   const [qrOffset, setQrOffset] = createSignal("0");
   const [vendors, setVendors] = createSignal<VendorPolicy[]>([]);
+  const [origins, setOrigins] = createSignal<string[]>([]);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -91,16 +107,18 @@ export function Channels() {
       setTender([...PAYMENT_METHODS]);
       setQr({ ...QR_DEFAULTS });
       setVendors([]);
+      setOrigins([]);
       return;
     }
     setError("");
     setBusy(true);
     try {
-      const [ch, te, qg, vp] = await Promise.all([
+      const [ch, te, qg, vp, og] = await Promise.all([
         api.readChannels(tenantId(), storeId()),
         api.readTender(tenantId(), storeId()),
         api.readQrGuardrails(tenantId(), storeId()),
         api.readVendorPolicies(tenantId(), storeId()),
+        api.readOrigins(tenantId(), storeId()),
       ]);
       // An absent node means "no restriction": show every channel / method enabled.
       setChannels(ch ? [...ch.enabled] : [...SALES_CHANNELS]);
@@ -112,6 +130,10 @@ export function Channels() {
       setQrClose(String(guardrails.business_hours?.close_hour ?? 0));
       setQrOffset(String(guardrails.business_hours?.tz_offset_minutes ?? 0));
       setVendors(vp ? vp.policies.map((policy) => ({ ...policy })) : []);
+      // An absent node is *not* "no restriction" here, unlike the four above: it means same-origin
+      // only, which is how every store behaved before ADR-0111. So the empty list is the truth, and
+      // the card must not pre-fill anything an operator did not publish.
+      setOrigins(og ? [...og.allowed] : []);
     } catch (caught) {
       fail(caught);
     } finally {
@@ -247,6 +269,26 @@ export function Channels() {
         suppressed_items: [],
       },
     ]);
+
+  const publishOrigins = async () => {
+    // Trimmed and de-blanked before the round trip: a row an operator left empty is a row they
+    // abandoned, not an origin. Everything else — wildcards, `null`, a pasted URL with a path — is
+    // the server's to refuse, against the very rule the edge applies, so the message the operator
+    // reads is the one the edge would have logged.
+    const allowed = origins()
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0);
+    setBusy(true);
+    try {
+      await api.publishOrigins(tenantId(), storeId(), allowed);
+      setOrigins(allowed);
+      toast.ok(t("channels.originsPublished", { store: storeName() }));
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const storeGate = (body: () => unknown) => (
     <Show
@@ -476,6 +518,63 @@ export function Channels() {
                 <div>
                   <Button disabled={busy()} onClick={() => void publishVendors()}>
                     {t("channels.publishVendors")}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </Card>
+
+          {/* Origins (ADR-0111) */}
+          <Card
+            title={t("channels.originsTitle")}
+            actions={
+              <Button
+                variant="secondary"
+                disabled={busy() || !storeId() || origins().length >= MAX_ORIGINS}
+                onClick={() => setOrigins((prev) => [...prev, ""])}
+              >
+                {t("channels.originAdd")}
+              </Button>
+            }
+          >
+            <p class="mb-3 text-sm text-ink-muted">{t("channels.originsHint")}</p>
+            {storeGate(() => (
+              <div class="flex flex-col gap-3">
+                <Show
+                  when={origins().length > 0}
+                  fallback={<p class="text-sm text-ink-muted">{t("channels.originsEmpty")}</p>}
+                >
+                  <For each={origins()}>
+                    {(origin, index) => (
+                      <div class="flex flex-wrap items-end gap-2 rounded-token border border-line bg-surface-raised p-3">
+                        <TextField
+                          label={t("channels.originValue")}
+                          value={origin}
+                          placeholder={t("channels.originPlaceholder")}
+                          onInput={(value) =>
+                            setOrigins((prev) =>
+                              prev.map((held, i) => (i === index() ? value : held)),
+                            )
+                          }
+                        />
+                        <Button
+                          variant="secondary"
+                          disabled={busy()}
+                          onClick={() =>
+                            setOrigins((prev) => prev.filter((_, i) => i !== index()))
+                          }
+                        >
+                          {t("channels.originRemove")}
+                        </Button>
+                      </div>
+                    )}
+                  </For>
+                </Show>
+                <div>
+                  {/* Publishing an empty list is deliberate and allowed: it withdraws every second
+                      origin, which is distinct from never having published one. */}
+                  <Button disabled={busy()} onClick={() => void publishOrigins()}>
+                    {t("channels.publishOrigins")}
                   </Button>
                 </div>
               </div>

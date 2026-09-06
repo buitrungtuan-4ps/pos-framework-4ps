@@ -1179,6 +1179,21 @@ export const api = {
       store_id: storeId,
       accepted,
     }),
+  // Which other origins a store's edge answers (ADR-0111). Same read/publish shape as the settings
+  // nodes above; an absent node (null) means same-origin only, which is how every store behaved
+  // before this existed. The cloud refuses an entry the edge would refuse, so a `400` here is the
+  // operator's typo and not a store that will quietly ignore what they saved.
+  readOrigins: (tenantId: string, storeId: string) =>
+    requestJson<{ allowed: string[] } | null>(
+      "GET",
+      `/admin/config/origins?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ),
+  publishOrigins: (tenantId: string, storeId: string, allowed: string[]) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/origins", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      allowed,
+    }),
   readQrGuardrails: (tenantId: string, storeId: string) =>
     requestJson<QrGuardrails | null>(
       "GET",

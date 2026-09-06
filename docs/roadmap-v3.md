@@ -535,8 +535,18 @@ end:
   which supersedes nobody, and ADR-0110's wording read literally would have badged a fleet that has
   handed nothing over.
 
-**Not started:** the edge container image, the CORS layer, the print queue and the host agent — and
-the two spikes above still gate every estimate on them.
+- The **origin allow-list** ([ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)): an
+  `origins` config node of up to eight entries, authored at `PUT /admin/config/origins` and on the
+  Channels & payments screen, validated by one rule the cloud and the edge both call, and applied by
+  the edge to every route a till uses. `/ws` carries its own `Origin` check rather than a CORS layer,
+  because a browser applies no same-origin policy to a WebSocket handshake. A store that publishes
+  nothing behaves exactly as it did: the origin that served the page is compared against the request's
+  own `Host`, not against the list. ADR-0111's remaining pieces — the base-URL default, the token in
+  the OS keychain, the second pairing-URL form, the version response header and the additive-route
+  snapshot — are not in it.
+
+**Not started:** the edge container image, the print queue and the host agent — and the two spikes
+above still gate every estimate on them.
 
 ## Debates settled
 

@@ -57,6 +57,7 @@ use pos_proto::money::CurrencyCode;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
+use crate::origins::Origins;
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
@@ -452,6 +453,56 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
 /// first pull answers) — which is also what the config-pull loop should start out holding, so a
 /// restart does not re-pull a document it already has.
 ///
+/// Applies the `origins` node to the shared allow-list, if the document carries a usable one
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// **Beside `session_from_config`, not inside it.** That function produces an `EdgeSession`, which is
+/// what the application layer decides against; this list is read by the CORS layer on the front of
+/// every request, before any handler. Different reader, different carrier.
+///
+/// The config tree's never-blank rule is enforced here and stated as three cases, because they are
+/// three different operator intentions and only one of them is a mistake:
+///
+/// - **The node is absent** — this document says nothing about origins, so the previous list stands.
+///   Every store that has never published one is in this case, and it is not an error.
+/// - **The node is present and is a list of strings that validate** — replaced, including an empty
+///   list, which is a person deliberately withdrawing every second origin.
+/// - **The node is present and does not validate** — refused whole, logged, and the previous list
+///   stands. A malformed publish must not open the edge to nobody, or to everybody.
+fn apply_origins(origins: &Origins, document: &serde_json::Value) {
+    let Some(node) = document.get("origins") else {
+        return;
+    };
+    // `{"origins": {"allowed": [...]}}` — an object with a named field rather than a bare array, so
+    // the node can gain a sibling later without changing shape. A bare array is accepted too,
+    // because refusing it would be a refusal about punctuation.
+    let listed = node
+        .get("allowed")
+        .unwrap_or(node)
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| entry.as_str().map(str::to_owned))
+                .collect::<Option<Vec<String>>>()
+        });
+    let Some(Some(listed)) = listed else {
+        tracing::warn!(
+            "the origins node is not a list of strings; keeping the origins already applied"
+        );
+        return;
+    };
+    match origins.replace(&listed) {
+        Ok(count) => tracing::info!(count, "applied the published origin allow-list"),
+        // The entries are published configuration, never secrets, so the reason names the offender:
+        // an operator who cannot see which entry was refused cannot fix it.
+        Err(error) => tracing::warn!(
+            %error,
+            "the origins node was refused whole; keeping the origins already applied"
+        ),
+    }
+}
+
 /// Never fails the boot: a stored document that will not parse is logged and skipped, because a
 /// store that will not start is worse than a store on a stale menu.
 ///
@@ -534,6 +585,9 @@ pub struct ConfigClient<T, S> {
     transport: T,
     edge: Arc<Edge<S>>,
     held_version: Mutex<Option<String>>,
+    /// The same `Arc<Origins>` the CORS layer reads, or `None` on a client built without one — the
+    /// on-fakes example and most tests, which serve no cross-origin caller.
+    origins: Option<Arc<Origins>>,
 }
 
 impl<T, S> ConfigClient<T, S>
@@ -552,7 +606,20 @@ where
             transport,
             edge,
             held_version: Mutex::new(held_version),
+            origins: None,
         }
+    }
+
+    /// Shares the allow-list this loop keeps current
+    /// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+    ///
+    /// `compose` hands over the same `Arc` the CORS layer holds, so a published `origins` node
+    /// reaches the request path without a restart — the property every other config node already
+    /// has.
+    #[must_use]
+    pub fn with_origins(mut self, origins: Arc<Origins>) -> Self {
+        self.origins = Some(origins);
+        self
     }
 
     /// The version the store currently holds, for the next pull.
@@ -579,6 +646,10 @@ where
         let base = self.edge.session();
         let rebuilt = session_from_config(&base, &synced.document);
         self.edge.apply_session(rebuilt);
+        // Beside the session swap, not inside it: a different reader on a different carrier.
+        if let Some(origins) = &self.origins {
+            apply_origins(origins, &synced.document);
+        }
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
         // after a restart), not a reason to refuse a document the counter is already selling on.
@@ -1625,5 +1696,79 @@ mod tests {
             malformed.floor.table(table_id).is_some(),
             "a malformed floor node leaves the plan unchanged"
         );
+    }
+}
+
+#[cfg(test)]
+mod origins_node_tests {
+    use super::apply_origins;
+    use crate::origins::Origins;
+
+    /// A document that says nothing about origins leaves the applied list alone.
+    ///
+    /// This is the case every store is in today, and getting it wrong is how a config publish about
+    /// the menu would silently close the edge to a shell that was working a minute ago.
+    #[test]
+    fn a_document_without_the_node_changes_nothing() {
+        let origins = Origins::new();
+        origins
+            .replace(["https://till.example.com"])
+            .expect("a valid list");
+        apply_origins(&origins, &serde_json::json!({ "menu": { "entries": [] } }));
+        assert_eq!(origins.published(), vec!["https://till.example.com"]);
+    }
+
+    #[test]
+    fn both_the_object_and_the_bare_array_shapes_apply() {
+        for node in [
+            serde_json::json!({ "origins": { "allowed": ["https://till.example.com"] } }),
+            serde_json::json!({ "origins": ["https://till.example.com"] }),
+        ] {
+            let origins = Origins::new();
+            apply_origins(&origins, &node);
+            assert_eq!(
+                origins.published(),
+                vec!["https://till.example.com"],
+                "shape {node} should apply"
+            );
+        }
+    }
+
+    #[test]
+    fn a_node_that_does_not_validate_leaves_the_previous_list_standing() {
+        // Each of these is a different way to publish something unusable, and none of them may be
+        // read as "allow nothing" — that would turn one bad publish into a store whose shells all
+        // stop working, with no way to tell why from the box.
+        for bad in [
+            serde_json::json!({ "origins": { "allowed": ["https://*.example.com"] } }),
+            serde_json::json!({ "origins": { "allowed": ["null"] } }),
+            serde_json::json!({ "origins": { "allowed": [7] } }),
+            serde_json::json!({ "origins": "https://till.example.com" }),
+        ] {
+            let origins = Origins::new();
+            origins
+                .replace(["https://kiosk.example.com"])
+                .expect("a valid list");
+            apply_origins(&origins, &bad);
+            assert_eq!(
+                origins.published(),
+                vec!["https://kiosk.example.com"],
+                "document {bad} should have been refused whole"
+            );
+        }
+    }
+
+    /// An empty list is a decision, not a malformed document, and it has to be possible.
+    #[test]
+    fn an_explicitly_empty_list_withdraws_every_second_origin() {
+        let origins = Origins::new();
+        origins
+            .replace(["https://till.example.com"])
+            .expect("a valid list");
+        apply_origins(
+            &origins,
+            &serde_json::json!({ "origins": { "allowed": [] } }),
+        );
+        assert!(origins.published().is_empty());
     }
 }

@@ -577,6 +577,10 @@ where
     let fonts = load_fonts(&config);
     let state =
         AppState::with_fanout(config, edge.fanout().clone()).with_pairing(Arc::clone(&pairing));
+    // One allow-list, shared by the CORS layer on every covered router, the `/ws` upgrade and the
+    // config-pull loop that keeps it current (ADR-0111). Empty until a store publishes an `origins`
+    // node, which allows same-origin and nothing else — exactly today's behaviour.
+    let origins = Arc::clone(&state.origins);
 
     // The domain routes share the same pairing state the infra router serves, so the device-token
     // check (ADR-0084) validates tokens against the very set `/api/pair` issues them into. The config
@@ -604,6 +608,7 @@ where
             Arc::clone(&queue),
             Arc::clone(&pairing),
             Arc::clone(&sessions),
+            &origins,
         ))
         .layer(axum::Extension(printers));
 
@@ -630,6 +635,7 @@ where
             lease_authority,
             nats.as_ref(),
             held_config_version,
+            &origins,
             shutdown_rx,
         )
         .await;
@@ -683,6 +689,7 @@ async fn compose_cloud_surface<S, Q, L>(
     lease: L,
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
+    origins: &Arc<crate::origins::Origins>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> CloudSurface
 where
@@ -722,6 +729,7 @@ where
         Arc::clone(edge),
         cloud,
         Arc::clone(&vault),
+        origins,
     ));
 
     // Boot gate: start the cloud loops only once the box holds a device credential (ADR-0086). Reading
@@ -745,6 +753,7 @@ where
                 lease,
                 sync_key,
                 held_config_version,
+                origins,
                 shutdown_rx,
                 drained_rx,
             ) {
@@ -852,7 +861,8 @@ struct CloudLoops {
     clippy::too_many_arguments,
     reason = "the ninth is the drain signal, and it is a parameter precisely because the heartbeat \
               loop must not decide for itself when a stopping store has finished draining — the \
-              publish loop it has no handle on decides that"
+              publish loop it has no handle on decides that; the tenth is the origin allow-list the \
+              config loop keeps current for the CORS layer the routers already hold (ADR-0111)"
 )]
 fn spawn_cloud_loops<S, Q, L>(
     cloud_url: &url::Url,
@@ -862,6 +872,7 @@ fn spawn_cloud_loops<S, Q, L>(
     lease: L,
     sync_key: Option<String>,
     held_config_version: Option<String>,
+    origins: &Arc<crate::origins::Origins>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
     drained: tokio::sync::oneshot::Receiver<()>,
 ) -> Option<CloudLoops>
@@ -893,7 +904,10 @@ where
         ConfigHttpTransport::new(client.clone(), store_id),
         Arc::clone(edge),
         held_config_version,
-    );
+    )
+    // The same list the CORS layer reads on every request, handed to the only writer there is: a
+    // published `origins` node reaches the layer through this handle and nowhere else (ADR-0111).
+    .with_origins(Arc::clone(origins));
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet

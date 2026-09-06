@@ -42,6 +42,7 @@ pub mod inventory;
 pub mod locale;
 pub mod menu;
 pub mod money;
+pub mod origins;
 pub mod pii;
 pub mod protocol;
 pub mod quantity;

@@ -53,6 +53,7 @@ pub mod idgen;
 pub mod installer;
 pub mod lease_state;
 pub mod order_in;
+pub mod origins;
 pub mod ota;
 pub mod ota_client;
 pub mod ota_state;

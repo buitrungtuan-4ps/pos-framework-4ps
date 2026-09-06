@@ -16,6 +16,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A second origin may address a store's edge, and only the ones that store published**
+  ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md), Program C Phase 1).
+
+  A store can now publish an `origins` node — up to eight `scheme://host[:port]` entries — from
+  **Channels & payments → Allowed origins**, or `PUT /admin/config/origins`. Its edge answers those
+  origins on every route a till uses: the eighteen guarded domain routes, the three session routes,
+  `/api/orders/open`, `/api/pair`, `/api/pair/devices`, `/api/pair/revoke`, and
+  `GET /api/activation`. `POST /api/activate`, `/healthz` and the asset fallback are deliberately not
+  covered, each for a reason ADR-0111 states.
+
+  **A store that publishes nothing behaves exactly as it does today.** The origin that served the
+  page is allowed with no list at all — compared against the request's own `Host`, and the *scheme*
+  is not compared, so a store behind a TLS-terminating proxy keeps working. Publishing an empty list
+  is a distinct, deliberate act: it withdraws every second origin.
+
+  `/ws` carries its own `Origin` check rather than the CORS layer, because a browser applies no
+  same-origin policy to a WebSocket handshake — a layer there would have been decoration. A cross-origin
+  upgrade from an unpublished origin is refused `403`; a request with no `Origin` at all is a
+  non-browser client and still passes to the device-token gate, as it always has.
+
+  `Access-Control-Allow-Credentials` is **never** sent — not `true`, not `false`, absent. The device
+  token is a bearer in `Authorization` and no cookie exists anywhere on the edge, so there is no
+  ambient credential to lend an allow-listed origin. `Access-Control-Allow-Origin` echoes the single
+  matched origin, never `*`, and every covered response carries `Vary: Origin`.
+
+  A published entry is refused whole if any of it is invalid — wildcards, `null`, a non-`http(s)`
+  scheme, or a URL with a path — by one rule ([`pos_proto::origins`](crates/pos-proto/src/origins.rs))
+  the cloud applies at authoring time and the edge applies at apply time. A refusal changes nothing:
+  the previously published list stands, so a malformed publish cannot make a shop dark.
+
+  **Upgrade note** No migration, no `PROTOCOL_VERSION` change, no default changed. The node is
+  additive and absent everywhere until an operator publishes one.
+
 - **The fleet console says where a store is in a machine handover, and says nothing when it has never
   had one** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
 
