@@ -16,6 +16,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A terminal is created, and a printer is pointed at it, from the console**
+  ([ADR-0112](docs/adr/0112-print-agents.md)).
+
+  For a store whose edge is not in the shop, a printer plugged into a till is invisible to the box
+  that renders its receipts — the till's agent has to write the bytes. The two routes that record
+  that decision shipped without a screen, so bringing such a store online meant an operator with a
+  terminal, a printer and no way to connect them.
+
+  The Devices screen gains two store-scoped cards. **Terminals** creates the entry no discovery can
+  find: nothing on a LAN announces itself as a till, so the admin creating it *is* the approval.
+  **Print agents** lists the store's approved printers with the terminal writing for each, and picks
+  or clears it — the write conditional on the version the row was read at, because two managers
+  picking different agents for one printer is the ordinary race.
+
+  Building them turned up a gap: no `/admin` read could list a store's *approved* devices, and both
+  halves of a binding are approved. `GET /admin/devices/proposals` gains optional `store_id` and
+  `status` parameters, defaulting to `pending` — every existing caller keeps exactly the rows it had
+  — and refuses an unrecognised status by name rather than quietly handing back the pending queue.
+
+  **Upgrade note** No migration, no permission identifier and no default changes. The two console
+  writes were already behind `console.devices.manage`; the read's new parameters are additive and
+  optional.
+
 - **Silence behind a print agent reaches the console before the night ends**
   ([ADR-0112](docs/adr/0112-print-agents.md)).
 

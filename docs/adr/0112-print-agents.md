@@ -331,6 +331,47 @@ The drawer following the printer also remains where the section above left it: t
 which machine the kick lands on, and ADR-0103's missing console field still means no drawer opens
 anywhere.
 
+### Delivery note — 2026-09-06, the console entry and the agent picker
+
+The last piece of slice 5. A terminal can be created from the console, and an approved printer can
+be pointed at one — the two routes that shipped in slices 2 and 4 with no surface to drive them.
+
+**A blocker found by reading, not by a failing test: there was no `/admin` read the picker could be
+built on.** Every `/admin/devices` route is a write except `GET /admin/devices/proposals`, and that
+one was hard-coded to `DeviceProposalStatus::Pending`. Both halves of a binding are `approved` — the
+printer already in service, the terminal already created — so the onboarding queue could show
+neither, and `list_store_devices` sits on `/sync` behind the store's own API key, where a console
+cannot reach it. The seam underneath already took both filters (`list(tenant, store, status)`), so
+the fix is additive: optional `store_id` and `status` query parameters, defaulting to `pending` so
+every existing caller keeps exactly the rows it had. An unknown status token is refused **by name**
+rather than narrowed to the default — a caller who mistypes `aproved` and is handed the pending
+queue would read the empty result as *this store has no printers*.
+
+The console is two store-scoped cards below the onboarding queue, both fed by one read of the
+store's approved devices, split by kind:
+
+- **Terminals** — the create. A name and nothing else: nothing dials a terminal, so it has no
+  address, and the admin who creates the entry is the human gate ADR-0041's approval step exists to
+  be.
+- **Print agents** — the pick. Each approved printer shows the terminal writing its bytes, or *the
+  edge prints it*, and the picker offers that store's terminals plus the same "none". The write
+  carries the version the row was read at ([ADR-0094](0094-console-optimistic-concurrency.md)):
+  two managers picking different agents for one printer is the ordinary race, and last-write-wins
+  would leave the loser believing a decision that is not in the database.
+
+They follow the **store** in the top bar rather than the tenant, because an agent may only be a
+terminal standing in the same shop — a tenant-wide picker would offer picks `admin_publish_devices`
+will refuse. A pick that no longer resolves renders as the raw id rather than as *no agent*: "none"
+is a different and much quieter state, and the two must not be confused on the screen that sets them.
+
+Both new parameters are pinned by a route test verified red first — the status filter, and the
+unchanged pending default — because the default is the whole reason this could be added to a
+shipped read rather than a new one.
+
+**Not in this slice.** The drawer following the printer, exactly where the section above left it:
+this record settles which machine the kick lands on, and ADR-0103's missing console field still
+means no drawer opens anywhere.
+
 ### The last hop assumes one building, and everything above it does not
 
 [ADR-0103](0103-directly-attached-printers.md) decided that a USB or serial printer is reached by

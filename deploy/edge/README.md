@@ -305,8 +305,10 @@ Four things, in this order, and skipping any one of them leaves an agent that ru
 nothing:
 
 1. **A `TERMINAL` entry exists in the console** for this machine. Nothing discovers one — a terminal
-   is not a printer announcing itself on the LAN — so an admin creates it.
+   is not a printer announcing itself on the LAN — so an admin creates it, under **Devices →
+   Terminals**, with the store chosen in the top bar.
 2. **The printer's device entry names that terminal** as its agent, and the config is published.
+   Under **Devices → Print agents**: pick the terminal beside the printer, then publish.
 3. **This machine is paired with the store's edge**, which is what mints the device token below.
 4. **A manager binds this device to the terminal entry**, at the till, signed in. The binding is
    exclusive: one terminal, one machine, refused rather than promoted, because two machines holding

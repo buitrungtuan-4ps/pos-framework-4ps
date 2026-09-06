@@ -18892,3 +18892,125 @@ async fn a_heartbeat_reports_its_print_agents_and_an_empty_list_clears_them() {
         "a store that says it has no agent is recorded as having none, not left as it was"
     );
 }
+
+#[tokio::test]
+async fn the_admin_device_read_lists_approved_devices_for_one_store_and_still_defaults_to_pending()
+{
+    // ADR-0112's agent picker acts on a printer already in service and names a terminal already
+    // created. Until this read could show either, `set_print_agent` had no `/admin` read a console
+    // could be written against at all — the same shape of gap as a leased job that carried no
+    // printer address. The seam always supported both filters; only the route did not.
+    //
+    // Defaulting to `pending` is the other half: the onboarding queue is an existing caller that
+    // passes neither parameter, and it must keep seeing exactly what it saw.
+    let keys = FakeKeys::default();
+    let devices = FakeDevices::default();
+    let router = device_app(provisioned_admin(), keys.clone(), devices);
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let devices_uri = format!("/sync/stores/{store_ulid}/devices");
+
+    let created = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &devices_uri,
+            &serde_json::json!({
+                "kind": "printer",
+                "name": "Kitchen 1",
+                "address": "192.168.1.50:9100",
+            }),
+            &token,
+        ))
+        .await
+        .expect("route the proposal");
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    // Still pending: an `approved` listing is empty, and the default listing is not.
+    let approved = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/devices/proposals?tenant_id={tenant_ulid}&store_id={store_ulid}&status=approved"
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route the approved listing"),
+    )
+    .await;
+    assert_eq!(
+        approved.as_array().expect("array").len(),
+        0,
+        "a pending printer is not an approved one"
+    );
+
+    let approve = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{id}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
+            &serde_json::json!({}),
+            &cookie,
+        ))
+        .await
+        .expect("route the approval");
+    assert_eq!(approve.status(), StatusCode::NO_CONTENT);
+
+    // Now the picker can see it — which is the whole point of the parameter.
+    let approved = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/devices/proposals?tenant_id={tenant_ulid}&store_id={store_ulid}&status=approved"
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route the approved listing"),
+    )
+    .await;
+    assert_eq!(approved.as_array().expect("array").len(), 1);
+    assert_eq!(approved[0]["id"], id);
+    assert!(
+        approved[0]["version"].is_string(),
+        "and carries the version the picker echoes back in If-Match (ADR-0094): {approved:?}"
+    );
+
+    // The onboarding queue passes neither parameter and must be unchanged: the printer it was
+    // watching has been approved, so the pending queue is now empty.
+    let pending = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/devices/proposals?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the default listing"),
+    )
+    .await;
+    assert_eq!(
+        pending.as_array().expect("array").len(),
+        0,
+        "the default is still pending-only, so an approved row does not leak into the queue"
+    );
+
+    // A status nobody defined is refused by name rather than silently narrowed to pending — being
+    // handed the pending queue for `aproved` reads as \"this store has no printers\".
+    let mistyped = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/devices/proposals?tenant_id={tenant_ulid}&status=aproved"),
+            &cookie,
+        ))
+        .await
+        .expect("route the mistyped listing");
+    assert_eq!(mistyped.status(), StatusCode::BAD_REQUEST);
+}

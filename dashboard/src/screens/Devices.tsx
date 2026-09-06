@@ -1,5 +1,11 @@
 // The printer/KDS onboarding queue (ADR-0041): a store reports the devices it found on its network;
 // the super-admin approves or rejects each pending proposal here. Tenant-scoped, on the F2 CRUD kit.
+//
+// Below the queue sit the two store-scoped cards ADR-0112 needs. A terminal is *created* rather than
+// proposed — nothing on a LAN announces itself as a till — and an approved printer may then be
+// pointed at one, which makes that terminal's agent the thing that writes its bytes. Both halves are
+// approved devices in one store, so neither can be shown by the pending queue above; they read
+// through `listStoreDevices` and follow the top bar's store, not the tenant.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -7,13 +13,14 @@ import { api, ApiError } from "../api/client";
 import type { DeviceProposalSummary, Station, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { tenantId } from "../state/session";
+import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
+  FormField,
   Modal,
   TechnicalDetails,
 } from "../components/kit";
@@ -36,6 +43,17 @@ export function Devices() {
   const [connection, setConnection] = createSignal("network");
   const [station, setStation] = createSignal("");
   const [stations, setStations] = createSignal<Station[]>([]);
+  // The chosen store's *approved* devices — terminals and printers in one read, because a binding
+  // needs both sides and they come from the same list (ADR-0112). `null` is "not loaded yet", which
+  // is not the same as a store with no devices.
+  const [fleet, setFleet] = createSignal<DeviceProposalSummary[] | null>(null);
+  const [newTerminal, setNewTerminal] = createSignal(false);
+  const [terminalName, setTerminalName] = createSignal("");
+  // The printer whose agent is being picked, held with the version it was read at: the write is
+  // conditional on that version (ADR-0094), so re-reading the row is what makes a stale pick fail
+  // loudly rather than quietly overwrite a colleague's.
+  const [pendingAgent, setPendingAgent] = createSignal<DeviceProposalSummary | null>(null);
+  const [agentChoice, setAgentChoice] = createSignal("");
 
   // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
   // name a store that predates the backfill, or one already archived).
@@ -60,6 +78,69 @@ export function Devices() {
 
   // Load on open and whenever the tenant changes — never with an empty context (F0).
   onScopedContext("tenant", () => void load());
+
+  const loadFleet = async () => {
+    try {
+      setFleet(await api.listStoreDevices(tenantId(), storeId(), "approved"));
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : String(caught));
+    }
+  };
+
+  // The two cards below follow the *store* in the top bar, not the tenant: an agent may only be a
+  // terminal standing in the same shop, so a tenant-wide list would offer picks the publish gate
+  // will refuse.
+  onScopedContext("store", () => void loadFleet());
+
+  const terminals = () => (fleet() ?? []).filter((device) => device.kind === "terminal");
+  const printers = () => (fleet() ?? []).filter((device) => device.kind === "printer");
+
+  // A printer names its agent by id; the operator reads the terminal's name. A pick that no longer
+  // resolves — the terminal was created in another store, or archived — shows the raw id rather than
+  // claiming there is no agent, because "none" is a different and much quieter state.
+  const agentLabel = (agentId: string | null) => {
+    if (!agentId) {
+      return t("devices.agentNone");
+    }
+    return terminals().find((device) => device.id === agentId)?.name ?? agentId;
+  };
+
+  const createTerminal = async () => {
+    setBusy(true);
+    try {
+      await api.createTerminal(tenantId(), storeId(), terminalName().trim());
+      toast.ok(t("devices.terminalCreated"));
+      setNewTerminal(false);
+      setTerminalName("");
+      await loadFleet();
+    } catch (caught) {
+      const message = caught instanceof ApiError ? caught.message : String(caught);
+      setError(message);
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveAgent = async () => {
+    const printer = pendingAgent();
+    if (!printer) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.setPrintAgent(tenantId(), printer.id, agentChoice() || null, printer.version);
+      toast.ok(t("devices.agentSaved"));
+      setPendingAgent(null);
+      await loadFleet();
+    } catch (caught) {
+      const message = caught instanceof ApiError ? caught.message : String(caught);
+      setError(message);
+      toast.error(message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Opens the approval dialog, pulling the *proposing store's* stations so the picker offers real
   // names rather than asking for a ULID. A store with no stations configured still approves — the
@@ -134,6 +215,48 @@ export function Devices() {
     },
   ];
 
+  const terminalColumns = (): Column<DeviceProposalSummary>[] => [
+    {
+      key: "name",
+      header: t("devices.name"),
+      cell: (row) => <span class="text-ink">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "id",
+      header: t("devices.id"),
+      cell: (row) => (
+        <TechnicalDetails label={t("common.technicalDetails")}>
+          <div>{row.id}</div>
+        </TechnicalDetails>
+      ),
+    },
+  ];
+
+  const printerColumns = (): Column<DeviceProposalSummary>[] => [
+    {
+      key: "name",
+      header: t("devices.name"),
+      cell: (row) => <span class="text-ink">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "address",
+      header: t("devices.address"),
+      cell: (row) => <span class="font-mono text-sm text-ink-muted">{row.address}</span>,
+      sortValue: (row) => row.address,
+    },
+    {
+      key: "agent",
+      header: t("devices.agent"),
+      cell: (row) => (
+        <span class={row.agent_device_id ? "text-ink" : "text-ink-muted"}>
+          {agentLabel(row.agent_device_id)}
+        </span>
+      ),
+    },
+  ];
+
   return (
     <div>
       <PageHeader title={t("devices.title")} description={t("devices.description")} />
@@ -170,6 +293,60 @@ export function Devices() {
             )}
           </Show>
         </Card>
+
+        <div class="mt-6">
+          <Card
+            title={t("devices.terminals")}
+            actions={
+              <Button
+                disabled={busy() || !storeId()}
+                onClick={() => {
+                  setTerminalName("");
+                  setNewTerminal(true);
+                }}
+              >
+                {t("devices.newTerminal")}
+              </Button>
+            }
+          >
+            <p class="mb-3 text-sm text-ink-muted">{t("devices.terminalsHint")}</p>
+            <Show when={storeId()} fallback={<p class="text-sm text-ink-muted">{t("context.storeRequired")}</p>}>
+              <DataTable
+                columns={terminalColumns()}
+                rows={terminals()}
+                pageSize={8}
+                empty={<EmptyState title={t("devices.terminalsEmpty")} />}
+              />
+            </Show>
+          </Card>
+        </div>
+
+        <div class="mt-6">
+          <Card title={t("devices.agents")}>
+            <p class="mb-3 text-sm text-ink-muted">{t("devices.agentsHint")}</p>
+            <Show when={storeId()} fallback={<p class="text-sm text-ink-muted">{t("context.storeRequired")}</p>}>
+              <DataTable
+                columns={printerColumns()}
+                rows={printers()}
+                pageSize={8}
+                empty={<EmptyState title={t("devices.agentsEmpty")} />}
+                actionsHeader={t("common.actions")}
+                actions={(row) => (
+                  <Button
+                    variant="secondary"
+                    disabled={busy()}
+                    onClick={() => {
+                      setAgentChoice(row.agent_device_id ?? "");
+                      setPendingAgent(row);
+                    }}
+                  >
+                    {t("devices.chooseAgent")}
+                  </Button>
+                )}
+              />
+            </Show>
+          </Card>
+        </div>
 
         <div class="mt-6">
           <Card title={t("devices.resolved")}>
@@ -227,6 +404,57 @@ export function Devices() {
             </select>
             <span class="mt-1 block text-xs text-ink-muted">{t("devices.stationHint")}</span>
           </label>
+        </Modal>
+
+        <Modal
+          open={newTerminal()}
+          title={t("devices.newTerminalTitle")}
+          closeLabel={t("action.close")}
+          onClose={() => setNewTerminal(false)}
+          footer={
+            <Button
+              disabled={busy() || terminalName().trim() === ""}
+              onClick={() => void createTerminal()}
+            >
+              {t("action.create")}
+            </Button>
+          }
+        >
+          <p class="mb-4 text-sm text-ink-muted">{t("devices.newTerminalHint")}</p>
+          <FormField label={t("devices.terminalNameLabel")}>
+            <input
+              class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+              value={terminalName()}
+              onInput={(event) => setTerminalName(event.currentTarget.value)}
+            />
+            <span class="mt-1 block text-xs text-ink-muted">{t("devices.terminalNameHint")}</span>
+          </FormField>
+        </Modal>
+
+        <Modal
+          open={pendingAgent() !== null}
+          title={t("devices.agentTitle")}
+          closeLabel={t("action.close")}
+          onClose={() => setPendingAgent(null)}
+          footer={
+            <Button disabled={busy()} onClick={() => void saveAgent()}>
+              {t("action.save")}
+            </Button>
+          }
+        >
+          <p class="mb-4 text-sm text-ink-muted">{t("devices.agentHint")}</p>
+          <FormField label={t("devices.agentLabel")}>
+            <select
+              class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+              value={agentChoice()}
+              onChange={(event) => setAgentChoice(event.currentTarget.value)}
+            >
+              <option value="">{t("devices.agentNone")}</option>
+              <For each={terminals()}>
+                {(entry) => <option value={entry.id}>{entry.name}</option>}
+              </For>
+            </select>
+          </FormField>
         </Modal>
 
         <ConfirmDialog
