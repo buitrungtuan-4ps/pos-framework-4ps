@@ -85,7 +85,7 @@ use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
 use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
-    DeviceProposalSummary, PersistedDeviceProposal,
+    DeviceProposalSummary, PersistedDeviceProposal, SetAgentOutcome,
 };
 use pos_core::lease::LeaseGeneration;
 
@@ -1258,7 +1258,9 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 address: row.address,
                 connection: row.connection,
                 station_id: row.station_id,
+                agent_device_id: row.agent_device_id,
                 status: row.status,
+                version: row.version,
             })
             .collect())
     }
@@ -1286,6 +1288,52 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         )
         .await
         .map_err(|error| DeviceProposalError::new(error.to_string()))
+    }
+
+    async fn create_terminal(
+        &self,
+        proposal: &PersistedDeviceProposal,
+    ) -> Result<(), DeviceProposalError> {
+        PostgresDeviceProposals::create_terminal(
+            self,
+            &proposal.id.to_string(),
+            &proposal.tenant_id.to_string(),
+            &proposal.store_id.to_string(),
+            &proposal.name,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))
+    }
+
+    async fn set_agent(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        agent: Option<DeviceProposalId>,
+        expected: &str,
+    ) -> Result<SetAgentOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let agent = agent.map(|agent| agent.to_string());
+        let changed =
+            PostgresDeviceProposals::set_agent(self, &tenant, &id, agent.as_deref(), expected)
+                .await
+                .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        if changed.is_some() {
+            return Ok(SetAgentOutcome::Updated);
+        }
+        // Nothing changed, and the two reasons need different answers: the caller is stale, or the
+        // device is not there at all. A second read is the only way to tell, and it is only ever
+        // paid on the failing path.
+        let present = self
+            .version_of(&tenant, &id)
+            .await
+            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        Ok(if present.is_some() {
+            SetAgentOutcome::VersionMismatch
+        } else {
+            SetAgentOutcome::NotFound
+        })
     }
 }
 

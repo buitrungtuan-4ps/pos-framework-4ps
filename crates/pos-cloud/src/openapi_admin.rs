@@ -200,6 +200,12 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/devices/proposals",
     "/admin/devices/proposals/{id}/approve",
     "/admin/devices/proposals/{id}/reject",
+    // The print-agent pair (ADR-0112). Undocumented for the same reason as the three above and
+    // `/admin/devices/publish` below, not a new decision: this whole device surface is deferred
+    // together, and documenting two routes in the middle of it would leave a fork's client reading
+    // half a story. They join the debt when the device surface does.
+    "/admin/devices/proposals/{id}/agent",
+    "/admin/devices/terminals",
     "/admin/activation-codes",
     "/admin/activation-codes/revoke",
     // --- the four-level configuration tree and its publishes (ADR-0033) ---

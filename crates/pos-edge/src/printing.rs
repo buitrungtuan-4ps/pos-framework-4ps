@@ -828,6 +828,9 @@ mod tests {
             address: format!("192.0.2.{seed}:9100"),
             name: DisplayName::new("Printer"),
             station_id: at,
+            // Absent is the in-store case and the one this module still implements: the edge opens
+            // the address itself. The agent branch lands with the claim and acknowledge routes.
+            agent_device_id: None,
         }
     }
 
