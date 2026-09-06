@@ -237,6 +237,6 @@ The cloud **must** understand at least the two most recent protocol versions, be
 ## 13. Machine enforcement
 
 1. **Naming linter** over the OpenAPI document, SQL migrations, and the event/permission registries: rejects camelCase, `created_at`, bare `id` columns, unlisted abbreviations, and enums missing `*_UNSPECIFIED`.
-2. **Snapshots** of the public API, the event schema, and the permission catalogue: any change is a visible diff in the pull request; removals are rejected.
+2. **Snapshots** of the public API, the event schema, the permission catalogue, and the edge's published `/api/*` routes ([`docs/snapshots/routes.txt`](snapshots/routes.txt), [ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)): any change is a visible diff in the pull request; removals are rejected.
 3. **Name-parity test**: database column names must equal JSON field names for core business tables.
 4. **OpenAPI is generated from code**, never hand-written, so documentation and wire format cannot drift.

@@ -16,6 +16,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **An edge route, once published, cannot be renamed away from a till that has not updated**
+  ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+
+  The additive rule protected published fields, events and permissions, each held by a snapshot that
+  fails the build when a line disappears. Routes were not on that list — and a renamed edge route is
+  the quietest break of the set: the asset fallback answers an unmatched path with `200 text/html`,
+  so the app reports a JSON parse error naming neither the route nor the release that moved it.
+
+  `docs/snapshots/routes.txt` now holds every published `/api/*` route, method and path per line,
+  regenerated from the source and diff-checked against the base branch by `cargo xtask snapshot`.
+  `/healthz` and `/ws` are outside the rule, as that record draws it. Removing or renaming a route is
+  now a build failure with the remedy in the message: deprecate it in place.
+
+  **Upgrade note** No behaviour changes and nothing on the wire moves. Adding a route now requires
+  regenerating the snapshot in the same pull request:
+  `POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-edge --test routes_snapshot`.
+
 - **A terminal is created, and a printer is pointed at it, from the console**
   ([ADR-0112](docs/adr/0112-print-agents.md)).
 

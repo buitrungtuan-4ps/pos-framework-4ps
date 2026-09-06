@@ -61,6 +61,45 @@ keychain, the second pairing-URL form, the `PROTOCOL_VERSION` response header, t
 [ADR-0112](0112-print-agents.md) builds). The allow-list is what those need to exist first; none of
 them is blocked on a decision.
 
+## Delivery — 2026-09-06, the additive-route rule and its snapshot
+
+The rule this record *extends* is now enforced. `AGENTS.md` §2 forbade removing or renaming a
+published field, event or permission and said nothing about routes; it now names the edge's `/api/*`
+routes alongside them, and `docs/snapshots/routes.txt` is what holds it, checked by
+`cargo xtask snapshot` the same way the other three are.
+
+This lands before the `pos-edge-version` header, not beside it, because the header's comparison is
+**one-sided** — an app checks only whether it is ahead of its edge — and the section below is explicit
+that the guarantee making that safe did not exist. Building the header first would have shipped a
+comparison resting on a promise nothing kept.
+
+Two mechanisms, because two different things rot:
+
+- **`crates/pos-edge/tests/routes_snapshot.rs`** regenerates the file from the source and fails when
+  the two disagree. Axum's `Router` exposes no route list, so the set is recovered from the source the
+  way `pos_cloud::openapi_admin` recovers `/admin`'s — but by walking the whole `src/` tree rather than
+  naming one file, because the edge registers routes from five modules and a sixth would otherwise be
+  missed silently. It reads the method too, and every method on a chained registration rather than the
+  first: a snapshot holding only the `GET` of a `get(read).post(write)` would let the `POST` go
+  unnoticed. `POS_UPDATE_SNAPSHOTS=1` regenerates, which is how a route is added.
+- **`cargo xtask snapshot`** answers the question the test cannot, because only git can: has a line
+  *disappeared* since the base branch? Its hint is now chosen per file — the event-catalogue sentence
+  sent a contributor who renamed a route looking for a payload field that does not exist.
+
+**The scope is `/api/*`, which is this record's line and not a shortcut.** `/healthz` and `/ws` are
+registered by the same router and are outside it, for different reasons that are worth stating rather
+than leaving as an omission. `/healthz` serves a service manager's liveness probe, not the app. `/ws`
+is one route named in one expression in `live.ts`, and renaming it fails at connect time — at once, on
+every device — rather than as the unattributable parse error an `/api` rename produces, because the
+asset fallback answers an unmatched path with `200 text/html`. A test pins that boundary, so widening
+it later is a visible act rather than a side effect of touching the extractor.
+
+Verified red first in both directions: renaming `/api/floor` fails the snapshot test, and deleting a
+line from the committed file makes the `xtask` gate refuse with the route hint.
+
+**Still open from this record.** The base-URL default, the token in the operating system's keychain,
+the second pairing-URL form, and the `pos-edge-version` response header — which is now unblocked.
+
 ## The problem
 
 ### The client's opening line is a design decision, and it has become a constraint

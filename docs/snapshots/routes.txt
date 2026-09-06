@@ -1,0 +1,35 @@
+# Generated from the .route( registrations in crates/pos-edge/src — do not edit.
+# One line per published edge route: METHOD, a space, then the path.
+# ADR-0111: an /api/* route, once published, is not removed or renamed — deprecate in place.
+# /healthz and /ws are registered by the same router and are deliberately outside that rule.
+GET /api/activation
+GET /api/floor
+GET /api/layout
+GET /api/locale
+GET /api/menu
+GET /api/orders/open
+GET /api/orders/{id}/check
+GET /api/pair/devices
+GET /api/print/jobs
+GET /api/session
+GET /api/tables/{id}
+GET /api/tables/{id}/check
+POST /api/activate
+POST /api/bills/{id}/settle
+POST /api/kds/bump
+POST /api/lines/{id}/fire
+POST /api/orders/{id}/bill
+POST /api/pair
+POST /api/pair/revoke
+POST /api/print/agent
+POST /api/print/agent/revoke
+POST /api/print/jobs/{job_id}/ack
+POST /api/session/sign-in
+POST /api/session/sign-out
+POST /api/shifts
+POST /api/shifts/{id}/close
+POST /api/shifts/{id}/count
+POST /api/tables/{id}/bill
+POST /api/tables/{id}/clean
+POST /api/tables/{id}/lines
+POST /api/tables/{id}/seat

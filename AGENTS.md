@@ -40,7 +40,7 @@ Read this file before your first change. Everything below is enforced by CI wher
 **MUST**
 
 - Follow [`docs/naming-and-api.md`](docs/naming-and-api.md) for every identifier: `snake_case` everywhere, `<resource>_id`, timestamps ending in `_time`, enums `UPPER_SNAKE_CASE` with a `*_UNSPECIFIED` zero value.
-- Make schema and protocol changes **additive**. Removing or renaming a published field, event, or permission is forbidden — deprecate instead.
+- Make schema and protocol changes **additive**. Removing or renaming a published field, event, permission, or edge `/api/*` route is forbidden — deprecate instead. Each is held by a snapshot under [`docs/snapshots/`](docs/snapshots/) that `cargo xtask snapshot` diffs against the base branch; the route rule is [ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)'s, and it is what makes the `pos-edge-version` comparison safe in one direction only.
 - Keep `pos-core` tests free of databases, networks, and hardware. They run with in-memory fakes in seconds.
 - Make every new adapter pass the shared contract test suite for its port.
 - Apply [`docs/design-principles.md`](docs/design-principles.md): extend by adding an adapter, never by branching inside the core; extract shared code on the **third** occurrence, not the second; no speculative abstraction, flag, or layer.
