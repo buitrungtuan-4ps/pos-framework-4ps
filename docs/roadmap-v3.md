@@ -445,6 +445,41 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **B10.3** — A real card-terminal adapter for the pilot country, into the `PaymentTerminal` port wired at B9.2.
 - **B10.4** — Data-residency + legal + pentest (ops): hosting-region decision (APPI/DPDP), independent pentest after WS-F.
 
+## Program C — Edge Anywhere (Phase 0 recorded; nothing implemented)
+
+`pos_edge` stays the single unit of a store — one process, one SQLite database, one lease, one API
+key — and gains exactly one new degree of freedom: **where it runs**. Three `edge_placement` modes
+share every line of domain code: `IN_STORE` as today, `HOSTED_BY_OPERATOR` on the operator's own VPS,
+and `HOSTED_BY_PLATFORM`, which an admin stands up by choosing a region and pressing Start.
+Target shape: 500+ stores, 10+ brands, ~5 countries.
+
+**Phase 0 is done and is the whole of this programme so far: five records, no code.**
+
+- **C0.1** — [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md): `edge_placement` is an
+  attribute of a store; ADR-0001's offline guarantee is a property of the `IN_STORE` mode only; the
+  [ADR-0049](adr/0049-single-active-lease.md)/[ADR-0108](adr/0108-the-lease-generation-is-authority.md)
+  lease is the sole authority over which placement is active, and the column is written inside the
+  bump's own transaction so the two can never disagree. **Done.**
+- **C0.2** — [ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md): a CORS allow-list published
+  as an `origins` config node, a configurable base URL defaulting to same-origin, the device token in
+  the OS keychain, an `https` pairing URL for hosted placements, a version handshake. **Done.**
+- **C0.3** — [ADR-0112](adr/0112-print-agents.md): a paired device may own a printer's transport; the
+  edge still renders every byte; a durable per-agent queue with ACK, an idempotent job id and one-hop
+  failover along `backup_station_id`. **Done.**
+- **C0.4** — [ADR-0113](adr/0113-the-host-agent.md): a dial-out host agent that long-polls
+  region-scoped jobs and runs one container per store, so the cloud never dials in. **Done.**
+- **C0.5** — [ADR-0114](adr/0114-region-is-required-recorded-visible.md): the hosting region is
+  required, recorded and visible; mechanism, never policy. **Done.**
+
+**Two spikes gate every estimate below Phase 0, and neither has been run:** Tauri v2 on Android
+against the real `ui/dist`, and Android as an ESC/POS print agent over Bluetooth or USB-host. Until
+the second passes, the print agent is the Windows terminal and ADR-0112 stays correct either way.
+
+**Not started:** the edge container image, drain-before-stop in `server.rs` (today's graceful
+shutdown drains in-flight HTTP and never flushes the outbox, so tearing down a hosted placement loses
+the last minutes of sales), the CORS layer, the print queue, the host agent, and the console surfaces
+for all of it.
+
 ## Debates settled
 
 The full debate log (D1–D25) lives in the planning artifact. The load-bearing ones:
@@ -464,6 +499,7 @@ The full debate log (D1–D25) lives in the planning artifact. The load-bearing 
 - **D23** — The edge reaches NATS **directly over TCP**, not through the HTTP reverse proxy. Both were viable and performance-indistinguishable at this workload — the publisher drains the outbox in batches every 5 s, ~135 events ≈ 40–100 KB, so ~20 KB/s per store, nowhere near any transport's limit, and WebSocket's per-frame mask is a rounding error there. Direct TCP wins on four things a proxy cannot give: TLS terminates *at NATS*, which is the only way to authenticate a store by **client certificate** (through a proxy the identity dies at the proxy — a header NATS will not read); NATS's own cluster gossip lets clients failover across nodes, which a proxy hides behind internal addresses; the proxy is not a shared chokepoint for both the console and the bus (Caddy runs on `cpus: 0.25` / `mem_limit: 96m` and already carries the long-polls); and there is no upgrade round-trip per reconnect, which mattered for the then-deferred relay live mode (ADR-0062 has since declined that mode, so this is now the weakest of the four). It also needs **no** proxy plugin: the `nats` container publishes `4222` itself and Caddy is not in the path. **Revisit if** the fleet outgrows one NATS node, per-store mTLS is dropped, the bus starts carrying large payloads (the deferred log tail), or the proxy measurably stops being the constraint — the transport is a URL, so reversing costs a config line, not code (`async_nats::connect` takes either scheme from the same binary).
 - **D24** — TLS termination is a **fork-level posture, not a fixed choice**. Four are legitimate and a framework must serve all four: ACME HTTP-01 (the default; sslip.io and any A-record domain), ACME DNS-01 (a Cloudflare-managed domain, grey-clouded), **bring-your-own certificate files** (a company with a wildcard or an internal CA and no ACME), and **termination upstream** (a company whose own load balancer, ingress or tunnel already does TLS and where the bundled proxy should do none). An explicit `TLS_MODE` selects a committed per-mode file; nothing overwrites one. **Recorded in [ADR-0090](adr/0090-tls-postures.md)**, which also establishes `secrets/tls/` as the single certificate path — the dependency ADR-0089 was waiting on. The `external` mode is the one with a hidden edge: the app must then trust `X-Forwarded-For`/`X-Forwarded-Proto` from *that* balancer, or the login rate limit collapses every user onto one source IP and one wrong password locks the whole company out.
 - **D25** — For mTLS on the bus, the **server certificate and the client CA are different trust decisions**. The server certificate may be public (ACME or brought). The CA that verifies *store* certificates must be **private and ours** — configure a public CA there and anyone who can obtain a certificate from it can speak to the bus, which is the most common way mTLS is misconfigured into a no-op. Store certificates carry the `store_id` as their subject and NATS maps it (`verify_and_map`), which is what finally gives a box a real fleet identity rather than one derived from its store id. Custody follows D1's reasoning: a CA key on the VPS means owning the VPS is owning every store's identity, so the pilot may generate it on the box (documented as a pilot posture) and a fleet moves it offline before scale.
+- **D26** — Where a store's edge runs is a **deployment axis, not a fork**: one binary, one lease, three `edge_placement` modes. Three things follow and are recorded rather than assumed. Offline trading belongs to `IN_STORE` alone, so the console must show a store's mode wherever it shows its health — a hosted store with no internet cannot sell, and saying so plainly beats a mode that silently degrades. A device-local write buffer is **declined outright**: receipt numbers, stock and shift totals all assume one authority, and a second writer turns every conflict into a money question the framework already solved at the store level. And the word `placement` was already taken twice (`MenuPlacement`; the OTA rollout placement at `/admin/config/ota/placement`), so the newcomer disambiguates itself as `edge_placement` rather than renaming a published route. **Recorded in [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md)**; ADR-0111 to ADR-0114 build on it.
 
 ## Cadence
 
