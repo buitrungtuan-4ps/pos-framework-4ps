@@ -481,8 +481,13 @@ it:** drain-before-stop. `EventPublisher::run` returned on the stop signal witho
 abandoned the moment `serve_until` returned. A stop now runs one bounded drain and something waits
 for it (`docs/production-readiness.md` **D8**).
 
-**Not started:** the edge container image, the CORS layer, the print queue, the host agent, and the
-console surfaces for all of it.
+**Phase 1 has begun.** `edge_placement` is a column on `store_lease`, an `EdgePlacement` wire enum in
+`pos-proto`, and an optional field on the lease bump — written inside the bump's own statement and by
+nothing else, so the record and the lease cannot disagree (**C1**, ADR-0110). The console does not
+show it yet; that is the next slice.
+
+**Not started:** surfacing the mode wherever a store's health is shown, the edge container image, the
+CORS layer, the print queue, the host agent, and the console surfaces for all of it.
 
 ## Debates settled
 

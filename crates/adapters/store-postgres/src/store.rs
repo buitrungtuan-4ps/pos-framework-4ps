@@ -181,6 +181,11 @@ const MIGRATION_0050: &str = include_str!("../migrations/0050_tax_rate_component
 /// replacement had taken over went on installing updates as though it were still the store.
 const MIGRATION_0051: &str = include_str!("../migrations/0051_store_lease.sql");
 
+/// Where a store's edge runs (ADR-0110). On `store_lease` rather than on `stores`, because the
+/// bump is the only write that table has, which makes "no other way to write it" structural instead
+/// of a rule somebody has to keep.
+const MIGRATION_0052: &str = include_str!("../migrations/0052_edge_placement.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -443,6 +448,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0051)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0052)
             .await
             .map_err(unavailable)
     }
@@ -1023,5 +1032,103 @@ pub(crate) async fn window_total(
             .await
             .map_err(unavailable)?
             .get(0)),
+    }
+}
+
+#[cfg(test)]
+mod migration_wiring_tests {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::Path;
+
+    /// This file's own text. A migration only runs if this file both **declares** it (an
+    /// `include_str!`) and **executes** it (a `batch_execute`), so reading the source catches both
+    /// ways one goes missing — and they are different mistakes, made months apart.
+    const SOURCE: &str = include_str!("store.rs");
+
+    /// Every `.sql` file in the migrations directory, by stem.
+    fn migration_stems() -> BTreeSet<String> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        fs::read_dir(&dir)
+            .expect("the migrations directory is beside this crate")
+            .map(|entry| entry.expect("a readable directory entry").path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "sql"))
+            .map(|path| {
+                path.file_stem()
+                    .expect("a .sql file has a stem")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    /// A migration file nothing runs is not a migration; it is a document.
+    ///
+    /// This has already happened once — 0013 to 0017 sat in the directory unwired, so five tables
+    /// the code queried did not exist on a fresh database and the failure surfaced as a runtime
+    /// query error rather than as anything a build could see. The cost of adding a file and
+    /// forgetting the two lines beside it is a production incident; the cost of this test is a
+    /// directory read.
+    #[test]
+    fn every_migration_file_is_both_declared_and_executed() {
+        let mut unwired: Vec<String> = Vec::new();
+        for stem in migration_stems() {
+            let number = stem
+                .split('_')
+                .next()
+                .expect("a migration is named NNNN_something");
+            if !SOURCE.contains(&format!("migrations/{stem}.sql")) {
+                unwired.push(format!("{stem}: no include_str! declares it"));
+            }
+            if !SOURCE.contains(&format!("batch_execute(MIGRATION_{number})")) {
+                unwired.push(format!(
+                    "{stem}: MIGRATION_{number} is never passed to batch_execute, so a fresh \
+                     database never gets it"
+                ));
+            }
+        }
+        assert!(
+            unwired.is_empty(),
+            "migrations exist that no boot applies:\n  {}",
+            unwired.join("\n  ")
+        );
+    }
+
+    /// The migration numbers the runner passes to `batch_execute`, in source order.
+    ///
+    /// Only four-digit tokens count, because this file also *mentions* `batch_execute(MIGRATION_` in
+    /// the format string the test above builds — a scan that took every match would find its own
+    /// `{number}` placeholder and report the runner as unordered, which is a test failing on itself
+    /// rather than on the code.
+    fn applied_migration_numbers() -> Vec<&'static str> {
+        SOURCE
+            .match_indices("batch_execute(MIGRATION_")
+            .filter_map(|(at, needle)| {
+                let rest = &SOURCE[at + needle.len()..];
+                let token = &rest[..rest.find(')')?];
+                (token.len() == 4 && token.bytes().all(|byte| byte.is_ascii_digit()))
+                    .then_some(token)
+            })
+            .collect()
+    }
+
+    /// The runner is ordered, and the order is the numbering: 0052 alters a table 0051 created. A
+    /// file applied out of order would run against a schema that does not yet have what it alters —
+    /// on a *fresh* database only, which is the worst place to find it, because every database that
+    /// already exists would keep working.
+    #[test]
+    fn the_runner_applies_migrations_in_numeric_order() {
+        let applied = applied_migration_numbers();
+        let mut sorted = applied.clone();
+        sorted.sort_unstable();
+        assert_eq!(
+            applied, sorted,
+            "the batch_execute calls are not in numeric order"
+        );
+        assert_eq!(
+            applied.len(),
+            migration_stems().len(),
+            "every migration is applied exactly once"
+        );
     }
 }

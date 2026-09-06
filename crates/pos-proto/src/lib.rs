@@ -58,8 +58,9 @@ pub use display::{
     LayoutBook,
 };
 pub use enums::{
-    BillState, OrderLineState, OrderState, PaymentMethod, PaymentOutcome, ReductionKind,
-    SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState, UnitOfMeasure,
+    BillState, EdgePlacement, OrderLineState, OrderState, PaymentMethod, PaymentOutcome,
+    ReductionKind, SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
+    UnitOfMeasure,
 };
 pub use envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 pub use error::{ErrorBody, ErrorDetail, ErrorResponse, ErrorStatus};
