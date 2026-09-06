@@ -308,31 +308,56 @@ impl PostgresConfigTrees {
         // the argument is deliberate: the caller audits what the store *now is*, which for a
         // no-placement bump is a value it never sent.
         //
-        // `superseded_generation = store_lease.generation` records the number this bump is
-        // displacing (ADR-0110). Inside `ON CONFLICT DO UPDATE` the table name is the *pre-update*
-        // row, which is the same fact the line above it already depends on — `generation =
-        // store_lease.generation + 1` is only correct for that reason — so the recorded value is
-        // exact by construction, with no read before the write and nothing to race. The insert
-        // branch writes NULL explicitly: a store's first lease (generation 0) supersedes nobody.
+        // **Two CTEs, not an upsert, and that is a correction rather than a preference.** The
+        // obvious shape — one `INSERT … ON CONFLICT DO UPDATE` with the preconditions on the
+        // conflict branch — cannot express this. Guarding the insert with `WHERE $6 IS NULL` gates
+        // the *whole statement*: with a numbered `If-Match` the SELECT yields no row, so there is
+        // nothing to insert, so no conflict arises, so `DO UPDATE` never runs, and every bump after
+        // a store's first is silently refused. Only a real database showed that — the shape
+        // type-checks and reads correctly.
+        //
+        // So the update is its own statement, conditional on both preconditions, and the insert is
+        // a second one conditional on the caller having claimed there is no row (`If-Match: *`).
+        // Exactly one can produce a row, so the union yields one row or none, and none is
+        // unambiguously a refusal.
+        //
+        // `superseded_generation = generation` records the number this bump displaces (ADR-0110).
+        // Every `SET` expression in one `UPDATE` reads the *pre-update* row — the same fact
+        // `generation = generation + 1` beside it depends on — so the recorded value is exact by
+        // construction, with nothing to race. The insert writes NULL explicitly: a store's first
+        // lease supersedes nobody.
+        //
+        // `DO NOTHING` covers two callers creating one store at once: the loser returns no row and
+        // is reported as a version mismatch, which is true — somebody else issued the lease — rather
+        // than a unique-violation 503 that would invite the same losing retry.
         //
         // Why the column is needed at all: `store_liveness` holds one row per store, so the instant
         // the incoming machine heartbeats, the outgoing machine's final `outbox_depth` is gone. This
         // is the cloud's only durable memory of the question \"has N drained?\".
         let requested = edge_placement.map(ToOwned::to_owned);
         let row = connection
-            .query_opt("INSERT INTO store_lease \
-                 (tenant_id, store_id, generation, issued_at, edge_placement, superseded_generation) \
-                 SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL \
-                 WHERE $6::bigint IS NULL \
-                 ON CONFLICT (tenant_id, store_id) DO UPDATE SET \
-                 generation = store_lease.generation + 1, \
-                 superseded_generation = store_lease.generation, \
-                 issued_at = EXCLUDED.issued_at, \
-                 edge_placement = COALESCE($4, store_lease.edge_placement) \
-                 WHERE store_lease.generation = $6::bigint \
-                   AND (store_lease.superseded_generation IS NULL \
-                        OR store_lease.superseded_generation = $5::bigint) \
-                 RETURNING generation, edge_placement, superseded_generation",
+            .query_opt(
+                "WITH bumped AS ( \
+                     UPDATE store_lease SET \
+                     generation = generation + 1, \
+                     superseded_generation = generation, \
+                     issued_at = $3, \
+                     edge_placement = COALESCE($4, edge_placement) \
+                     WHERE tenant_id = $1 AND store_id = $2 \
+                       AND generation = $6::bigint \
+                       AND (superseded_generation IS NULL \
+                            OR superseded_generation = $5::bigint) \
+                     RETURNING generation, edge_placement, superseded_generation \
+                 ), issued AS ( \
+                     INSERT INTO store_lease \
+                     (tenant_id, store_id, generation, issued_at, edge_placement, \
+                      superseded_generation) \
+                     SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL \
+                     WHERE $6::bigint IS NULL \
+                     ON CONFLICT (tenant_id, store_id) DO NOTHING \
+                     RETURNING generation, edge_placement, superseded_generation \
+                 ) \
+                 SELECT * FROM bumped UNION ALL SELECT * FROM issued",
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),
