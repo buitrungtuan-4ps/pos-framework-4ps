@@ -210,6 +210,49 @@ A job whose printer the store no longer publishes is skipped rather than handed 
 invented at the route. There is nowhere to send it; it expires at its TTL like any other
 undeliverable job, and the agent's other printers still get their work.
 
+## Delivery — 2026-09-06, the agent binary
+
+`pos_print_agent` exists: [`crates/pos-print-agent/`](../../crates/pos-print-agent/), a third binary
+this record already argued for and [ADR-0113](0113-the-host-agent.md) named as one of ADR-0002's two
+exceptions. It claims, writes, and acknowledges, and it decides nothing.
+
+- **The three-crate rule is a gate, not a comment.** This record said the list *"is a rule a
+  `cargo-deny`-style check can hold"*, so it is one:
+  [`xtask print-agent-deps`](../../xtask/src/checks/print_agent_deps.rs) refuses any workspace
+  dependency outside `printer-escpos`, `pos-ports`, `pos-proto` — dev-dependencies included, because
+  a test build that can reach the domain is a test build that invites the domain in. It runs in the
+  `rules` CI job and in `just preflight`.
+- **The order of the three writes is the whole design, and it is tested as such.** Write the bytes,
+  **record the id, then acknowledge**. A crash between the record and the acknowledgement is the
+  case that ordering exists for: the job returns at the claim lease, the record answers *already
+  written*, and the agent acknowledges without printing a second ticket. A write that *fails* is
+  never acknowledged, so the lease returns it — which is what a printer out of paper needs. Both are
+  pinned by tests over a stubbed edge and print head, each verified red first.
+- **A corrupt record starts empty rather than refusing to run.** A kitchen with no tickets is worse
+  than one duplicate ticket, and this record already accepts one duplicate as the cost of losing the
+  file entirely.
+- **One printer's jam does not hold up another printer's ticket.** The claim returns at most one job
+  per printer but an agent may own several, and a cycle that gave up on the first refusal would let
+  a jammed kitchen printer stall the counter's receipt.
+- **`http` and `https` both, and nothing else.** [ADR-0110](0110-edge-placement-is-a-deployment-axis.md)
+  made where the edge runs a deployment axis: in-store it is a box on the shop LAN behind no proxy,
+  hosted it is behind the same TLS terminator as everything else. Which one a store uses is a fact
+  about that store, not a posture this binary holds — but a third scheme is refused at construction,
+  where an operator can still read the message. The client is ADR-0054's stack, so the agent adds no
+  third-party subtree the tree does not already build.
+- **`--self-test` deliberately opens no printer and does not dial the edge.** It answers *can these
+  bytes run on this box, and can they read this machine's configuration* — the same question
+  [ADR-0055](0055-edge-ota-updater.md) Amendment 1 has the edge's self-test answer. A printer that is
+  off is an ordinary state of the world, not a fact about a staged binary.
+
+**Not in this slice.** The generated installer — this record's *"rides the same rail, and gets its
+installer from the same generator"* is still a claim about where it will live rather than a file on
+disk; the agent's shape (no update slots, no store key, no database) is different enough from the
+edge's that it wants its own generator function and its own drift check. Also still to come: silence
+reported to the console before the night ends, and the console's `TERMINAL` entry and agent picker.
+Until the installer lands, an agent is installed the way any small service is: put the binary
+somewhere, write `print-agent.toml`, and register it.
+
 ## The problem
 
 ### The last hop assumes one building, and everything above it does not
