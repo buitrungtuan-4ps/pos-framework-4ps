@@ -97,7 +97,7 @@ use crate::floorplan::{
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
-use crate::lease::{LeaseBump, LeaseStore, LeaseStoreError};
+use crate::lease::{LeaseBump, LeaseStore, LeaseStoreError, StorePlacement};
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
@@ -1678,6 +1678,32 @@ impl RegistryStore for PostgresRegistry {
 /// Converts one joined `store-postgres` fleet row into the cloud's [`FleetRow`]. A liveness timestamp
 /// out of range (impossible for values this cloud wrote) fails safe to "never seen" rather than
 /// failing the whole listing; a negative backlog (impossible from a `count`) reads as zero.
+/// What the fleet read can say about a store's placement, from the `LEFT JOIN`ed column.
+///
+/// Deliberately **not** [`stored_edge_placement`]'s posture. That decoder serves the *lease* path
+/// and refuses an unrecognised token, because a bump that cannot name where it put a store should
+/// fail rather than record a lie. This is the *fleet* path, and one corrupt row must not take down
+/// the console an operator is holding open during an incident — so the row survives.
+///
+/// It survives as [`StorePlacement::Unreadable`], never as "no record". That distinction is the
+/// whole point of the three-state type: `Unreadable` scores as "cannot trade with the line down",
+/// the same as hosted, so a token this binary cannot read raises the severity rather than lowering
+/// it. Collapsing it into `NeverIssued` would make a dark hosted store page as a warning.
+fn fleet_placement(token: Option<&str>) -> StorePlacement {
+    let Some(token) = token else {
+        return StorePlacement::NeverIssued;
+    };
+    if let Some(placement) = EdgePlacement::from_wire(token) {
+        return StorePlacement::Known(placement);
+    }
+    tracing::warn!(
+        token = %token,
+        "a store_lease row carries an edge_placement this build does not recognise; scoring it as \
+         unreadable, which alerts at the hosted severity"
+    );
+    StorePlacement::Unreadable
+}
+
 fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     let last_seen_at = row
         .last_seen_at_ms
@@ -1725,6 +1751,15 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         lease_generation_authoritative: row
             .lease_generation_authoritative
             .and_then(|value| u64::try_from(value).ok()),
+        // Deliberately NOT `stored_edge_placement`'s posture. That decoder serves the *lease* path
+        // and refuses an unrecognised token, because a bump that cannot name where it put a store
+        // should fail rather than record a lie. This is the *fleet* path: one corrupt row must not
+        // 503 the console an operator is holding open during an incident, so the row survives — but
+        // it survives as `Unreadable`, never as "no record". Collapsing the two is the bug
+        // `StorePlacement` exists to prevent: `Unreadable` scores as "cannot trade with the line
+        // down", the same as hosted, so a token this binary cannot read pages at the higher
+        // severity rather than the lower one.
+        edge_placement: fleet_placement(row.edge_placement.as_deref()),
     })
 }
 

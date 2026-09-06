@@ -19,6 +19,7 @@
 
 use core::future::Future;
 
+use crate::lease::StorePlacement;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
 
@@ -89,6 +90,14 @@ pub struct FleetRow {
     /// store one — every store until an operator deliberately does, which reads as "no lease in
     /// force" and never as generation `0`.
     pub lease_generation_authoritative: Option<u64>,
+    /// Where the machine holding that generation runs
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// Three-valued rather than `Option<EdgePlacement>`, because a fleet reader must tell a store
+    /// nobody has bumped from a store whose stored token this binary cannot read — see
+    /// [`StorePlacement`]. The alert engine reads this same row, and those two absences carry
+    /// opposite severities.
+    pub edge_placement: StorePlacement,
 }
 
 /// Reads the fleet read model, per tenant.

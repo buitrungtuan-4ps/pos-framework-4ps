@@ -16,6 +16,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A quiet store now alerts by where its edge runs** ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+  Program C Phase 1 slice 2).
+
+  Slice 1 recorded a store's `edge_placement`; nothing could read it back. The fleet read now carries
+  it — one extra column on a `store_lease` join `FLEET_SELECT` already had — and the alert engine is
+  its first consumer.
+
+  One condition, two urgencies. An in-store edge gone quiet is a store we have lost *sight* of: the
+  till is on the counter, [ADR-0001](docs/adr/0001-offline-first-store-autonomy.md)'s offline
+  guarantee holds, and it is very likely still taking money — `Warning`, as before. A hosted edge gone
+  quiet is a store that is not trading at all, because there is no machine in the shop to fall back
+  to — `Critical`. Same `store_offline` kind either way, so an operator filtering on it still sees
+  every store.
+
+  **The placement a reader sees is three-valued, not two.** `Option<EdgePlacement>` is the obvious
+  shape and it is wrong: `store_lease` is `LEFT JOIN`ed, so a store nobody has bumped has no row and
+  reads as SQL `NULL` — today, most of the fleet. That is one absence. A row whose token this build
+  cannot decode (an older binary against a newer database, a fork's fourth mode, a corrupt row) is a
+  different one. Collapse them and both score as in-store, and a *hosted* store that has gone dark
+  pages one severity too low — with nothing failing, nothing logging, and a plausible-looking alert
+  in the console. `StorePlacement::{NeverIssued, Known, Unreadable}` keeps them apart, and
+  `Unreadable` scores with the hosted case: "we could not read where this store runs" must never be
+  reported as "and it is probably fine".
+
+  The two decoders now differ on purpose. The lease path still *refuses* an unrecognised token — a
+  bump that cannot name where it put a store should fail rather than record a lie. The fleet path
+  keeps the row, because one corrupt store must not take down the console an operator is holding open
+  during an incident.
+
 - **A store records where its edge runs, and the lease bump is the only thing that can write it**
   ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md), Program C Phase 1).
 

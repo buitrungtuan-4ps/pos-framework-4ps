@@ -59,6 +59,7 @@ use pos_cloud::floorplan::{
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::inventory::{InventoryStore, InventoryStoreError};
+use pos_cloud::lease::StorePlacement;
 use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
@@ -6324,6 +6325,7 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             lease_generation_held: None,
             lease_reported_at: None,
             lease_generation_authoritative: None,
+            edge_placement: StorePlacement::NeverIssued,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -6396,6 +6398,7 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             lease_generation_held: None,
             lease_reported_at: None,
             lease_generation_authoritative: None,
+            edge_placement: StorePlacement::NeverIssued,
         },
     );
     let alerts = FakeAlerts::default();
@@ -6452,6 +6455,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_generation_held: Some(3),
                 lease_reported_at: Some(seen_ago(1_000)),
                 lease_generation_authoritative: Some(3),
+                edge_placement: StorePlacement::NeverIssued,
             },
         )
         .with_row(
@@ -6476,6 +6480,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_generation_held: Some(2),
                 lease_reported_at: Some(seen_ago(600_000)),
                 lease_generation_authoritative: Some(3),
+                edge_placement: StorePlacement::NeverIssued,
             },
         )
 }
@@ -6582,6 +6587,7 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             lease_generation_held: None,
             lease_reported_at: None,
             lease_generation_authoritative: None,
+            edge_placement: StorePlacement::NeverIssued,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -6634,6 +6640,7 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             lease_generation_held: None,
             lease_reported_at: None,
             lease_generation_authoritative: None,
+            edge_placement: StorePlacement::NeverIssued,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

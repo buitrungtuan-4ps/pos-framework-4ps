@@ -153,6 +153,20 @@ impl FiringAlert {
             detail,
         }
     }
+
+    /// The same alert at a different severity — the override
+    /// [`AlertKind::default_severity`] documents.
+    ///
+    /// Used by the store-offline rule, where the condition is one kind but its urgency depends on
+    /// where the store's edge runs
+    /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)): the same silence
+    /// means "probably still selling, and we cannot see it" from a shop-floor box, and "not selling"
+    /// from a hosted one.
+    #[must_use]
+    pub fn at_severity(mut self, severity: AlertSeverity) -> Self {
+        self.severity = severity;
+        self
+    }
 }
 
 #[cfg(test)]

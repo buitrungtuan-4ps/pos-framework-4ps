@@ -14,7 +14,7 @@ use pos_proto::ids::TenantId;
 use pos_proto::time::Timestamp;
 use serde_json::{Value, json};
 
-use super::model::{AlertKind, FiringAlert};
+use super::model::{AlertKind, AlertSeverity, FiringAlert};
 use crate::fleet::FleetRow;
 use crate::health::{ROLLUP_PROJECTOR, TaskHealth};
 use crate::registry::EntityStatus;
@@ -117,20 +117,45 @@ fn store_offline(
         return None;
     }
     let minutes = idle_ms / 60_000;
-    Some(FiringAlert::new(
-        AlertKind::StoreOffline,
-        Some(tenant),
-        row.store_id.to_string(),
-        format!(
-            "Store \u{201c}{}\u{201d} has been offline for {minutes} min",
-            row.name
-        ),
-        json!({
-            "store_id": row.store_id.to_string(),
-            "last_seen_at_ms": seen_ms,
-            "minutes_offline": minutes,
-        }),
-    ))
+    // One condition, two urgencies, and the input that separates them is where the store's edge
+    // runs (ADR-0110). An in-store edge that has gone quiet is a store we have lost *sight* of: the
+    // till is on the counter, ADR-0001's offline guarantee holds, and it is very likely still
+    // taking money. A hosted edge that has gone quiet is a store that is not trading at all —
+    // there is no machine in the shop to fall back to. Same silence, opposite meaning, so the same
+    // rule ends at a different severity rather than at a different kind: an operator filtering by
+    // `store_offline` must keep seeing both.
+    let may_trade = row.edge_placement.may_trade_offline();
+    let severity = if may_trade {
+        AlertKind::StoreOffline.default_severity()
+    } else {
+        AlertSeverity::Critical
+    };
+    let mut detail = json!({
+        "store_id": row.store_id.to_string(),
+        "last_seen_at_ms": seen_ms,
+        "minutes_offline": minutes,
+        // Why this alert is at the severity it is, so the drawer explains itself without the
+        // reader having to know the rule.
+        "may_be_trading_offline": may_trade,
+    });
+    if let Some(token) = row.edge_placement.as_wire()
+        && let Some(object) = detail.as_object_mut()
+    {
+        object.insert("edge_placement".to_owned(), json!(token));
+    }
+    Some(
+        FiringAlert::new(
+            AlertKind::StoreOffline,
+            Some(tenant),
+            row.store_id.to_string(),
+            format!(
+                "Store \u{201c}{}\u{201d} has been offline for {minutes} min",
+                row.name
+            ),
+            detail,
+        )
+        .at_severity(severity),
+    )
 }
 
 fn relay_backlog(
@@ -256,8 +281,10 @@ mod tests {
     use crate::alerts::model::{AlertKind, AlertSeverity};
     use crate::fleet::FleetRow;
     use crate::health::{ROLLUP_PROJECTOR, TaskHealth};
+    use crate::lease::StorePlacement;
     use crate::registry::EntityStatus;
     use pos_ports::message_link::LinkCapacity;
+    use pos_proto::enums::EdgePlacement;
     use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
@@ -292,6 +319,7 @@ mod tests {
             lease_generation_held: None,
             lease_reported_at: None,
             lease_generation_authoritative: None,
+            edge_placement: StorePlacement::NeverIssued,
         }
     }
 
@@ -317,6 +345,76 @@ mod tests {
         assert_eq!(firing[0].dedup_key, store_id(10).to_string());
         assert_eq!(firing[0].tenant_id, Some(tenant_id(1)));
         assert_eq!(firing[0].severity, AlertSeverity::Warning);
+    }
+
+    /// The same silence, three placements, three severities
+    /// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+    ///
+    /// The store that has never been bumped keeps the old behaviour, and that is the assertion
+    /// protecting every store in the fleet today from a severity change nobody asked for.
+    #[test]
+    fn a_quiet_store_alerts_by_where_its_edge_runs() {
+        let now = ts(10_000_000);
+        let thresholds = AlertThresholds::default(); // 300s
+        let quiet = 10_000_000 - 400_000; // 400s idle → past the threshold
+
+        let mut in_store = store_row(20, "Bến Thành", Some(quiet));
+        in_store.edge_placement = StorePlacement::Known(EdgePlacement::InStore);
+        let mut hosted = store_row(21, "Thảo Điền", Some(quiet));
+        hosted.edge_placement = StorePlacement::Known(EdgePlacement::HostedByPlatform);
+        let never = store_row(22, "Xuân Thủy", Some(quiet)); // NeverIssued, the fleet as it stands
+
+        let firing = evaluate(
+            now,
+            &thresholds,
+            &one_tenant(vec![in_store, hosted, never]),
+            &[],
+            None,
+        );
+        let severity_of = |id: u128| {
+            firing
+                .iter()
+                .find(|alert| alert.dedup_key == store_id(id).to_string())
+                .map(|alert| alert.severity)
+        };
+
+        // A shop-floor box gone quiet: the till still works, so this is "we have lost sight of a
+        // store that is probably still selling".
+        assert_eq!(severity_of(20), Some(AlertSeverity::Warning));
+        // A hosted box gone quiet: there is no machine in the shop. The store is not trading.
+        assert_eq!(severity_of(21), Some(AlertSeverity::Critical));
+        // No lease row yet — every store in the fleet today. Unchanged behaviour.
+        assert_eq!(severity_of(22), Some(AlertSeverity::Warning));
+
+        // All three are still one kind: an operator filtering on `store_offline` sees the lot.
+        assert_eq!(firing.len(), 3);
+        assert!(
+            firing
+                .iter()
+                .all(|alert| alert.kind == AlertKind::StoreOffline)
+        );
+    }
+
+    /// A token this build cannot read is scored as the *severe* case, not the safe one.
+    ///
+    /// This is the failure the three-state [`StorePlacement`] exists to prevent. An
+    /// `Option<EdgePlacement>` would make "no row" and "unreadable row" the same `None`, both would
+    /// score as in-store, and a hosted store that had gone dark would page one severity too low —
+    /// with nothing failing, nothing 500ing, and a plausible-looking alert in the console.
+    #[test]
+    fn an_unreadable_placement_alerts_at_the_hosted_severity() {
+        let now = ts(10_000_000);
+        let thresholds = AlertThresholds::default();
+        let mut corrupt = store_row(23, "Phú Mỹ Hưng", Some(10_000_000 - 400_000));
+        corrupt.edge_placement = StorePlacement::Unreadable;
+
+        let firing = evaluate(now, &thresholds, &one_tenant(vec![corrupt]), &[], None);
+        assert_eq!(firing.len(), 1);
+        assert_eq!(
+            firing[0].severity,
+            AlertSeverity::Critical,
+            "an unreadable placement must not be scored as though the store were in-store"
+        );
     }
 
     #[test]
