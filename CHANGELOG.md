@@ -16,6 +16,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A till can be told which edge it belongs to, instead of assuming the one that served it**
+  ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+
+  Every call the app made was root-relative, which is right for a till served by the box it talks to
+  and impossible for anything else — a native shell has no serving origin, and a hosted placement is
+  reached by hostname. The client now sends `base + path`, where the base is recorded when the device
+  pairs and is **empty by default**, so an in-store till sends the identical bytes it sent before.
+  `/ws` derives from the same base, with the scheme swapped.
+
+  The base and the token are one record: a token means nothing against an edge that did not issue it.
+  One asymmetry is deliberate — a `401` clears the token and keeps the base, because a device whose
+  token went stale must re-pair to the *same* edge rather than be sent looking for a QR code in
+  another building.
+
+  Token access is now a small seam (`read`/`write`/`clear`) with the browser's storage installed by
+  default, so a native shell can put a device credential in the OS credential store instead. Two
+  storage keys rather than one blob: a till that paired before this change keeps its token exactly
+  where it left it and is not asked to re-pair for a refactor.
+
+  **Upgrade note** No migration, no permission change, nothing on the wire moves, and no device
+  re-pairs. `api.pair(code)` gains an optional second argument for the edge's origin; omitting it is
+  the in-store behaviour.
+
 - **A till that is newer than its store server now says so, instead of failing to parse**
   ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 

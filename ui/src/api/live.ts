@@ -3,7 +3,7 @@
 // (ADR-0018) — the fan-out is the store's shared truth, and being offline (from the cloud) is a
 // normal working state, so the only "connected" this reports is to the edge on the LAN.
 
-import { deviceToken } from "./client";
+import { deviceToken, liveSocketUrl } from "./credentials";
 
 // The subprotocol name the edge selects. It must match `pos_edge::http::ws::SUBPROTOCOL`.
 const SUBPROTOCOL = "pos-edge.v1";
@@ -55,14 +55,16 @@ export class LiveLink {
 
   #connect(): void {
     this.#handlers.onStatus("connecting");
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
     // The device token travels as a WebSocket subprotocol, because the browser `WebSocket` API
     // cannot set an `Authorization` header and `/ws` is behind the paired-device gate (roadmap-v3
     // S0c). A query parameter was the alternative and is worse: the edge logs the request path, so
     // the token would end up in a log. The server selects only the protocol *name*, never the token.
     const token = deviceToken();
     const protocols = token === null ? [SUBPROTOCOL] : [SUBPROTOCOL, token];
-    const socket = new WebSocket(`${scheme}://${window.location.host}/ws`, protocols);
+    // Derived from the same base the domain calls use (ADR-0111): an in-store till gets today's
+    // expression unchanged, and a device paired against a named edge opens the socket there rather
+    // than against whatever origin happened to serve the page.
+    const socket = new WebSocket(liveSocketUrl(), protocols);
     this.#socket = socket;
 
     socket.addEventListener("open", () => {

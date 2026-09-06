@@ -1,8 +1,11 @@
-// The typed HTTP client for the edge's domain routes. Every call is one `fetch` to the same origin
-// that served the app, so it works on the store LAN with no configuration. A refused command comes
-// back as a non-2xx with a plain-text reason (the edge maps a domain refusal to 409); this surfaces
-// it as an `ApiError` the screens can show without guessing.
+// The typed HTTP client for the edge's domain routes. Every call is one `fetch` to `base() + path`,
+// where the base is empty for a till served by the box it talks to — so an in-store device sends the
+// identical root-relative request it always has, and a native shell or a hosted placement sends the
+// same path against the origin it paired with (ADR-0111). A refused command comes back as a non-2xx
+// with a plain-text reason (the edge maps a domain refusal to 409); this surfaces it as an
+// `ApiError` the screens can show without guessing.
 
+import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./credentials";
 import { observeEdgeVersion } from "./edgeVersion";
 import type {
   ActivateAccepted,
@@ -57,33 +60,11 @@ export class ApiError extends Error {
   }
 }
 
-// The bearer token a device was issued when it paired (ADR-0084). Kept in localStorage so it
-// survives a reload; every wrapper is defensive because a private window or blocked storage throws.
-const DEVICE_TOKEN_KEY = "pos-edge.device-token";
-
-export function deviceToken(): string | null {
-  try {
-    return localStorage.getItem(DEVICE_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function setDeviceToken(token: string): void {
-  try {
-    localStorage.setItem(DEVICE_TOKEN_KEY, token);
-  } catch {
-    // A device that cannot persist its token re-pairs each session; that is degraded, not broken.
-  }
-}
-
-function clearDeviceToken(): void {
-  try {
-    localStorage.removeItem(DEVICE_TOKEN_KEY);
-  } catch {
-    // Nothing to do — the next domain call will 401 and route the operator to pair anyway.
-  }
-}
+// The token and the base live in `./credentials`, which is a seam rather than four calls to
+// `localStorage`: a native shell keeps a device credential in the OS credential store, and a browser
+// keeps it where a browser can. Re-exported here so the screens that already import `deviceToken`
+// from this module are unchanged.
+export { deviceToken } from "./credentials";
 
 // The headers every call carries: JSON content-type when there is a body, and the device bearer token
 // when one is stored (ADR-0084).
@@ -99,8 +80,16 @@ function authHeaders(hasBody: boolean): Record<string, string> {
   return headers;
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(path, {
+// `base` defaults to the edge this device paired with. Pairing itself passes one explicitly,
+// because at that moment nothing is stored yet — the base is what the operator just supplied, and
+// storing it before the call succeeds would leave a device claiming an edge that refused it.
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  base: string = edgeBase(),
+): Promise<T> {
+  const response = await fetch(base + path, {
     method,
     headers: authHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -194,11 +183,17 @@ export const api = {
   closeShift: (shiftId: string) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`),
 
-  // Redeem a pairing code for a device token, and keep the token so every later domain call carries
-  // it (ADR-0084). Pairing itself is unauthenticated — it is how a device obtains the token.
-  pair: async (code: string): Promise<PairAccepted> => {
-    const accepted = await request<PairAccepted>("POST", "/api/pair", { code });
-    setDeviceToken(accepted.device_token);
+  // Redeem a pairing code for a device token, and keep the token **and the edge it came from** so
+  // every later call carries the one against the other (ADR-0084, ADR-0111). Pairing itself is
+  // unauthenticated — it is how a device obtains the token.
+  //
+  // `base` is empty for a till served by the box it is pairing with, which is every in-store device
+  // and is what keeps its requests root-relative. A shell pairing against a named edge passes that
+  // origin, and it is stored beside the token because a token is only meaningful against the edge
+  // that issued it.
+  pair: async (code: string, base = ""): Promise<PairAccepted> => {
+    const accepted = await request<PairAccepted>("POST", "/api/pair", { code }, base);
+    rememberPairing(base, accepted.device_token);
     return accepted;
   },
 
@@ -232,7 +227,11 @@ export const api = {
   // result rather than throwing on a wrong PIN, so the screen can show the attempts left or the
   // lockout countdown. The PIN is sent once and never stored.
   signIn: async (code: string, pin: string): Promise<SignInResult> => {
-    const response = await fetch("/api/session/sign-in", {
+    // Takes the base at its own call site, as `request()` does. Changing only `request()` would ship
+    // a shell that can read the floor and settle a bill but can never sign an employee in — a worse
+    // failure than not shipping one, since the three session routes are covered precisely so a second
+    // origin can sign in (ADR-0111).
+    const response = await fetch(edgeBase() + "/api/session/sign-in", {
       method: "POST",
       headers: authHeaders(true),
       body: JSON.stringify({ code, pin }),
@@ -266,7 +265,7 @@ export const api = {
   // Sign the current employee out on this device (S0b). The device stays paired; the next command
   // needs a fresh sign-in.
   signOut: async (): Promise<void> => {
-    const response = await fetch("/api/session/sign-out", {
+    const response = await fetch(edgeBase() + "/api/session/sign-out", {
       method: "POST",
       headers: authHeaders(false),
     });
