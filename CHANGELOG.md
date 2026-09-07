@@ -14,6 +14,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **The release now builds and signs a Windows edge binary.**
+
+  `deploy/edge/install-pos-edge.ps1` asked for a `pos-edge.exe` that no workflow produced. The
+  service wrapper and the generated installer (roadmap-v3 **E4**) shipped, `pr.yml`'s
+  `build (windows-2022)` leg compiled the workspace on Windows and uploaded nothing, and
+  `release.yml` built the two Linux targets only — so the one thing a Windows store needs was the
+  one thing never published. `release.yml`'s own header said Windows *"joins this release with the
+  Windows service wrapper"*; the wrapper arrived and the leg did not.
+
+  `x86_64-pc-windows-msvc` is the target `rust-toolchain.toml` declares and the one the PR gate
+  already exercises, and it does not cross-compile from Linux, so it is a second job on a
+  `windows-2022` runner. **It builds and it does not sign:** the minisign key stays on one runner,
+  which is the whole reason this is two jobs and not one matrix — a signing secret that reaches a
+  second operating system is a secret in two more places for no gain. The unsigned binary crosses as
+  a run artifact with one day of retention, and the Linux job signs it beside the other two.
+
+  Each of the three targets now carries the same pair: an archive for a person (`.tar.gz` on Linux,
+  `.zip` on Windows) and the bare executable for OTA, whose signature has to cover exactly the bytes
+  `UpdateInstaller::apply` writes. The staging and signing steps switched from lists of extensions
+  to every file in `dist`, because a list that must be edited whenever a target is added is the edit
+  that was missed here.
+
+  Both preflights — signing key present, trust anchor present — moved into the Windows job, the
+  first one to run. They cost seconds and they now gate two builds instead of being discovered after
+  fifteen minutes of compilation and a reviewer's approval.
+
+  `gh run download` rather than `actions/download-artifact`, for the reason the publish step already
+  gives for using `gh`: it ships on the runner, so no fourth action needs pinning. That needs
+  `actions: read`, which the permissions block now carries and explains.
+
+  `deploy/edge/README.md` gains the section whose absence sent a technician looking: where
+  `pos-edge.exe` comes from, and that a locally built one runs but carries no release stamp and no
+  signature, so the fleet console cannot tell which version it is.
+
 ### Fixed
 
 - **`bootstrap.sh` reported "set" for keys it had not written, and one of them was the boot-critical

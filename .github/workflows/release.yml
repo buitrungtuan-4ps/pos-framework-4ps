@@ -9,10 +9,15 @@ name: release
 # (roadmap-v3 R2). The signing key lives only in a GitHub Actions secret — see
 # docs/release-runbook.md for generating it and trusting its public half.
 #
-# Windows (x86_64-pc-windows-msvc) is a real edge target but needs the MSVC toolchain and a
-# Windows runner; it joins this release with the Windows service wrapper (roadmap-v3 E4). This
-# slice ships the two Linux targets — amd64 and arm64 (Ampere/Graviton), the same pair the cloud
-# deploy cross-compiles.
+# Three targets: Linux amd64 and arm64 (Ampere/Graviton, the same pair the cloud deploy
+# cross-compiles) plus Windows x86_64-pc-windows-msvc.
+#
+# Windows arrives late and the reason is worth recording, because for a while it was a hole rather
+# than a decision. The service wrapper and the generated PowerShell installer (roadmap-v3 E4)
+# shipped without this leg, so `deploy/edge/install-pos-edge.ps1` asked for a `pos-edge.exe` that
+# no workflow produced: an installer with nothing to install. `x86_64-pc-windows-msvc` needs the
+# MSVC toolchain on a Windows host, which is why it is a second job rather than a third
+# `cargo build` line here.
 
 on:
   push:
@@ -24,9 +29,12 @@ on:
         description: "Existing tag to build and publish, e.g. v1.2.0"
         required: true
 
-# Publishing a Release and uploading its assets needs write; nothing else does.
+# Publishing a Release and uploading its assets needs `contents: write`. `actions: read` is for
+# `gh run download`, which is how the signing job below collects the Windows binary from the job
+# that built it — this run's own artifact, and an Actions read rather than a contents one.
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
@@ -37,7 +45,119 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # The Windows edge binary. `x86_64-pc-windows-msvc` is the target
+  # [`rust-toolchain.toml`](../../rust-toolchain.toml) declares and the one `pr.yml`'s
+  # `build (windows-2022)` leg already exercises, so this is the toolchain the tree checks on every
+  # PR rather than a second Windows story. It does not cross-compile from Linux, hence a job.
+  #
+  # **It builds and it does not sign.** The minisign key stays on one runner, which is the whole
+  # reason this is two jobs and not one matrix: a signing secret that reaches a second operating
+  # system is a secret in two more places, for no gain. The unsigned binary travels as a run
+  # artifact and the job below signs it beside the two Linux ones.
+  windows:
+    runs-on: windows-2022
+    # The same gate as `release`. `POS_EDGE_TRUSTED_KEYS` is read here too, and an *environment*
+    # variable is only visible to a job that names its environment. If it is configured
+    # repository-wide instead, this line can go and a run asks for one approval rather than two.
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      # Git Bash is on the Windows runners, so every step here is `shell: bash` and the tag rule is
+      # the *same* five lines as the job below — not a PowerShell paraphrase free to drift from it.
+      - name: Resolve the release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::release tag must look like vX.Y.Z, got '$tag'"; exit 1 ;;
+          esac
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      # Both preflights run here, in the FIRST job, rather than only in the signing one. They cost
+      # seconds and they gate two builds: discovering a missing signing key after fifteen minutes of
+      # Windows compilation, and then asking a reviewer to approve it, is the same failure told late.
+      - name: Fail early if the signing key is absent
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ]; then
+            echo "::error::the MINISIGN_SECRET_KEY secret is not set — a release is never published unsigned. See docs/release-runbook.md."
+            exit 1
+          fi
+
+      - name: Fail early if the trust anchor is absent
+        shell: bash
+        env:
+          POS_EDGE_TRUSTED_KEYS: ${{ vars.POS_EDGE_TRUSTED_KEYS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${POS_EDGE_TRUSTED_KEYS}" ]; then
+            echo "::error::the POS_EDGE_TRUSTED_KEYS variable is not set — the built edge would trust no update signing key and could never install an update. Set it to the second line of minisign.pub: see docs/fork-checklist.md."
+            exit 1
+          fi
+
+      - uses: ./.github/actions/rust-setup
+
+      - name: Build the operator UI
+        # Built here as well as on the Linux job, rather than shared between them as an artifact.
+        # The two bundles come from the same source with the same `VITE_MINIMUM_EDGE_VERSION` and
+        # may still differ byte-wise across hosts, which costs nothing: each binary embeds the
+        # bundle built beside it, and every signature covers the bytes actually shipped. Sharing one
+        # would mean a third job in a pipeline that already waits on a human.
+        working-directory: ui
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ env.TAG }}
+        run: |
+          set -euo pipefail
+          export VITE_MINIMUM_EDGE_VERSION="${RELEASE_TAG#v}"
+          echo "the app requires edge ${VITE_MINIMUM_EDGE_VERSION} or later"
+          npm install --global pnpm@10
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Build pos-edge for Windows
+        shell: bash
+        env:
+          # The same two inputs the Linux build takes, for the same two reasons: the stamp so the
+          # OTA progress model can tell one release from another (R1b, ADR-0078), and the trust
+          # anchor baked at compile time because `trusted_keys.rs` is the only path to a trusted key
+          # (ADR-0092). The `v` is stripped here too — `ReleaseVersion::parse` returns None on it.
+          POS_EDGE_RELEASE_VERSION: ${{ env.TAG }}
+          POS_EDGE_TRUSTED_KEYS: ${{ vars.POS_EDGE_TRUSTED_KEYS }}
+        run: |
+          set -euo pipefail
+          export POS_EDGE_RELEASE_VERSION="${POS_EDGE_RELEASE_VERSION#v}"
+          echo "stamping version ${POS_EDGE_RELEASE_VERSION} from tag ${TAG}"
+          echo "baking $(printf '%s' "${POS_EDGE_TRUSTED_KEYS}" | tr ',' '\n' | grep -c .) trusted signing key(s)"
+          cargo build --release --locked -p pos-edge --target x86_64-pc-windows-msvc
+
+      - name: Hand the unsigned binary to the signing job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pos-edge-windows
+          path: target/x86_64-pc-windows-msvc/release/pos-edge.exe
+          # An empty upload here would surface as a confusing failure two steps into the next job.
+          if-no-files-found: error
+          # This artifact is an *unsigned* executable and the next job consumes it within the same
+          # run. A day is the shortest retention Actions accepts; there is no reason to keep it.
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
   release:
+    # The Windows binary has to exist before anything can be signed or published — a release that
+    # shipped two of its three targets because one job was still running is exactly the artifact
+    # nobody can reason about later.
+    needs: windows
     runs-on: ubuntu-24.04
     # The `production` Environment gates a signed release behind the same required reviewer as a
     # deploy (ADR-0044/ADR-0045): cutting an artifact every store will trust and install is a
@@ -94,7 +214,8 @@ jobs:
           set -euo pipefail
           rustup target add aarch64-unknown-linux-gnu
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu minisign
+          # `zip` for the Windows archive: a .zip is what Windows hands you a working extractor for.
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu minisign zip
 
       - name: Build the operator UI
         # A shipped edge embeds the real SolidJS bundle (rust-embed); a fresh checkout has none
@@ -142,6 +263,19 @@ jobs:
           cargo build --release --locked -p pos-edge --target x86_64-unknown-linux-gnu
           cargo build --release --locked -p pos-edge --target aarch64-unknown-linux-gnu
 
+      - name: Collect the Windows binary from the job above
+        # `gh run download` rather than `actions/download-artifact`, for the same reason the publish
+        # step below uses `gh`: it ships on the runner, so there is no fourth action for
+        # `xtask actions-pinned` to hold a SHA for. It reads this run's own artifact, which is what
+        # `actions: read` in the permissions block is for.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "${{ github.run_id }}" --name pos-edge-windows --dir windows
+          test -s windows/pos-edge.exe
+          ls -l windows
+
       - name: Stage and checksum the artifacts
         run: |
           set -euo pipefail
@@ -160,7 +294,21 @@ jobs:
             # `apply` bytes nobody ever signed.
             cp "target/${target}/release/pos-edge" "dist/pos-edge-${TAG}-${target}.bin"
           done
-          ( cd dist && sha256sum *.tar.gz *.bin > SHA256SUMS )
+          # Windows gets the same two assets as each Linux target, from the artifact rather than from
+          # `target/` because MSVC does not cross-compile from here. A `.zip` for the person who
+          # downloads it, and the bare `.exe` for OTA — whose signature has to cover exactly the
+          # bytes `UpdateInstaller::apply` writes, which is why the archive is never the only form.
+          win="pos-edge-${TAG}-x86_64-pc-windows-msvc"
+          mkdir -p "$win"
+          cp windows/pos-edge.exe "$win/"
+          cp LICENSE "$win/" 2>/dev/null || true
+          zip -qr "dist/${win}.zip" "$win"
+          rm -rf "$win"
+          cp windows/pos-edge.exe "dist/${win}.exe"
+          # Everything in dist, rather than a list of extensions that has to be edited whenever a
+          # target is added — which is the edit that was missed when Windows first went in. The glob
+          # expands before the redirect creates the file, so SHA256SUMS never lists itself.
+          ( cd dist && sha256sum * > SHA256SUMS )
           ls -l dist
 
       - name: Sign every artifact with minisign
@@ -175,7 +323,9 @@ jobs:
           # minisign reads the password from stdin when stdin is not a TTY (it is not, here); a
           # passwordless key ignores the piped line. The trusted comment carries the release tag,
           # so a signature names what it signed.
-          for f in dist/*.tar.gz dist/*.bin dist/SHA256SUMS; do
+          # Every file in dist, for the reason the checksum step gives. The glob expands once, so the
+          # `.minisig` files this loop creates are not themselves signed.
+          for f in dist/*; do
             minisign -S -s minisign.key -m "$f" \
               -t "pos-edge ${TAG}" -c "pos-edge ${TAG} $(basename "$f")" \
               <<<"${MINISIGN_PASSWORD:-}"
