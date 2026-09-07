@@ -16,6 +16,44 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **An upgrade across ADR-0097 left the cloud crash-looping while the deploy reported success.**
+
+  ADR-0097 made `internal_shared_secret` a **boot requirement**: `Config::validate` refuses to
+  start without it, deliberately, because `cloud.toml` is not checked for unknown keys and so a
+  misspelled name would look set and be absent. Step 2's template writes it, which covers every box
+  created since.
+
+  A box created *before* it existed takes the `keep cloud.toml` branch — correctly; generated
+  secrets are never rotated — and nothing in that branch added the key. So the first image carrying
+  the requirement crash-looped on `internal_shared_secret is required` while the workflow went
+  green, because `bootstrap.sh` had genuinely finished: everything it was asked to do, it did.
+
+  **The `keep` branch already reconciled two other keys, and the priority was exactly inverted.**
+  `trusted_proxy_hops` is rewritten every run; `table_token_secret` is added if absent. Missing the
+  first means a wrong rate-limit bucket; missing the second means QR ordering is off plus one warn
+  line. Missing `internal_shared_secret` means the cloud does not run at all. The two survivable
+  gaps had an upgrade path and the fatal one did not.
+
+  It is now added if absent on the same terms as the QR secret — and never rewritten once found,
+  since re-minting a shared secret would silently break every caller already configured with it.
+  Three details are load-bearing and each was verified against a `cloud.toml` shaped like a live
+  box's:
+
+  - The key is inserted **above the first table header**, never appended. Step 7b appends
+    `[artifacts]`, so on any box that has completed a bootstrap the end of that file is *inside*
+    that table, and a bare key written there parses as `artifacts.internal_shared_secret` — which
+    the loader never reads, while the script reports "set". Confirmed by parsing both outcomes.
+  - The secret is generated **inside** the privileged shell, so what reaches `sudo`'s argv is the
+    text `openssl rand -hex 32` and never the value, which `ps` would otherwise expose. A box
+    without openssl falls back to `/dev/urandom`, inlined because `rand_hex` is a function in the
+    calling shell and cannot be reached from there.
+  - The note carries no `/`. It is interpolated into a `sed s//…/` replacement where a slash ends
+    the expression; a first attempt with `# The /internal route …` failed on exactly that. Both
+    pre-existing notes obey the rule silently — the new comment says why.
+
+  Where neither root nor passwordless `sudo` can reach the file, the warn now states that
+  `pos_cloud` refuses to start without the key and says where to put it by hand.
+
 - **The deploy failed after bringing the stack up, because `bootstrap.sh` could not write the one
   file it had just given away.**
 
