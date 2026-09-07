@@ -1338,6 +1338,11 @@ export const api = {
     tenantId: string,
     storeId: string,
     settings: {
+      // Which country this store is in, as an ISO 3166-1 alpha-2 code (ADR-0114). Required: the
+      // route refuses a publish without it, because a publish rebuilds the node wholesale and an
+      // optional field would either erase the country on an unrelated edit or behave unlike
+      // `display_language` one line down.
+      country_code: string;
       currency_code: string;
       timezone: string;
       cutoff_hour: number;
@@ -1350,6 +1355,7 @@ export const api = {
     requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
       tenant_id: tenantId,
       store_id: storeId,
+      country_code: settings.country_code,
       currency_code: settings.currency_code,
       timezone: settings.timezone,
       cutoff_hour: settings.cutoff_hour,

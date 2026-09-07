@@ -225,6 +225,7 @@ export function StoreSettings() {
     setBusy(true);
     try {
       await api.publishLocale(tenantId(), storeId(), {
+        country_code: country().trim().toUpperCase(),
         currency_code: currency().trim().toUpperCase(),
         timezone: timezone().trim(),
         cutoff_hour: cutoffHour(),
@@ -249,6 +250,26 @@ export function StoreSettings() {
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={loaded()}>
             <div class="grid max-w-xl gap-4">
+              {/* Which country this store is in (ADR-0114). Required: the publish refuses without
+                  it, because it is the value a hosted store's region is compared against — and a
+                  store whose country nobody recorded reads as "country not recorded" on the fleet
+                  console rather than silently as agreeing. Distinct from the filler below, which
+                  overwrites six other fields; this one records a fact and touches nothing else, so
+                  an airport store can keep rounding its own way. */}
+              <FormField label={t("storeSettings.country")}>
+                <select
+                  class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+                  value={country()}
+                  onChange={(event) => setCountry(event.currentTarget.value)}
+                >
+                  <option value="">{t("storeSettings.countryNone")}</option>
+                  <For each={countries()}>
+                    {(option) => <option value={option.code}>{option.display_name}</option>}
+                  </For>
+                </select>
+                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.countryHint")}</p>
+              </FormField>
+
               <FormField label={t("storeSettings.fromCountry")}>
                 <select
                   class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
@@ -364,7 +385,7 @@ export function StoreSettings() {
               </div>
 
               <div>
-                <Button disabled={busy()} onClick={() => void publish()}>
+                <Button disabled={busy() || country().trim() === ""} onClick={() => void publish()}>
                   {t("storeSettings.publish")}
                 </Button>
               </div>

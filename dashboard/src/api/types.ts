@@ -858,6 +858,32 @@ export interface FleetStore {
    *  wire that token means "this message did not say". */
   readonly edge_placement: string | null;
   /**
+   * Where in the world the machine holding the lease is — its ISO 3166-1 alpha-2 country — or
+   * `null` (ADR-0114).
+   *
+   * `null` means the same thing however it arises: never bumped, in its own shop, or a row written
+   * before the columns existed. There is nothing to show.
+   */
+  readonly region_country: string | null;
+  /** The place a person recognises — `ap-southeast-1`, `the rack in Sakai` — or `null`. */
+  readonly region_label: string | null;
+  /**
+   * The country this store publishes, **on the single-store read only** (ADR-0114).
+   *
+   * Absent on the listing, because a comparison there would be one config-tree load per row. Do not
+   * read its absence as "no country": read `region_agreement`, which is absent for the same reason.
+   */
+  readonly profile_country?: string | null;
+  /**
+   * Whether the region agrees with that country — `"agrees"`, `"differs"`,
+   * `"country-not-recorded"` — or absent (ADR-0114).
+   *
+   * Derived by the server so this rule lives in one place. Absent on the listing, and absent on the
+   * detail when the store has no region at all: an in-store machine has nothing to compare, and
+   * rendering that as agreement would be a lie of exactly the kind this record exists to prevent.
+   */
+  readonly region_agreement?: string | null;
+  /**
    * The generation the last bump displaced and nothing has yet proved drained, or `null` (ADR-0110).
    *
    * The number a settle has to name: it says *which machine* the handover is about, where

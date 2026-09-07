@@ -105,6 +105,70 @@ mistake one layer up. `edge_placement` itself is not on that payload either, and
 placement beside it says less than nothing. The Stores screen can show both from the fleet read it
 can already make, which is where the console work belongs.
 
+## Delivery — 2026-09-07, the country becomes real and the comparison appears
+
+The previous note recorded that this record's comparison could not be built because nothing writes
+`locale.country_code`. It is written now, and the comparison is live.
+
+**`country_code` is required on `PUT /admin/config/locale`, and that is a breaking change made
+deliberately.** Three shapes were on the table and each solves a different subset of the four
+problems the gap creates:
+
+| | comparison has an input | a cutoff edit cannot erase the country | one node, one rule | existing callers keep working |
+|---|---|---|---|---|
+| **A** optional, preserved when absent | ✓ | ✓ | ✗ | ✓ |
+| **B** optional, cleared when absent | ✓ | ✗ | ✓ | ✓ |
+| **C** required | ✓ | ✓ | ✓ | ✗ |
+
+A and B each keep every caller working and each leave a trap. B's is the worse one: `locale` already
+contains `display_language`, which *is* cleared on absence, so B is the only shape where the node's
+two optional fields behave alike — but a console that publishes a cutoff-hour edit without resending
+the country then silently erases it, and the fleet console goes back to reporting "country not
+recorded" for a store that recorded one last week. A avoids that by preserving on absence, at the
+cost of two fields in one node behaving oppositely: a maintainer who reads the `display_language`
+branch and copies its shape writes a bug the type system cannot catch.
+
+C's cost is real and it is the only one that is *loud*. A caller built against the older shape gets a
+`400` naming `country_code` and saying what it accepts, on the first request, in a message a person
+can act on. Nothing is silently wrong, nothing is silently erased, and the failure is fixed by adding
+one field. The two cheap options buy their compatibility with a failure mode that is silent and
+data-destroying, or with a latent trap; this record is about a fact being *recorded* rather than
+assumed, so the shape that cannot quietly stop recording it is the one that fits.
+
+The field is `#[serde(default)]` even though it is required, and that is not a contradiction: without
+it, a request omitting the key is refused by axum's extractor as a bare `422` with no envelope, so
+the caller who most needs to be told *which* field to add is the one caller who would not be. With
+it, absent and malformed both reach the same `api_error_with_details` and both answer
+`InvalidArgument` naming `country_code`. It is validated before every other field for the same
+reason: a caller built against the older shape must be told what changed, not walked through the
+fields it did send correctly.
+
+**The comparison itself is three-valued, derived on the server, and never blocks.** `region_agreement`
+in [`lease.rs`](../../crates/pos-cloud/src/lease.rs) answers `agrees`, `differs` or
+`country-not-recorded`, or `None` when the store has no region at all. The third answer is the point:
+a store with a region and no published country has *nothing* to compare, and rendering that as
+agreement would be exactly the lie this record exists to prevent. `None` is likewise deliberately not
+`agrees` — an in-store machine and a hosted machine that happens to be in the right country are
+different facts, and only one of them is a transfer somebody decided on.
+
+`GET /admin/fleet/{store_id}` gained a `ConfigTreeStore` handle to do it, and does one `load` for the
+store it already names. **A tree that fails to load degrades to "country not recorded" with a warning
+in the log, and never fails the page**: the region, the placement and the liveness on that read are
+what an operator opens the screen for, and losing all of them because a config read timed out would
+be a worse answer than an honest gap. The two list routes gain no config-tree read and render no
+comparison — one tree load per row is work that grows with the fleet, for a badge that belongs on the
+screen where somebody acts on it.
+
+The console shows the country as a required `<select>` on Store settings (publish is disabled until
+one is chosen), the region beside the placement badge on Fleet, and a region card on the store hub
+carrying the agreement in words. All four strings exist in both locales.
+
+**Not in this slice, and last:** the acknowledgement. A `differs` badge can be seen but not yet
+answered — `POST /admin/stores/{store_id}/region-acknowledgement`, its
+`store_region_acknowledgement` row and the `store.edge_placement.acknowledge` audit action are the
+remaining half, and until they land a mismatch warns permanently with no way to record why it is
+correct.
+
 ## The problem
 
 ### A hosted edge placement moves a store's personal data onto a machine somebody chose

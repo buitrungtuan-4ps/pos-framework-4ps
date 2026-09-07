@@ -162,6 +162,15 @@ export function StoreHub() {
     }
   });
 
+  // Whether this store has a region to show at all (ADR-0114). Narrowed on the panel's own state
+  // rather than reaching past it: a store still loading, or one whose read failed, has nothing to
+  // say here, and an in-store machine is in the shop and has no region by construction. Rendering a
+  // card for it would invent a fact.
+  const hasRegion = () => {
+    const panel = fleet();
+    return panel.state === "ready" && panel.value.region_country !== null;
+  };
+
   // A store-scoped alert carries its store id in `dedup_key` (ADR-0073): the key scopes the alert
   // *within* its kind, and for the store-scoped kinds that scope is the store. A server-wide kind
   // keys on something else and simply will not match, which is the behaviour we want — the console
@@ -191,6 +200,35 @@ export function StoreHub() {
                     }),
             })}
           </HubCard>
+
+          {/* Where this store's data rests, and whether that agrees with the country the store
+              publishes (ADR-0114). It rides `api.fleetStore`, which this screen already calls, so
+              ADR-0099's rule holds — each card reads an endpoint that already exists.
+
+              A mismatch warns and never blocks. Whether a particular cross-border placement is
+              lawful depends on facts the operator holds, under law that changes without a release;
+              a block would refuse lawful placements, catch no unlawful ones, and get routed around
+              by an admin picking whichever region passes — leaving the record saying something
+              false. A dismissed warning is recorded. A dodged block is not. */}
+          <Show when={hasRegion()}>
+            <HubCard title={t("hub.region.title")} panel={fleet()} link="fleet" linkLabel={t("hub.region.link")}>
+              {(store) => ({
+                headline: store.region_label
+                  ? `${store.region_country} · ${store.region_label}`
+                  : (store.region_country ?? ""),
+                tone: store.region_agreement === "agrees" ? "ok" : "attention",
+                support:
+                  store.region_agreement === "agrees"
+                    ? t("hub.region.agrees", { country: store.profile_country ?? "" })
+                    : store.region_agreement === "differs"
+                      ? t("hub.region.differs", {
+                          region: store.region_country ?? "",
+                          country: store.profile_country ?? "",
+                        })
+                      : t("hub.region.countryNotRecorded"),
+              })}
+            </HubCard>
+          </Show>
 
           <HubCard
             title={t("hub.config.title")}

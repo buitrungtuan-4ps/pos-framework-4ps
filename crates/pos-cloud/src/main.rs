@@ -508,10 +508,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Fleet liveness (ADR-0068): the read-only console view of whether each store is up and in
         // sync — a join across the registry, `store_liveness` (captured on config pulls/heartbeats),
         // the config tree, and the order-relay queue, with online/offline derived at read.
+        // The config-tree handle is for the single-store read only: it compares the store's region
+        // against the country that store publishes (ADR-0114). The listing does not compare — one
+        // config-tree load per row is work that grows with the fleet.
         .merge(http::fleet_router(
             store.fleet(),
             store.admin(),
             SystemClock,
+            store.config_trees(),
         ))
         // Operational alerts (ADR-0073, Track O2): the console reads the fleet-wide alert list the
         // evaluator loop maintains, and acknowledges/resolves alerts. Reads are behind the session
