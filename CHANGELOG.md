@@ -16,6 +16,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till can void, and the picker offers only what the act accepts.**
+  The void control on the order screen, the bill void on the pay screen, and
+  `GET /api/reason-codes` behind both — B2.2 slice 6, the last of
+  [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  Slice 5 built the routes; nothing at the till could reach them. This is the half a member of staff
+  touches. One read at start-up carries the store's managed list with each entry's `applies_to`, and
+  each picker filters by the act in hand — so a reason valid for refusing a guest's order never
+  appears on the void picker, which is the same question the edge asks before it writes the event.
+  The list is served in the store's display language, and a retired entry reaches no picker at all.
+
+  A fired line and a bill ask for the manager's badge and PIN in the panel itself, and the reason
+  buttons stay disabled until both are filled. That is deliberate: the edge would refuse the request
+  without them, and a button whose only outcome is a `403` teaches an operator that the till is
+  unreliable rather than that something is missing. The PIN is typed, used once and dropped — it is
+  never stored, and closing the panel clears it.
+
+  Neither void costs an extra tap. `docs/ui-ux.md` §6 allows three for a rare action; voiding a line
+  takes two and voiding a bill takes three, and all three flows are now declared in
+  `ui/scripts/step-tasks.mjs` so [ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)'s
+  two gates measure them. The unfired-line void is replayed in a browser against a real edge; the
+  two manager flows say in the declaration why they are not — the badge and PIN are typed between
+  taps, and the harness types only before the first.
+
+  Two `sales.order_line.voided` and `billing.bill.voided` fold arms went into the till's own
+  projection at the same time, so a colleague's void on another device removes the line from this
+  one's kitchen board and releases the table rather than leaving a bill that no longer exists.
+
+  **Upgrade note** One new route, additive: `GET /api/reason-codes`, behind the paired and
+  signed-in gates like the other config reads. No migration, no `PROTOCOL_VERSION` change and no new
+  permission identifier. A till running an older build is unaffected — it simply has no void
+  control, as before.
+
 - **A void now demands a reason and a manager's PIN, and both are recorded.**
   `POST /api/lines/{id}/void` and `POST /api/bills/{id}/void` — B2.2 slice 5 of
   [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).

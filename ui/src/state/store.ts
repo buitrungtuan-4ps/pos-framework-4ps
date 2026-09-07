@@ -8,6 +8,7 @@ import { createStore, produce } from "solid-js/store";
 import { api } from "../api/client";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
+  ApproverRequest,
   BillResponse,
   BuyerRequest,
   CheckResponse,
@@ -15,6 +16,7 @@ import type {
   LayoutCategory,
   MenuItemResponse,
   PaymentRequest,
+  ReasonCodeEntry,
 } from "../api/types";
 import { fallbackQuickCash, type Money } from "../lib/money";
 
@@ -78,6 +80,11 @@ interface StoreShape {
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
   cashDenominations: number[] | null;
+  // The store's managed reason list, from `GET /api/reason-codes` (ADR-0115). Empty until the read
+  // lands — and empty is never a real answer here, because the edge falls back to the framework
+  // default set when nothing is published. A picker with nothing in it therefore means "the read has
+  // not happened", which is why the control that opens one is disabled rather than opening blank.
+  reasonCodes: ReasonCodeEntry[];
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
@@ -114,6 +121,7 @@ const [state, setState] = createStore<StoreShape>({
   tipsEnabled: false,
   acceptedTender: null,
   cashDenominations: null,
+  reasonCodes: [],
   bumped: {},
   shift: null,
 });
@@ -263,6 +271,34 @@ export function fold(event: ServerEvent): void {
       const lineId = str(payload, "order_line_id");
       if (lineId !== null && state.lines[lineId] !== undefined) {
         setState("lines", lineId, "state", "ORDER_LINE_STATE_FIRED");
+      }
+      break;
+    }
+    // A void, from whichever device performed it (ADR-0115). Folded rather than only applied
+    // locally, so a second till showing the same table stops offering to fire a line a colleague
+    // has just cancelled — and so the kitchen board drops it, since `firedLines` keys on the state
+    // this sets.
+    case "sales.order_line.voided": {
+      const lineId = str(payload, "order_line_id");
+      if (lineId !== null && state.lines[lineId] !== undefined) {
+        setState("lines", lineId, "state", "ORDER_LINE_STATE_VOIDED");
+      }
+      break;
+    }
+    // A voided bill releases its table back to occupied: the money was never taken, and the order
+    // is still sitting there to be charged again.
+    case "billing.bill.voided": {
+      const bill = str(payload, "bill_id");
+      if (bill !== null) {
+        const table = Object.keys(state.openBill).find((key) => state.openBill[key] === bill);
+        if (table !== undefined) {
+          setState(
+            produce((draft) => {
+              delete draft.openBill[table];
+              draft.tableState[table] = "TABLE_STATE_OCCUPIED";
+            }),
+          );
+        }
       }
       break;
     }
@@ -513,10 +549,33 @@ export async function loadLayout(): Promise<void> {
   }
 }
 
-// Everything the till has to read from the edge before it can sell: the floor, the price book, the
-// button plan and the money settings.
+// The reasons a void, a comp or a refund may cite, from the edge's live session (ADR-0115).
+// Forgiving in the same way `loadMenu` is: a failed read leaves whatever is loaded, so a blip does
+// not strand an operator whose next act needs a reason.
+export async function loadReasonCodes(): Promise<void> {
+  try {
+    const response = await api.reasonCodes();
+    setState("reasonCodes", response.reasons);
+  } catch {
+    // Keep whatever is loaded; the next boot or reload tries again.
+  }
+}
+
+// The entries a picker may offer for one action (a `REASON_ACTION_*` wire name).
 //
-// One function rather than four call sites, because there are two moments a device becomes able to
+// Filtered on `applies_to`, which is the whole point of tagging an entry per action: `OUT_OF_STOCK`
+// is a real, active reason for refusing a guest's order and is **not** one for voiding, so offering
+// it on the void picker would produce a refusal the operator cannot act on. The edge asks the same
+// question before it writes the event, so this filter agrees with the authority rather than
+// duplicating a rule.
+export function reasonsFor(action: string): ReasonCodeEntry[] {
+  return state.reasonCodes.filter((reason) => reason.applies_to.includes(action));
+}
+
+// Everything the till has to read from the edge before it can sell: the floor, the price book, the
+// button plan, the money settings and the reasons an act may cite.
+//
+// One function rather than five call sites, because there are two moments a device becomes able to
 // sell and both have to load the same set. The boot gate is the obvious one; **signing in is the
 // other**, and it was missing. A device that pairs and signs in navigates client-side to the floor,
 // so `App`'s `onMount` does not run again — the till drew the fallback floor, an empty price book
@@ -527,7 +586,7 @@ export async function loadLayout(): Promise<void> {
 // Every loader is individually forgiving, so this is too: a blip leaves whatever was already loaded
 // rather than emptying the till.
 export async function loadStore(): Promise<void> {
-  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale()]);
+  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale(), loadReasonCodes()]);
 }
 
 export async function fire(lineId: string): Promise<void> {
@@ -535,6 +594,47 @@ export async function fire(lineId: string): Promise<void> {
   // send is only the fallback it uses when the store has published no station plan yet.
   const response = await api.fireLine(lineId, { station_id: state.defaultStation });
   setState("lines", lineId, "state", response.state);
+}
+
+// Voids a line, citing a reason from the store's managed list (ADR-0115, §11 item 2).
+//
+// `approval` is the manager's badge and PIN, present only when the line has already fired: the
+// kitchen has made it, stock has moved, and §5 puts that behind `VoidFiredLine` and a verified PIN.
+// An unfired line is an ordinary cancel and the field is left off. The edge decides either way — it
+// refuses without the approval when one is needed — so this passes what it was given rather than
+// second-guessing the rule.
+//
+// The PIN is never held: it arrives as an argument, goes out on the one request, and the screen
+// clears the field it was typed into.
+export async function voidLine(
+  lineId: string,
+  reasonCodeId: string,
+  approval?: ApproverRequest,
+): Promise<void> {
+  const response = await api.voidLine(lineId, { reason_code_id: reasonCodeId, ...approval });
+  setState("lines", lineId, "state", response.state);
+}
+
+// Voids a bill before it settles. Always needs a manager, so `approval` is required rather than
+// optional: a bill is money whether or not the kitchen started.
+//
+// The table goes back to occupied. The bill is gone but the order is not — the lines are still
+// there, and a cashier who voided the wrong bill can open another one on the same table.
+export async function voidBill(
+  billId: string,
+  reasonCodeId: string,
+  approval: ApproverRequest,
+): Promise<void> {
+  await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
+  const table = Object.keys(state.openBill).find((key) => state.openBill[key] === billId);
+  if (table !== undefined) {
+    setState(
+      produce((draft) => {
+        delete draft.openBill[table];
+        draft.tableState[table] = "TABLE_STATE_OCCUPIED";
+      }),
+    );
+  }
 }
 
 // A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`

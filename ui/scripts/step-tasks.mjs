@@ -97,6 +97,41 @@ export const TASKS = [
     outcome: { route: "/table/:id/pay", mark: "settled" },
   },
   {
+    task: "Void an unfired line",
+    budget: 3,
+    note: "Rare, and §6 allows three. It costs two: the void control is on the line itself, and the reason is the second tap — the reason is mandatory (ADR-0115), so it is part of the act rather than a question asked afterwards. Nothing was made and no stock moved, so no manager is involved.",
+    steps: [
+      { route: "/table/:id", action: "askVoid" },
+      { route: "/table/:id", action: "voidReason" },
+    ],
+    outcome: { route: "/table/:id", mark: "line-voided" },
+  },
+  {
+    task: "Void a line the kitchen has already been given",
+    budget: 3,
+    note: "The same two taps as above. Declared separately because the act is not the same one — §5 puts a fired line behind `VoidFiredLine` and a verified PIN — and this is where that shows: the manager's badge and PIN are *typed*, and typing is not a tap, exactly as the shift float is not one. The claim being pinned here is that requiring a second person costs the flow no extra tap.",
+    steps: [
+      { route: "/table/:id", action: "askVoid" },
+      { route: "/table/:id", action: "voidReason" },
+    ],
+    outcome: { route: "/table/:id", mark: "line-voided" },
+    unreplayable:
+      "the manager's badge and PIN go into fields that exist only once the picker is open, and the harness fills a form in a precondition — before the first tap — so it has no moment to type them in",
+  },
+  {
+    task: "Void a bill before it settles",
+    budget: 3,
+    note: "Three, at §6's ceiling for a rare action: open the bill, void it, cite a reason. A bill is money whether or not the kitchen started (§6), so this one always needs a manager and there is no cheaper shape of it.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "askVoidBill" },
+      { route: "/table/:id/pay", action: "voidBillReason" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "bill-voided" },
+    unreplayable:
+      "the same missing moment as the fired-line void above — the manager's badge and PIN are typed between the second and third taps, and the harness types only before the first",
+  },
+  {
     task: "Bump a ticket on the kitchen display",
     budget: 1,
     note: "A tap anywhere on the card. One, not two: the kitchen has both hands full.",

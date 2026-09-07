@@ -24,8 +24,11 @@
 //   part of the map.
 // * **A skipped flow says why, and the set is checked.** Three counter tasks cannot run against the
 //   on-fakes example, because a counter order arrives over the relay from a cloud the example does
-//   not have. They carry `unreplayable` in the declaration, and the last test in this file asserts
-//   the skipped set is exactly that set — so coverage cannot quietly shrink by one flow at a time.
+//   not have. Two void tasks cannot run for a different reason: the manager's badge and PIN are
+//   typed into fields that appear mid-flow, and this harness types only in a precondition — before
+//   the first tap. All five carry `unreplayable` in the declaration, and the last test in this file
+//   asserts the skipped set is exactly that set — so coverage cannot quietly shrink by one flow at
+//   a time.
 
 import { expect, test } from "@playwright/test";
 
@@ -131,6 +134,12 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
+  // skipped for a reason the declaration states.
+  "Void an unfired line": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   "Bump a ticket on the kitchen display": async (page) => {
     await seatTable(page);
     await addItem(page);
@@ -212,6 +221,8 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Charge a counter (takeaway) order in cash",
       "Charge a counter order by card",
       "Charge a counter order in cash, taking a tip",
+      "Void a bill before it settles",
+      "Void a line the kitchen has already been given",
     ].sort(),
   );
   for (const declared of skipped) {

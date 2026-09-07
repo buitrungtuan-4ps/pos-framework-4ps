@@ -12,6 +12,7 @@ GET /api/orders/open
 GET /api/orders/{id}/check
 GET /api/pair/devices
 GET /api/print/jobs
+GET /api/reason-codes
 GET /api/session
 GET /api/tables/{id}
 GET /api/tables/{id}/check
