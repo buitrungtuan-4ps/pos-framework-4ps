@@ -429,8 +429,15 @@ else
   # invalidate every table QR already printed and stuck to a table, which is why neither of these
   # two reconciles touches a value it finds.
   qr_note='# QR table-token signing secret (ADR-0057), added by a later bootstrap run.'
-  cloud_toml_mint_key_if_absent table_token_secret "$qr_note"
-  case "$?" in
+  # `|| rc=$?`, never a bare call read by `case "$?"`. This file runs under `set -e`, where a
+  # function answering a non-zero status IS a failing command: the bare spelling exits bootstrap
+  # before the `case` is ever reached. Not theoretical — deploy #19 died on this line's twin
+  # below, on the *ordinary* "already there" answer, after this reconcile had just succeeded. `||`
+  # puts the call in an AND-OR list, which `set -e` exempts, and captures the status in the same
+  # step. Four outcomes are only worth distinguishing if the shell lives long enough to read them.
+  qr_rc=0
+  cloud_toml_mint_key_if_absent table_token_secret "$qr_note" || qr_rc=$?
+  case "$qr_rc" in
     0) echo "set    cloud.toml table_token_secret (QR ordering was off on this box)" ;;
     1) ;;
     2) echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); QR ordering may still be off" ;;
@@ -452,8 +459,9 @@ else
   # missing `trusted_proxy_hops` means a wrong rate-limit bucket. Missing THIS means the cloud does
   # not run at all. The two survivable gaps had an upgrade path and the fatal one did not.
   secret_note='# Shared secret the three internal routes require (ADR-0097), added by a later bootstrap run.'
-  cloud_toml_mint_key_if_absent internal_shared_secret "$secret_note"
-  case "$?" in
+  secret_rc=0
+  cloud_toml_mint_key_if_absent internal_shared_secret "$secret_note" || secret_rc=$?
+  case "$secret_rc" in
     0) echo "set    cloud.toml internal_shared_secret (this box predates ADR-0097; pos_cloud could not have started without it)" ;;
     1) ;;
     2) echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); cannot tell whether internal_shared_secret is set" ;;
@@ -464,8 +472,9 @@ else
   # `[artifacts]` because a person appended it by hand — which is the natural thing to do and the
   # wrong thing to do. Only asserted when the file could actually be read: a `2` means "could not
   # tell", and the branch above has already said so.
-  cloud_toml_key_is_top_level internal_shared_secret
-  if [ "$?" = 1 ]; then
+  toplevel_rc=0
+  cloud_toml_key_is_top_level internal_shared_secret || toplevel_rc=$?
+  if [ "$toplevel_rc" = 1 ]; then
     echo "warn   internal_shared_secret is missing or below the first [table] header in $SECRETS/cloud.toml, so pos_cloud will REFUSE TO START (ADR-0097)"
     echo "warn   a key appended to the end of that file lands inside [artifacts] and is never read: move it ABOVE the first [table] header, then restart pos_cloud"
   fi
