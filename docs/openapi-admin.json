@@ -81,6 +81,404 @@
         ]
       }
     },
+    "/admin/reason-codes": {
+      "get": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin lists a tenant's authored reason codes, retired ones included.",
+        "operationId": "admin_list_reason_codes",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose list to read (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's entries in id order, each with the version it was read at. Retired entries are included, because a historic event still names them and the console has to show what is out of service"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin authors a reason code; the server mints its id.",
+        "operationId": "admin_create_reason_code",
+        "requestBody": {
+          "description": "The tenant, the report handle, the name staff read, its per-locale names, and the actions it may be cited for. The id is server-minted and must not be sent; `active` defaults to true",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. The body is the entry as stored, including the id the server minted, and the ETag carries its first version"
+          },
+          "400": {
+            "description": "code or display_name is blank, applies_to is empty, or it names an action this cloud does not know",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reason_codes.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An entry already holds that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store is unreachable, or the OS would not give the entropy the id needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/reason-codes/{reason_code_id}": {
+      "get": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin reads one reason code by id.",
+        "operationId": "admin_get_reason_code",
+        "parameters": [
+          {
+            "name": "reason_code_id",
+            "in": "path",
+            "description": "The entry's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entry, with an ETag carrying the version it was read at — the token a PUT must send back as If-Match"
+          },
+          "400": {
+            "description": "tenant_id or reason_code_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no entry with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin edits a reason code in place, by the path id — including retiring and restoring\nit, which is [`PublishedReasonCode::active`] and not a route of its own.",
+        "operationId": "admin_update_reason_code",
+        "parameters": [
+          {
+            "name": "reason_code_id",
+            "in": "path",
+            "description": "The entry's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the entry was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The entry's fields as they should now stand, including `active` — retiring and restoring are this route, not a lifecycle route of their own, so they go through the same version check as any other edit",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the entry as stored and the ETag carries its new version"
+          },
+          "400": {
+            "description": "A field is blank or unknown, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reason_codes.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no entry with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The entry changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin deletes a reason code by id.",
+        "description": "For the entry created by mistake. The trail keeps the whole summary as the `before`, so a\ndeletion is still readable afterwards — which is the only thing that can be done for an id an\nevent may already name.",
+        "operationId": "admin_delete_reason_code",
+        "parameters": [
+          {
+            "name": "reason_code_id",
+            "in": "path",
+            "description": "The entry's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted. Prefer retiring — `PUT` with `active: false` — for anything an event may already cite"
+          },
+          "400": {
+            "description": "tenant_id or reason_code_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reason_codes.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no entry with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/recovery-codes": {
       "get": {
         "tags": [
@@ -519,6 +917,10 @@
     {
       "name": "auth",
       "description": "Two-factor sign-in, the session it issues, and the second-factor levers (ADR-0034, ADR-0060). Everything else on this surface stands behind the session these routes establish."
+    },
+    {
+      "name": "reason codes",
+      "description": "The managed list a void, a discount, a comp, a refund, a drawer opening, a staff rejection, either cash movement and either stock correction must cite (ADR-0115, `docs/pos-spec.md` §11 item 2). Documented rather than deferred because it is a **fraud control**: a fork writing its own console needs to know that ids are server-minted, that an entry leaves service by going inactive rather than by being deleted, and that every write is conditional."
     },
     {
       "name": "fleet",

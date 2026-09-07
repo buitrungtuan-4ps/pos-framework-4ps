@@ -16,6 +16,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Reason codes can be authored from the console.** `/admin/reason-codes` — list, read one, create,
+  edit and delete — behind a new `console.reason_codes.manage` permission, plus the console screen
+  that drives it. B2.2 slice 3 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  Ids are **server-minted**: an event names a `reason_code_id` forever, so a caller that could
+  choose one could collide with an id already in the log. Every edit carries the version it was
+  read at ([ADR-0094](docs/adr/0094-console-optimistic-concurrency.md)), so two managers cannot
+  silently undo one another — including on a retire, which is `active: false` through the ordinary
+  `PUT` rather than a lifecycle route of its own.
+
+  Authoring sits behind its own permission rather than `console.config.publish`, because the two
+  ways to defeat a fraud control are to remove the reason a colleague's void would have had to cite
+  and to add a vague catch-all everything can hide behind — both authoring, not publishing. The
+  audit summary therefore records the actions each entry covers and whether it is live, not just
+  its name: a trail that omitted those would say a reason changed while hiding the change that
+  mattered. An entry valid for no action is refused, naming the field.
+
+  The screen leads with **retire** and puts delete behind a type-the-code confirmation, and the
+  five routes are documented in `docs/openapi-admin.json` rather than joining the coverage debt.
+
+  **Upgrade note** — new permission identifier `console.reason_codes.manage`, granted to Owner and
+  Admin. No migration; no `PROTOCOL_VERSION` change.
+
 - **The cloud can hold a tenant's reason codes.** `ReasonCodeStore` (the seam), migration `0060`
   (the tenant-scoped, RLS-isolated table), the `store-postgres` adapter, and a fake with the
   contract cases — B2.2 slice 2 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).

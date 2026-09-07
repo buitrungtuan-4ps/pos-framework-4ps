@@ -68,6 +68,8 @@ import type {
   OtaRollout,
   PublishPlacementRequest,
   PublishRolloutRequest,
+  ReasonCode,
+  ReasonCodeInput,
   ReconcileRun,
   Recipe,
   RecipeInput,
@@ -1328,6 +1330,34 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+  // Reason codes (ADR-0115, roadmap B2.2). The managed list a void, discount, comp, refund, drawer
+  // opening, staff rejection, cash movement or stock correction must cite — a fraud control
+  // (`docs/pos-spec.md` §11 item 2), so authoring is behind console.reason_codes.manage while the
+  // read is behind console.data.read. The id is server-minted, because an event names it forever;
+  // every edit is conditional on the version it was read at, which is why the type carries an
+  // `etag`. Retiring is `update` with `active: false`, never a delete — see `deleteReasonCode`.
+  listReasonCodes: (tenantId: string) =>
+    requestJson<ReasonCode[]>("GET", `/admin/reason-codes?${tenantQuery(tenantId)}`),
+  createReasonCode: (tenantId: string, input: ReasonCodeInput) =>
+    requestJson<ReasonCode>("POST", "/admin/reason-codes", {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  updateReasonCode: (tenantId: string, id: string, etag: ETag, input: ReasonCodeInput) =>
+    requestJsonIfMatch<ReasonCode>(
+      "PUT",
+      `/admin/reason-codes/${encodeURIComponent(id)}`,
+      etag,
+      { tenant_id: tenantId, ...input },
+    ),
+  // For the entry created by mistake and never cited. Anything an event may already name is
+  // *retired* instead (`updateReasonCode` with `active: false`), because a deleted row makes that
+  // event unresolvable and a fraud control whose trail decays into bare ULIDs has stopped being one.
+  deleteReasonCode: (tenantId: string, id: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/reason-codes/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
