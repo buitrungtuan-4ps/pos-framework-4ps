@@ -16,6 +16,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The deploy failed after bringing the stack up, because `bootstrap.sh` could not write the one
+  file it had just given away.**
+
+  Step 2 of `bootstrap.sh` chowns `secrets/cloud.toml` to uid `10001` mode 600, so the non-root
+  `pos_cloud` container can read its own config. Everything the script does with that file
+  afterwards therefore needs root or passwordless `sudo` — the file says so three times in its own
+  comments, and both of its step-2 reconciles carry the ladder to prove it. Step 7b, the Garage
+  `[artifacts]` capture, never got one. On a root deploy it worked; on the non-root sudo user that
+  is the default on essentially every cloud VPS, it could not write, and `set -euo pipefail` turned
+  that into `exit 1` — **after** `docker compose up` had already recreated the stack. A red
+  workflow, over an optional feature, on a box that was already serving.
+
+  Three distinct defects lived in that block, and only the third was visible:
+
+  - The guard `grep -q '^\[artifacts\]' cloud.toml 2>/dev/null` could not read the file either,
+    and its `2>/dev/null` swallowed the `EACCES` — so it reported "no `[artifacts]` yet" on *every*
+    run, whatever the file actually held.
+  - `garage key create` is the one Garage call in the block with no existence check; Garage will
+    mint a second key under the same name without complaint. That broken guard was the only thing
+    standing between a redeploy and a new S3 key holding read/write on `pos-artifacts` whose
+    secret — printed exactly once — was lost the moment the append failed.
+  - The append itself, which is where the error surfaced.
+
+  Reading and writing `cloud.toml` now go through a single ladder defined at the chown that creates
+  the need, and the guard distinguishes **present** from **absent** from **unreadable**: it will not
+  mint a key it could not record, because "I cannot tell" is not a licence to write one. The
+  content is appended from **stdin** rather than through `sudo -n sh -c "…"`, so a freshly minted S3
+  secret never enters the process table where `ps` can read it. And a `cloud.toml` that cannot be
+  written is now a `warn` that leaves the OTA artifact route off — the same posture the neighbouring
+  chown failure already had, and the right one: none of the three ways this step can fall short is
+  worth failing a deploy for.
+
+  Exercised as all three users — root, a non-root user with passwordless `sudo`, and one with no
+  `sudo` at all — confirming that the second now writes the block and reports `keep` on a re-run
+  (the idempotency the header claimed but did not have), and the third warns without minting.
+
 - **The cloud image could not build: the dashboard's build script validated files the image does
   not contain.**
 

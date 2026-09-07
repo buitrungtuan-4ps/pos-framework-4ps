@@ -337,6 +337,60 @@ else
   echo "warn   could not chown cloud.toml to $APP_UID (need root or passwordless sudo); pos_cloud may be unable to read it"
 fi
 
+# 2b. How to read and write cloud.toml FROM HERE ON. The chown above handed the file to uid
+#     $APP_UID mode 600, so past this line a non-root deploy user (Oracle's `ubuntu`, and most
+#     other cloud defaults) can neither read nor write it directly and has to go through the same
+#     passwordless `sudo -n` that the chown itself falls back to. The reconciles in step 2 each
+#     carry their own copy of that ladder; step 7b did not, and paid for it twice — its guard's
+#     `grep` had its EACCES swallowed by `2>/dev/null` and so read "no [artifacts] yet" on every
+#     run, and its append then aborted the whole bootstrap under `set -e`, after the stack was
+#     already up. These two helpers are that ladder, once.
+#
+#     Content is appended from STDIN rather than passed as an argument on purpose: a `sudo -n sh -c
+#     "…$key_secret…"` would put a freshly minted S3 secret in the process table, readable by anyone
+#     on the box who can run `ps`.
+cloud_toml_reader() {
+  if [ -r "$SECRETS/cloud.toml" ]; then
+    echo direct
+  elif command -v sudo >/dev/null 2>&1 && sudo -n test -r "$SECRETS/cloud.toml" 2>/dev/null; then
+    echo sudo
+  else
+    echo none
+  fi
+}
+
+cloud_toml_writer() {
+  if [ -w "$SECRETS/cloud.toml" ]; then
+    echo direct
+  elif command -v sudo >/dev/null 2>&1 && sudo -n test -w "$SECRETS/cloud.toml" 2>/dev/null; then
+    echo sudo
+  else
+    echo none
+  fi
+}
+
+# Prints present | absent | unreadable. "Could not tell" is a third answer and it has to be
+# distinguishable from "absent", because the two call for opposite actions. It is printed rather
+# than returned in `$?` because the first assignment after the call clobbers `$?`, which is exactly
+# the trap the old `grep … 2>/dev/null` fell into.
+cloud_toml_state() {
+  case "$(cloud_toml_reader)" in
+    direct) if grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
+    sudo) if sudo -n grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
+    *) echo unreadable ;;
+  esac
+}
+
+# stdin -> the end of cloud.toml. Non-zero if it could not be written, with stdin drained either
+# way so the producing group does not die on EPIPE under `set -o pipefail`.
+cloud_toml_append() {
+  case "$(cloud_toml_writer)" in
+    direct) cat >> "$SECRETS/cloud.toml" ;;
+    sudo) sudo -n tee -a "$SECRETS/cloud.toml" >/dev/null ;;
+    *) cat >/dev/null; return 1 ;;
+  esac
+}
+
 # 3. NATS: JetStream, a token, and — once a certificate exists — TLS on a published client port
 #    (ADR-0089). The monitoring port (8222) stays internal for the healthcheck, no token.
 #
@@ -532,15 +586,36 @@ fi
 #     part of this that is special. It is not a step for a person: this script already runs on the
 #     box on every deploy, so it creates the layout, the bucket and the key itself.
 #
-#     Everything below is idempotent. `garage layout apply` is one-shot per version, and the bucket
-#     and key already exist on a redeploy, so each step checks first and reports "keep" rather than
-#     failing. A run that cannot reach Garage leaves cloud.toml untouched and says so: the cloud
-#     boots fine without an [artifacts] block, with the OTA route off.
+#     Everything below is idempotent, but not uniformly so, and the difference matters. `garage
+#     layout apply` is one-shot per version and `bucket create` is guarded by `bucket info`, so both
+#     report "keep" on a redeploy. `key create` has NO such check — Garage happily mints a second key
+#     under the same name — so the ONLY thing standing between a redeploy and an orphan key is the
+#     `[artifacts]` guard below. That guard therefore has to be right, and until the step 2b ladder
+#     reached it, it was not: it could not read a file owned by $APP_UID and reported "absent" every
+#     single run.
+#
+#     A run that cannot reach Garage, cannot read cloud.toml, or cannot write it leaves the file
+#     untouched and says so: the cloud boots fine without an [artifacts] block, with the OTA route
+#     off. None of those three is worth failing a deploy for, and failing one AFTER `docker compose
+#     up` has already recreated the stack is worse than not failing at all — the workflow goes red
+#     over an optional feature while the box it was meant to protect is already serving.
 if [ "${POS_BOOTSTRAP_NO_UP:-0}" != "1" ] && command -v docker >/dev/null 2>&1; then
   garage_cli() { docker compose -f "$COMPOSE" exec -T garage /garage "$@" 2>/dev/null; }
 
-  if grep -q '^\[artifacts\]' "$SECRETS/cloud.toml" 2>/dev/null; then
+  # Both halves of this go through the step 2b ladder. The guard has to distinguish "no
+  # [artifacts] block yet" from "cannot read the file at all": the second is not a licence to
+  # write one. `key create` prints a secret exactly once, so minting a key this run cannot record
+  # loses it permanently and leaves an orphan key holding read/write on the bucket — which is what
+  # every deploy on a non-root user did until the ladder reached this block.
+  artifacts_state="$(cloud_toml_state '^\[artifacts\]')"
+  if [ "$artifacts_state" = present ]; then
     echo "keep   garage artifact credentials (already in cloud.toml)"
+  elif [ "$artifacts_state" = unreadable ]; then
+    echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo), so whether [artifacts] is already there is unknown"
+    echo "warn   not minting a Garage key that could not be recorded; the OTA artifact route stays as it is"
+  elif [ "$(cloud_toml_writer)" = none ]; then
+    echo "warn   could not write $SECRETS/cloud.toml (need root or passwordless sudo); [artifacts] not written, so the OTA artifact route stays off"
+    echo "warn   not minting a Garage key that could not be recorded — its secret is printed once and would be lost"
   else
     # Garage needs a moment after `up` before its RPC answers.
     garage_ready=0
@@ -594,8 +669,9 @@ if [ "${POS_BOOTSTRAP_NO_UP:-0}" != "1" ] && command -v docker >/dev/null 2>&1; 
             echo "region = \"garage\""
             echo "access_key_id = \"$key_id\""
             echo "secret_access_key = \"$key_secret\""
-          } >> "$SECRETS/cloud.toml"
-          echo "create garage artifact credentials (in secrets/cloud.toml)"
+          } | cloud_toml_append &&
+            echo "create garage artifact credentials (in secrets/cloud.toml)" ||
+            echo "warn   minted a Garage key but could not write it to $SECRETS/cloud.toml; the OTA artifact route stays off and the key is orphaned (garage key delete $GARAGE_KEY_NAME)"
         fi
       fi
     fi
