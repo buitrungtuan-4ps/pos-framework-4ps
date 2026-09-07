@@ -52,6 +52,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`bootstrap.sh` stopped the deploy whenever a `cloud.toml` key was already set.**
+
+  Deploy #19 printed `set    cloud.toml table_token_secret` and then exited 1 with no error
+  message. It never reached the `chown` that lets the app user read its config, the NATS
+  configuration, or `docker compose up` — so the box went on running the previous image while the
+  workflow showed a failed step. Bootstrap had not refused anything; the shell had killed it.
+
+  The previous release gave the reconciles four honest answers — added, already there, could not
+  read, could not write — and both call sites read them as a bare
+  `cloud_toml_mint_key_if_absent …` followed by `case "$?"`. That is not safe under `set -e`, which
+  this script sets: a function answering non-zero **is** a failing command there, so the script
+  exits before the `case` is ever reached. The answer meaning *"the key is already set, nothing to
+  do"* — the ordinary state of every box whose template wrote it — was therefore fatal. The fix for
+  the fourth deploy blocker created the fifth.
+
+  The three sites now capture the status with `rc=0; cmd || rc=$?`: an AND-OR list, which `set -e`
+  exempts, reading the status in the same step. Four outcomes are only worth distinguishing if the
+  shell lives long enough to read them.
+
+  `deploy/tests/cloud-toml-reconcile.sh` now runs that block in CI. It extracts the helpers and the
+  reconcile block verbatim from `bootstrap.sh` — extracted, not transcribed, because a copy drifts
+  and a test that passes against a copy of the old code is worse than none — and asserts the exit
+  status and the output across six file states a real box presents: both keys present, one present
+  and one absent (deploy #19's path), neither, the boot-critical key stranded inside `[artifacts]`,
+  no table header at all, and unreadable. It was confirmed to fail on the pre-fix script before
+  being trusted. `bootstrap.sh` is shipped over SSH and executed on the box, which is how all
+  twelve PR gates stayed green through five consecutive deploy failures inside it.
+
+  One detail is worth recording, because it is why review did not catch this: the scenario that
+  mints *both* keys passed before the fix as well. A status of 0 never trips `set -e`, so the path
+  that does all the work was the one path that worked.
+
 - **`bootstrap.sh` reported "set" for keys it had not written, and one of them was the boot-critical
   secret.**
 

@@ -96,6 +96,13 @@ jobs:
               -F clippy::float_arithmetic -F unsafe_code -D warnings
           done
 
+      # bootstrap.sh is shipped to a box over SSH and run there, so every gate in this file was
+      # green through five consecutive deploy failures inside it. This runs its cloud.toml reconcile
+      # block against the file states a real box presents — including the one that broke deploy #19,
+      # where answering "the key is already there" exited the script under `set -e`.
+      - name: deploy/bootstrap.sh cloud.toml reconciles
+        run: bash deploy/tests/cloud-toml-reconcile.sh
+
   # ---------------------------------------------------------------------------
   # Tests. The domain suite touches no database, network or hardware, so it needs
   # no services here — that is the point of the sans-I/O core.
