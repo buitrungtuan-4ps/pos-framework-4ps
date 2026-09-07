@@ -205,6 +205,13 @@ const MIGRATION_0058: &str = include_str!("../migrations/0058_edge_placement_reg
 /// either of them moves — a reason written about one difference must not silence a different one.
 const MIGRATION_0059: &str = include_str!("../migrations/0059_store_region_acknowledgement.sql");
 
+/// A tenant's managed reason codes
+/// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2). The list
+/// `docs/pos-spec.md` §11 item 2 requires and eleven event fields cite. An entry is *retired*
+/// (`active: false`) rather than deleted once anything may have cited it, so a historic void stays
+/// resolvable.
+const MIGRATION_0060: &str = include_str!("../migrations/0060_reason_codes.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -500,6 +507,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0059)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0060)
+            .await
             .map_err(unavailable)
     }
 
@@ -713,6 +724,15 @@ impl PostgresStore {
     #[must_use]
     pub fn inventory(&self) -> crate::inventory::PostgresInventory {
         crate::inventory::PostgresInventory::new(self.pool.clone())
+    }
+
+    /// The reason-code authoring store over this pool
+    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReasonCodeStore` seam over it.
+    #[must_use]
+    pub fn reason_codes(&self) -> crate::reason_codes::PostgresReasonCodes {
+        crate::reason_codes::PostgresReasonCodes::new(self.pool.clone())
     }
 
     /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
