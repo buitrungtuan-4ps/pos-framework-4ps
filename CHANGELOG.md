@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A tenant's reason codes now reach the till.** `PUT /admin/config/reason-codes` composes the
+  authored entries into the store's `reason_codes` config node, and the edge applies it — B2.2
+  slice 4 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  The node **replaces** the framework default wholesale rather than merging, which is what lets an
+  operator remove a framework reason they judge wrong for their business. That rule has a
+  consequence worth stating plainly: an *empty* publish would take every reason away from a trading
+  store, leaving staff unable to void a mis-keyed line at all. So the route refuses one, and the
+  edge refuses to apply one — ADR-0115's "absence is not a brick" reasoning holds because the
+  framework set is still there when nothing is published, and an empty publish is the one way to
+  remove it. An entry valid for no action is refused too, which is the guarantee the ADR puts here.
+
+  The publish answers, and the trail records, **which actions the published list leaves with no
+  reason to cite**. An action with an empty picker is blocked as surely as one the till refuses, so
+  a store that publishes only void reasons can no longer record a cash paid-in. That may be exactly
+  what an operator meant; the console says it out loud either way rather than refusing, because
+  deciding that staff do not comp is theirs to make.
+
+  Absent or unparseable leaves the framework set standing, as every other node does — a bad publish
+  never blanks a trading store's pickers.
+
+  **Upgrade note** — new route, additive; no migration, no `PROTOCOL_VERSION` change. A store that
+  never publishes keeps the framework set exactly as before.
+
 - **Reason codes can be authored from the console.** `/admin/reason-codes` — list, read one, create,
   edit and delete — behind a new `console.reason_codes.manage` permission, plus the console screen
   that drives it. B2.2 slice 3 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).

@@ -112,7 +112,8 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
-use pos_proto::reason_codes::PublishedReasonCode;
+use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction, ReasonCode};
+use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -20468,4 +20469,191 @@ async fn a_tenants_reason_codes_are_its_own() {
         .await
         .expect("route the mistyped listing");
     assert_eq!(mistyped.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Reason-code publish (ADR-0115, B2.2 slice 4) -----------------------------------------------
+
+/// The admin surface plus the reason-code publish route, on fakes.
+fn reason_code_publish_app(
+    admin: FakeAdmin,
+    reason_codes: FakeReasonCodes,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_reason_codes_router(
+        reason_codes,
+        config_trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// Seeds one authored entry directly into the store, valid for `actions`.
+fn seed_reason_code(store: &FakeReasonCodes, n: u128, code: &str, actions: &[ReasonAction]) {
+    store.rows.lock().expect("lock").push((
+        tenant(),
+        Versioned::new(
+            PublishedReasonCode::new(
+                ReasonCodeId::new(Ulid::from_u128(n)),
+                ReasonCode::new(code),
+                DisplayName::new(code),
+                actions.to_vec(),
+            ),
+            Version::new("1"),
+        ),
+    ));
+}
+
+/// The publish writes the node onto the Store layer and says what the store can no longer record.
+#[tokio::test]
+async fn publishing_reason_codes_writes_the_node_and_names_what_nothing_now_covers() {
+    let store = FakeReasonCodes::default();
+    seed_reason_code(
+        &store,
+        10,
+        "WASTE",
+        &[ReasonAction::VoidLine, ReasonAction::StockWaste],
+    );
+    let config_trees = FakeConfigTrees::default();
+    let router = reason_code_publish_app(provisioned_admin(), store, config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+
+    let published = router
+        .oneshot(put_with_cookie(
+            "/admin/config/reason-codes",
+            &body,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let answered = json_body(published).await;
+    assert_eq!(answered["published"], 1);
+    assert_eq!(answered["active"], 1);
+
+    // The heart of it: a store that publishes one void reason can no longer record a comp, a
+    // refund, a drawer opening or a cash movement, because the node REPLACED the framework set and
+    // offers nothing for those. That may be what the operator meant; it must not be a surprise.
+    let uncovered = answered["uncovered_actions"]
+        .as_array()
+        .expect("the publish reports coverage");
+    assert!(
+        uncovered.contains(&serde_json::json!("REASON_ACTION_COMP")),
+        "a comp has no reason to cite after this publish, and the response says so: {answered}"
+    );
+    assert!(
+        !uncovered.contains(&serde_json::json!("REASON_ACTION_VOID_LINE")),
+        "while the action they did author for is not listed"
+    );
+    assert!(
+        !uncovered.contains(&serde_json::json!("REASON_ACTION_UNSPECIFIED")),
+        "the wire enum's zero value is not an act anyone performs, so it is not a gap"
+    );
+
+    // And the node is on the store's Store layer (index 2), beside the other keys.
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.record.layers[2]["reason_codes"];
+    assert_eq!(
+        node["codes"].as_array().expect("the codes array").len(),
+        1,
+        "the published node is the authored list"
+    );
+}
+
+/// Publishing an empty list is refused, because the node replaces the framework set.
+///
+/// This is the hazard ADR-0115's "absence is not a brick" reasoning creates in the other direction:
+/// absence is safe *because* the framework default is still there, and an empty publish is the one
+/// way to take it away. A store that took it would be unable to void a mis-keyed line at all.
+#[tokio::test]
+async fn publishing_an_empty_reason_list_is_refused_rather_than_disarming_the_store() {
+    let config_trees = FakeConfigTrees::default();
+    let router = reason_code_publish_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        config_trees.clone(),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/reason-codes",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "reason_codes");
+    assert_eq!(body["error"]["details"][0]["reason"], "EMPTY_NOT_ALLOWED");
+
+    assert!(
+        config_trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .is_none(),
+        "and nothing was written, so the store keeps the framework set it was trading on"
+    );
+}
+
+/// An entry valid for no action is refused at publish — the guarantee ADR-0115 puts here.
+#[tokio::test]
+async fn publishing_a_reason_valid_for_nothing_is_refused_and_names_it() {
+    let store = FakeReasonCodes::default();
+    seed_reason_code(&store, 10, "WASTE", &[ReasonAction::VoidLine]);
+    seed_reason_code(&store, 11, "ORPHAN", &[]);
+    let config_trees = FakeConfigTrees::default();
+    let router = reason_code_publish_app(provisioned_admin(), store, config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/reason-codes",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    let body = json_body(refused).await;
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .contains("ORPHAN"),
+        "the refusal names the entry so an operator knows which row to fix, got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["field"], "applies_to");
+    assert!(
+        config_trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .is_none(),
+        "and the whole publish is refused rather than half-applied"
+    );
 }

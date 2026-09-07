@@ -21,7 +21,7 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { tenantId } from "../state/session";
+import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
@@ -65,6 +65,9 @@ export function ReasonCodes() {
   const [actions, setActions] = createSignal<ReasonAction[]>([]);
   const [active, setActive] = createSignal(true);
   const [pendingDelete, setPendingDelete] = createSignal<ReasonCode | null>(null);
+  // What the last publish reported: the acts this store can no longer record, because the list it
+  // now holds offers no reason for them. Empty is the healthy answer; null means it has not run.
+  const [uncovered, setUncovered] = createSignal<ReasonAction[] | null>(null);
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -192,6 +195,22 @@ export function ReasonCodes() {
     }
   };
 
+
+  // Push the authored list onto the store in context.
+  const publish = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      const result = await api.publishReasonCodes(tenantId(), storeId());
+      setUncovered(result.uncovered_actions);
+      toast.ok(t("reasonCodes.published", { count: String(result.active) }));
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const columns = (): Column<ReasonCode>[] => [
     {
       key: "code",
@@ -296,6 +315,49 @@ export function ReasonCodes() {
                 )}
               />
             )}
+          </Show>
+        </Card>
+
+
+        <Card title={t("reasonCodes.publishTitle")}>
+          <p class="mb-3 text-sm text-ink-muted">{t("reasonCodes.publishHint")}</p>
+          <Show
+            when={storeId()}
+            fallback={<p class="text-sm text-ink-muted">{t("reasonCodes.publishNeedsStore")}</p>}
+          >
+            <div class="flex flex-col gap-3">
+              <p class="text-sm text-ink">
+                {t("reasonCodes.publishTo", { store: storeName() })}
+              </p>
+              <div>
+                <Button disabled={busy()} onClick={() => void publish()}>
+                  {t("reasonCodes.publish")}
+                </Button>
+              </div>
+              <Show when={uncovered()}>
+                {(gaps) => (
+                  <Show
+                    when={gaps().length > 0}
+                    fallback={<Banner tone="ok" message={t("reasonCodes.coverageComplete")} />}
+                  >
+                    {/* A notice, not a failure: an operator may have meant to leave an act with
+                        no reason, which blocks it. The design system has `ok` and `danger` and
+                        nothing between, and `danger` would call a deliberate choice an error — so
+                        this is the neutral card shape, read by a screen reader as a status. */}
+                    <div
+                      role="status"
+                      class="rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+                    >
+                      {t("reasonCodes.coverageGaps", {
+                        actions: gaps()
+                          .map((action) => t(ACTION_LABEL[action]))
+                          .join(", "),
+                      })}
+                    </div>
+                  </Show>
+                )}
+              </Show>
+            </div>
           </Show>
         </Card>
 
