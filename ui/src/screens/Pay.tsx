@@ -10,10 +10,17 @@ import {
   loadCheck,
   openBill,
   openBillFor,
+  reasonsFor,
   settle,
   tenderAccepted,
   tipsEnabled,
+  voidBill,
 } from "../state/store";
+
+// The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
+// store can hold reasons for one and not the other — and the picker here offers only the entries
+// that declare this one.
+const VOID_BILL = "REASON_ACTION_VOID_BILL";
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
 // and its change, an optional tip, or card for the exact amount. On settlement it shows the gapless
@@ -77,6 +84,13 @@ export function Pay() {
   // What the guest owes, as the edge assembled it (E5). Null until it arrives; the screen shows no
   // amount rather than a guess, because the till no longer has the means to guess one.
   const [check, setCheck] = createSignal<CheckResponse | null>(null);
+  // Voiding this bill before it settles (ADR-0115, §6). Always a manager: a bill is money whether
+  // or not the kitchen started, so unlike a line there is no shape of it that passes without one.
+  // The badge and PIN live here for the length of the refusal and are cleared with the panel.
+  const [voidingBill, setVoidingBill] = createSignal(false);
+  const [voided, setVoided] = createSignal(false);
+  const [approverCode, setApproverCode] = createSignal("");
+  const [approverPin, setApproverPin] = createSignal("");
 
   onMount(() => {
     void loadCheck(params.id)
@@ -185,6 +199,60 @@ export function Pay() {
       },
     ]);
 
+  const readyToVoid = () => approverCode().trim() !== "" && approverPin() !== "";
+
+  const closeVoid = () => {
+    setVoidingBill(false);
+    setApproverCode("");
+    setApproverPin("");
+  };
+
+  // The first tap: open the picker. Nothing is written until a reason is chosen — the reason is
+  // mandatory, not a question asked afterwards.
+  const askVoidBill = () => {
+    setError(null);
+    setVoidingBill(true);
+  };
+
+  // The second tap: void the bill, citing this reason and the manager standing at the till. The
+  // panel stays open on a refusal — a settled bill is refused by the bill machine, and reading why
+  // is the point.
+  const voidBillReason = (reasonCodeId: string) => {
+    const id = billId();
+    if (id === null) {
+      return;
+    }
+    setError(null);
+    void voidBill(id, reasonCodeId, {
+      approver_code: approverCode().trim(),
+      approver_pin: approverPin(),
+    })
+      .then(() => {
+        closeVoid();
+        setVoided(true);
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+      );
+  };
+
+  // What the screen becomes once the bill is voided: no money was taken, and the order is still
+  // sitting on the table to be charged again. The way back is the order, not the floor — a voided
+  // bill usually means the cashier is about to open the right one.
+  const voidedPanel = () => (
+    <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="bill-voided">
+      <p class="text-lg font-semibold">{t("pay.void_done")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("pay.void_done_hint")}</p>
+      <button
+        type="button"
+        class="mt-4 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+        onClick={() => navigate(`/table/${params.id}`)}
+      >
+        {t("common.back_order")}
+      </button>
+    </div>
+  );
+
   return (
     <section class="mx-auto max-w-xl p-4">
       <a href={`/table/${params.id}`} class="text-sm text-ink-muted no-underline">
@@ -194,7 +262,7 @@ export function Pay() {
       <Show
         when={done()}
         fallback={
-          <>
+          <Show when={!voided()} fallback={voidedPanel()}>
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
             <Show when={check()} fallback={<p class="text-2xl font-semibold tabular-nums">{"—"}</p>}>
               {(totals) => (
@@ -315,7 +383,79 @@ export function Pay() {
                 </button>
               </Show>
             </div>
-          </>
+
+            {/*
+              Voiding the bill (ADR-0115, §6). Secondary to the tender buttons on purpose: it is the
+              rare act, and it is the one that needs a second person. Always a manager — a bill is
+              money whether or not the kitchen started — so unlike a line there is no shape of this
+              the till lets through on its own.
+
+              The reason buttons stay disabled until the manager's badge and PIN are filled, which
+              keeps the void at the three taps §6 allows a rare action (pay, void, reason) rather
+              than spending one on a request that could only come back `403`.
+            */}
+            <Show
+              when={voidingBill()}
+              fallback={
+                <button
+                  type="button"
+                  class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+                  disabled={billId() === null || reasonsFor(VOID_BILL).length === 0}
+                  data-step="askVoidBill"
+                  onClick={() => askVoidBill()}
+                >
+                  {t("pay.void")}
+                </button>
+              }
+            >
+              <div class="mt-6 rounded-token border border-line bg-surface p-3">
+                <h2 class="font-semibold">{t("pay.void_title")}</h2>
+                <p class="mt-1 text-sm text-ink-muted">{t("pay.void_manager")}</p>
+                <label class="mt-2 block text-sm">
+                  {t("pay.approver_code")}
+                  <input
+                    type="text"
+                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                    value={approverCode()}
+                    onInput={(event) => setApproverCode(event.currentTarget.value)}
+                  />
+                </label>
+                <label class="mt-2 block text-sm">
+                  {t("pay.approver_pin")}
+                  <input
+                    type="password"
+                    inputmode="numeric"
+                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                    value={approverPin()}
+                    onInput={(event) => setApproverPin(event.currentTarget.value)}
+                  />
+                </label>
+                <p class="mt-3 text-sm text-ink-muted">{t("pay.void_reason")}</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <For each={reasonsFor(VOID_BILL)}>
+                    {(reason) => (
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                        disabled={!readyToVoid()}
+                        data-step="voidBillReason"
+                        onClick={() => voidBillReason(reason.reason_code_id)}
+                      >
+                        {reason.display_name}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                  onClick={() => closeVoid()}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </Show>
+          </Show>
         }
       >
         {(bill) => (

@@ -26,9 +26,12 @@ import type {
   OpenShiftRequest,
   PairAccepted,
   PairingState,
+  ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
   TableResponse,
+  VoidBillResponse,
+  VoidRequest,
   WaitingResponse,
 } from "./types";
 
@@ -170,6 +173,23 @@ export const api = {
     request<void>("POST", `/api/orders/${orderId}/reject`, {
       reason_code_id: reasonCodeId,
     }),
+
+  // The store's managed reason list (ADR-0115) — every active entry, each tagged with the actions
+  // it may be cited for. Read once at start beside the price book: a picker that had to fetch its
+  // own reasons would open empty for as long as the round-trip took, on a screen where the operator
+  // is already mid-act.
+  reasonCodes: () => request<ReasonCodesResponse>("GET", "/api/reason-codes"),
+
+  // Void a line, citing a reason the store holds for voiding. The same request either way: the edge
+  // decides whether a manager is needed (a fired line) or not (an ordinary cancel), so the till does
+  // not have to encode the rule twice. A `403` means the approval is missing or was refused.
+  voidLine: (lineId: string, request_: VoidRequest) =>
+    request<LineResponse>("POST", `/api/lines/${lineId}/void`, request_),
+
+  // Void a bill before it settles. Always needs a manager: a bill is money whether or not the
+  // kitchen started. A settled one is refused with a 409 — reversing that is a refund.
+  voidBill: (billId: string, request_: VoidRequest) =>
+    request<VoidBillResponse>("POST", `/api/bills/${billId}/void`, request_),
 
   // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID

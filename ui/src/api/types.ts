@@ -174,6 +174,42 @@ export interface BumpRequest {
   order_line_ids: string[];
 }
 
+// One entry of the store's managed reason list, as `GET /api/reason-codes` serves it (ADR-0115).
+//
+// `applies_to` is what makes one read serve every picker: the till offers only the entries that
+// declare the act in hand, so a reason valid for rejecting a guest's order never appears on the
+// void picker. The edge validates the same way, so a picker that filtered differently would only
+// produce a refusal the operator cannot act on.
+export interface ReasonCodeEntry {
+  reason_code_id: string;
+  code: string;
+  display_name: string;
+  applies_to: string[];
+}
+
+// The store's managed list — the framework default until the console publishes one, and the
+// published set afterwards. Retired entries are already filtered out by the edge.
+export interface ReasonCodesResponse {
+  reasons: ReasonCodeEntry[];
+}
+
+// The manager who authorised an act that needs a second person (§11.4). Sent with the request and
+// never stored: the PIN is typed, used once and dropped, exactly as a sign-in PIN is.
+export interface ApproverRequest {
+  approver_code: string;
+  approver_pin: string;
+}
+
+// A void, as the till asks for it. The reason is mandatory; the approval is present only when the
+// act needs one, and the edge decides which — an unfired line is an ordinary cancel, a fired one
+// and every bill need a manager.
+export type VoidRequest = { reason_code_id: string } & Partial<ApproverRequest>;
+
+// The state a voided bill came to rest in, so the screen can say so without re-reading.
+export interface VoidBillResponse {
+  state: string;
+}
+
 export interface BumpResponse {
   order_id: string;
   station_id: string;

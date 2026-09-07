@@ -30,6 +30,7 @@ pub mod pair;
 mod print_agent;
 mod print_jobs;
 pub mod qr;
+pub mod reason_codes;
 pub mod shifts;
 pub mod tables;
 pub mod ws;
@@ -232,6 +233,10 @@ where
         // The money facts the pay pad needs — currency, the notes a guest carries, what the total
         // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
         .route("/api/locale", get(locale::settings::<S>))
+        // The store's managed reason list, so a picker offers what the store actually holds
+        // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
+        // till filters by the act in hand.
+        .route("/api/reason-codes", get(reason_codes::list::<S>))
         // The floor: seat, clean, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
