@@ -112,15 +112,25 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_reenrol_totp,
         crate::http::admin_generate_recovery_codes,
         crate::http::admin_recovery_codes_status,
+        crate::http::admin_acknowledge_region,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
-    tags((
-        name = "auth",
-        description = "Two-factor sign-in, the session it issues, and the second-factor levers \
-                       (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
-                       session these routes establish."
-    ))
+    tags(
+        (
+            name = "auth",
+            description = "Two-factor sign-in, the session it issues, and the second-factor levers \
+                           (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
+                           session these routes establish."
+        ),
+        (
+            name = "fleet",
+            description = "Where each store runs and how it is standing (ADR-0068, ADR-0110, \
+                           ADR-0114). The reads themselves are still coverage debt; the one write \
+                           here is documented because it is the only one on this surface a person \
+                           answers a compliance warning with."
+        ),
+    )
 )]
 pub(crate) struct AdminApiDoc;
 

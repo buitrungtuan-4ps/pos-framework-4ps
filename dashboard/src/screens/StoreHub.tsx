@@ -29,7 +29,7 @@
 // ADR-0099 claimed the number was exact; a number nobody produces is exactly zero, which is not the
 // same thing. Both cards are recorded as follow-ups in that ADR rather than dressed up here.
 
-import { createSignal, Show } from "solid-js";
+import { createSignal, Show, type JSXElement } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/types";
@@ -107,6 +107,14 @@ function HubCard<T>(props: {
   link: ScreenId;
   linkLabel: string;
   children: (value: T) => { headline: string; support: string; tone?: Tone };
+  /**
+   * An optional affordance under the answer, rendered only when the panel is ready.
+   *
+   * One card uses it — the region warning, which ADR-0114 requires be answerable in the place it is
+   * drawn. Every other card stays read-only and links out, per ADR-0099: a hub that could edit five
+   * things would be a second copy of five editors, free to drift from the real ones.
+   */
+  action?: (value: T) => JSXElement;
 }) {
   return (
     <Card title={props.title}>
@@ -126,6 +134,7 @@ function HubCard<T>(props: {
                 {rendered.headline}
               </p>
               <p class="text-sm text-ink-muted">{rendered.support}</p>
+              {props.action?.(ready().value)}
             </div>
           );
         }}
@@ -171,6 +180,40 @@ export function StoreHub() {
     return panel.state === "ready" && panel.value.region_country !== null;
   };
 
+  // The answer an admin is typing, and whether one is in flight. Kept on the screen rather than in
+  // the card, because the card is a pure render of a panel and this is the one place on the hub that
+  // writes anything (ADR-0114; ADR-0099's read-only rule bends here for exactly one action, because
+  // the warning it answers is drawn here and nowhere else).
+  const [reason, setReason] = createSignal("");
+  const [acknowledging, setAcknowledging] = createSignal(false);
+  const [refusal, setRefusal] = createSignal<string | null>(null);
+
+  // Records the answer, then re-reads the store so the card redraws from the server's verdict rather
+  // than from an optimistic guess — the standing rule lives on the server and the console must not
+  // second-guess it.
+  const acknowledge = async (store: FleetStore) => {
+    const tenant = tenantId();
+    const id = storeId();
+    if (tenant === null || id === null) {
+      return;
+    }
+    setAcknowledging(true);
+    setRefusal(null);
+    try {
+      await api.acknowledgeRegion(tenant, id, {
+        profile_country: store.profile_country ?? "",
+        region_country: store.region_country ?? "",
+        reason: reason(),
+      });
+      setReason("");
+      await panelOf(api.fleetStore(tenant, id), setFleet);
+    } catch (error) {
+      setRefusal(error instanceof ApiError ? error.message : String(error));
+    } finally {
+      setAcknowledging(false);
+    }
+  };
+
   // A store-scoped alert carries its store id in `dedup_key` (ADR-0073): the key scopes the alert
   // *within* its kind, and for the store-scoped kinds that scope is the store. A server-wide kind
   // keys on something else and simply will not match, which is the behaviour we want — the console
@@ -211,12 +254,72 @@ export function StoreHub() {
               by an admin picking whichever region passes — leaving the record saying something
               false. A dismissed warning is recorded. A dodged block is not. */}
           <Show when={hasRegion()}>
-            <HubCard title={t("hub.region.title")} panel={fleet()} link="fleet" linkLabel={t("hub.region.link")}>
+            <HubCard
+              title={t("hub.region.title")}
+              panel={fleet()}
+              link="fleet"
+              linkLabel={t("hub.region.link")}
+              action={(store) => (
+                // Only a live, unanswered difference gets the form. An agreeing store has nothing to
+                // answer; a store with no published country has nothing to compare, and the fix
+                // there is to publish one, not to explain a difference nobody has established.
+                <Show
+                  when={store.region_agreement === "differs"}
+                  fallback={<></>}
+                >
+                  <Show
+                    when={store.region_acknowledgement}
+                    fallback={
+                      <div class="mt-3 space-y-2 border-t border-line pt-3">
+                        <label class="block text-sm" for="region-reason">
+                          {t("hub.region.acknowledgeLabel")}
+                        </label>
+                        <textarea
+                          id="region-reason"
+                          class="w-full rounded border border-line bg-surface p-2 text-sm"
+                          rows={2}
+                          maxlength={280}
+                          value={reason()}
+                          onInput={(event) => setReason(event.currentTarget.value)}
+                        />
+                        <p class="text-xs text-ink-muted">{t("hub.region.acknowledgeHint")}</p>
+                        <Show when={refusal()}>
+                          {(message) => <p class="text-xs text-danger">{message()}</p>}
+                        </Show>
+                        <button
+                          type="button"
+                          class="rounded bg-accent px-3 py-1 text-sm text-on-accent disabled:opacity-50"
+                          disabled={acknowledging() || reason().trim() === ""}
+                          onClick={() => void acknowledge(store)}
+                        >
+                          {t("hub.region.acknowledgeAction")}
+                        </button>
+                      </div>
+                    }
+                  >
+                    {(answer) => (
+                      <div class="mt-3 space-y-1 border-t border-line pt-3">
+                        <p class="text-sm font-medium">{t("hub.region.acknowledged")}</p>
+                        <p class="text-sm text-ink-muted">{answer().reason}</p>
+                        <p class="text-xs text-ink-muted">
+                          {t("hub.region.acknowledgedWhen", {
+                            when: formatRelativeAge(ageSeconds(answer().acknowledged_at_ms)),
+                          })}
+                        </p>
+                      </div>
+                    )}
+                  </Show>
+                </Show>
+              )}
+            >
               {(store) => ({
                 headline: store.region_label
                   ? `${store.region_country} · ${store.region_label}`
                   : (store.region_country ?? ""),
-                tone: store.region_agreement === "agrees" ? "ok" : "attention",
+                tone:
+                  store.region_agreement === "agrees" || store.region_acknowledgement
+                    ? "ok"
+                    : "attention",
                 support:
                   store.region_agreement === "agrees"
                     ? t("hub.region.agrees", { country: store.profile_country ?? "" })

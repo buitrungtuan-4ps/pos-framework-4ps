@@ -260,6 +260,98 @@
         }
       }
     },
+    "/admin/stores/{store_id}/region-acknowledgement": {
+      "post": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "An admin records why a store's region difference is correct\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).",
+        "description": "Behind [`ConsolePermission::ManageStores`] rather than `PublishConfig`: this is a judgement about\nwhere a store's data may rest, which is the same judgement the bump that put it there was, and\nthe person who makes it is the person who moves stores between machines.\n\n# It answers one difference, not the store\n\nThe request names both country codes and the write refuses `FailedPrecondition` when either has\nmoved since the console drew the screen. Without that check an admin could acknowledge a\ndifference that no longer exists — or worse, one that changed to something they never saw — and\nthe record would say a person approved a transfer they were never shown. The row then keeps the\npair, so the *read* applies the same rule for free: an answer stops standing when the store\nmoves, and the warning comes back unanswered.\n\nRefused for a store with no difference at all, because there is nothing to answer: a store whose\nregion agrees, or which has no region, or which has published no country, would otherwise\naccumulate reasons for questions nobody asked.",
+        "operationId": "admin_acknowledge_region",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, the two country codes the console showed, and one sentence saying why the difference between them is correct",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded. The body is the answer as stored"
+          },
+          "400": {
+            "description": "A country code is not two letters, or the reason is blank or over 280 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nothing to answer, or the store has moved since this screen was drawn — the codes you named are not the ones it has now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fleet, the config tree, or the acknowledgement store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/totp": {
       "post": {
         "tags": [
@@ -427,6 +519,10 @@
     {
       "name": "auth",
       "description": "Two-factor sign-in, the session it issues, and the second-factor levers (ADR-0034, ADR-0060). Everything else on this surface stands behind the session these routes establish."
+    },
+    {
+      "name": "fleet",
+      "description": "Where each store runs and how it is standing (ADR-0068, ADR-0110, ADR-0114). The reads themselves are still coverage debt; the one write here is documented because it is the only one on this surface a person answers a compliance warning with."
     }
   ]
 }

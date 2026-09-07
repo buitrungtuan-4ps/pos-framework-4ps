@@ -256,6 +256,198 @@ pub fn region_agreement(
     })
 }
 
+/// The longest reason an admin may give for a region difference, in Unicode scalar values.
+///
+/// 280 rather than a paragraph: this is a sentence naming the basis for a transfer — "customer
+/// consent recorded at sign-up; DTA in force" — and a field that invites an essay collects one
+/// nobody reads. Counted in `chars()` rather than bytes so a Vietnamese or Japanese reason is
+/// measured the way a person would measure it.
+pub const REGION_REASON_LIMIT: usize = 280;
+
+/// A person's recorded answer to a region difference
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// **It carries the two country codes it was written about, and that is the whole mechanism.** An
+/// acknowledgement is not "this store is fine"; it is "*this difference*, between these two
+/// countries, is fine, and here is why". A store acknowledged while resting in Singapore and later
+/// moved to Japan has an answer to a question nobody is asking any more, so
+/// [`standing_acknowledgement`] stops returning it and the warning comes back — unanswered, which
+/// is correct, because nobody has answered *that* one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionAcknowledgement {
+    /// The country the store was registered in when this was written.
+    profile_country: CountryCode,
+    /// The country its data was resting in when this was written.
+    region_country: CountryCode,
+    /// Why the difference is correct, as somebody typed it. Never parsed, never logged, never in an
+    /// event payload — the same handling `Region::label` gets, for the same reason.
+    reason: String,
+    /// When it was written.
+    acknowledged_at: Timestamp,
+}
+
+impl RegionAcknowledgement {
+    /// Records an answer, checking the reason an admin typed.
+    ///
+    /// # Errors
+    ///
+    /// [`RegionReasonRefusal`] when the reason is blank or over [`REGION_REASON_LIMIT`].
+    pub fn new(
+        profile_country: CountryCode,
+        region_country: CountryCode,
+        reason: &str,
+        acknowledged_at: Timestamp,
+    ) -> Result<Self, RegionReasonRefusal> {
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(RegionReasonRefusal::Empty);
+        }
+        if reason.chars().count() > REGION_REASON_LIMIT {
+            return Err(RegionReasonRefusal::TooLong);
+        }
+        Ok(Self {
+            profile_country,
+            region_country,
+            reason: reason.to_owned(),
+            acknowledged_at,
+        })
+    }
+
+    /// Rebuilds an acknowledgement from what the database returned, for a reader.
+    ///
+    /// Separate from [`Self::new`] for the reason [`Region::stored`] is: a row written by an older
+    /// build or a fork is a fact this cloud has to report, not re-validate. A row whose country
+    /// codes no longer parse is reported as no acknowledgement rather than as an error — it could
+    /// not match the current pair anyway, so the warning it would have answered is already back.
+    #[must_use]
+    pub fn stored(
+        profile_country: &str,
+        region_country: &str,
+        reason: &str,
+        acknowledged_at: Timestamp,
+    ) -> Option<Self> {
+        Some(Self {
+            profile_country: CountryCode::parse(profile_country).ok()?,
+            region_country: CountryCode::parse(region_country).ok()?,
+            reason: reason.to_owned(),
+            acknowledged_at,
+        })
+    }
+
+    /// The country the store was registered in when this was written.
+    #[must_use]
+    pub const fn profile_country(&self) -> CountryCode {
+        self.profile_country
+    }
+
+    /// The country its data was resting in when this was written.
+    #[must_use]
+    pub const fn region_country(&self) -> CountryCode {
+        self.region_country
+    }
+
+    /// Why the difference is correct, as somebody typed it.
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    /// When it was written.
+    #[must_use]
+    pub const fn acknowledged_at(&self) -> Timestamp {
+        self.acknowledged_at
+    }
+}
+
+/// Why a reason was refused ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionReasonRefusal {
+    /// The reason is empty once trimmed. A warning silenced with no explanation is a warning
+    /// deleted, and the point of recording the answer is that somebody said something.
+    Empty,
+    /// The reason is longer than [`REGION_REASON_LIMIT`] scalar values.
+    TooLong,
+}
+
+impl RegionReasonRefusal {
+    /// The wire code for the envelope's `details`, always on the `reason` field.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Empty => "REQUIRED",
+            Self::TooLong => "TOO_LONG",
+        }
+    }
+}
+
+/// The acknowledgement that answers the difference a store has **right now**, or `None`.
+///
+/// Pure, and the counterpart to [`region_agreement`]: that function says whether there is a
+/// difference, this one says whether somebody has answered *this* difference. A stored row whose
+/// pair no longer matches is not returned — it is not stale data to be cleaned up, it is an answer
+/// to a question that changed, and nothing needs to delete it because not matching is already what
+/// retires it.
+///
+/// `None` for a store with no region or no published country, because there is no difference for an
+/// acknowledgement to be about.
+#[must_use]
+pub fn standing_acknowledgement<'a>(
+    acknowledgement: Option<&'a RegionAcknowledgement>,
+    region: Option<&Region>,
+    profile_country: Option<CountryCode>,
+) -> Option<&'a RegionAcknowledgement> {
+    let acknowledgement = acknowledgement?;
+    let region = region?;
+    let profile_country = profile_country?;
+    (acknowledgement.region_country == region.country()
+        && acknowledgement.profile_country == profile_country)
+        .then_some(acknowledgement)
+}
+
+/// Reading and writing a store's answer to its region difference
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// A trait rather than a concrete type so the route runs against a fake in tests and a
+/// `store-postgres` upsert in the cloud, as every other cloud seam does.
+pub trait RegionAcknowledgementStore {
+    /// Writes this store's answer, replacing whatever it had.
+    ///
+    /// An overwrite and not an append: this row answers "what is currently answered", and the
+    /// history of who answered what lives in the audit trail, which nothing overwrites. Two admins
+    /// answering the same difference is not a conflict worth refusing — the second one's reason is
+    /// the current one, and both are in the trail.
+    ///
+    /// # Errors
+    ///
+    /// [`RegionAcknowledgementError`] if the row could not be written.
+    fn record(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        acknowledgement: &RegionAcknowledgement,
+    ) -> impl Future<Output = Result<(), RegionAcknowledgementError>> + Send;
+
+    /// This store's answer, or `None` if nobody has written one.
+    ///
+    /// `None` is also what a row this build cannot read becomes — see
+    /// [`RegionAcknowledgement::stored`].
+    ///
+    /// # Errors
+    ///
+    /// [`RegionAcknowledgementError`] if the row could not be read.
+    fn current(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> impl Future<Output = Result<Option<RegionAcknowledgement>, RegionAcknowledgementError>> + Send;
+}
+
+/// The one failure an acknowledgement read or write reports: the store behind the seam was
+/// unreachable. Every other outcome is a value, not an error.
+#[derive(Debug, thiserror::Error)]
+#[error("the region-acknowledgement store is unavailable: {0}")]
+pub struct RegionAcknowledgementError(pub String);
+
 /// What one bump does to the store's stored region
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///

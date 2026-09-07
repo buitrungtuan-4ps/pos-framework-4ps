@@ -61,7 +61,8 @@ pub use catalog::{
     ItemOrder, PostgresCatalog,
 };
 pub use config_trees::{
-    BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionWrite, StoredRetire, StoredSettle,
+    BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
+    StoredRetire, StoredSettle,
 };
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fleet::{FleetStoreRow, PostgresFleet};

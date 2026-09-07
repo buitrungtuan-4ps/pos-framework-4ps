@@ -169,6 +169,66 @@ answered — `POST /admin/stores/{store_id}/region-acknowledgement`, its
 remaining half, and until they land a mismatch warns permanently with no way to record why it is
 correct.
 
+## Delivery — 2026-09-07, the warning can be answered, and this record is closed
+
+A `differs` badge could be seen and not answered. It can now:
+`POST /admin/stores/{store_id}/region-acknowledgement`, behind `ConsolePermission::ManageStores`,
+writing one row per store in `store_region_acknowledgement` (migration `0059`) and one audit entry
+under `store.edge_placement.acknowledge`. With it, every verb in this record's title is built.
+
+**The row stores the comparison, not a verdict, and that is the whole mechanism.** It carries
+`profile_country` and `region_country` beside the reason, and the read compares them against the
+store's *current* pair. An answer written about SG-versus-VN says nothing about a store since moved
+to Japan, so `standing_acknowledgement` stops returning it and the warning comes back — unanswered,
+which is correct, because nobody has answered *that* one. Nothing clears the row and nothing needs
+to: it is retired by not matching, which cannot be forgotten the way a cleanup job can. The write
+applies the same rule from the other side: the request names both codes and is refused
+`FailedPrecondition` when either has moved, so an admin cannot approve a transfer they were never
+shown.
+
+**Departure from this record's own Consequences: there is no `If-Match`.** The line above said the
+route would carry one. It does not, and the reason is the one
+[`LeaseStore::settle_handover`](../../crates/pos-cloud/src/lease.rs) already gives one table over —
+*the named value is the precondition*, and here it is strictly stronger than any version could be.
+No single resource's `ETag` covers both halves of this comparison: the region lives on `store_lease`
+and the country in the config tree, two rows with two independent writers. An `If-Match` would name
+one and silently miss changes to the other, while inviting a caller to believe it covered both.
+Naming the pair catches every move of either and records what the admin was actually looking at. The
+Consequences line is superseded by this note.
+
+**No `acknowledged_by` column, also deliberate.** `store_lease.retired_by` next door does carry its
+deciding admin, and the difference is what the two rows are: that one is a store's standing
+operational record, this one is overwritten by the next answer. A "who" stored here would be
+destroyed, silently, by the next person to answer a warning. The audit action records every
+acknowledgement with the acting admin's id and email and is never overwritten, so the trail answers
+"who decided" and the row answers "what is currently answered". The console links to the trail rather
+than showing a name this read cannot honestly give.
+
+**Two refusals beyond the malformed ones.** A store whose region *agrees*, and a store with no region
+or no published country, are both refused: there is nothing to answer, and a fleet that accumulates
+reasons for questions nobody asked teaches its readers that the record means nothing. The reason
+itself is required, non-blank after trimming, and at most 280 Unicode scalar values — counted in
+characters so a Vietnamese or Japanese sentence is measured the way the person who typed it would.
+
+**Where the route lives, and why not where its path suggests.** It is served from `fleet_router`,
+not `registry_router`, because answering the warning needs both halves of the comparison and only
+that router holds both. Putting it with the other `/admin/stores/…` paths would mean giving the
+registry router a lease handle and a config-tree handle for one route, in a router whose entire
+payload is the registry record. Paths already span routers here — `/admin/stores/{store_id}/config`
+does the same — so this follows the grain rather than cutting across it.
+
+**The console action is on the store hub**, which is the surface that already reads
+`/admin/fleet/{store_id}` and therefore the only one holding the verdict and the standing answer. The
+Fleet screen keeps showing the region beside the placement badge and does **not** gain the action: its
+data is the list row, which deliberately carries no verdict, and giving it one would mean the
+config-tree load per row that this record's previous slice refused. This bends ADR-0099's read-only
+hub rule for exactly one action, in the one place the warning it answers is drawn.
+
+With this slice ADR-0114 is delivered: the region is written by the bump and by nothing else; it
+reaches every read that should carry it; the country it is compared against is a required field; the
+comparison is three-valued and never renders absence as agreement; and a difference can be answered
+by a named person, with a reason, in a record that stops standing when the question changes.
+
 ## The problem
 
 ### A hosted edge placement moves a store's personal data onto a machine somebody chose

@@ -511,11 +511,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // The config-tree handle is for the single-store read only: it compares the store's region
         // against the country that store publishes (ADR-0114). The listing does not compare — one
         // config-tree load per row is work that grows with the fleet.
+        //
+        // The same router serves `POST /admin/stores/{store_id}/region-acknowledgement`, because
+        // answering that warning needs both halves of the comparison and this is the only router
+        // holding both. The acknowledgement store is the same `PostgresConfigTrees` handle — one
+        // pool, one adapter — and the audit recorder is the shared one every write route uses.
         .merge(http::fleet_router(
             store.fleet(),
             store.admin(),
             SystemClock,
             store.config_trees(),
+            store.config_trees(),
+            Arc::clone(&audit),
         ))
         // Operational alerts (ADR-0073, Track O2): the console reads the fleet-wide alert list the
         // evaluator loop maintains, and acknowledges/resolves alerts. Reads are behind the session
