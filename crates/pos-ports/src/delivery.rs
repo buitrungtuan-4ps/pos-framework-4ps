@@ -171,9 +171,11 @@ pub trait DeliveryVendor: Send + Sync {
 
     /// Rejects an order with a reason from the cloud-managed list.
     ///
-    /// The reason is a [`ReasonCodeId`] rather than free text because `docs/pos-spec.md` §12
-    /// requires reasons to come from a managed list — that is what makes rejection rates
-    /// comparable between stores instead of a collection of one-off sentences.
+    /// The reason is a [`ReasonCodeId`] rather than free text because `docs/pos-spec.md` §11
+    /// item 2 requires reasons to come from a cloud-managed list — that is what makes rejection
+    /// rates comparable between stores instead of a collection of one-off sentences. The list is
+    /// `pos_proto::reason_codes` ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md));
+    /// `REASON_ACTION_REJECT_ORDER` is the action an id must be valid for here.
     ///
     /// # Errors
     ///
