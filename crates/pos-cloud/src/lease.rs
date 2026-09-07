@@ -190,6 +190,72 @@ impl RegionRefusal {
     }
 }
 
+/// Whether a store's region agrees with the country it is registered in
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Derived at read time from two facts the single-store read already has, exactly as
+/// [`handover_state`] is, and for the same reason: deriving it in one place is what stops the
+/// console re-implementing the rule and getting the third case wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionAgreement {
+    /// The store's data rests in the country the store is registered in.
+    Agrees,
+    /// It does not. The console warns; nothing blocks.
+    ///
+    /// **A warning and never a refusal.** Whether a particular cross-border placement is lawful
+    /// depends on the basis for the transfer, whether an agreement or an adequacy finding covers
+    /// it, and what was said when consent was taken — facts the operator holds, under law that
+    /// changes without a release. A block would refuse placements that are perfectly lawful and
+    /// catch none of the unlawful ones, because a same-country placement with no basis at all
+    /// passes every check a framework could write. And a block that is wrong gets routed around:
+    /// the admin picks whichever region passes, and the record then says something false. A
+    /// dismissed warning is recorded; a dodged block is not.
+    Differs,
+    /// The store has a region but has never published a locale, so there is no country to compare
+    /// it against.
+    ///
+    /// A distinct answer rather than folding into [`Self::Agrees`], and that is the whole point of
+    /// this being three-valued. **Absence must never render as agreement.** Showing the gap is
+    /// honest, and it puts the missing profile in front of the one person who can publish it.
+    CountryNotRecorded,
+}
+
+impl RegionAgreement {
+    /// The wire token, for a console that renders a badge.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Agrees => "agrees",
+            Self::Differs => "differs",
+            Self::CountryNotRecorded => "country-not-recorded",
+        }
+    }
+}
+
+/// Compares a store's region against the country it publishes, or `None` when there is nothing to
+/// compare ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// `None` is a real answer and the commonest one: a store with no region — never bumped, or running
+/// in its own shop — has nothing to say here, and a console renders no badge at all rather than a
+/// reassuring one. It is deliberately *not* [`RegionAgreement::Agrees`]: an in-store machine and a
+/// hosted machine that happens to be in the right country are different facts, and only one of them
+/// is a transfer somebody decided on.
+#[must_use]
+pub fn region_agreement(
+    region: Option<&Region>,
+    profile_country: Option<CountryCode>,
+) -> Option<RegionAgreement> {
+    let region = region?;
+    let Some(profile_country) = profile_country else {
+        return Some(RegionAgreement::CountryNotRecorded);
+    };
+    Some(if region.country() == profile_country {
+        RegionAgreement::Agrees
+    } else {
+        RegionAgreement::Differs
+    })
+}
+
 /// What one bump does to the store's stored region
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///

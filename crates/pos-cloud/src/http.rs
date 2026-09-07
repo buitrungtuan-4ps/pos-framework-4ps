@@ -175,7 +175,8 @@ use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
     HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
-    RegionRefusal, RetireOutcome, SettleOutcome, handover_state, lease_node, resolve_region,
+    RegionAgreement, RegionRefusal, RetireOutcome, SettleOutcome, handover_state, lease_node,
+    region_agreement, resolve_region,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
@@ -4282,6 +4283,28 @@ struct ConfigLocaleState<Cfg, A, C> {
 struct PublishLocaleRequest {
     tenant_id: String,
     store_id: String,
+    /// Which country this store is in, as an ISO 3166-1 alpha-2 code
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// **Required, and that is a deliberate break** from the shape this route had before. It sits
+    /// beside `currency_code` and `timezone` because [D21](../../../docs/roadmap-v3.md) puts all
+    /// three in the same place — attributes of a *store* — and this node already carried the other
+    /// two. It was simply missing.
+    ///
+    /// Required rather than optional because a publish rebuilds this node wholesale, so an optional
+    /// field has only two possible meanings and both are wrong. "Absent clears it" makes an edit to
+    /// the cutoff hour erase where a store's data rests, silently. "Absent keeps it" makes this
+    /// field behave unlike `display_language` one line down, which *does* clear when omitted — a
+    /// trap for the next reader of this struct. Required leaves no absent case at all: a caller
+    /// that does not send one is refused by name, loudly, and fixes one line.
+    ///
+    /// `#[serde(default)]` and *not* a bare required field, deliberately. A missing field makes
+    /// axum's `Json` extractor answer `422` with its own plain body, which is off the
+    /// [AIP-193](../../../docs/naming-and-api.md) envelope the whole `/admin` surface was moved
+    /// onto. Defaulting to the empty string routes "absent" through the same check as "malformed",
+    /// so both answer one `400` naming `country_code` and saying what it accepts.
+    #[serde(default)]
+    country_code: String,
     currency_code: String,
     timezone: String,
     cutoff_hour: u8,
@@ -4381,6 +4404,85 @@ fn checked_denominations(request: &PublishLocaleRequest) -> Result<Vec<i64>, Res
     Ok(denominations)
 }
 
+/// The store's locale settings, each field checked with its own domain constructor, as the `locale`
+/// node they become.
+///
+/// Separate from the handler because it is the whole of what this route validates: five domain
+/// parses and one optional key, with no session, no store and no clock in sight. A refusal is the
+/// finished [`Response`] rather than an error type, because each one names its own field and its
+/// own code and there is no second caller that would want to phrase them differently.
+///
+/// # Errors
+///
+/// An AIP-193 `400` naming the first field that does not parse.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_locale_node(request: &PublishLocaleRequest) -> Result<serde_json::Value, Response> {
+    // Checked first because it is the field this route did not use to have: a caller built against
+    // the older shape must be told *that*, rather than being led through the fields it did send.
+    let Ok(country) = CountryCode::parse(&request.country_code) else {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "country_code is required and must be an ISO 3166-1 alpha-2 code — two letters, such \
+             as VN or JP. It records which country this store is in, beside its currency and \
+             timezone",
+            &[("country_code", "INVALID_FORMAT")],
+        ));
+    };
+    if CurrencyCode::parse(&request.currency_code).is_err() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "currency_code is not a 3-letter code",
+            &[("currency_code", "INVALID_FORMAT")],
+        ));
+    }
+    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "timezone is not a valid IANA name",
+            &[("timezone", "INVALID_FORMAT")],
+        ));
+    }
+    if CutoffHour::new(request.cutoff_hour).is_err() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cutoff_hour must be in 0..=23",
+            &[("cutoff_hour", "OUT_OF_RANGE")],
+        ));
+    }
+    let denominations = checked_denominations(request)?;
+
+    let mut locale_value = serde_json::json!({
+        // Upper-cased by `CountryCode::parse` on the way in, so the fleet console's comparison
+        // against a store's `region_country` — written through the same parse — is an equality test
+        // rather than a case fold (ADR-0114).
+        "country_code": country.as_str(),
+        "currency_code": request.currency_code,
+        "timezone": request.timezone,
+        "cutoff_hour": request.cutoff_hour,
+        "prices_include_tax": request.prices_include_tax,
+        "cash_rounding_increment": request.cash_rounding_increment,
+        "cash_denominations": denominations,
+    });
+    // The display language is optional: include it only when a non-blank code was given, so a store
+    // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
+    if let Some(language) = request
+        .display_language
+        .as_deref()
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "display_language".to_owned(),
+            serde_json::Value::String(language.to_owned()),
+        );
+    }
+    Ok(locale_value)
+}
+
 /// Validates a store's locale settings and writes them as its `locale` node, versioned — the same
 /// load→merge→publish→version shape as the other node publishes. Each field is checked with its domain
 /// constructor before anything is written (a real IANA timezone against the tz database, a 3-letter
@@ -4413,54 +4515,10 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    if CurrencyCode::parse(&request.currency_code).is_err() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "currency_code is not a 3-letter code",
-            &[("currency_code", "INVALID_FORMAT")],
-        );
-    }
-    if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "timezone is not a valid IANA name",
-            &[("timezone", "INVALID_FORMAT")],
-        );
-    }
-    if CutoffHour::new(request.cutoff_hour).is_err() {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "cutoff_hour must be in 0..=23",
-            &[("cutoff_hour", "OUT_OF_RANGE")],
-        );
-    }
-    let denominations = match checked_denominations(&request) {
-        Ok(denominations) => denominations,
+    let locale_value = match checked_locale_node(&request) {
+        Ok(node) => node,
         Err(refusal) => return refusal,
     };
-
-    let mut locale_value = serde_json::json!({
-        "currency_code": request.currency_code,
-        "timezone": request.timezone,
-        "cutoff_hour": request.cutoff_hour,
-        "prices_include_tax": request.prices_include_tax,
-        "cash_rounding_increment": request.cash_rounding_increment,
-        "cash_denominations": denominations,
-    });
-    // The display language is optional: include it only when a non-blank code was given, so a store
-    // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
-    if let Some(language) = request
-        .display_language
-        .as_deref()
-        .map(str::trim)
-        .filter(|language| !language.is_empty())
-        && let serde_json::Value::Object(map) = &mut locale_value
-    {
-        map.insert(
-            "display_language".to_owned(),
-            serde_json::Value::String(language.to_owned()),
-        );
-    }
 
     // Set the `locale` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys.
@@ -6860,10 +6918,22 @@ const FLEET_ONLINE_THRESHOLD_MS: i64 = 180_000;
 /// model, plus the admin and clock every session guard (and the online-at-read derivation) uses. Like
 /// [`RegistryState`], it carries its own state and is merged into the main router.
 #[derive(Clone)]
-struct FleetState<F, A, C> {
+struct FleetState<F, A, C, Cfg> {
     fleet: F,
     admin: A,
     clock: C,
+    /// The store's own configuration, for the one thing the fleet read model cannot answer: which
+    /// country the store publishes ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Used by the **single-store** read only, which does exactly one `load` for the one store it
+    /// already names. The list route deliberately does not: a comparison there would be one
+    /// config-tree load per row — work that grows with the fleet, which `AGENTS.md` §2's
+    /// bounded-work discipline and [ADR-0098](../../../docs/adr/0098-paged-admin-reads.md) both
+    /// refuse. The tempting shortcut is worse than the read it saves: copying `country_code` onto
+    /// the registry row would make a second copy of a versioned node, and a config rollback can
+    /// move the node backwards while the copy keeps asserting the old value — a silent disagreement
+    /// about a store's country, which is the exact failure ADR-0114 exists to prevent.
+    config_trees: Cfg,
 }
 
 /// One bound print agent as the fleet console sees it
@@ -6971,6 +7041,27 @@ struct FleetStoreView {
     /// question it answers ("where has this store been running?") is asked while somebody has the
     /// fleet page open, not afterwards.
     region_label: Option<String>,
+    /// The country this store publishes in its `locale` node
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// **Present only on the single-store read**, which is the one route that loads a store's
+    /// configuration; the listing omits the key entirely rather than sending `null`, so a console
+    /// can tell "not compared here" from "compared, and there is no country". Absence must never
+    /// render as agreement.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_country: Option<String>,
+    /// Whether the region agrees with that country — `agrees`, `differs`, `country-not-recorded` —
+    /// or absent when there is nothing to compare
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Derived by [`region_agreement`] rather than in the console, for the reason `handover` beside
+    /// it is: the third case is the one that is easy to get wrong, and getting it wrong means a
+    /// store with no recorded country renders as agreeing.
+    ///
+    /// Omitted on the listing, exactly as [`profile_country`](Self::profile_country) is — a
+    /// comparison there would be one config-tree load per row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region_agreement: Option<&'static str>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
@@ -7071,6 +7162,10 @@ impl FleetStoreView {
                 .as_ref()
                 .map(|region| region.country_str().to_owned()),
             region_label: row.region.as_ref().map(|region| region.label().to_owned()),
+            // Filled in by the single-store route after this builds; the listing leaves both
+            // absent, because it does not perform the comparison.
+            profile_country: None,
+            region_agreement: None,
             lease_superseded_generation: row.superseded_generation,
             handover: handover_state(HandoverFacts {
                 authoritative: row.lease_generation_authoritative.map(LeaseGeneration::new),
@@ -7097,19 +7192,24 @@ impl FleetStoreView {
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): the whole fleet, and one
 /// store's detail. Online/offline is derived here at read time, so the answer is always current
 /// without any background sweep.
-pub fn fleet_router<F, A, C>(fleet: F, admin: A, clock: C) -> Router
+pub fn fleet_router<F, A, C, Cfg>(fleet: F, admin: A, clock: C, config_trees: Cfg) -> Router
 where
     F: FleetStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/admin/fleet", get(admin_list_fleet::<F, A, C>))
-        .route("/admin/fleet/{store_id}", get(admin_fleet_store::<F, A, C>))
+        .route("/admin/fleet", get(admin_list_fleet::<F, A, C, Cfg>))
+        .route(
+            "/admin/fleet/{store_id}",
+            get(admin_fleet_store::<F, A, C, Cfg>),
+        )
         .with_state(FleetState {
             fleet,
             admin,
             clock,
+            config_trees,
         })
 }
 
@@ -7120,8 +7220,8 @@ fn fleet_error_response(error: &FleetStoreError) -> Response {
 }
 
 /// A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.
-async fn admin_list_fleet<F, A, C>(
-    State(state): State<FleetState<F, A, C>>,
+async fn admin_list_fleet<F, A, C, Cfg>(
+    State(state): State<FleetState<F, A, C, Cfg>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
 ) -> Response
@@ -7129,6 +7229,7 @@ where
     F: FleetStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -7159,8 +7260,8 @@ where
 
 /// A super-admin (any console role) reads one store's fleet detail; `404` if the tenant has no such
 /// store.
-async fn admin_fleet_store<F, A, C>(
-    State(state): State<FleetState<F, A, C>>,
+async fn admin_fleet_store<F, A, C, Cfg>(
+    State(state): State<FleetState<F, A, C, Cfg>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<RegistryTenantQuery>,
@@ -7169,6 +7270,7 @@ where
     F: FleetStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -7186,13 +7288,45 @@ where
             Err(refusal) => return refusal,
         };
     let now_ms = state.clock.now().as_milliseconds_since_epoch();
-    match state.fleet.store_detail(tenant, store).await {
-        Ok(Some(row)) => {
-            (StatusCode::OK, Json(FleetStoreView::from_row(row, now_ms))).into_response()
+    let row = match state.fleet.store_detail(tenant, store).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found("store"),
+        Err(error) => return fleet_error_response(&error),
+    };
+    // The country this store publishes, for the one comparison ADR-0114 asks for. One `load` for
+    // the one store already named — the read this route performs anyway is a single row, so this
+    // is bounded work, unlike the same comparison on the listing.
+    //
+    // A config-tree failure is **not** an error here. This read's job is to report a store's
+    // health, and failing the whole page because a second store's configuration could not be read
+    // would take the console away from an operator mid-incident. It degrades to "no country", which
+    // renders as `country-not-recorded` — visibly not an answer, never as agreement.
+    let profile_country = match state.config_trees.load(tenant, store).await {
+        Ok(tree) => tree.and_then(|tree| published_country(&tree.record)),
+        Err(error) => {
+            tracing::warn!(%error, "a store's country could not be read for its region comparison");
+            None
         }
-        Ok(None) => not_found("store"),
-        Err(error) => fleet_error_response(&error),
-    }
+    };
+    let agreement = region_agreement(row.region.as_ref(), profile_country);
+    let mut view = FleetStoreView::from_row(row, now_ms);
+    view.profile_country = profile_country.map(|country| country.as_str().to_owned());
+    view.region_agreement = agreement.map(RegionAgreement::as_wire);
+    (StatusCode::OK, Json(view)).into_response()
+}
+
+/// The country a store's published `locale` node names, or `None` when it has never published one
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Reads the Store layer, which is where `admin_publish_locale` writes. A value that is not two
+/// ASCII letters answers `None` rather than an error: a node written by a fork, or by a build older
+/// than the required-`country_code` change, is a store this console still has to be able to draw.
+fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
+    tree.layer(ConfigLevel::Store)
+        .get("locale")?
+        .get("country_code")?
+        .as_str()
+        .and_then(|code| CountryCode::parse(code).ok())
 }
 
 // --- Operational alerts (`/admin/alerts`, ADR-0073, Track O2) -----------------------------------

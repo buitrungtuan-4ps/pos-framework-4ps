@@ -1018,6 +1018,28 @@ impl FakeConfigTrees {
         *next += 1;
         Version::new(next.to_string())
     }
+
+    /// Puts a store-layer document in the tree, as a publish would, so a read has something to
+    /// find. Only the Store layer is written: the console's country comparison reads exactly
+    /// `store.locale.country_code`, and a helper that also filled the layers above it would let a
+    /// test pass on inheritance the real read does not perform.
+    fn seed_store_layer(&self, tenant: TenantId, store: StoreId, layer: serde_json::Value) {
+        let version = self.mint();
+        let state = ConfigTreeState {
+            layers: [
+                serde_json::json!({}),
+                serde_json::json!({}),
+                layer,
+                serde_json::json!({}),
+            ],
+            history: Vec::new(),
+            k: 8,
+        };
+        self.rows
+            .lock()
+            .expect("lock")
+            .insert((tenant, store), Versioned::new(state, version));
+    }
 }
 
 impl ConfigTreeStore for FakeConfigTrees {
@@ -6887,15 +6909,26 @@ fn seen_ago(offset_ms: i64) -> Timestamp {
 
 /// The main router (for `/admin/login`) merged with the fleet sub-router, one shared admin store.
 fn fleet_app(admin: FakeAdmin, fleet: FakeFleet) -> axum::Router {
+    fleet_app_with_config(admin, fleet, FakeConfigTrees::default())
+}
+
+/// The same, with a config-tree store a test can publish a `locale` node into — the country the
+/// single-store read compares a region against
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+fn fleet_app_with_config(
+    admin: FakeAdmin,
+    fleet: FakeFleet,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
         FakeKeys::default(),
         admin.clone(),
-        FakeConfigTrees::default(),
+        config_trees.clone(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::fleet_router(fleet, admin, clock()))
+    http::router(app).merge(http::fleet_router(fleet, admin, clock(), config_trees))
 }
 
 /// An [`AlertChannel`] that records the batches it was handed, so a test can prove the evaluator
@@ -7188,6 +7221,108 @@ fn store_in_handover(
 /// The `null` cases are the ones worth a route test rather than only a unit test: they are what the
 /// console renders for most of the fleet, and reading ADR-0110's `taking-over` definition literally
 /// would have put a mid-handover badge on every one of them.
+/// The single-store read compares a store's region against the country it publishes, and says
+/// "country not recorded" rather than letting absence read as agreement
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Three answers and no fourth, derived on the server so the console never re-implements the rule.
+/// The third is the one that matters: a store that has never published a country has *nothing* to
+/// compare, and rendering that as agreement would be the exact lie this record exists to prevent.
+#[tokio::test]
+async fn the_single_store_read_compares_the_region_against_the_stores_own_country() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // Three routers over the same fleet row — a store hosted in Singapore — differing only in what
+    // country the store has published.
+    let hosted = || {
+        let mut row = store_in_handover(store, Some(1), None, None);
+        row.region = Region::stored("SG", "ap-southeast-1");
+        FakeFleet::default().with_row(tenant(), row)
+    };
+    let published = |country: Option<&str>| {
+        let trees = FakeConfigTrees::default();
+        if let Some(country) = country {
+            trees.seed_store_layer(
+                tenant(),
+                store,
+                serde_json::json!({ "locale": { "country_code": country } }),
+            );
+        }
+        trees
+    };
+
+    // (what the store publishes, the agreement it must report, the country it must echo)
+    let cases: [(Option<&str>, &str, serde_json::Value); 3] = [
+        (Some("SG"), "agrees", serde_json::json!("SG")),
+        (Some("VN"), "differs", serde_json::json!("VN")),
+        (None, "country-not-recorded", serde_json::Value::Null),
+    ];
+
+    for (country, expected, echoed) in cases {
+        let router = fleet_app_with_config(provisioned_admin(), hosted(), published(country));
+        let cookie = admin_cookie(&router).await;
+        let response = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fleet/{store}?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the single-store read");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(
+            body["region_agreement"], expected,
+            "a store in SG whose published country is {country:?}"
+        );
+        assert_eq!(body["profile_country"], echoed);
+        assert_eq!(
+            body["region_country"], "SG",
+            "and the region itself is reported either way — the comparison never hides it"
+        );
+    }
+}
+
+/// An in-store store has no region, so there is nothing to compare and no badge to draw
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// `null` here is a real answer and deliberately *not* `agrees`: an in-store machine and a hosted
+/// machine that happens to be in the right country are different facts, and only one of them is a
+/// transfer somebody decided on.
+#[tokio::test]
+async fn a_store_with_no_region_reports_no_agreement_rather_than_agreeing() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let fleet =
+        FakeFleet::default().with_row(tenant(), store_in_handover(store, Some(1), None, None));
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store,
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+
+    let router = fleet_app_with_config(provisioned_admin(), fleet, trees);
+    let cookie = admin_cookie(&router).await;
+    let body = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fleet/{store}?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the single-store read"),
+    )
+    .await;
+    assert!(body["region_country"].is_null());
+    assert!(
+        body["region_agreement"].is_null(),
+        "an in-store machine is in the shop; there is no transfer to agree or disagree about"
+    );
+}
+
 /// Where a store's data rests reaches the console on the read it already runs
 /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
@@ -12487,6 +12622,10 @@ async fn locale_publish_validates_and_writes_the_locale_node() {
             &serde_json::json!({
                 "tenant_id": tenant_ulid,
                 "store_id": store_ulid,
+                // Required since ADR-0114: this is the country a hosted store's region is compared
+                // against, and it belongs beside the currency and timezone below rather than
+                // anywhere new. Lower case in, upper case out.
+                "country_code": "vn",
                 "currency_code": "VND",
                 "timezone": "Asia/Ho_Chi_Minh",
                 "cutoff_hour": 4,
@@ -12506,14 +12645,20 @@ async fn locale_publish_validates_and_writes_the_locale_node() {
         "Asia/Ho_Chi_Minh"
     );
     assert_eq!(state.record.layers[2]["locale"]["currency_code"], "VND");
+    assert_eq!(
+        state.record.layers[2]["locale"]["country_code"], "VN",
+        "normalised on the way in, so the fleet console's comparison is an equality test"
+    );
 
     // A malformed IANA timezone is a 400, validated before anything is written.
     let bad = router
+        .clone()
         .oneshot(put_with_cookie(
             "/admin/config/locale",
             &serde_json::json!({
                 "tenant_id": tenant_ulid,
                 "store_id": store_ulid,
+                "country_code": "VN",
                 "currency_code": "VND",
                 "timezone": "Nowhere/Nope",
                 "cutoff_hour": 4,
@@ -12523,6 +12668,35 @@ async fn locale_publish_validates_and_writes_the_locale_node() {
         .await
         .expect("route bad timezone");
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    // A publish that names no country is refused by name (ADR-0114). Absent and malformed answer
+    // the *same* refusal, on the AIP-193 envelope: the field defaults to the empty string rather
+    // than being a bare required field, because a missing field would otherwise be axum's own `422`
+    // with a plain body, off the envelope every other `/admin` refusal uses.
+    for country in [serde_json::Value::Null, serde_json::json!("Vietnam")] {
+        let mut body = serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "currency_code": "VND",
+            "timezone": "Asia/Ho_Chi_Minh",
+            "cutoff_hour": 4,
+        });
+        if !country.is_null() {
+            body["country_code"] = country.clone();
+        }
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie("/admin/config/locale", &body, &cookie))
+            .await
+            .expect("route the countryless publish");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "a store must say which country it is in: {country}"
+        );
+        let payload = json_body(refused).await;
+        assert_eq!(payload["error"]["details"][0]["field"], "country_code");
+    }
 }
 
 #[tokio::test]

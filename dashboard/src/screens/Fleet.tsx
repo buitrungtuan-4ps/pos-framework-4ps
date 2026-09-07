@@ -135,7 +135,22 @@ export function Fleet() {
           : undefined
       }
     >
-      {(token) => <StatusBadge tone="neutral" label={placementLabel(token())} />}
+      {(token) => (
+        <span class="inline-flex items-center gap-1">
+          <StatusBadge tone="neutral" label={placementLabel(token())} />
+          {/* Where that machine is (ADR-0114). Shown on the row because the question is asked while
+              somebody has this page open — but *not* compared here: the comparison needs the
+              store's own configuration, and one load per row is work that grows with the fleet.
+              The row links into the store, which is the screen that can answer it. */}
+          <Show when={row.region_country}>
+            {(code) => (
+              <span class="text-xs text-ink-muted">
+                {row.region_label ? `${code()} · ${row.region_label}` : code()}
+              </span>
+            )}
+          </Show>
+        </span>
+      )}
     </Show>
   );
 

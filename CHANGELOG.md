@@ -14,6 +14,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Changed
+
+- **BREAKING — a store must say which country it is in: `country_code` is now required on the locale
+  publish, and the fleet console compares it against where the store's data rests**
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md), Program C Phase 1 slice 3a).
+
+  **Upgrade note.** `PUT /admin/config/locale` now **requires** a `country_code` — an ISO 3166-1
+  alpha-2 code such as `VN` or `JP`. A request that omits it, or sends anything else, is refused
+  `400` naming the field. The console sends it (Store settings has a required Country selector, and
+  publish is disabled until one is chosen); **any caller outside the console must be updated.** The
+  code is written to the store's `locale` config node beside its currency and timezone. No
+  migration, no permission change, and nothing on the wire to a store moves — the edge parses the
+  node field by field and ignores keys it does not know.
+
+  This is a deliberate break rather than an optional field, because the two compatible shapes each
+  buy compatibility with a worse failure. An optional field *cleared* on absence means a console
+  publishing a cutoff-hour edit silently erases a country recorded last week; an optional field
+  *preserved* on absence puts two keys in one node behaving oppositely, since `display_language`
+  beside it does clear. Required fails loudly, on the first request, in a message naming the one
+  field to add. The reasoning is written out in the ADR's delivery note.
+
+  With the field real, `GET /admin/fleet/{store_id}` now reports `profile_country` and
+  `region_agreement` — `agrees`, `differs`, or `country-not-recorded`. The third answer is the point
+  of it being three-valued: a store that has never published a country has nothing to compare, and
+  showing that as agreement would be the exact lie this record exists to prevent. A store with no
+  region reports no agreement at all rather than agreeing. **The verdict warns and never blocks** —
+  whether a particular cross-border placement is lawful depends on the basis for the transfer and
+  what was said when consent was taken, facts the operator holds. A block that is wrong gets routed
+  around; a dismissed warning is recorded.
+
+  The comparison costs one config-tree load on the single-store read only. A tree that fails to load
+  degrades to "country not recorded" with a logged warning and never fails the page. The two list
+  routes do no tree read and render no verdict.
+
+  **Still open:** a `differs` badge can be seen but not yet answered. The audited acknowledgement —
+  the route, its row and its audit action — is the remaining half of ADR-0114.
+
 ### Added
 
 - **The fleet console can see where each store's data rests**
@@ -35,8 +72,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   store's region differs from its country, compared against `locale.country_code`. **Nothing writes
   that field** — the locale publish carries currency, timezone and cutoff but no country, and
   neither the store registry row nor the store profile holds one. Built as specified the comparison
-  would report "country not recorded" for every store, permanently. It is not built; the gap and
-  what closing it costs are written up in the ADR's delivery note.
+  would report "country not recorded" for every store, permanently. It is not built here; the gap
+  and what closing it costs are written up in the ADR's delivery note. **Closed by the entry above**
+  — the locale publish now requires a country, and the comparison is live.
 
 - **Where a hosted store's data rests is recorded when the store is moved there**
   ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)).
