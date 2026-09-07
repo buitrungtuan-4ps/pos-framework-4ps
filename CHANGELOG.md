@@ -16,6 +16,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`bootstrap.sh` reported "set" for keys it had not written, and one of them was the boot-critical
+  secret.**
+
+  Deploy #18 printed `set cloud.toml table_token_secret (QR ordering was off on this box)`. The
+  cloud then booted saying `no table_token_secret configured; the QR ordering endpoint is off`. Both
+  lines were about the same file and only one could be true.
+
+  The reconcile built a command string ending `…; echo added; fi` and read the enclosing `if`'s
+  success as proof of the write. It is not proof of anything: the pieces are joined with `;`, so on
+  a `cloud.toml` this user cannot touch — which is every box after step 2 chowns it to the app's
+  uid — the `grep` fails, the write fails, `echo added` runs anyway, and the `if` succeeds. The
+  `2>/dev/null` swallowed the `EACCES` that would have said so. Reproduced exactly: as a non-root
+  user without sudo, against a 600 file owned by another uid, the old shape prints "set" and leaves
+  the file untouched.
+
+  **The `internal_shared_secret` reconcile added one entry earlier in this file carried the same
+  flaw**, because it was written to mirror the shape above. On the box where it was first needed the
+  key had already been inserted by hand, so it never showed; on any other box it would have reported
+  "set" while writing nothing, and the cloud still would not have started.
+
+  Both now go through one helper that **does not trust the write**. It re-reads the file afterwards
+  and confirms the key is present *and above the first table header* — the only position the loader
+  reads — and only then answers "added". Its four outcomes are distinguished rather than collapsed:
+  added, already there, could not read, could not write; each gets its own line, and "could not
+  tell" never renders as "done". The `trusted_proxy_hops` reconcile beside them was already honest
+  and is untouched: it ends at `fi`, so its exit status is the write's, which is why deploy #18
+  correctly reported *it* as going via sudo.
+
+  The same check also catches a key in the wrong **place**. A person adding
+  `internal_shared_secret` by hand naturally appends it, which lands it inside the `[artifacts]`
+  table that step 7b writes at the end of the file — where it parses as
+  `artifacts.internal_shared_secret`, is never read, and yet is found by any `grep -q '^…'`. That
+  now draws a warning naming the position and the fix, instead of looking set.
+
+  Verified across five cases: a writable file, an unreadable one with no sudo (warns, writes
+  nothing), an unreadable one with passwordless sudo (writes, reports), a re-run of that (silent,
+  byte-identical), and a file whose key sits inside `[artifacts]` (refuses to re-mint, says where to
+  move it).
+
 - **An upgrade across ADR-0097 left the cloud crash-looping while the deploy reported success.**
 
   ADR-0097 made `internal_shared_secret` a **boot requirement**: `Config::validate` refuses to
