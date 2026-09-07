@@ -32,9 +32,11 @@ use pos_core::decision::{
 use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
 use pos_core::lease::LeaseGeneration;
+use pos_core::machines::{Bill, BillTrigger};
 use pos_core::menu::PricedLine;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
+use pos_core::state_machine::StateMachine;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
@@ -43,10 +45,11 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
-    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, KitchenTicketBumped,
-    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
+    BillingBillOpened, BillingBillSettled, BillingBillVoided, BillingPaymentCaptured,
+    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType,
+    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
+    SalesOrderLineFired, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
+    SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -55,6 +58,7 @@ use pos_proto::ids::{
 };
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
@@ -211,6 +215,26 @@ impl StaffRoster {
         let auth = self.by_code.get(code)?;
         let phc = auth.pin_phc.as_deref()?;
         crate::auth::verify_pin(phc, pin).then_some(auth.permissions)
+    }
+
+    /// Verifies an approver's `code` + `pin` for a **step-up** on one act, returning who they are
+    /// and what their role grants.
+    ///
+    /// [`authorise`](Self::authorise) answers the sign-in question — "what may this person do" — and
+    /// throws the identity away, because a sign-in goes on to carry it in the session. A step-up is
+    /// the other shape: the person authorising is *not* the person acting, so their identity is the
+    /// whole point. `docs/pos-spec.md` §11.4 makes a manager-PIN override a fraud control, and
+    /// `security.permission.overridden` records the approver as `approver_employee_id` while the
+    /// envelope keeps the actor who performed the act.
+    ///
+    /// `None` for an unknown code, a member with no id, a member with no PIN set, or a wrong PIN —
+    /// so a failed step-up authorises nothing and names nobody.
+    #[must_use]
+    pub fn approve(&self, code: &str, pin: &str) -> Option<(EmployeeId, PermissionSet)> {
+        let auth = self.by_code.get(code)?;
+        let phc = auth.pin_phc.as_deref()?;
+        let employee_id = auth.employee_id?;
+        crate::auth::verify_pin(phc, pin).then_some((employee_id, auth.permissions))
     }
 
     /// The sign-in credentials under `code`: the employee the code acts as and the Argon2id hash to
@@ -522,6 +546,13 @@ impl EdgeSession {
         self.staff.authorise(code, pin)
     }
 
+    /// Verifies a manager's step-up authorisation for one act against the published roster, giving
+    /// back who approved and what they hold ([`StaffRoster::approve`]).
+    #[must_use]
+    pub fn approve_step_up(&self, code: &str, pin: &str) -> Option<(EmployeeId, PermissionSet)> {
+        self.staff.approve(code, pin)
+    }
+
     /// Installs a menu catalog, for a test or the on-fakes example. The real store's menu arrives
     /// from the cloud config tree (WS-B); this builder seeds one without a cloud.
     #[must_use]
@@ -731,6 +762,62 @@ pub enum AppError {
     /// permission and its own reason (roadmap B2.2), not a rejection.
     #[error("that order has already fired and can no longer be rejected")]
     AlreadyFired,
+    /// A high-risk act needed a manager's PIN and none was offered (`docs/pos-spec.md` §9, §11.4).
+    ///
+    /// The permission registry marks the act `pin: true`, and until roadmap B2.2 **nothing read that
+    /// flag**: `Grant::pin_required` was set, the domain checked it, and no caller ever passed a
+    /// verified PIN — so the only act that could reach the check was one that never ran. This is the
+    /// refusal that flag always described.
+    #[error("that action needs a manager's PIN")]
+    ApprovalRequired,
+    /// A manager's PIN was offered and did not authorise the act — an unknown code, a wrong PIN, or
+    /// a person whose role does not hold the permission being exercised.
+    ///
+    /// One refusal for all three on purpose: telling a caller which of them failed would let anyone
+    /// at the till enumerate who can approve a void.
+    #[error("that manager PIN does not authorise this action")]
+    ApprovalRefused,
+    /// A void cited a reason the store's managed list does not hold for voiding
+    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    ///
+    /// Separate from [`ReasonCodeNotValid`](Self::ReasonCodeNotValid), which is a rejection's: the
+    /// two actions draw from different entries of the same list, and a message naming the wrong act
+    /// would send an operator to the wrong row.
+    #[error("that reason code is not valid for voiding")]
+    VoidReasonNotValid,
+}
+
+/// A manager's step-up authorisation for one act (`docs/pos-spec.md` §9, §11.4).
+///
+/// The framework's high-risk permissions carry `pin: true`: a colleague who lacks one calls someone
+/// who holds it to tap their badge code and PIN on the same device. This is that pair, and it
+/// authorises **exactly one act** — it is not a session, it grants nothing else, and it is never
+/// stored.
+///
+/// # Who the log blames
+///
+/// The envelope's actor stays the person who performed the act, and the approver is named on a
+/// companion `security.permission.overridden`. That split is the event catalogue's own — its
+/// `approver_employee_id` field is documented as "Who authorised it. The employee who *requested* it
+/// is on the envelope." A trail that recorded only the manager would hide who voided; one that
+/// recorded only the server would hide who let them.
+#[derive(Clone)]
+pub struct Approval {
+    /// The approver's badge code.
+    pub code: String,
+    /// The approver's PIN. Verified against the published Argon2id hash and never stored.
+    pub pin: String,
+}
+
+impl fmt::Debug for Approval {
+    /// Redacts the PIN. A `Debug` that printed it would put a manager's credential into any log
+    /// line that formatted the surrounding request.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Approval")
+            .field("code", &self.code)
+            .field("pin", &"<redacted>")
+            .finish()
+    }
 }
 
 /// One line of a guest order waiting for staff confirmation (ADR-0116).
@@ -1929,6 +2016,207 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Resolves a step-up for one `permission`, returning the approver and whether a PIN was
+    /// verified.
+    ///
+    /// The permission's own `pin_required` decides whether an approval is needed at all, so the
+    /// registry stays the single source of truth: flipping `pin: true` on a permission changes what
+    /// the till demands, with no second list to update.
+    ///
+    /// What the approval grants is deliberately narrow: **exactly the permission being exercised**,
+    /// not the approver's whole set. A manager approving a void must not incidentally hand the
+    /// server their discount ceiling for the same act.
+    fn resolve_step_up(
+        &self,
+        ctx: &mut DecisionCtx,
+        permission: Permission,
+        approval: Option<&Approval>,
+    ) -> Result<Option<EmployeeId>, AppError> {
+        if !permission.meta().pin_required {
+            return Ok(None);
+        }
+        let approval = approval.ok_or(AppError::ApprovalRequired)?;
+        let (approver, held) = self
+            .session()
+            .approve_step_up(&approval.code, &approval.pin)
+            .ok_or(AppError::ApprovalRefused)?;
+        if !held.contains(permission) {
+            return Err(AppError::ApprovalRefused);
+        }
+        ctx.granted = ctx.granted.with(permission);
+        Ok(Some(approver))
+    }
+
+    /// The `security.permission.overridden` a verified step-up owes the log.
+    ///
+    /// `docs/pos-spec.md` §11.4 makes a manager-PIN override a fraud control, and until roadmap B2.2
+    /// this event had no producer anywhere in the tree — the control had no auditable record at all,
+    /// exactly as the event's own declaration says. `exceeded_by` is `None` here: a void is not an
+    /// amount over a ceiling, it is an act a role does not hold, and inventing a figure would be
+    /// worse than saying there is none.
+    fn override_record(
+        permission: Permission,
+        approver: EmployeeId,
+    ) -> SecurityPermissionOverridden {
+        SecurityPermissionOverridden {
+            permission_key: PermissionKey::new(permission.meta().id),
+            approver_employee_id: approver,
+            exceeded_by: None,
+        }
+    }
+
+    /// Voids one order line, citing a reason from the store's managed list (`docs/pos-spec.md` §5,
+    /// §11 item 2; [ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap
+    /// B2.2).
+    ///
+    /// # The two shapes of a void
+    ///
+    /// A line that never fired is an ordinary cancel: nothing was made, no stock moved, and any
+    /// member of staff who can take the order can take it back off. A line that **has** fired is the
+    /// fraud-sensitive one — the kitchen made it, the stock is gone, and the money is what changes —
+    /// so it needs [`Permission::VoidFiredLine`], and because that permission is `pin: true` it
+    /// needs a manager's PIN with it. `pos_core::decide_line` has enforced exactly that since P3;
+    /// what did not exist until now was a caller, so the check had never run in production.
+    ///
+    /// The reason is validated against the **synced** list, which is what makes both events' "from
+    /// the cloud-managed list" true rather than aspirational.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownLine`] for a line the edge does not know;
+    /// [`AppError::VoidReasonNotValid`] if the reason is not one the store holds for voiding a line;
+    /// [`AppError::ApprovalRequired`] or [`AppError::ApprovalRefused`] if a fired line's manager PIN
+    /// is missing or does not authorise; [`AppError::Domain`] if the line cannot leave its state or
+    /// the actor is not permitted; [`AppError::Port`] if the store cannot be written.
+    pub async fn void_line(
+        &self,
+        actor: Actor,
+        order_line_id: OrderLineId,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<LineView, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let record = self
+            .lock_projection()
+            .line(order_line_id)
+            .ok_or(AppError::UnknownLine)?;
+        if !session
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::VoidLine)
+        {
+            return Err(AppError::VoidReasonNotValid);
+        }
+
+        // Only a fired line needs the step-up, because only a fired line costs the store something.
+        let was_fired = record.state == OrderLineState::Fired;
+        let approver = if was_fired {
+            self.resolve_step_up(&mut ctx, Permission::VoidFiredLine, approval)?
+        } else {
+            None
+        };
+
+        let decision = decide_line(
+            record.state,
+            LineCommand::Void {
+                pin_verified: approver.is_some(),
+            },
+            &ctx,
+            &session.recipes,
+        )?;
+
+        let voided = SalesOrderLineVoided {
+            order_id: record.order_id,
+            order_line_id,
+            reason_code_id,
+            was_fired,
+        };
+        let (voided_envelope, voided_message) = self.prepare(&ctx, &voided)?;
+        let mut envelopes = vec![voided_envelope];
+        let mut messages = vec![voided_message];
+        // One transaction for the void and the override that authorised it: a log holding the void
+        // without the approval would show an act nobody could have performed.
+        if let Some(approver) = approver {
+            let override_record = Self::override_record(Permission::VoidFiredLine, approver);
+            let (envelope, message) = self.prepare(&ctx, &override_record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection()
+            .set_line_state(order_line_id, decision.next_state);
+        Ok(LineView {
+            order_id: record.order_id,
+            order_line_id,
+            state: decision.next_state,
+            fired: None,
+        })
+    }
+
+    /// Voids a whole bill before it settles, citing a reason from the store's managed list
+    /// (`docs/pos-spec.md` §6, §11 item 2; ADR-0115, roadmap B2.2).
+    ///
+    /// [`Permission::VoidBill`] is `pin: true` and, unlike a line, has no unfired shape — a bill is
+    /// money either way — so a manager's PIN is required for every one. A settled bill is not
+    /// voidable: `pos_core`'s bill machine makes `Settled` terminal on purpose
+    /// (`crates/pos-core/src/machines.rs`), and the way to reverse a settled bill is a refund, which
+    /// is its own permission and its own reason.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] for a bill the edge does not know;
+    /// [`AppError::VoidReasonNotValid`] if the reason is not one the store holds for voiding a bill;
+    /// [`AppError::ApprovalRequired`] or [`AppError::ApprovalRefused`] if the manager PIN is missing
+    /// or does not authorise; [`AppError::Domain`] if the bill has already settled or been voided;
+    /// [`AppError::Port`] if the store cannot be written.
+    pub async fn void_bill(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<BillState, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let record = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        if !session
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::VoidBill)
+        {
+            return Err(AppError::VoidReasonNotValid);
+        }
+        let approver = self.resolve_step_up(&mut ctx, Permission::VoidBill, approval)?;
+        ctx.require(Permission::VoidBill)?;
+        // The machine owns whether this bill may be voided at all: `Settled` and `Voided` are both
+        // terminal, so a second void and a void-after-payment are refused here rather than by a
+        // hand-rolled state check that could disagree with the machine.
+        let next_state = Bill::step(record.state, BillTrigger::Void)
+            .map_err(DomainError::from)
+            .map_err(AppError::Domain)?;
+
+        let voided = BillingBillVoided {
+            bill_id,
+            reason_code_id,
+        };
+        let (voided_envelope, voided_message) = self.prepare(&ctx, &voided)?;
+        let mut envelopes = vec![voided_envelope];
+        let mut messages = vec![voided_message];
+        if let Some(approver) = approver {
+            let override_record = Self::override_record(Permission::VoidBill, approver);
+            let (envelope, message) = self.prepare(&ctx, &override_record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection().set_bill_state(bill_id, next_state);
+        Ok(next_state)
+    }
+
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
     /// this store, or `None` ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). The intake path
     /// reads this to return the same order on a retry rather than opening a second one.
@@ -2919,6 +3207,84 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Folds a bill's life back onto the projection: opened, paid into, settled.
+    ///
+    /// Extracted from [`fold`](Self::fold) so that match stays inside its line budget — it had
+    /// reached exactly the ceiling, which is why adding the two void arms needed room made rather
+    /// than found. The three arms belong together anyway: each one is the same bill moving on, and
+    /// two of them also move the table it sits at.
+    fn fold_billing(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        match known {
+            EventType::BillingBillOpened => {
+                let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
+                // The bill is recorded whether or not a table is found. A bill event names its
+                // order, never a table (ADR-0093), and a counter order has none — while this arm
+                // was inside `if let Some(table_id)`, a takeaway bill was dropped on every rebuild,
+                // so a restart between opening and settling one lost it entirely and the guest
+                // could not be charged.
+                let table_id = projection.table_for_order(event.order_id);
+                projection.open_bill_record(
+                    event.bill_id,
+                    BillRecord {
+                        order_id: event.order_id,
+                        table_id,
+                        state: BillState::Open,
+                    },
+                );
+                if let Some(table_id) = table_id {
+                    projection.set_table(table_id, TableState::AwaitingPayment);
+                }
+            }
+            EventType::BillingPaymentCaptured => {
+                let event: BillingPaymentCaptured =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                // Only cash reaches the drawer, and the roll-up is the reason payments are evented.
+                if event.method.known() == PaymentMethod::Cash {
+                    projection.collect_cash(event.applied_to_bill)?;
+                }
+            }
+            EventType::BillingBillSettled => {
+                let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_bill_state(event.bill_id, BillState::Settled);
+                if let Some(table_id) = projection
+                    .bill(event.bill_id)
+                    .and_then(|record| record.table_id)
+                {
+                    projection.set_table(table_id, TableState::NeedsCleaning);
+                }
+            }
+            // Unreachable: `fold` delegates only the three arms above.
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Folds a void back onto the projection — a line's or a bill's.
+    ///
+    /// Extracted from [`fold`](Self::fold) to keep it inside its line budget, the same way
+    /// `fold_staff_decision` was. Both events had **no arm at all** before roadmap B2.2, so a box
+    /// that restarted after a void came back believing the line was still fired and the bill still
+    /// open: it would have re-fired the line to the kitchen and charged for a bill somebody
+    /// cancelled.
+    fn fold_void(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::SalesOrderLineVoided {
+            let event: SalesOrderLineVoided = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_line_state(event.order_line_id, OrderLineState::Voided);
+        } else {
+            let event: BillingBillVoided = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_bill_state(event.bill_id, BillState::Voided);
+        }
+        Ok(())
+    }
+
     fn fold(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
@@ -2960,43 +3326,13 @@ impl<S: EventStore> Edge<S> {
                     envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_line_state(event.order_line_id, OrderLineState::Fired);
             }
-            EventType::BillingBillOpened => {
-                let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
-                // The bill is recorded whether or not a table is found. A bill event names its
-                // order, never a table (ADR-0093), and a counter order has none — while this arm
-                // was inside `if let Some(table_id)`, a takeaway bill was dropped on every rebuild,
-                // so a restart between opening and settling one lost it entirely and the guest
-                // could not be charged.
-                let table_id = projection.table_for_order(event.order_id);
-                projection.open_bill_record(
-                    event.bill_id,
-                    BillRecord {
-                        order_id: event.order_id,
-                        table_id,
-                        state: BillState::Open,
-                    },
-                );
-                if let Some(table_id) = table_id {
-                    projection.set_table(table_id, TableState::AwaitingPayment);
-                }
+            EventType::SalesOrderLineVoided | EventType::BillingBillVoided => {
+                Self::fold_void(projection, envelope, known)?;
             }
-            EventType::BillingPaymentCaptured => {
-                let event: BillingPaymentCaptured =
-                    envelope.data.decode().map_err(AppError::Encode)?;
-                // Only cash reaches the drawer, and the roll-up is the reason payments are evented.
-                if event.method.known() == PaymentMethod::Cash {
-                    projection.collect_cash(event.applied_to_bill)?;
-                }
-            }
-            EventType::BillingBillSettled => {
-                let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_bill_state(event.bill_id, BillState::Settled);
-                if let Some(table_id) = projection
-                    .bill(event.bill_id)
-                    .and_then(|record| record.table_id)
-                {
-                    projection.set_table(table_id, TableState::NeedsCleaning);
-                }
+            EventType::BillingBillOpened
+            | EventType::BillingPaymentCaptured
+            | EventType::BillingBillSettled => {
+                Self::fold_billing(projection, envelope, known)?;
             }
             EventType::CashShiftOpened => {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;

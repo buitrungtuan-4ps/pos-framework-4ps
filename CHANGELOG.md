@@ -16,6 +16,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A void now demands a reason and a manager's PIN, and both are recorded.**
+  `POST /api/lines/{id}/void` and `POST /api/bills/{id}/void` — B2.2 slice 5 of
+  [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  Two fraud controls `docs/pos-spec.md` §11 declares had been declared and never run. The reason
+  list existed as of slice 4; this is the first caller that refuses a void without one, and it
+  validates against the **synced** list per action — `OUT_OF_STOCK`, valid for rejecting a guest's
+  order, is not valid for voiding, which is what makes `applies_to` load-bearing rather than
+  decorative.
+
+  The manager PIN is the sharper one. `Permission::VoidFiredLine` and `Permission::VoidBill` carry
+  `pin: true`; `pos_core::decide_line` has checked `Grant::pin_required` against a `pin_verified`
+  argument since P3 — and **nothing in the tree ever called it**, so the only act that could reach
+  the check was one that never happened. It runs now: a fired line and every bill need a second
+  person's badge and PIN, verified against the published roster. An unfired line stays an ordinary
+  cancel, because nothing was made and no stock moved.
+
+  A verified override is its own event. `security.permission.overridden` was declared precisely
+  because §11.4's manager-PIN override *"had no auditable record at all"* — and it had no producer
+  either. It has one now, written in the same transaction as the void, naming the approver while the
+  envelope keeps the person who performed the act, exactly as that event's own documentation
+  describes. What the approval grants is deliberately narrow: **only the permission being
+  exercised**, never the approver's whole set, so a manager approving a void does not hand the
+  server their discount ceiling for the same act.
+
+  A missing or refused PIN answers `403`, not `409`: the caller is authenticated and the command is
+  well-formed — what is missing is the authority. An unknown code, a wrong PIN and a manager whose
+  role lacks the permission all answer the same refusal, so nobody at the till can enumerate who is
+  able to approve.
+
+  **Fixed on the way:** neither `sales.order_line.voided` nor `billing.bill.voided` had a fold arm,
+  so a box that restarted after a void came back believing the line was still fired and the bill
+  still open — it would have re-fired to the kitchen and charged for it.
+
+  **Upgrade note** — two new routes, additive (`docs/snapshots/routes.txt` updated). No migration,
+  no `PROTOCOL_VERSION` change, no new permission identifier: the two this uses were declared in P3.
+
 - **A tenant's reason codes now reach the till.** `PUT /admin/config/reason-codes` composes the
   authored entries into the store's `reason_codes` config node, and the edge applies it — B2.2
   slice 4 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).

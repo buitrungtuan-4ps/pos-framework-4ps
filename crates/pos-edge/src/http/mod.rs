@@ -256,6 +256,11 @@ where
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))
+        // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
+        // PIN with the request, which is the first thing in the tree to read the permission
+        // registry's `pin: true`.
+        .route("/api/lines/{id}/void", post(lines::void::<S>))
+        .route("/api/bills/{id}/void", post(bills::void::<S>))
         // The cash shift: open, blind count, close.
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
@@ -350,7 +355,15 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::OrderRejected
         | AppError::NotAwaitingStaffConfirmation
         | AppError::ReasonCodeNotValid
+        | AppError::VoidReasonNotValid
         | AppError::AlreadyFired => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        // A missing or refused manager PIN is an authorisation failure, not a state conflict: the
+        // command is well-formed and applies to the record, and the only thing missing is the
+        // authority to run it. `403` and not `401`, because the *caller* is authenticated — it is
+        // the act that needs a second person (`docs/pos-spec.md` §9, §11.4).
+        AppError::ApprovalRequired | AppError::ApprovalRefused => {
+            (StatusCode::FORBIDDEN, error.to_string()).into_response()
+        }
         AppError::Port(_) => {
             (StatusCode::SERVICE_UNAVAILABLE, "the store is unavailable").into_response()
         }

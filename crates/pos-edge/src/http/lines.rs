@@ -24,14 +24,16 @@ use serde::{Deserialize, Serialize};
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{CourseId, MenuItemId, OrderLineId, StationId, TableId, TaxClassId};
+use pos_proto::ids::{
+    CourseId, MenuItemId, OrderLineId, ReasonCodeId, StationId, TableId, TaxClassId,
+};
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 
 use pos_proto::ids::EventId;
 
-use crate::app::{Edge, LineDraft, LineView};
+use crate::app::{Approval, Edge, LineDraft, LineView};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, ticket_line};
 
@@ -200,4 +202,63 @@ fn respond(outcome: Result<LineView, crate::app::AppError>) -> Response {
         Ok(view) => Json(LineResponse::from(view)).into_response(),
         Err(error) => error_response(&error),
     }
+}
+
+/// A void as a till asks for it: the reason from the store's managed list, plus the manager's badge
+/// and PIN when the line has already fired.
+///
+/// The approval is optional in the shape and required by the act — a line that never fired needs
+/// none, and one that has cannot proceed without it. Making it optional here rather than splitting
+/// the route in two keeps the till's one control talking to one endpoint: the till does not have to
+/// know the fired/unfired rule, and the edge, which does, answers `403` when the PIN is the missing
+/// piece.
+#[derive(Debug, Deserialize)]
+pub(crate) struct VoidLineRequest {
+    reason_code_id: ReasonCodeId,
+    /// The approving manager's badge code, when one is needed.
+    #[serde(default)]
+    approver_code: Option<String>,
+    /// The approving manager's PIN. Never logged and never stored.
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+impl VoidLineRequest {
+    /// The step-up pair, when the caller sent both halves. One half without the other is no
+    /// approval at all rather than a refusal of its own — the act's own gate then answers.
+    fn approval(&self) -> Option<Approval> {
+        let code = self.approver_code.clone()?;
+        let pin = self.approver_pin.clone()?;
+        Some(Approval { code, pin })
+    }
+}
+
+/// `POST /api/lines/{id}/void` — void a line, citing a reason from the store's managed list
+/// (ADR-0115, roadmap B2.2).
+///
+/// A fired line needs [`pos_core::permission::Permission::VoidFiredLine`] and a manager's PIN with
+/// it; an unfired one is an ordinary cancel. The edge decides which, so the till sends the same
+/// request either way.
+pub(crate) async fn void<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<VoidLineRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_line_id) = parse_ulid(&id).map(OrderLineId::new) else {
+        return bad_request("an order line id is a ULID");
+    };
+    let approval = request.approval();
+    respond(
+        edge.void_line(
+            actor,
+            order_line_id,
+            request.reason_code_id,
+            approval.as_ref(),
+        )
+        .await,
+    )
 }
