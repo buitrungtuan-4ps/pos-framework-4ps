@@ -22,13 +22,13 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, OrderId, TableId};
+use pos_proto::ids::{BillId, OrderId, ReasonCodeId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use pos_proto::ids::EventId;
 
-use crate::app::{BillView, BuyerDetails, Edge};
+use crate::app::{Approval, BillView, BuyerDetails, Edge};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers};
 
@@ -308,6 +308,62 @@ where
 fn respond(outcome: Result<BillView, crate::app::AppError>) -> Response {
     match outcome {
         Ok(view) => Json(BillResponse::from(view)).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// A bill void as a till asks for it: the reason from the store's managed list, plus the manager's
+/// badge and PIN — which, unlike a line's, are needed every time.
+#[derive(Debug, Deserialize)]
+pub(crate) struct VoidBillRequest {
+    reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+impl VoidBillRequest {
+    fn approval(&self) -> Option<Approval> {
+        let code = self.approver_code.clone()?;
+        let pin = self.approver_pin.clone()?;
+        Some(Approval { code, pin })
+    }
+}
+
+/// The state a voided bill came to rest in, so the till can show it rather than re-reading.
+#[derive(Debug, Serialize)]
+pub(crate) struct VoidBillResponse {
+    state: &'static str,
+}
+
+/// `POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's
+/// managed list (ADR-0115, roadmap B2.2).
+///
+/// Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a
+/// line there is no unfired shape to let through. A settled bill is refused by the bill machine —
+/// reversing one is a refund, with its own permission and its own reason.
+pub(crate) async fn void<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<VoidBillRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    let approval = request.approval();
+    match edge
+        .void_bill(actor, bill_id, request.reason_code_id, approval.as_ref())
+        .await
+    {
+        Ok(state) => Json(VoidBillResponse {
+            state: state.as_wire(),
+        })
+        .into_response(),
         Err(error) => error_response(&error),
     }
 }
