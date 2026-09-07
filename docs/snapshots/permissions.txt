@@ -155,6 +155,15 @@ sales.line.void_fired	default_role=SUPERVISOR
 sales.line.void_fired	group=SALES
 sales.line.void_fired	pin_required=true
 sales.line.void_fired	risk=HIGH
+sales.order.confirm_qr
+sales.order.confirm_qr	default_role=CASHIER
+sales.order.confirm_qr	default_role=MANAGER
+sales.order.confirm_qr	default_role=OWNER
+sales.order.confirm_qr	default_role=SERVER
+sales.order.confirm_qr	default_role=SUPERVISOR
+sales.order.confirm_qr	group=SALES
+sales.order.confirm_qr	pin_required=false
+sales.order.confirm_qr	risk=MEDIUM
 sales.order.transfer
 sales.order.transfer	default_role=MANAGER
 sales.order.transfer	default_role=OWNER

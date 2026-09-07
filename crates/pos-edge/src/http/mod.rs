@@ -29,6 +29,7 @@ pub mod menu;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
+pub mod qr;
 pub mod shifts;
 pub mod tables;
 pub mod ws;
@@ -243,6 +244,11 @@ where
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))
+        // The staff-confirmation queue (ADR-0116). A guest's tabled QR order cannot be fired until
+        // one of these two decisions lands, which is the guardrail ADR-0012 promised.
+        .route("/api/orders/awaiting-confirmation", get(qr::awaiting::<S>))
+        .route("/api/orders/{id}/confirm", post(qr::confirm::<S>))
+        .route("/api/orders/{id}/reject", post(qr::reject::<S>))
         // The kitchen display: bump a ticket (mark lines prepared), durable and fanned out.
         .route("/api/kds/bump", post(kds::bump::<S>))
         // The bill: open on a table, open on an order, settle. The order-keyed route is what makes
@@ -339,7 +345,12 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::BillAlreadyOpen
         | AppError::UnknownBill
         | AppError::UnknownShift
-        | AppError::ShiftAlreadyOpen => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        | AppError::ShiftAlreadyOpen
+        | AppError::AwaitingStaffConfirmation
+        | AppError::OrderRejected
+        | AppError::NotAwaitingStaffConfirmation
+        | AppError::ReasonCodeNotValid
+        | AppError::AlreadyFired => (StatusCode::CONFLICT, error.to_string()).into_response(),
         AppError::Port(_) => {
             (StatusCode::SERVICE_UNAVAILABLE, "the store is unavailable").into_response()
         }

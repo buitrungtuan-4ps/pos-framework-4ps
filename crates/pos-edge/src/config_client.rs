@@ -164,6 +164,10 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             None => catalog.clone(),
         };
     }
+    // Kept as well as applied: a compiled menu can be resolved once here, but a list the binary
+    // ships — ADR-0116's refusal reasons, from `PublishedReasonCodes::framework_default` — has no
+    // apply step to be resolved in, so the read needs the language itself (ADR-0074).
+    session.display_language.clone_from(&display_language);
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
     // authorises sign-ins against, replacing any local roster.
     if let Some(published) = document

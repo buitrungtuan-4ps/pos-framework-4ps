@@ -15,6 +15,7 @@ import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Setup } from "./screens/Setup";
 import { Shift } from "./screens/Shift";
+import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
@@ -132,6 +133,8 @@ export function App() {
       <Route path="/kds" component={Kds} />
       <Route path="/expo" component={Expo} />
       <Route path="/counter" component={Takeaway} />
+      {/* The staff-confirmation queue (ADR-0116) — the screen the QR hold had no way to reach. */}
+      <Route path="/guests" component={Confirm} />
       <Route path="/today" component={Today} />
       <Route path="/shift" component={Shift} />
       <Route path="/pair" component={Pairing} />

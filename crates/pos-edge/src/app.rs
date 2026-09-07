@@ -45,13 +45,15 @@ use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingPaymentCaptured, CashShiftClosed,
     CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType, KitchenTicketBumped,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderOpened, SalesTableClosed, SalesTableOpened,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
-    ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::store_profile::StoreProfile;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
@@ -232,6 +234,15 @@ pub struct EdgeSession {
     pub granted: PermissionSet,
     /// The store's capability profile (§10).
     pub capabilities: CapabilityContext,
+    /// The store's display language, from the `locale` node
+    /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)), or `None` when the store has
+    /// set none.
+    ///
+    /// The menu is already resolved into this language at config-apply time, so nothing needed the
+    /// code itself until a *second* list had to be localized — the reason codes ADR-0116's refusal
+    /// picker offers, which the framework ships and a publish replaces, and which therefore cannot
+    /// be pre-resolved the way a compiled menu is.
+    pub display_language: Option<String>,
     /// The store's currency.
     pub currency: CurrencyCode,
     /// The store's timezone, for business-date derivation (ADR-0014).
@@ -356,6 +367,15 @@ pub struct EdgeSession {
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
     /// edge reads it from the published `qr` node so an operator can disable the hold.
     pub qr_staff_confirmation_required: bool,
+    /// The managed reason-code list this store validates a rejection against
+    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    ///
+    /// Starts as [`PublishedReasonCodes::framework_default`] and not as an empty list, which is the
+    /// one node where absence must not mean "feature off": a store that has published nothing must
+    /// still be able to refuse a guest's order, and an empty list would make the picker empty and
+    /// the refusal impossible. A published `reason_codes` node replaces this set wholesale
+    /// (ADR-0115 slice 4).
+    pub reason_codes: PublishedReasonCodes,
     /// The rollout the cloud has published for the fleet, from the `fleet_update` config node
     /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
     /// itself against — target version, lowest eligible ring, canary ramp, signing key, kill switch
@@ -481,7 +501,9 @@ impl EdgeSession {
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
+            display_language: None,
             qr_staff_confirmation_required: true,
+            reason_codes: PublishedReasonCodes::framework_default(),
             // No rollout published and no placement: a bootstrap store installs nothing, which is
             // the only safe answer before the cloud has said anything about updates.
             fleet_update: None,
@@ -557,24 +579,39 @@ impl EdgeSession {
             .is_none_or(|set| set.contains(&method))
     }
 
-    /// Whether an inbound order naming `table_id` waits for a member of staff before the kitchen
-    /// sees it ([ADR-0057](../../../docs/adr/0057-qr-ordering.md); the store can turn the hold off
-    /// in its `qr` guardrail node, [ADR-0080](../../../docs/adr/0080-channels-and-payments.md) M7).
+    /// Whether a guest's order on `channel` naming `table_id` waits for a member of staff before
+    /// the kitchen sees it ([ADR-0057](../../../docs/adr/0057-qr-ordering.md); the store can turn
+    /// the hold off in its `qr` guardrail node,
+    /// [ADR-0080](../../../docs/adr/0080-channels-and-payments.md) M7).
     ///
-    /// **The single place this question is answered.** It used to be asked twice — once to write
-    /// the durable ledger row (as `table_id.is_some()` alone) and once to build the acceptance
-    /// returned to the cloud (as `table_id.is_some() && qr_staff_confirmation_required`) — so on a
-    /// store that had turned the hold off the two disagreed: the first delivery answered "not
-    /// waiting" and every replay of the same at-least-once reference answered "waiting", stranding
-    /// the guest's order behind a hold the store had switched off.
+    /// **The single place this question is answered**, for the answer reported to the caller and
+    /// for the answer that gates firing
+    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)). It used
+    /// to be asked twice — once to write the durable ledger row (as `table_id.is_some()` alone)
+    /// and once to build the acceptance returned to the cloud (as
+    /// `table_id.is_some() && qr_staff_confirmation_required`) — so on a store that had turned the
+    /// hold off the two disagreed: the first delivery answered "not waiting" and every replay of
+    /// the same at-least-once reference answered "waiting".
+    ///
+    /// The channel is an argument because this is now also asked of *every* order in the
+    /// projection, not only of an order arriving through intake. On the intake path every tabled
+    /// order is a QR order, so `table_id.is_some()` was right by accident; asked of the whole
+    /// projection it would hold every dine-in table a server had seated by hand. A tabled order on
+    /// the delivery channel is not a guest submission either, and is not held.
     ///
     /// Note what this is NOT: it is not "does this order get a queue number". That is
     /// `table_id.is_none()` — a table order is served where it sits, a tableless one is called back
     /// by number — and it holds however the hold is configured. Deriving one from the other is the
     /// mistake that made these two questions look like one.
     #[must_use]
-    pub fn holds_for_staff_confirmation(&self, table_id: Option<TableId>) -> bool {
-        table_id.is_some() && self.qr_staff_confirmation_required
+    pub fn holds_for_staff_confirmation(
+        &self,
+        channel: Option<SalesChannel>,
+        table_id: Option<TableId>,
+    ) -> bool {
+        channel == Some(SalesChannel::Qr)
+            && table_id.is_some()
+            && self.qr_staff_confirmation_required
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
@@ -666,6 +703,45 @@ pub enum AppError {
     /// A shift was opened while one is already open — one open shift per device (§6, archive).
     #[error("a shift is already open")]
     ShiftAlreadyOpen,
+    /// A line was fired on a guest's order a member of staff has not yet confirmed
+    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+    ///
+    /// The order is real and billable; what has not happened is anyone agreeing to make it. This is
+    /// the guardrail ADR-0012 and ADR-0057 promised and nothing enforced.
+    #[error("that order is waiting for a member of staff to confirm it")]
+    AwaitingStaffConfirmation,
+    /// A confirmation or a rejection named an order that is not waiting for one — it was never a
+    /// held guest submission, or staff have already decided (ADR-0116).
+    #[error("that order is not waiting for staff confirmation")]
+    NotAwaitingStaffConfirmation,
+    /// A rejection cited a reason the store's managed list does not hold for rejecting an order
+    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
+    #[error("that reason code is not valid for rejecting an order")]
+    ReasonCodeNotValid,
+    /// A line was fired on an order a member of staff **refused** (ADR-0116).
+    ///
+    /// Distinct from [`AwaitingStaffConfirmation`](Self::AwaitingStaffConfirmation): that one is
+    /// "nobody has decided yet" and ends when somebody does; this one is decided, and the answer
+    /// was no. Collapsing the two into "has a decision been recorded" is exactly the bug the
+    /// enforcement suite caught — a refused order's line became fireable the moment the refusal
+    /// landed, which is the opposite of what a refusal means.
+    #[error("that order was refused by a member of staff")]
+    OrderRejected,
+    /// A rejection named an order whose kitchen has already started. That is a void, with a void's
+    /// permission and its own reason (roadmap B2.2), not a rejection.
+    #[error("that order has already fired and can no longer be rejected")]
+    AlreadyFired,
+}
+
+/// One line of a guest order waiting for staff confirmation (ADR-0116).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitingLine {
+    /// The name the guest saw when they ordered.
+    pub display_name: String,
+    /// How many.
+    pub quantity: Quantity,
+    /// The extended total, as captured.
+    pub line_total: Money,
 }
 
 /// What a table looks like to a caller after a command.
@@ -972,6 +1048,43 @@ impl ShiftRecord {
     }
 }
 
+/// Where an order came from — the two `sales.order.opened` facts a later decision needs.
+///
+/// The channel decides the tax rate (roadmap **B1.2**); the channel and the table together decide
+/// whether the order is a guest submission awaiting staff confirmation (ADR-0116). Both are
+/// `Option` for the same reason: an `UNSPECIFIED` or unrecognised channel token from a newer
+/// sender records as `None` rather than a guessed variant, and a tableless order has no table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OrderOrigin {
+    channel: Option<SalesChannel>,
+    table_id: Option<TableId>,
+}
+
+/// What a member of staff decided about a guest's submission (ADR-0116).
+///
+/// Recorded rather than collapsed to a bool because the two outcomes differ in what follows:
+/// a confirmation releases the order to the kitchen, a rejection closes it. A screen that
+/// showed "decided" without saying which would be useless to the person who has to explain it
+/// to the guest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaffDecision {
+    /// Released to the kitchen.
+    Confirmed,
+    /// Refused, and the order closed with it.
+    Rejected,
+}
+
+/// Where an order stands with staff, from the fire path's point of view (ADR-0116).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StaffStanding {
+    /// A guest submission nobody has decided on yet. The kitchen must not see it.
+    Waiting,
+    /// A guest submission staff refused. The kitchen must never see it.
+    Refused,
+    /// Either released by staff, or never a held guest submission at all.
+    Fireable,
+}
+
 /// The in-memory projection: the current state of each aggregate, folded from the event log.
 ///
 /// Durable truth is the event log in the store; this is a cache rebuilt at boot and updated as
@@ -998,7 +1111,17 @@ struct Projection {
     /// The guest count `sales.order.opened` also carries is deliberately **not** here. It is
     /// reporting data (average check per cover) whose readers are the event log and the cloud
     /// rollups; no edge decision consults it, and a cached copy no code reads is a field that rots.
-    orders: HashMap<OrderId, Option<SalesChannel>>,
+    orders: HashMap<OrderId, OrderOrigin>,
+    /// The orders a member of staff has confirmed or refused
+    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
+    /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
+    ///
+    /// This is the *only* mutable part of the hold, and it is append-only: an order enters the map
+    /// once and never leaves it. The hold itself is not stored — it is derived from this map, the
+    /// order's origin, and the live `qr` policy, so turning the policy off releases every held
+    /// order at once instead of leaving a stored flag to be cleared one order at a time. A stored
+    /// boolean is how the reported answer and the enforced answer drifted apart before.
+    staff_decisions: HashMap<OrderId, StaffDecision>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
@@ -1054,9 +1177,15 @@ impl Projection {
             .map(|(table, _)| *table)
     }
 
-    /// Records the channel an order came in on, from a live open or from the fold on rebuild.
-    fn open_order_channel(&mut self, order_id: OrderId, channel: Option<SalesChannel>) {
-        self.orders.insert(order_id, channel);
+    /// Records where an order came from, from a live open or from the fold on rebuild.
+    fn open_order_origin(
+        &mut self,
+        order_id: OrderId,
+        channel: Option<SalesChannel>,
+        table_id: Option<TableId>,
+    ) {
+        self.orders
+            .insert(order_id, OrderOrigin { channel, table_id });
     }
 
     /// The channel an order came in on.
@@ -1066,7 +1195,70 @@ impl Projection {
     /// session's channel in both cases, which is exactly the old behaviour and the only answer
     /// available for a line already in the ground.
     fn order_channel(&self, order_id: OrderId) -> Option<SalesChannel> {
-        self.orders.get(&order_id).copied().flatten()
+        self.orders.get(&order_id).and_then(|origin| origin.channel)
+    }
+
+    /// Where an order came from, if this build saw it open.
+    fn order_origin(&self, order_id: OrderId) -> Option<OrderOrigin> {
+        self.orders.get(&order_id).copied()
+    }
+
+    /// Records what a member of staff decided about a guest's submission (ADR-0116).
+    fn record_staff_decision(&mut self, order_id: OrderId, decision: StaffDecision) {
+        self.staff_decisions.insert(order_id, decision);
+    }
+
+    /// What staff decided about an order, or `None` while it is still theirs to decide.
+    fn staff_decision(&self, order_id: OrderId) -> Option<StaffDecision> {
+        self.staff_decisions.get(&order_id).copied()
+    }
+
+    /// Whether this order is a guest submission still waiting on staff, under `session`'s live
+    /// policy (ADR-0116).
+    ///
+    /// Derived, never stored: origin from the log, decision from the log, policy from the current
+    /// session. An order this build never saw open has no origin and is therefore not held — the
+    /// safe answer, because refusing to fire an order whose provenance is unknown would strand a
+    /// pre-upgrade order nobody can release.
+    fn awaits_staff_confirmation(&self, order_id: OrderId, session: &EdgeSession) -> bool {
+        self.staff_decision(order_id).is_none()
+            && self.order_origin(order_id).is_some_and(|origin| {
+                session.holds_for_staff_confirmation(origin.channel, origin.table_id)
+            })
+    }
+
+    /// Where an order stands with staff, for the fire path (ADR-0116).
+    ///
+    /// Three answers rather than two, because "not waiting" is ambiguous in the one way that
+    /// matters: a confirmed order and a refused order are both decided, and only one of them may
+    /// reach the kitchen.
+    fn staff_standing(&self, order_id: OrderId, session: &EdgeSession) -> StaffStanding {
+        match self.staff_decision(order_id) {
+            Some(StaffDecision::Rejected) => StaffStanding::Refused,
+            Some(StaffDecision::Confirmed) => StaffStanding::Fireable,
+            None => {
+                if self.order_origin(order_id).is_some_and(|origin| {
+                    session.holds_for_staff_confirmation(origin.channel, origin.table_id)
+                }) {
+                    StaffStanding::Waiting
+                } else {
+                    StaffStanding::Fireable
+                }
+            }
+        }
+    }
+
+    /// Every order still waiting on staff, oldest id first (ULIDs sort by mint time, so this is
+    /// arrival order without storing a timestamp).
+    fn orders_awaiting_staff_confirmation(&self, session: &EdgeSession) -> Vec<OrderId> {
+        let mut held: Vec<OrderId> = self
+            .orders
+            .keys()
+            .copied()
+            .filter(|order_id| self.awaits_staff_confirmation(*order_id, session))
+            .collect();
+        held.sort_unstable();
+        held
     }
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
@@ -1521,7 +1713,7 @@ impl<S: EventStore> Edge<S> {
         // back to the caller below rather than recomputed there. The caller holds its own snapshot
         // taken microseconds earlier, and the config-pull loop can swap the session between the
         // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
-        let holds_for_staff = session.holds_for_staff_confirmation(table_id);
+        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
 
         // The events AND the idempotency ledger row commit in ONE transaction, so a crash between
         // opening the order and recording it is impossible — either both land or neither
@@ -1564,7 +1756,7 @@ impl<S: EventStore> Edge<S> {
             // The channel this order actually came in on, so the bill is taxed at its rate rather
             // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
             // no table and still has a channel.
-            projection.open_order_channel(order_id, order_channel);
+            projection.open_order_origin(order_id, order_channel, table_id);
             for (line_id, record) in line_records {
                 projection.add_line(line_id, record);
             }
@@ -1574,6 +1766,167 @@ impl<S: EventStore> Edge<S> {
             business_date,
             awaiting_staff_confirmation: holds_for_staff,
         })
+    }
+
+    /// Every guest order still waiting for a member of staff, oldest first
+    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+    ///
+    /// Derived from the log and the live `qr` policy, so a store that turns the hold off sees this
+    /// list empty on the next read rather than having to release each order by hand.
+    #[must_use]
+    pub fn orders_awaiting_staff_confirmation(&self) -> Vec<OrderId> {
+        let session = self.session();
+        self.lock_projection()
+            .orders_awaiting_staff_confirmation(&session)
+    }
+
+    /// Whether one order is still waiting for a member of staff (ADR-0116).
+    #[must_use]
+    pub fn awaits_staff_confirmation(&self, order_id: OrderId) -> bool {
+        let session = self.session();
+        self.lock_projection()
+            .awaits_staff_confirmation(order_id, &session)
+    }
+
+    /// The line ids on one order, oldest first.
+    ///
+    /// A ULID sorts by mint time, so this is the order the lines were added in.
+    #[must_use]
+    pub fn order_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
+        let projection = self.lock_projection();
+        let mut ids: Vec<OrderLineId> = projection
+            .lines
+            .iter()
+            .filter(|(_, record)| record.order_id == order_id)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// The lines and table of one waiting order, for the confirmation screen (ADR-0116).
+    ///
+    /// Returns the display name rather than the menu item id: the line captured the name the guest
+    /// saw at the moment they ordered (§14.2), and re-reading the live menu could show a member of
+    /// staff a name the guest never saw.
+    #[must_use]
+    pub fn waiting_order_view(&self, order_id: OrderId) -> (Vec<WaitingLine>, Option<TableId>) {
+        let session = self.session();
+        let projection = self.lock_projection();
+        let lines = projection
+            .lines_for_order(order_id)
+            .into_iter()
+            .map(|record| WaitingLine {
+                // The same fallback the counter list uses: an item the store has since removed
+                // from its menu must still be *shown*, or a member of staff would be asked to
+                // agree to an order with a line missing from it.
+                display_name: session.menu.get(record.menu_item_id).map_or_else(
+                    || record.menu_item_id.to_string(),
+                    |entry| entry.display_name.as_str().to_owned(),
+                ),
+                quantity: record.quantity,
+                line_total: record.line_total,
+            })
+            .collect();
+        let table_id = projection
+            .order_origin(order_id)
+            .and_then(|origin| origin.table_id);
+        (lines, table_id)
+    }
+
+    /// Releases a guest's order to the kitchen (`sales.order.confirmed_by_staff`), ADR-0116.
+    ///
+    /// The order's lines become fireable; nothing else about it changes. Idempotent in the sense
+    /// that matters operationally: a second confirmation is refused with
+    /// [`AppError::NotAwaitingStaffConfirmation`] rather than writing a second event, so two
+    /// devices racing on the same order produce one decision and one audit entry.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NotAwaitingStaffConfirmation`] if the order is not a held guest submission or
+    /// staff have already decided, [`AppError::Domain`] if the actor lacks
+    /// `Permission::ConfirmQrOrder`, or [`AppError`] if the store cannot be written.
+    pub async fn confirm_inbound_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+    ) -> Result<(), AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::ConfirmQrOrder)?;
+        if !self.awaits_staff_confirmation(order_id) {
+            return Err(AppError::NotAwaitingStaffConfirmation);
+        }
+
+        let payload = SalesOrderConfirmedByStaff { order_id };
+        self.commit_and_publish(&ctx, &payload).await?;
+        self.lock_projection()
+            .record_staff_decision(order_id, StaffDecision::Confirmed);
+        Ok(())
+    }
+
+    /// Refuses a guest's order (`sales.order.rejected_by_staff`, then `sales.order.closed`),
+    /// ADR-0116.
+    ///
+    /// The reason is validated against the store's managed list before the event is written
+    /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)), for the
+    /// `REASON_ACTION_REJECT_ORDER` action — which is what makes the event's own doc comment
+    /// (*"the mandatory reason, from the cloud-managed list"*) true rather than aspirational.
+    ///
+    /// A rejection closes the order, because a refused guest order is not a live order waiting on
+    /// the floor: left open it would appear on the counter list and on the table's bill. An order
+    /// with a line already fired is refused instead — that is a void, with a void's permission and
+    /// its own reason (roadmap B2.2).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NotAwaitingStaffConfirmation`] if the order is not awaiting a decision,
+    /// [`AppError::ReasonCodeNotValid`] if the reason is not valid for rejecting an order,
+    /// [`AppError::AlreadyFired`] if the kitchen has already started, [`AppError::Domain`] if the
+    /// actor lacks `Permission::ConfirmQrOrder`, or [`AppError`] if the store cannot be written.
+    pub async fn reject_inbound_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<(), AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::ConfirmQrOrder)?;
+        if !self.awaits_staff_confirmation(order_id) {
+            return Err(AppError::NotAwaitingStaffConfirmation);
+        }
+        if !self
+            .session()
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::RejectOrder)
+        {
+            return Err(AppError::ReasonCodeNotValid);
+        }
+        // Checked before the write rather than after: a fired line has already consumed stock and
+        // printed a ticket, and "rejected" would tell the log a story the kitchen could contradict.
+        if self
+            .lock_projection()
+            .lines_for_order(order_id)
+            .iter()
+            .any(|line| line.state == OrderLineState::Fired)
+        {
+            return Err(AppError::AlreadyFired);
+        }
+
+        let rejected = SalesOrderRejectedByStaff {
+            order_id,
+            reason_code_id,
+        };
+        let closed = SalesOrderClosed { order_id };
+        let (rejected_envelope, rejected_message) = self.prepare(&ctx, &rejected)?;
+        let (closed_envelope, closed_message) = self.prepare(&ctx, &closed)?;
+        self.append_and_publish(
+            vec![rejected_envelope, closed_envelope],
+            vec![rejected_message, closed_message],
+        )
+        .await?;
+        self.lock_projection()
+            .record_staff_decision(order_id, StaffDecision::Rejected);
+        Ok(())
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -1658,7 +2011,7 @@ impl<S: EventStore> Edge<S> {
             let mut projection = self.lock_projection();
             projection.set_table(table_id, decision.next_state);
             projection.open_order(table_id, order_id);
-            projection.open_order_channel(order_id, Some(channel));
+            projection.open_order_origin(order_id, Some(channel), Some(table_id));
         }
         Ok(TableView {
             table_id,
@@ -1786,6 +2139,21 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .line(order_line_id)
             .ok_or(AppError::UnknownLine)?;
+
+        // The guardrail ADR-0012 and ADR-0057 promised, enforced for the first time here
+        // (ADR-0116). Until this check existed `awaiting_staff_confirmation` had three readers and
+        // all three only *reported* it — a guest's order reached the kitchen the moment anyone
+        // pressed fire, exactly as an order with no hold would. Fire is the one gate: the order
+        // stays addable, billable and settleable, because what staff have not agreed to is making
+        // it.
+        match self
+            .lock_projection()
+            .staff_standing(record.order_id, &session)
+        {
+            StaffStanding::Waiting => return Err(AppError::AwaitingStaffConfirmation),
+            StaffStanding::Refused => return Err(AppError::OrderRejected),
+            StaffStanding::Fireable => {}
+        }
 
         // The published routing decides the station; the caller's station is only a fallback for a
         // store that has not published a station plan yet (never-blank, ADR-0072).
@@ -2527,6 +2895,30 @@ impl<S: EventStore> Edge<S> {
     /// The reverse of what each command emits, without re-deciding: the events already happened, so
     /// this trusts them. Events the projection does not track — and unknown types from a newer
     /// writer — are skipped, which is what keeps a forward-compatible log replayable.
+    /// The two staff-decision arms of [`Self::fold`], lifted out to keep that function inside the
+    /// line budget rather than by dropping the comments that explain it.
+    ///
+    /// Both payloads carry an `order_id` and nothing else the projection needs — the rejection's
+    /// `reason_code_id` belongs to the audit trail, not to the hold, which only has to know that a
+    /// decision was made and which way (ADR-0116).
+    fn fold_staff_decision(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        let (order_id, decision) = if known == EventType::SalesOrderConfirmedByStaff {
+            let event: SalesOrderConfirmedByStaff =
+                envelope.data.decode().map_err(AppError::Encode)?;
+            (event.order_id, StaffDecision::Confirmed)
+        } else {
+            let event: SalesOrderRejectedByStaff =
+                envelope.data.decode().map_err(AppError::Encode)?;
+            (event.order_id, StaffDecision::Rejected)
+        };
+        projection.record_staff_decision(order_id, decision);
+        Ok(())
+    }
+
     fn fold(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
@@ -2545,7 +2937,14 @@ impl<S: EventStore> Edge<S> {
                 // An unrecognised channel from a newer sender is recorded as "no answer" rather
                 // than failing the whole replay: a box that cannot rebuild does not trade, and a
                 // guessed variant would tax a bill at a rate nobody chose.
-                projection.open_order_channel(event.order_id, event.channel.require().ok());
+                projection.open_order_origin(
+                    event.order_id,
+                    event.channel.require().ok(),
+                    event.table_id,
+                );
+            }
+            EventType::SalesOrderConfirmedByStaff | EventType::SalesOrderRejectedByStaff => {
+                Self::fold_staff_decision(projection, envelope, known)?;
             }
             EventType::SalesTableClosed => {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;

@@ -137,6 +137,37 @@ export interface CounterOrder {
   bill_id?: string;
 }
 
+// One line of a guest's order waiting for staff confirmation (ADR-0116).
+export interface WaitingLine {
+  display_name: string;
+  quantity: Quantity;
+  line_total: Money;
+}
+
+// One reason the till may offer for refusing a guest's order. The id goes back to the edge, the
+// name is already resolved into the store's display language — the till never holds a reason list
+// of its own, because the store's published list replaces the framework's (ADR-0115).
+export interface RejectReason {
+  reason_code_id: string;
+  code: string;
+  display_name: string;
+}
+
+// One guest order waiting for a member of staff (ADR-0116).
+export interface WaitingOrder {
+  order_id: string;
+  table_id: string;
+  items: WaitingLine[];
+  total: Money;
+}
+
+// The confirmation queue, and the reasons a refusal may cite. One response so the refusal dialog
+// can never open with an empty picker.
+export interface WaitingResponse {
+  orders: WaitingOrder[];
+  reject_reasons: RejectReason[];
+}
+
 export interface BumpRequest {
   order_id: string;
   station_id: string;

@@ -48,7 +48,11 @@ fn seeded_session() -> EdgeSession {
     let rates = TaxRateTable::new()
         .with(class, SalesChannel::DineIn, TaxRate::from_percent(10))
         .with(class, SalesChannel::Takeaway, TaxRate::from_percent(10))
-        .with(class, SalesChannel::Delivery, TaxRate::from_percent(10));
+        .with(class, SalesChannel::Delivery, TaxRate::from_percent(10))
+        // QR joined this table when the staff-confirmation cases started using the channel a
+        // guest's order actually arrives on (ADR-0116). Without it intake refuses the order for
+        // want of a rate, which is the correct refusal and the wrong test.
+        .with(class, SalesChannel::Qr, TaxRate::from_percent(10));
     EdgeSession::bootstrap()
         .with_menu(menu)
         .with_tax_rates(rates)
@@ -147,11 +151,33 @@ mod staff_confirmation {
         )
     }
 
-    /// A QR order: it names a table, so it is served there rather than called back by number.
+    /// An edge on the default policy: the hold is ON, as ADR-0012 and ADR-0057 require.
+    fn intake_with_the_hold() -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
+        let edge = Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(store()),
+            seeded_session(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator");
+        EdgeOrderIn::new(
+            Arc::new(edge),
+            InMemoryQueueNumbers::new(),
+            DeviceId::new(Ulid::from_u128(20)),
+        )
+    }
+
+    /// A QR order: on the QR channel, and it names a table, so it is served there rather than
+    /// called back by number.
+    ///
+    /// The channel used to be `DineIn` here, which was wrong in a way that only became visible
+    /// once the channel joined the hold predicate (ADR-0116): the fixture claimed to be a QR
+    /// order, the assertions below claim to be about the QR hold, and a `DineIn` order is not
+    /// held at all — so all three tests would have passed against a predicate that did nothing.
     fn at_a_table(reference: &str) -> InboundOrder {
         InboundOrder {
             external_reference: ExternalReference::parse(reference).expect("a valid reference"),
-            sales_channel: Open::from_known(SalesChannel::DineIn),
+            sales_channel: Open::from_known(SalesChannel::Qr),
             store_id: store(),
             table_id: Some(TableId::new(Ulid::from_u128(42))),
             subject_id: None,
@@ -235,6 +261,57 @@ mod staff_confirmation {
         assert_eq!(
             first.queue_number, replay.queue_number,
             "and the replay shouts the same number rather than burning a second one"
+        );
+    }
+
+    #[test]
+    fn a_tabled_qr_order_is_held_when_the_policy_is_on() {
+        // The default posture, and the one ADR-0012 calls the protection on a printed code.
+        let intake = intake_with_the_hold();
+        let accepted = submit(&intake, &at_a_table("QR-HOLD"));
+
+        assert!(
+            accepted.awaiting_staff_confirmation,
+            "a guest's tabled QR order waits for staff on the default policy"
+        );
+    }
+
+    #[test]
+    fn a_tabled_order_on_another_channel_is_not_a_guest_submission() {
+        // The distinction the channel argument buys (ADR-0116). A marketplace order that happens
+        // to name a table is not somebody scanning a printed code, and holding it would leave a
+        // delivery rider waiting for a confirmation nobody knows to give.
+        let intake = intake_with_the_hold();
+        let order = InboundOrder {
+            sales_channel: Open::from_known(SalesChannel::Delivery),
+            ..at_a_table("DL-1")
+        };
+        let accepted = submit(&intake, &order);
+
+        assert!(
+            !accepted.awaiting_staff_confirmation,
+            "only a QR submission is held; a tabled delivery order is not"
+        );
+    }
+
+    #[test]
+    fn a_tableless_qr_order_is_not_held() {
+        // A QR order taken at the counter names no table, so there is no "table they are not
+        // sitting at" to protect — and it is called back by number instead.
+        let intake = intake_with_the_hold();
+        let order = InboundOrder {
+            table_id: None,
+            ..at_a_table("QR-COUNTER")
+        };
+        let accepted = submit(&intake, &order);
+
+        assert!(
+            !accepted.awaiting_staff_confirmation,
+            "a tableless QR order has no table to protect, so it is not held"
+        );
+        assert!(
+            accepted.queue_number.is_some(),
+            "and it is called back by number"
         );
     }
 }

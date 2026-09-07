@@ -29,6 +29,7 @@ import type {
   SettleRequest,
   ShiftResponse,
   TableResponse,
+  WaitingResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -157,6 +158,18 @@ export const api = {
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
   bumpTicket: (bump: BumpRequest) =>
     request<BumpResponse>("POST", "/api/kds/bump", bump),
+
+  // The guest orders waiting for a member of staff, and the reasons a refusal may cite
+  // (ADR-0116). Before these three the hold was reported and never enforced — there was nothing
+  // for anyone to press.
+  awaitingConfirmation: () =>
+    request<WaitingResponse>("GET", "/api/orders/awaiting-confirmation"),
+  confirmOrder: (orderId: string) =>
+    request<void>("POST", `/api/orders/${orderId}/confirm`),
+  rejectOrder: (orderId: string, reasonCodeId: string) =>
+    request<void>("POST", `/api/orders/${orderId}/reject`, {
+      reason_code_id: reasonCodeId,
+    }),
 
   // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID

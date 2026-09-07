@@ -8,6 +8,9 @@ import { state } from "../state/store";
 const NAV: { href: string; key: MessageKey }[] = [
   { href: "/", key: "nav.floor" },
   { href: "/counter", key: "nav.counter" },
+  // A guest order that nobody confirms never reaches the kitchen (ADR-0116), so the queue needs to
+  // be one tap from every screen rather than somewhere a server has to remember to look.
+  { href: "/guests", key: "nav.confirm" },
   { href: "/kds", key: "nav.kitchen" },
   { href: "/expo", key: "nav.pass" },
   { href: "/today", key: "nav.today" },
