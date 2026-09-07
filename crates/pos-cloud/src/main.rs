@@ -589,6 +589,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Reason codes (ADR-0115, roadmap B2.2): author the managed list a void, discount, comp,
+        // refund, drawer opening, staff rejection, cash movement or stock correction must cite
+        // (per-record CRUD behind console.reason_codes.manage, audited with the actions each entry
+        // covers — narrowing those is how the fraud control gets defeated). The composed
+        // `reason_codes` node publish is a separate route.
+        .merge(http::reason_code_router(
+            store.reason_codes(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Vouchers (ADR-0077, Track M3): mint and list the distributable codes a voucher-kind
         // campaign redeems (behind console.campaigns.manage, audited by count only).
         .merge(http::voucher_router(

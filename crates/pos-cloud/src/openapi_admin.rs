@@ -113,6 +113,11 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_generate_recovery_codes,
         crate::http::admin_recovery_codes_status,
         crate::http::admin_acknowledge_region,
+        crate::http::admin_list_reason_codes,
+        crate::http::admin_get_reason_code,
+        crate::http::admin_create_reason_code,
+        crate::http::admin_update_reason_code,
+        crate::http::admin_delete_reason_code,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
@@ -122,6 +127,16 @@ pub(crate) struct ErrorResponse {
             description = "Two-factor sign-in, the session it issues, and the second-factor levers \
                            (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
                            session these routes establish."
+        ),
+        (
+            name = "reason codes",
+            description = "The managed list a void, a discount, a comp, a refund, a drawer \
+                           opening, a staff rejection, either cash movement and either stock \
+                           correction must cite (ADR-0115, `docs/pos-spec.md` §11 item 2). \
+                           Documented rather than deferred because it is a **fraud control**: a \
+                           fork writing its own console needs to know that ids are server-minted, \
+                           that an entry leaves service by going inactive rather than by being \
+                           deleted, and that every write is conditional."
         ),
         (
             name = "fleet",

@@ -177,6 +177,19 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author ingredients, recipes, auto-86 thresholds, and suppliers",
     },
+    /// Author the managed reason codes a void, discount, comp, refund, staff rejection, cash
+    /// movement or stock correction must cite
+    /// ([ADR-0115](../adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
+    ///
+    /// Owner/Admin, the manage norm — Ops publishes the composed node but does not author the
+    /// list. `docs/pos-spec.md` §11 item 2 makes these reasons a **fraud control**, and the two
+    /// ways to defeat one are to remove the reason a colleague's void would have had to cite and
+    /// to add a vague catch-all everything can hide behind. Both are authoring, not publishing.
+    ManageReasonCodes {
+        id: "console.reason_codes.manage",
+        roles: [Owner, Admin],
+        description: "Author the managed reason codes a void, discount or refund must cite",
+    },
     /// Publish an OTA rollout — target version, ring, ramp, signing key, revocations — or engage its
     /// kill switch ([ADR-0078](../adr/0078-sync-and-ota-closure.md)). Owner/Admin only, above the
     /// `PublishConfig` norm that includes Ops: pushing a binary rollout to the fleet is not a

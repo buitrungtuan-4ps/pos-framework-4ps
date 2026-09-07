@@ -443,6 +443,66 @@ export const UNITS: readonly UnitOfMeasure[] = [
   "UNIT_OF_MEASURE_PIECE",
 ];
 
+/**
+ * An action a reason must be cited for (`ReasonAction`); wire tokens are prefixed `REASON_ACTION_`
+ * (ADR-0115).
+ *
+ * Eleven, one per event field in the catalogue that declares a `reason_code_id` — `docs/pos-spec.md`
+ * §11 item 2 names six and the events demand five more, so an operator can author a reason for a
+ * cash paid-in or a stock correction rather than leaving that field unfillable.
+ */
+export type ReasonAction =
+  | "REASON_ACTION_VOID_LINE"
+  | "REASON_ACTION_VOID_BILL"
+  | "REASON_ACTION_DISCOUNT"
+  | "REASON_ACTION_COMP"
+  | "REASON_ACTION_REFUND"
+  | "REASON_ACTION_DRAWER_OPEN"
+  | "REASON_ACTION_REJECT_ORDER"
+  | "REASON_ACTION_CASH_PAID_IN"
+  | "REASON_ACTION_CASH_PAID_OUT"
+  | "REASON_ACTION_STOCK_ADJUSTMENT"
+  | "REASON_ACTION_STOCK_WASTE";
+
+/** Every action a reason can be tagged for, in the order the picker lists them. */
+export const REASON_ACTIONS: readonly ReasonAction[] = [
+  "REASON_ACTION_VOID_LINE",
+  "REASON_ACTION_VOID_BILL",
+  "REASON_ACTION_DISCOUNT",
+  "REASON_ACTION_COMP",
+  "REASON_ACTION_REFUND",
+  "REASON_ACTION_DRAWER_OPEN",
+  "REASON_ACTION_REJECT_ORDER",
+  "REASON_ACTION_CASH_PAID_IN",
+  "REASON_ACTION_CASH_PAID_OUT",
+  "REASON_ACTION_STOCK_ADJUSTMENT",
+  "REASON_ACTION_STOCK_WASTE",
+];
+
+/**
+ * One entry in a tenant's managed reason list (`PublishedReasonCode`) — the handle a report groups
+ * by, the name staff read, its per-locale names, the actions it may be cited for, and whether it is
+ * still offered.
+ *
+ * `active: false` is how an entry leaves service: a historic `sales.order_line.voided` names its id
+ * forever, so it stays in the list and resolves for a report while appearing on no picker.
+ */
+export interface ReasonCode {
+  readonly id: string;
+  readonly code: string;
+  readonly display_name: string;
+  readonly display_name_translations?: Record<string, string>;
+  readonly applies_to: ReasonAction[];
+  readonly active: boolean;
+  readonly etag: ETag;
+}
+
+/**
+ * The authoring fields of a reason-code create/update — a `ReasonCode` without its server-minted id
+ * or the version it was read at (a write sends that as `If-Match`, not in the body).
+ */
+export type ReasonCodeInput = Omit<ReasonCode, "id" | "etag">;
+
 /** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
 export interface Ingredient {
   readonly id: string;

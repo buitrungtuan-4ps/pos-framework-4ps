@@ -127,6 +127,16 @@ export const SCREENS = {
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
   },
+  // Reason codes (ADR-0115): the managed list a void, discount, comp, refund, drawer opening, staff
+  // rejection, cash movement or stock correction must cite. Owner/admin only, matching the server's
+  // console.reason_codes.manage — authoring the list is what upholds or defeats the fraud control.
+  reasonCodes: {
+    path: "/reason-codes",
+    key: "nav.reasonCodes",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+  },
   channels: {
     path: "/channels",
     key: "nav.channels",
@@ -263,6 +273,7 @@ export const NAV_GROUPS: readonly { key: MessageKey; items: readonly ScreenId[] 
       "catalog",
       "campaigns",
       "inventory",
+      "reasonCodes",
       "channels",
       "media",
       "layout",

@@ -76,6 +76,7 @@ use pos_cloud::people::{
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
+use pos_cloud::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use pos_cloud::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use pos_cloud::registry::{
     BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError, StoreRecord,
@@ -107,10 +108,11 @@ use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
-    StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
+    ReasonCodeId, StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::TaxRate;
+use pos_proto::reason_codes::PublishedReasonCode;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -19933,6 +19935,534 @@ async fn the_admin_device_read_lists_approved_devices_for_one_store_and_still_de
     let mistyped = router
         .oneshot(get_with_cookie(
             &format!("/admin/devices/proposals?tenant_id={tenant_ulid}&status=aproved"),
+            &cookie,
+        ))
+        .await
+        .expect("route the mistyped listing");
+    assert_eq!(mistyped.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Reason-code authoring admin routes (ADR-0115, B2.2 slice 3) --------------------------------
+
+/// An in-memory `ReasonCodeStore` for the route tests.
+///
+/// Tenant-scoped and version-carrying like the real thing, because that is what the routes under
+/// test depend on: a create refuses a taken id, an update applies only at the version a read handed
+/// back, and the list is where the console obtains it.
+/// One stored entry: which tenant authored it, and the record with the version it stands at.
+type ReasonCodeRow = (TenantId, Versioned<PublishedReasonCode>);
+
+#[derive(Default, Clone)]
+struct FakeReasonCodes {
+    rows: Arc<Mutex<Vec<ReasonCodeRow>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeReasonCodes {
+    /// The fake's stand-in for `xmin` (ADR-0094): a token that changes on every successful write.
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
+}
+
+impl ReasonCodeStore for FakeReasonCodes {
+    async fn list(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<PublishedReasonCode>>, ReasonCodeStoreError> {
+        let rows = self.rows.lock().expect("lock");
+        let mut mine: Vec<Versioned<PublishedReasonCode>> = rows
+            .iter()
+            .filter(|(owner, _)| *owner == tenant_id)
+            .map(|(_, row)| row.clone())
+            .collect();
+        mine.sort_by_key(|row| row.record.id.as_ulid().to_u128());
+        Ok(mine)
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<Option<Versioned<PublishedReasonCode>>, ReasonCodeStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(owner, row)| *owner == tenant_id && row.record.id == reason_code_id)
+            .map(|(_, row)| row.clone()))
+    }
+
+    async fn create(
+        &self,
+        tenant_id: TenantId,
+        reason_code: &PublishedReasonCode,
+    ) -> Result<CreateOutcome, ReasonCodeStoreError> {
+        let version = self.mint();
+        let mut rows = self.rows.lock().expect("lock");
+        if rows
+            .iter()
+            .any(|(owner, row)| *owner == tenant_id && row.record.id == reason_code.id)
+        {
+            return Ok(CreateOutcome::AlreadyExists);
+        }
+        rows.push((
+            tenant_id,
+            Versioned::new(reason_code.clone(), version.clone()),
+        ));
+        Ok(CreateOutcome::Created(version))
+    }
+
+    async fn update(
+        &self,
+        tenant_id: TenantId,
+        reason_code: &PublishedReasonCode,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, ReasonCodeStoreError> {
+        let version = self.mint();
+        let mut rows = self.rows.lock().expect("lock");
+        let Some((_, row)) = rows
+            .iter_mut()
+            .find(|(owner, row)| *owner == tenant_id && row.record.id == reason_code.id)
+        else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = reason_code.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<(), ReasonCodeStoreError> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .retain(|(owner, row)| !(*owner == tenant_id && row.record.id == reason_code_id));
+        Ok(())
+    }
+}
+
+/// The admin surface plus the reason-code router, on fakes, recording into `audit`.
+///
+/// The trail is a real `AuditSink` over `FakeAudit` rather than the no-op the inventory routes use:
+/// these entries are the record of who changed a **fraud control**, so what lands in them is part
+/// of what this slice has to get right, not incidental.
+fn reason_code_app(
+    admin: FakeAdmin,
+    reason_codes: FakeReasonCodes,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::reason_code_router(
+        reason_codes,
+        admin,
+        clock(),
+        audit,
+    ))
+}
+
+/// A reason-code write body: the report handle, the name staff read, one Vietnamese translation, and
+/// the actions it may be cited for.
+fn reason_code_body(tenant: &str, code: &str, actions: &[&str], active: bool) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": tenant,
+        "code": code,
+        "display_name": "Waste or spoilage",
+        "display_name_translations": { "vi": "Hàng hỏng hoặc hết hạn" },
+        "applies_to": actions,
+        "active": active,
+    })
+}
+
+/// The most recent trail entry for `action`, or `None`.
+async fn last_trail_entry(audit: &FakeAudit, action: &str) -> Option<AuditEntry> {
+    audit
+        .list(None, 50)
+        .await
+        .expect("read the trail")
+        .into_iter()
+        .find(|entry| entry.action == action)
+}
+
+/// Authoring an entry mints its id, hands back the version to edit it at, and records in the trail
+/// the two facts that decide whether the control holds: which actions it covers, and that it is live.
+#[tokio::test]
+async fn authoring_a_reason_code_mints_its_id_and_the_trail_records_what_it_covers() {
+    let audit = FakeAudit::default();
+    let router = reason_code_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(
+                &tenant,
+                "WASTE",
+                &["REASON_ACTION_VOID_LINE", "REASON_ACTION_STOCK_WASTE"],
+                true,
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let at_create = etag_of(&created);
+    let body = json_body(created).await;
+    let minted = body["id"]
+        .as_str()
+        .expect("the create answers the entry it stored")
+        .to_owned();
+    assert_eq!(
+        minted.len(),
+        26,
+        "the server minted the id, so a caller cannot choose one an event already names"
+    );
+    assert_eq!(
+        body["etag"].as_str().expect("an etag field"),
+        at_create,
+        "the version is in the body as well as the header, so the console can edit straight from a \
+         create without re-reading"
+    );
+    assert_eq!(
+        body["display_name_translations"]["vi"], "Hàng hỏng hoặc hết hạn",
+        "§12: the picker's Vietnamese name survives the round trip, got {body}"
+    );
+
+    let entry = last_trail_entry(&audit, "reason_codes.create")
+        .await
+        .expect("the create is in the trail");
+    assert_eq!(entry.entity_type, "reason_code");
+    assert_eq!(entry.entity_id, minted);
+    let after = entry.after.expect("the trail records what was stored");
+    assert_eq!(after["code"], "WASTE");
+    assert_eq!(
+        after["applies_to"],
+        serde_json::json!(["REASON_ACTION_VOID_LINE", "REASON_ACTION_STOCK_WASTE"]),
+        "the actions are in the summary: narrowing them is how the control gets defeated, so a \
+         trail that omitted them would record that a reason changed while hiding the change"
+    );
+    assert_eq!(after["active"], true);
+}
+
+/// Retiring an entry is the ordinary edit, needs the version the read carried, and shows in the
+/// trail as the change of standing it is.
+#[tokio::test]
+async fn retiring_a_reason_code_needs_the_version_and_is_visible_in_the_trail() {
+    let audit = FakeAudit::default();
+    let store = FakeReasonCodes::default();
+    let router = reason_code_app(
+        provisioned_admin(),
+        store.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "WASTE", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    let at_create = etag_of(&created);
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let row = format!("/admin/reason-codes/{id}");
+    let retire = reason_code_body(&tenant, "WASTE", &["REASON_ACTION_VOID_LINE"], false);
+
+    let unconditional = router
+        .clone()
+        .oneshot(put_with_cookie(&row, &retire, &cookie))
+        .await
+        .expect("route the unconditional edit");
+    assert_eq!(
+        unconditional.status(),
+        StatusCode::BAD_REQUEST,
+        "ADR-0094: an edit without If-Match is refused rather than clobbering"
+    );
+
+    let retired = router
+        .clone()
+        .oneshot(put_with_etag(&row, &retire, &cookie, &at_create))
+        .await
+        .expect("route the retire");
+    assert_eq!(retired.status(), StatusCode::OK);
+    let at_retire = etag_of(&retired);
+    assert_ne!(at_retire, at_create, "an applied edit moves the version");
+
+    let replayed = router
+        .clone()
+        .oneshot(put_with_etag(&row, &retire, &cookie, &at_create))
+        .await
+        .expect("route the replay");
+    assert_eq!(
+        replayed.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the stale version is refused, not silently applied"
+    );
+
+    let entry = last_trail_entry(&audit, "reason_codes.update")
+        .await
+        .expect("the retire is in the trail");
+    let before = entry.before.expect("the trail records what stood before");
+    let after = entry.after.expect("and what stands now");
+    assert_eq!(before["active"], true);
+    assert_eq!(
+        after["active"], false,
+        "the trail says a reason left service, which is the half of the control an auditor asks \
+         about: whether the reason a colleague's void would have had to cite was removed"
+    );
+
+    // And retiring keeps it resolvable: the list still holds it, because a historic
+    // `sales.order_line.voided` names its id forever.
+    let listed = json_body(
+        router
+            .oneshot(get_with_cookie(
+                &format!("/admin/reason-codes?tenant_id={tenant}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the list"),
+    )
+    .await;
+    let rows = listed.as_array().expect("an array");
+    assert_eq!(rows.len(), 1, "a retired entry stays in the list");
+    assert_eq!(rows[0]["active"], false);
+}
+
+/// The three data-entry faults a reason-code form can make, each naming its own field.
+#[tokio::test]
+async fn a_reason_that_could_be_cited_for_nothing_is_refused_and_the_refusal_names_the_field() {
+    let router = reason_code_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // No action at all: it would sit in the table and appear on no picker.
+    let unusable = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "WASTE", &[], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(unusable.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(unusable).await;
+    assert_eq!(body["error"]["details"][0]["field"], "applies_to");
+    assert_eq!(body["error"]["details"][0]["reason"], "REQUIRED");
+
+    // An action this cloud does not know matches nothing at the till, so storing it would author a
+    // reason that silently applies to nothing.
+    let unknown = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "WASTE", &["REASON_ACTION_TELEPORT"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(unknown).await;
+    assert_eq!(body["error"]["details"][0]["field"], "applies_to");
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+
+    // A blank handle: a report would group by an empty string.
+    let blank = router
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "   ", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(blank.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(blank).await;
+    assert_eq!(body["error"]["details"][0]["field"], "code");
+    assert_eq!(body["error"]["details"][0]["reason"], "REQUIRED");
+}
+
+/// Deleting is for the entry created by mistake, and it leaves the whole summary in the trail —
+/// which is the only thing that can be done for an id an event may already name.
+#[tokio::test]
+async fn deleting_a_reason_code_leaves_a_readable_trail_and_the_entry_stops_resolving() {
+    let audit = FakeAudit::default();
+    let router = reason_code_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "TYPO", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let row = format!("/admin/reason-codes/{id}?tenant_id={tenant}");
+
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(&row, &cookie))
+        .await
+        .expect("route the delete");
+    assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+
+    let entry = last_trail_entry(&audit, "reason_codes.delete")
+        .await
+        .expect("the delete is in the trail");
+    let before = entry.before.expect("the trail keeps the whole entry");
+    assert_eq!(before["code"], "TYPO");
+    assert_eq!(before["name"], "Waste or spoilage");
+    assert_eq!(
+        before["applies_to"],
+        serde_json::json!(["REASON_ACTION_VOID_LINE"]),
+        "so a reader of the trail can still say what the deleted id meant"
+    );
+
+    let gone = router
+        .clone()
+        .oneshot(get_with_cookie(&row, &cookie))
+        .await
+        .expect("route the read");
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+
+    // A second delete is refused as a `404` rather than answered as a success: the seam is
+    // idempotent, but the route reads the row first so it has a `before` to record.
+    let again = router
+        .oneshot(delete_with_cookie(&row, &cookie))
+        .await
+        .expect("route the second delete");
+    assert_eq!(again.status(), StatusCode::NOT_FOUND);
+}
+
+/// Authoring the list and reading it are different permissions: a viewer may see what a store's
+/// staff must cite, and may not change it.
+#[tokio::test]
+async fn a_viewer_reads_the_reason_codes_and_cannot_author_them() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = reason_code_app(
+        admin,
+        FakeReasonCodes::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let tenant = ulid_text(1);
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/reason-codes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(
+        listed.status(),
+        StatusCode::OK,
+        "console.data.read is granted to every role, so a viewer may read the list"
+    );
+
+    let denied = router
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "WASTE", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(
+        denied.status(),
+        StatusCode::FORBIDDEN,
+        "authoring is behind console.reason_codes.manage — Owner and Admin only, because \
+         removing a reason or adding a vague catch-all is how the fraud control gets defeated"
+    );
+}
+
+/// One tenant's list never reaches another's, and a malformed tenant is a refusal rather than a
+/// cross-tenant read.
+#[tokio::test]
+async fn a_tenants_reason_codes_are_its_own() {
+    let router = reason_code_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let mine = ulid_text(1);
+    let theirs = ulid_text(2);
+
+    router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&mine, "WASTE", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+
+    let others = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/reason-codes?tenant_id={theirs}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the other tenant's list"),
+    )
+    .await;
+    assert_eq!(
+        others.as_array().expect("an array").len(),
+        0,
+        "the other tenant authored nothing, and sees nothing"
+    );
+
+    let mistyped = router
+        .oneshot(get_with_cookie(
+            "/admin/reason-codes?tenant_id=nope",
             &cookie,
         ))
         .await

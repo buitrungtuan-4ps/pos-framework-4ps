@@ -93,6 +93,9 @@ const Fleet = lazy(() =>
 const Inventory = lazy(() =>
   import("./screens/Inventory").then((module) => ({ default: module.Inventory })),
 );
+const ReasonCodes = lazy(() =>
+  import("./screens/ReasonCodes").then((module) => ({ default: module.ReasonCodes })),
+);
 const Ota = lazy(() =>
   import("./screens/Ota").then((module) => ({ default: module.Ota })),
 );
@@ -170,6 +173,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   catalog: CatalogShell,
   campaigns: Campaigns,
   inventory: Inventory,
+  reasonCodes: ReasonCodes,
   channels: Channels,
   media: Media,
   layout: Layout,
