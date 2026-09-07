@@ -323,6 +323,47 @@ else
   else
     echo "warn   could not check table_token_secret in $SECRETS/cloud.toml (need root or passwordless sudo); QR ordering may still be off"
   fi
+
+  # internal_shared_secret is APPENDED IF ABSENT, on exactly the same terms as table_token_secret
+  # above — and it is the one this file most needed and did not have. ADR-0097 made it a BOOT
+  # REQUIREMENT: `Config::validate` refuses to start without it, deliberately, because this file is
+  # not checked for unknown keys and so a misspelled name would look set and be absent. The template
+  # in step 2 writes it, which covers every box created since. A box created BEFORE it existed takes
+  # the "keep cloud.toml" branch — correctly, secrets are never rotated — and until this block there
+  # was nothing to add the key on the upgrade run. The first image carrying the requirement then
+  # crash-looped on boot while the deploy reported success, because bootstrap had genuinely finished:
+  # everything it was asked to do, it did.
+  #
+  # That the two reconciles above existed and this one did not is the whole defect, and the priority
+  # was exactly inverted. Missing `table_token_secret` means one feature is off plus a warn line;
+  # missing `trusted_proxy_hops` means a wrong rate-limit bucket. Missing THIS means the cloud does
+  # not run at all. The two survivable gaps had an upgrade path and the fatal one did not.
+  #
+  # Never rewritten once found: the value is a shared secret, so re-minting it would silently break
+  # every caller already configured with it — the same reasoning as the QR secret one block up.
+  #
+  # The secret is generated INSIDE the privileged shell, so what reaches `sudo`'s argv is the text
+  # `openssl rand -hex 32` and never the value, which `ps` would otherwise show to anyone on the box.
+  # `rand_hex` cannot be reached from there (it is a function in this shell, not a command), so its
+  # /dev/urandom fallback is inlined for a box without openssl.
+  #
+  # The note carries NO SLASH on purpose: it is interpolated into a `sed s//…/` replacement, where a
+  # slash ends the expression and sed answers "unknown option to `s'". Both notes above obey the same
+  # rule; this comment is the one that says why.
+  secret_note='# Shared secret the three internal routes require (ADR-0097), added by a later bootstrap run.'
+  secret_cmd="if grep -q '^internal_shared_secret' '$SECRETS/cloud.toml'; then :;"
+  secret_cmd="$secret_cmd else v=\"\$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \\n')\";"
+  secret_cmd="$secret_cmd if grep -q '^\\[' '$SECRETS/cloud.toml'; then"
+  secret_cmd="$secret_cmd sed -i \"0,/^\\[/s//$secret_note\\ninternal_shared_secret = \\\"\$v\\\"\\n\\n&/\" '$SECRETS/cloud.toml';"
+  secret_cmd="$secret_cmd else printf '\\n%s\\ninternal_shared_secret = \"%s\"\\n' '$secret_note' \"\$v\" >> '$SECRETS/cloud.toml'; fi; echo added; fi"
+  if secret_added="$(sh -c "$secret_cmd" 2>/dev/null)"; then
+    [ -n "$secret_added" ] && echo "set    cloud.toml internal_shared_secret (this box predates ADR-0097; pos_cloud could not have started without it)"
+  elif command -v sudo >/dev/null 2>&1 && secret_added="$(sudo -n sh -c "$secret_cmd" 2>/dev/null)"; then
+    [ -n "$secret_added" ] && echo "set    cloud.toml internal_shared_secret via sudo (this box predates ADR-0097; pos_cloud could not have started without it)"
+  else
+    echo "warn   could not check internal_shared_secret in $SECRETS/cloud.toml (need root or passwordless sudo)"
+    echo "warn   pos_cloud REFUSES TO START without it (ADR-0097): add it by hand ABOVE the first [table] header in that file, then restart pos_cloud"
+  fi
 fi
 # The pos_cloud container runs as uid $APP_UID and must read this 600 file (root ignores the
 # mode; the app user does not). Deploying as root chowns directly; deploying as a non-root sudo
