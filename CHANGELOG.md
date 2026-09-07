@@ -52,6 +52,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A QR order could be stranded behind a hold the store had switched off.**
+
+  The staff-confirmation hold was decided twice, in two different ways. The durable idempotency
+  ledger row was written as `table_id.is_some()` alone; the acceptance returned to the cloud was
+  `table_id.is_some() && qr_staff_confirmation_required`. On a store that had turned the hold off in
+  its `qr` guardrail node those two disagree: the first delivery answered *not waiting*, and every
+  replay of the same reference — the relay is explicitly at-least-once — answered *waiting*, from
+  the row. Since no confirm route exists yet, that order was then held forever, by a hold the
+  operator had switched off.
+
+  The question is now asked once, by `EdgeSession::holds_for_staff_confirmation`, inside
+  `open_inbound_order` — which holds both inputs — and handed back in `InboundOrderOpened` rather
+  than recomputed by the caller. The caller's own session snapshot is taken microseconds earlier and
+  the config-pull loop can replace the session between the two, so recomputing would have
+  reintroduced the same disagreement, just more rarely.
+
+  **A second defect was underneath it, and fixing only the first would have released it.** The
+  replay path chose the queue number with `if awaiting { None } else { allocate() }` — two different
+  questions, conflated. It worked only because the stored flag happened to equal
+  `table_id.is_some()`. Correct that flag and the else-branch runs for a table order, and
+  `allocate_queue_number` is idempotent rather than fussy: it would have quietly minted a queue
+  number for an order served at a table, which must never have one. The replay now asks
+  `queue_number_for` — the read the port already provides, whose own doc comment names this exact
+  hazard — instead of inferring.
+
+  Three cases pin it, and each was confirmed to fail on the code it guards: the hold answer is the
+  same on the first delivery and the replay (fails on the original); a table order gets no queue
+  number on either path (passes on the original, fails on the flag-only half-fix — `left: Some(1)`,
+  `right: None`); and a tableless order shouts the same number twice rather than burning a second.
+
+  Still open, and tracked: nothing yet clears the hold. A store with confirmation ON has no confirm
+  or reject route and no screen listing pending QR orders, so those orders wait for a member of
+  staff who has no way to answer. This change makes the hold honest, not releasable.
+
 - **`bootstrap.sh` stopped the deploy whenever a `cloud.toml` key was already set.**
 
   Deploy #19 printed `set    cloud.toml table_token_secret` and then exited 1 with no error
