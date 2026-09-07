@@ -55,6 +55,19 @@ a stop. Started from a console it notices that SCM is not there and runs in the 
 `pos-edge.exe --self-test` and an operator's manual run are unchanged. **No third-party wrapper is
 needed.**
 
+### Get `pos-edge.exe`
+
+From the **GitHub Release** for the version you are installing:
+`pos-edge-vX.Y.Z-x86_64-pc-windows-msvc.zip` (or the bare `.exe` beside it). Verify the `.minisig`
+first — the edge does the same before it installs an update
+([ADR-0047](../../docs/adr/0047-minisign-verification.md)), and
+[`docs/release-runbook.md`](../../docs/release-runbook.md) has the one-line check.
+
+A binary you built yourself with `cargo build --release -p pos-edge` runs, and is the right thing for
+a bench test, but it carries **no release stamp and no signature**: the fleet console cannot tell
+which version it is ([ADR-0078](../../docs/adr/0078-sync-and-ota-closure.md)) and it is not what a
+shop should be trading on.
+
 ### Use the installer
 
 `install-pos-edge.ps1`, beside this file, does the whole install. Run it in an elevated PowerShell:

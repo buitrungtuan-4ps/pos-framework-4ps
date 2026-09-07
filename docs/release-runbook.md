@@ -75,12 +75,22 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    The push triggers the `release` workflow. (To rebuild an existing tag — e.g. after a transient
    runner failure — run the workflow manually from the Actions tab with that tag; publishing is
    idempotent and re-uploads onto the same Release.)
-3. Approve the `production` Environment prompt (the second human) when GitHub asks.
-4. When the run finishes, the Release for the tag carries, for each Linux target
-   (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`):
-   - `pos-edge-vX.Y.Z-<target>.tar.gz` — the binary (with the real embedded UI),
-   - `pos-edge-vX.Y.Z-<target>.tar.gz.minisig` — its minisign signature,
+3. Approve the `production` Environment prompt (the second human) when GitHub asks. **Two jobs name
+   that environment** — the Windows build and the signing job — so the run may ask twice. Only the
+   second one holds the signing key; the Windows job names the environment because the trust anchor
+   it bakes in may be configured there.
+4. When the run finishes, the Release for the tag carries, for **each of the three targets**
+   (`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`):
+   - the archive — `.tar.gz` for the Linux targets, `.zip` for Windows — holding the binary with the
+     real embedded UI,
+   - the bare executable — `.bin` for the Linux targets, `.exe` for Windows,
+   - a `.minisig` beside each of those,
    plus `SHA256SUMS` and its `.minisig`.
+
+   The Windows binary is built on a `windows-2022` runner because `x86_64-pc-windows-msvc` does not
+   cross-compile from Linux, and it is signed on the Linux job like the other two: **the signing key
+   only ever reaches one runner.** The Windows job hands its unsigned binary over as a run artifact
+   with one day of retention.
 
 5. **Upload the OTA pair to the cloud.** The Release is where a human downloads from; the cloud is
    where a *store* downloads from, and they are separate steps on purpose (the cloud never sees the
