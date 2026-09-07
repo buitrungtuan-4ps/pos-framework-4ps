@@ -74,6 +74,124 @@ rand_hex() {
 mkdir -p "$SECRETS"
 chmod 700 "$SECRETS"
 
+# 1c. How to read and write cloud.toml. A bootstrap that has run before chowned this file to uid
+#     $APP_UID mode 600 (step 2 below), so on a non-root deploy user — Oracle's `ubuntu`, and most
+#     other cloud defaults — nothing can read or write it directly; it all has to go through
+#     passwordless `sudo -n`, the same ladder the chown itself falls back to. Every caller in this
+#     script goes through these helpers, and each one that did not has cost a broken deploy:
+#     step 7b's `[artifacts]` guard had its EACCES swallowed by `2>/dev/null` and so read "not
+#     written yet" on every run, and its append then aborted the whole bootstrap under `set -e`
+#     after the stack was already up.
+#
+#     Content is appended from STDIN rather than passed as an argument on purpose: a `sudo -n sh -c
+#     "…$key_secret…"` would put a freshly minted S3 secret in the process table, readable by anyone
+#     on the box who can run `ps`.
+cloud_toml_reader() {
+  if [ -r "$SECRETS/cloud.toml" ]; then
+    echo direct
+  elif command -v sudo >/dev/null 2>&1 && sudo -n test -r "$SECRETS/cloud.toml" 2>/dev/null; then
+    echo sudo
+  else
+    echo none
+  fi
+}
+
+cloud_toml_writer() {
+  if [ -w "$SECRETS/cloud.toml" ]; then
+    echo direct
+  elif command -v sudo >/dev/null 2>&1 && sudo -n test -w "$SECRETS/cloud.toml" 2>/dev/null; then
+    echo sudo
+  else
+    echo none
+  fi
+}
+
+# Prints present | absent | unreadable. "Could not tell" is a third answer and it has to be
+# distinguishable from "absent", because the two call for opposite actions. It is printed rather
+# than returned in `$?` because the first assignment after the call clobbers `$?`, which is exactly
+# the trap the old `grep … 2>/dev/null` fell into.
+cloud_toml_state() {
+  case "$(cloud_toml_reader)" in
+    direct) if grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
+    sudo) if sudo -n grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
+    *) echo unreadable ;;
+  esac
+}
+
+# stdin -> the end of cloud.toml. Non-zero if it could not be written, with stdin drained either
+# way so the producing group does not die on EPIPE under `set -o pipefail`.
+cloud_toml_append() {
+  case "$(cloud_toml_writer)" in
+    direct) cat >> "$SECRETS/cloud.toml" ;;
+    sudo) sudo -n tee -a "$SECRETS/cloud.toml" >/dev/null ;;
+    *) cat >/dev/null; return 1 ;;
+  esac
+}
+
+# Is $1 present as a TOP-LEVEL key — that is, above the first table header? That is the only
+# position the cloud reads, and "present somewhere" is not the same question. Step 7b appends
+# `[artifacts]`, so on any box that has completed a bootstrap the end of this file is *inside* that
+# table, and a key appended there parses as `artifacts.<key>`: still at the start of its line, still
+# found by a bare `grep -q`, and never read. So the check compares line numbers, and a file with no
+# table at all counts every key as top-level. Answers 0 yes, 1 no, 2 could not read.
+cloud_toml_key_is_top_level() {
+  cmd="k=\$(grep -n '^$1' '$SECRETS/cloud.toml' | head -1 | cut -d: -f1);"
+  cmd="$cmd [ -n \"\$k\" ] || exit 1;"
+  cmd="$cmd t=\$(grep -n '^\\[' '$SECRETS/cloud.toml' | head -1 | cut -d: -f1);"
+  cmd="$cmd [ -z \"\$t\" ] || [ \"\$k\" -lt \"\$t\" ]"
+  case "$(cloud_toml_reader)" in
+    direct) sh -c "$cmd" 2>/dev/null ;;
+    sudo) sudo -n sh -c "$cmd" 2>/dev/null ;;
+    *) return 2 ;;
+  esac
+}
+
+# Mints a 32-byte secret into a top-level key of cloud.toml IF ABSENT, and NEVER rewrites one it
+# finds — a shared secret that changes breaks every caller already holding it.
+#
+# Answers: 0 added, 1 already there, 2 could not read the file, 3 could not write it.
+#
+# **The status is the whole point of this function.** The two reconciles below used to build a
+# command string ending `…; echo added; fi` and read the `if`'s success as proof. It is not: the
+# pieces are joined with `;`, so on a file this user cannot touch the `grep` fails, the write fails,
+# and `echo added` runs anyway — reporting "set" for a key that was never written, with the EACCES
+# swallowed by `2>/dev/null`. That is not a hypothetical: deploy #18 printed
+# `set cloud.toml table_token_secret` and the cloud then booted saying `no table_token_secret
+# configured`. So this function does not trust the write. It re-reads the file afterwards and
+# confirms the key is there AND top-level, and only then answers "added".
+#
+# The value is generated INSIDE the privileged shell, so what reaches `sudo`'s argv is the text
+# `openssl rand -hex 32` and never the secret, which `ps` would otherwise show to anyone on the box.
+# `rand_hex` is a function in this shell and unreachable from there, so its /dev/urandom fallback is
+# inlined for a box without openssl.
+#
+# $2 is a comment line and MUST NOT contain a `/`: it is interpolated into a `sed s//…/`
+# replacement, where a slash ends the expression and sed answers "unknown option to `s'".
+cloud_toml_mint_key_if_absent() {
+  case "$2" in
+    */*) echo "warn   internal error: the note for $1 contains a slash, which sed cannot take" >&2; return 3 ;;
+  esac
+  case "$(cloud_toml_state "^$1")" in
+    present) return 1 ;;
+    unreadable) return 2 ;;
+    *) ;;
+  esac
+  [ "$(cloud_toml_writer)" = none ] && return 3
+
+  mint="v=\"\$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \\n')\";"
+  mint="$mint if grep -q '^\\[' '$SECRETS/cloud.toml'; then"
+  mint="$mint sed -i \"0,/^\\[/s//$2\\n$1 = \\\"\$v\\\"\\n\\n&/\" '$SECRETS/cloud.toml';"
+  mint="$mint else printf '\\n%s\\n%s = \"%s\"\\n' '$2' '$1' \"\$v\" >> '$SECRETS/cloud.toml'; fi"
+  case "$(cloud_toml_writer)" in
+    direct) sh -c "$mint" 2>/dev/null || return 3 ;;
+    sudo) sudo -n sh -c "$mint" 2>/dev/null || return 3 ;;
+    *) return 3 ;;
+  esac
+
+  cloud_toml_key_is_top_level "$1" || return 3
+  return 0
+}
+
 # 1. PostgreSQL credentials.
 if [ ! -e "$SECRETS/pos.env" ]; then
   cat > "$SECRETS/pos.env" <<EOF
@@ -305,64 +423,51 @@ else
     echo "warn   could not set trusted_proxy_hops = $TRUSTED_PROXY_HOPS in $SECRETS/cloud.toml (need root or passwordless sudo)"
     echo "warn   TLS_MODE=$CADDY_TLS_MODE requires it: set it by hand and restart pos_cloud, or the /admin/login rate limit throttles by the proxy's address instead of the client's"
   fi
-  # table_token_secret is APPENDED IF ABSENT and never rewritten. Boxes bootstrapped before this
-  # line existed have no QR ordering and no error to show for it — absence means "feature off" plus
-  # one warn line at boot — so an upgrade run should turn it on. Rewriting an existing one would
-  # invalidate every table QR already printed and stuck to a table, which is why this is the one
-  # reconcile in this file that refuses to touch a value it finds.
+  # table_token_secret is minted IF ABSENT and never rewritten. Boxes bootstrapped before this line
+  # existed have no QR ordering and no error to show for it — absence means "feature off" plus one
+  # warn line at boot — so an upgrade run should turn it on. Rewriting an existing one would
+  # invalidate every table QR already printed and stuck to a table, which is why neither of these
+  # two reconciles touches a value it finds.
   qr_note='# QR table-token signing secret (ADR-0057), added by a later bootstrap run.'
-  qr_secret="$(rand_hex 32)"
-  qr_cmd="if grep -q '^table_token_secret' '$SECRETS/cloud.toml'; then :;"
-  qr_cmd="$qr_cmd elif grep -q '^\\[' '$SECRETS/cloud.toml'; then"
-  qr_cmd="$qr_cmd sed -i '0,/^\\[/s//$qr_note\\ntable_token_secret = \"$qr_secret\"\\n\\n&/' '$SECRETS/cloud.toml'; echo added;"
-  qr_cmd="$qr_cmd else printf '\\n%s\\ntable_token_secret = \"%s\"\\n' '$qr_note' '$qr_secret' >> '$SECRETS/cloud.toml'; echo added; fi"
-  if qr_added="$(sh -c "$qr_cmd" 2>/dev/null)"; then
-    [ -n "$qr_added" ] && echo "set    cloud.toml table_token_secret (QR ordering was off on this box)"
-  elif command -v sudo >/dev/null 2>&1 && qr_added="$(sudo -n sh -c "$qr_cmd" 2>/dev/null)"; then
-    [ -n "$qr_added" ] && echo "set    cloud.toml table_token_secret via sudo (QR ordering was off on this box)"
-  else
-    echo "warn   could not check table_token_secret in $SECRETS/cloud.toml (need root or passwordless sudo); QR ordering may still be off"
-  fi
+  cloud_toml_mint_key_if_absent table_token_secret "$qr_note"
+  case "$?" in
+    0) echo "set    cloud.toml table_token_secret (QR ordering was off on this box)" ;;
+    1) ;;
+    2) echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); QR ordering may still be off" ;;
+    *) echo "warn   could not write table_token_secret to $SECRETS/cloud.toml (need root or passwordless sudo); QR ordering stays off" ;;
+  esac
 
-  # internal_shared_secret is APPENDED IF ABSENT, on exactly the same terms as table_token_secret
-  # above — and it is the one this file most needed and did not have. ADR-0097 made it a BOOT
-  # REQUIREMENT: `Config::validate` refuses to start without it, deliberately, because this file is
-  # not checked for unknown keys and so a misspelled name would look set and be absent. The template
-  # in step 2 writes it, which covers every box created since. A box created BEFORE it existed takes
-  # the "keep cloud.toml" branch — correctly, secrets are never rotated — and until this block there
-  # was nothing to add the key on the upgrade run. The first image carrying the requirement then
-  # crash-looped on boot while the deploy reported success, because bootstrap had genuinely finished:
-  # everything it was asked to do, it did.
+  # internal_shared_secret is minted IF ABSENT on the same terms — and it is the one this file most
+  # needed and did not have. ADR-0097 made it a BOOT REQUIREMENT: `Config::validate` refuses to
+  # start without it, deliberately, because this file is not checked for unknown keys and so a
+  # misspelled name would look set and be absent. The template in step 2 writes it, which covers
+  # every box created since. A box created BEFORE it existed takes the "keep cloud.toml" branch —
+  # correctly, secrets are never rotated — and until this block there was nothing to add the key on
+  # the upgrade run. The first image carrying the requirement then crash-looped on boot while the
+  # deploy reported success, because bootstrap had genuinely finished: everything it was asked to
+  # do, it did.
   #
-  # That the two reconciles above existed and this one did not is the whole defect, and the priority
-  # was exactly inverted. Missing `table_token_secret` means one feature is off plus a warn line;
+  # That the reconciles above existed and this one did not is the whole defect, and the priority was
+  # exactly inverted. Missing `table_token_secret` means one feature is off plus a warn line;
   # missing `trusted_proxy_hops` means a wrong rate-limit bucket. Missing THIS means the cloud does
   # not run at all. The two survivable gaps had an upgrade path and the fatal one did not.
-  #
-  # Never rewritten once found: the value is a shared secret, so re-minting it would silently break
-  # every caller already configured with it — the same reasoning as the QR secret one block up.
-  #
-  # The secret is generated INSIDE the privileged shell, so what reaches `sudo`'s argv is the text
-  # `openssl rand -hex 32` and never the value, which `ps` would otherwise show to anyone on the box.
-  # `rand_hex` cannot be reached from there (it is a function in this shell, not a command), so its
-  # /dev/urandom fallback is inlined for a box without openssl.
-  #
-  # The note carries NO SLASH on purpose: it is interpolated into a `sed s//…/` replacement, where a
-  # slash ends the expression and sed answers "unknown option to `s'". Both notes above obey the same
-  # rule; this comment is the one that says why.
   secret_note='# Shared secret the three internal routes require (ADR-0097), added by a later bootstrap run.'
-  secret_cmd="if grep -q '^internal_shared_secret' '$SECRETS/cloud.toml'; then :;"
-  secret_cmd="$secret_cmd else v=\"\$(openssl rand -hex 32 2>/dev/null || od -An -tx1 -N32 /dev/urandom | tr -d ' \\n')\";"
-  secret_cmd="$secret_cmd if grep -q '^\\[' '$SECRETS/cloud.toml'; then"
-  secret_cmd="$secret_cmd sed -i \"0,/^\\[/s//$secret_note\\ninternal_shared_secret = \\\"\$v\\\"\\n\\n&/\" '$SECRETS/cloud.toml';"
-  secret_cmd="$secret_cmd else printf '\\n%s\\ninternal_shared_secret = \"%s\"\\n' '$secret_note' \"\$v\" >> '$SECRETS/cloud.toml'; fi; echo added; fi"
-  if secret_added="$(sh -c "$secret_cmd" 2>/dev/null)"; then
-    [ -n "$secret_added" ] && echo "set    cloud.toml internal_shared_secret (this box predates ADR-0097; pos_cloud could not have started without it)"
-  elif command -v sudo >/dev/null 2>&1 && secret_added="$(sudo -n sh -c "$secret_cmd" 2>/dev/null)"; then
-    [ -n "$secret_added" ] && echo "set    cloud.toml internal_shared_secret via sudo (this box predates ADR-0097; pos_cloud could not have started without it)"
-  else
-    echo "warn   could not check internal_shared_secret in $SECRETS/cloud.toml (need root or passwordless sudo)"
-    echo "warn   pos_cloud REFUSES TO START without it (ADR-0097): add it by hand ABOVE the first [table] header in that file, then restart pos_cloud"
+  cloud_toml_mint_key_if_absent internal_shared_secret "$secret_note"
+  case "$?" in
+    0) echo "set    cloud.toml internal_shared_secret (this box predates ADR-0097; pos_cloud could not have started without it)" ;;
+    1) ;;
+    2) echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); cannot tell whether internal_shared_secret is set" ;;
+    *) echo "warn   could not write internal_shared_secret to $SECRETS/cloud.toml (need root or passwordless sudo)" ;;
+  esac
+  # Whatever the branch above did, say so plainly if the key is not where the cloud reads it. This
+  # is the one key whose misplacement is fatal, and a box can reach here with the key sitting inside
+  # `[artifacts]` because a person appended it by hand — which is the natural thing to do and the
+  # wrong thing to do. Only asserted when the file could actually be read: a `2` means "could not
+  # tell", and the branch above has already said so.
+  cloud_toml_key_is_top_level internal_shared_secret
+  if [ "$?" = 1 ]; then
+    echo "warn   internal_shared_secret is missing or below the first [table] header in $SECRETS/cloud.toml, so pos_cloud will REFUSE TO START (ADR-0097)"
+    echo "warn   a key appended to the end of that file lands inside [artifacts] and is never read: move it ABOVE the first [table] header, then restart pos_cloud"
   fi
 fi
 # The pos_cloud container runs as uid $APP_UID and must read this 600 file (root ignores the
@@ -377,60 +482,6 @@ elif command -v sudo >/dev/null 2>&1 && sudo -n chown "$APP_UID:$APP_UID" "$SECR
 else
   echo "warn   could not chown cloud.toml to $APP_UID (need root or passwordless sudo); pos_cloud may be unable to read it"
 fi
-
-# 2b. How to read and write cloud.toml FROM HERE ON. The chown above handed the file to uid
-#     $APP_UID mode 600, so past this line a non-root deploy user (Oracle's `ubuntu`, and most
-#     other cloud defaults) can neither read nor write it directly and has to go through the same
-#     passwordless `sudo -n` that the chown itself falls back to. The reconciles in step 2 each
-#     carry their own copy of that ladder; step 7b did not, and paid for it twice — its guard's
-#     `grep` had its EACCES swallowed by `2>/dev/null` and so read "no [artifacts] yet" on every
-#     run, and its append then aborted the whole bootstrap under `set -e`, after the stack was
-#     already up. These two helpers are that ladder, once.
-#
-#     Content is appended from STDIN rather than passed as an argument on purpose: a `sudo -n sh -c
-#     "…$key_secret…"` would put a freshly minted S3 secret in the process table, readable by anyone
-#     on the box who can run `ps`.
-cloud_toml_reader() {
-  if [ -r "$SECRETS/cloud.toml" ]; then
-    echo direct
-  elif command -v sudo >/dev/null 2>&1 && sudo -n test -r "$SECRETS/cloud.toml" 2>/dev/null; then
-    echo sudo
-  else
-    echo none
-  fi
-}
-
-cloud_toml_writer() {
-  if [ -w "$SECRETS/cloud.toml" ]; then
-    echo direct
-  elif command -v sudo >/dev/null 2>&1 && sudo -n test -w "$SECRETS/cloud.toml" 2>/dev/null; then
-    echo sudo
-  else
-    echo none
-  fi
-}
-
-# Prints present | absent | unreadable. "Could not tell" is a third answer and it has to be
-# distinguishable from "absent", because the two call for opposite actions. It is printed rather
-# than returned in `$?` because the first assignment after the call clobbers `$?`, which is exactly
-# the trap the old `grep … 2>/dev/null` fell into.
-cloud_toml_state() {
-  case "$(cloud_toml_reader)" in
-    direct) if grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
-    sudo) if sudo -n grep -q "$1" "$SECRETS/cloud.toml"; then echo present; else echo absent; fi ;;
-    *) echo unreadable ;;
-  esac
-}
-
-# stdin -> the end of cloud.toml. Non-zero if it could not be written, with stdin drained either
-# way so the producing group does not die on EPIPE under `set -o pipefail`.
-cloud_toml_append() {
-  case "$(cloud_toml_writer)" in
-    direct) cat >> "$SECRETS/cloud.toml" ;;
-    sudo) sudo -n tee -a "$SECRETS/cloud.toml" >/dev/null ;;
-    *) cat >/dev/null; return 1 ;;
-  esac
-}
 
 # 3. NATS: JetStream, a token, and — once a certificate exists — TLS on a published client port
 #    (ADR-0089). The monitoring port (8222) stays internal for the healthcheck, no token.
