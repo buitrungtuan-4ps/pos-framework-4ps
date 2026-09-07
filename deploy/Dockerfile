@@ -17,7 +17,13 @@ WORKDIR /dashboard
 COPY dashboard/package.json dashboard/pnpm-lock.yaml ./
 RUN npm install --global pnpm@10 && pnpm install --frozen-lockfile
 COPY dashboard/ ./
-# `pnpm build` = tsc --noEmit && the no-hardcoded-strings lint && vite build.
+# `pnpm build` = tsc --noEmit, the no-hardcoded-strings lint, i18n parity, the WCAG contrast
+# audit, the step budget, then vite build. Every one of those reads only `dashboard/`, which is
+# all this stage copies — and that is a constraint on what may be chained into that script. The
+# installer-template check briefly was, and it reads `deploy/edge/*.ps1` two directories up: this
+# build died on `ENOENT` while CI stayed green, because CI runs the same script against a full
+# checkout. It was redundant there anyway — `build (windows-2022)` in `pr.yml` already runs that
+# script, where a real PowerShell parser checks the emitted installers as well as their drift.
 RUN pnpm build
 
 # ---- builder (runs natively on the runner) --------------------------------------------
