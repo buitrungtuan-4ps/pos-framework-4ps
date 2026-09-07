@@ -1557,6 +1557,66 @@ mod config_tree_store {
     /// looked and has no bound agent — what a manager releasing the last terminal produces — and it
     /// must *replace* the list, because a console still showing an agent nobody is bound to is the
     /// stale answer the column exists to prevent. Only a real database tells the two apart, because
+    /// The region the bump wrote comes back out of the fleet read
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Two tables and one join, which is exactly what neither the unit tests nor the in-process
+    /// suite can prove: they hand the view a `FleetRow` that already holds a region. This asserts
+    /// the `LEFT JOIN store_lease` actually carries the two columns across, and that a store with
+    /// no lease row at all — most of the fleet — comes back as no region rather than as an error.
+    #[test]
+    fn the_fleet_read_carries_the_region_the_bump_wrote() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let trees = store.config_trees();
+            let fleet = store.fleet();
+            let tenant = TenantId::new(Ulid::from_u128(0x0EE0));
+            let hosted = StoreId::new(Ulid::from_u128(0x0EE1));
+            let unplaced = StoreId::new(Ulid::from_u128(0x0EE2));
+
+            for (id, name) in [(hosted, "Hosted"), (unplaced, "Never bumped")] {
+                store
+                    .registry()
+                    .insert_store(&id.to_string(), &tenant.to_string(), None, name)
+                    .await
+                    .expect("register the store");
+            }
+
+            super::issue_with_region(
+                &trees,
+                tenant,
+                hosted,
+                1_777_000_000_000,
+                Some("EDGE_PLACEMENT_HOSTED_BY_OPERATOR"),
+                store_postgres::StoredRegionWrite::Set {
+                    country: "SG",
+                    label: "ap-southeast-1",
+                },
+                None,
+                None,
+            )
+            .await;
+
+            let rows = fleet
+                .list(&tenant.to_string())
+                .await
+                .expect("read the fleet");
+            let row = |wanted: StoreId| {
+                rows.iter()
+                    .find(|row| row.store_id == wanted.to_string())
+                    .expect("the store is in the fleet listing")
+            };
+
+            assert_eq!(row(hosted).region_country.as_deref(), Some("SG"));
+            assert_eq!(row(hosted).region_label.as_deref(), Some("ap-southeast-1"));
+            assert!(
+                row(unplaced).region_country.is_none() && row(unplaced).region_label.is_none(),
+                "a store with no lease row has no region, and the LEFT JOIN must say so rather \
+                 than dropping the row"
+            );
+        });
+    }
+
     /// only here is the `COALESCE` actually evaluated.
     #[test]
     fn an_empty_print_agent_report_replaces_the_list_and_an_absent_one_leaves_it() {

@@ -6956,6 +6956,21 @@ struct FleetStoreView {
     /// console does not decide it: the alert engine reads the same `FleetRow` and scores an
     /// undecodable token with the hosted case rather than the in-store one.
     edge_placement: Option<&'static str>,
+    /// Where in the world that machine is — its ISO 3166-1 alpha-2 country — or `null`
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// `null` for a store nobody has bumped, for one whose edge placement is in-store (the machine
+    /// is in the shop and has no region), and for a row written before migration `0058`. All three
+    /// mean the same thing to a reader — there is nothing to show — which is why this is a plain
+    /// `Option` and the placement beside it is not.
+    region_country: Option<String>,
+    /// The place a person recognises — `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai` —
+    /// or `null`. Present exactly when [`region_country`](Self::region_country) is.
+    ///
+    /// Free text an admin typed, carried verbatim and never parsed. It is on this read because the
+    /// question it answers ("where has this store been running?") is asked while somebody has the
+    /// fleet page open, not afterwards.
+    region_label: Option<String>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
@@ -7051,6 +7066,11 @@ impl FleetStoreView {
             lease_generation_authoritative: row.lease_generation_authoritative,
             lease_superseded,
             edge_placement: row.edge_placement.as_wire(),
+            region_country: row
+                .region
+                .as_ref()
+                .map(|region| region.country_str().to_owned()),
+            region_label: row.region.as_ref().map(|region| region.label().to_owned()),
             lease_superseded_generation: row.superseded_generation,
             handover: handover_state(HandoverFacts {
                 authoritative: row.lease_generation_authoritative.map(LeaseGeneration::new),

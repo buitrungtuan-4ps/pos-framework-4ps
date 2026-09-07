@@ -6962,6 +6962,7 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            region: None,
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
@@ -7040,6 +7041,7 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            region: None,
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
@@ -7102,6 +7104,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_reported_at: Some(seen_ago(1_000)),
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
+                region: None,
                 superseded_generation: None,
                 retired_at: None,
                 retired_by: None,
@@ -7132,6 +7135,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 lease_reported_at: Some(seen_ago(600_000)),
                 lease_generation_authoritative: Some(3),
                 edge_placement: StorePlacement::NeverIssued,
+                region: None,
                 superseded_generation: None,
                 retired_at: None,
                 retired_by: None,
@@ -7169,6 +7173,7 @@ fn store_in_handover(
         lease_reported_at: Some(seen_ago(1_000)),
         lease_generation_authoritative: authoritative,
         edge_placement: StorePlacement::NeverIssued,
+        region: None,
         superseded_generation: superseded,
         retired_at,
         retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
@@ -7183,6 +7188,72 @@ fn store_in_handover(
 /// The `null` cases are the ones worth a route test rather than only a unit test: they are what the
 /// console renders for most of the fleet, and reading ADR-0110's `taking-over` definition literally
 /// would have put a mid-handover badge on every one of them.
+/// Where a store's data rests reaches the console on the read it already runs
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// The fleet page is where somebody is already looking when the question is asked, and the region
+/// rides the `LEFT JOIN store_lease` the placement beside it already uses — so this costs no extra
+/// query and no work that grows with the fleet.
+#[tokio::test]
+async fn the_fleet_read_carries_where_each_store_rests_and_says_nothing_when_it_has_no_region() {
+    let hosted = StoreId::new(Ulid::from_u128(0x00F1_EE91));
+    let in_store = StoreId::new(Ulid::from_u128(0x00F1_EE92));
+
+    let mut abroad = store_in_handover(hosted, Some(1), None, None);
+    abroad.region = Region::stored("SG", "ap-southeast-1");
+    // A store in its own shop: the machine is in the shop, so there is no region and there must not
+    // be one. Left as the fixture's `None`, which is what the column holds.
+    let home = store_in_handover(in_store, Some(1), None, None);
+
+    let fleet = FakeFleet::default()
+        .with_row(tenant(), abroad)
+        .with_row(tenant(), home);
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let rows = body.as_array().expect("an array of stores");
+    let row = |wanted: StoreId| {
+        rows.iter()
+            .find(|row| row["store_id"] == wanted.to_string())
+            .expect("the store is in the listing")
+            .clone()
+    };
+
+    assert_eq!(row(hosted)["region_country"], "SG");
+    assert_eq!(row(hosted)["region_label"], "ap-southeast-1");
+    assert!(
+        row(in_store)["region_country"].is_null() && row(in_store)["region_label"].is_null(),
+        "an in-store machine is in the shop and has no region; a fabricated one would answer the \
+         transfer question with a lie"
+    );
+
+    // And the single-store read carries it too, because that is the one the store hub rides
+    // (ADR-0099: each card reads an endpoint that already exists).
+    let detail = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet/{hosted}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the single-store read");
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = json_body(detail).await;
+    assert_eq!(detail["region_country"], "SG");
+    assert_eq!(detail["region_label"], "ap-southeast-1");
+}
+
 #[tokio::test]
 async fn the_fleet_read_reports_a_handover_state_and_nothing_for_a_store_that_never_had_one() {
     let never = StoreId::new(Ulid::from_u128(0x00F1_EE81));
@@ -7358,6 +7429,7 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            region: None,
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
@@ -7416,6 +7488,7 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            region: None,
             superseded_generation: None,
             retired_at: None,
             retired_by: None,
