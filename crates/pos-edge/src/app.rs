@@ -557,6 +557,26 @@ impl EdgeSession {
             .is_none_or(|set| set.contains(&method))
     }
 
+    /// Whether an inbound order naming `table_id` waits for a member of staff before the kitchen
+    /// sees it ([ADR-0057](../../../docs/adr/0057-qr-ordering.md); the store can turn the hold off
+    /// in its `qr` guardrail node, [ADR-0080](../../../docs/adr/0080-channels-and-payments.md) M7).
+    ///
+    /// **The single place this question is answered.** It used to be asked twice — once to write
+    /// the durable ledger row (as `table_id.is_some()` alone) and once to build the acceptance
+    /// returned to the cloud (as `table_id.is_some() && qr_staff_confirmation_required`) — so on a
+    /// store that had turned the hold off the two disagreed: the first delivery answered "not
+    /// waiting" and every replay of the same at-least-once reference answered "waiting", stranding
+    /// the guest's order behind a hold the store had switched off.
+    ///
+    /// Note what this is NOT: it is not "does this order get a queue number". That is
+    /// `table_id.is_none()` — a table order is served where it sits, a tableless one is called back
+    /// by number — and it holds however the hold is configured. Deriving one from the other is the
+    /// mistake that made these two questions look like one.
+    #[must_use]
+    pub fn holds_for_staff_confirmation(&self, table_id: Option<TableId>) -> bool {
+        table_id.is_some() && self.qr_staff_confirmation_required
+    }
+
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile
     /// arrives from the cloud config tree's flag keys ([ADR-0071](../../../docs/adr/0071-config-without-json.md));
     /// this builder seeds one without a cloud.
@@ -1226,10 +1246,30 @@ pub struct Edge<S> {
     receipts: Arc<dyn ReceiptAuthority>,
 }
 
+/// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
+/// out for itself.
+///
+/// `awaiting_staff_confirmation` is carried here rather than recomputed by the caller because it
+/// depends on the store's `qr` guardrail, which the config-pull loop can replace at any moment: two
+/// readers of two snapshots can disagree, and when they do, one of them has already been written to
+/// a durable ledger row that every later replay of the same reference answers from.
+#[derive(Debug, Clone, Copy)]
+pub struct InboundOrderOpened {
+    /// The order that opened.
+    pub order_id: OrderId,
+    /// The trading day it opened on.
+    pub business_date: BusinessDate,
+    /// Whether it waits for a member of staff before the kitchen sees it — the same value written
+    /// to the idempotency ledger row in the order's own transaction.
+    pub awaiting_staff_confirmation: bool,
+}
+
 /// What [`Edge::open_inbound_order`] needs to write the idempotency ledger row in the order's own
 /// transaction ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)): the caller's key and the two
 /// acceptance facts the order itself does not carry. `order_id`, `business_date` and
-/// `awaiting_staff_confirmation` are the order's own and are filled in by `open_inbound_order`; the
+/// `awaiting_staff_confirmation` are the order's own and are filled in by `open_inbound_order`,
+/// which answers the last of those through [`EdgeSession::holds_for_staff_confirmation`] and hands
+/// it back in [`InboundOrderOpened`] so the acceptance cannot contradict the row; the
 /// `queue_number` is reconstructed on a repeat, never stored.
 #[derive(Debug, Clone, Copy)]
 pub struct IntakeIntent<'a> {
@@ -1415,7 +1455,7 @@ impl<S: EventStore> Edge<S> {
         table_id: Option<TableId>,
         lines: &[(PricedLine, bool)],
         intake: Option<IntakeIntent<'_>>,
-    ) -> Result<(OrderId, BusinessDate), AppError>
+    ) -> Result<InboundOrderOpened, AppError>
     where
         S: IntakeLedger,
     {
@@ -1477,6 +1517,12 @@ impl<S: EventStore> Edge<S> {
             ));
         }
 
+        // Asked once, here, from the session snapshot this order was priced against — and handed
+        // back to the caller below rather than recomputed there. The caller holds its own snapshot
+        // taken microseconds earlier, and the config-pull loop can swap the session between the
+        // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
+        let holds_for_staff = session.holds_for_staff_confirmation(table_id);
+
         // The events AND the idempotency ledger row commit in ONE transaction, so a crash between
         // opening the order and recording it is impossible — either both land or neither
         // (ADR-0064). A plain insert on an existing key fails the commit with `already_exists` and
@@ -1490,7 +1536,7 @@ impl<S: EventStore> Edge<S> {
                 business_date,
                 total: intent.total,
                 repriced: intent.repriced,
-                awaiting_staff_confirmation: table_id.is_some(),
+                awaiting_staff_confirmation: holds_for_staff,
             };
             self.store
                 .record(
@@ -1523,7 +1569,11 @@ impl<S: EventStore> Edge<S> {
                 projection.add_line(line_id, record);
             }
         }
-        Ok((order_id, business_date))
+        Ok(InboundOrderOpened {
+            order_id,
+            business_date,
+            awaiting_staff_confirmation: holds_for_staff,
+        })
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -3214,17 +3264,16 @@ mod tests {
     /// Opens a tableless counter order the way a relayed takeaway order arrives: no table, no
     /// signed-in employee, the box's own device id (ADR-0064).
     async fn a_counter_order(edge: &Edge<FakeStore>) -> OrderId {
-        let (order_id, _business_date) = edge
-            .open_inbound_order(
-                actor().device_id,
-                Open::from_known(SalesChannel::Takeaway),
-                None,
-                &[(a_priced_line(), false)],
-                None,
-            )
-            .await
-            .expect("a counter order opens with no table");
-        order_id
+        edge.open_inbound_order(
+            actor().device_id,
+            Open::from_known(SalesChannel::Takeaway),
+            None,
+            &[(a_priced_line(), false)],
+            None,
+        )
+        .await
+        .expect("a counter order opens with no table")
+        .order_id
     }
 
     fn cash(minor: i64) -> Payment {

@@ -28,7 +28,7 @@ use pos_proto::money::Money;
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
-use crate::app::{AppError, Edge, IntakeIntent};
+use crate::app::{AppError, Edge, InboundOrderOpened, IntakeIntent};
 use crate::queue::QueueNumberAuthority;
 
 /// The edge's [`OrderIn`]: reprice from the store's menu, open the order in the local log, dedupe on
@@ -73,15 +73,21 @@ where
         record: &IntakeRecord,
         created: bool,
     ) -> Result<OrderAcceptance, PortError> {
-        let queue_number = if record.awaiting_staff_confirmation {
-            None
-        } else {
-            let number = self
-                .queue
-                .allocate_queue_number(store_id, record.business_date, record.order_id)
-                .await?;
-            Some(u32::try_from(number).unwrap_or(u32::MAX))
-        };
+        // Ask the authority what this order WAS given, rather than inferring it from the hold.
+        //
+        // This used to read `if record.awaiting_staff_confirmation { None } else { allocate() }`,
+        // which conflated two different questions and only worked by accident: the stored flag was
+        // `table_id.is_some()`, so it happened to answer "does this order get a number" correctly.
+        // The moment that flag became the real hold — false for a table order at a store that
+        // switched the hold off — the else-branch would have ALLOCATED, putting a queue number on
+        // a floor order that must never have one. `allocate_queue_number` is idempotent by order,
+        // so it would not have failed; it would have quietly minted one. `queue_number_for`'s own
+        // doc comment names this exact hazard, and this is the read path it was built for.
+        let queue_number = self
+            .queue
+            .queue_number_for(store_id, record.order_id)
+            .await?
+            .map(|number| u32::try_from(number).unwrap_or(u32::MAX));
         Ok(OrderAcceptance {
             order_id: record.order_id,
             created,
@@ -172,7 +178,11 @@ where
             total,
             repriced,
         };
-        let (order_id, business_date) = match self
+        let InboundOrderOpened {
+            order_id,
+            business_date,
+            awaiting_staff_confirmation,
+        } = match self
             .edge
             .open_inbound_order(
                 self.device_id,
@@ -223,11 +233,12 @@ where
             queue_number,
             total,
             repriced,
-            // A QR order (one that names a table) waits for staff before the kitchen sees it
-            // (ADR-0057), unless the store has turned confirmation off in its `qr` guardrail node
-            // (ADR-0080, M7); a delivery or public-API order is already committed by its channel.
-            awaiting_staff_confirmation: order.table_id.is_some()
-                && session.qr_staff_confirmation_required,
+            // Whether a QR order waits for staff (ADR-0057, and ADR-0080 M7 for the store's own
+            // switch) was decided by `open_inbound_order` against the session snapshot this order
+            // was priced on, and written to the ledger row in the same transaction. Taken from
+            // there, not recomputed here: the two must be the same value, and asking twice is how
+            // they came to differ.
+            awaiting_staff_confirmation,
         })
     }
 

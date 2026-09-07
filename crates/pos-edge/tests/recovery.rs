@@ -221,7 +221,7 @@ fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
         // Session one: a relayed counter order, and a bill opened on it. No table anywhere.
         let bill_id = {
             let edge = edge_over(store.clone());
-            let (order_id, _business_date) = edge
+            let order_id = edge
                 .open_inbound_order(
                     actor().device_id,
                     Open::from_known(SalesChannel::Takeaway),
@@ -230,7 +230,8 @@ fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
                     None,
                 )
                 .await
-                .expect("a counter order opens");
+                .expect("a counter order opens")
+                .order_id;
             edge.open_bill_for_order(actor(), order_id)
                 .await
                 .expect("and takes a bill")
