@@ -46,6 +46,7 @@ import type {
   ETag,
   Enrolment,
   FleetStore,
+  RegionAcknowledgement,
   StoreLease,
   Ingredient,
   IngredientInput,
@@ -1821,6 +1822,23 @@ export const api = {
     requestJson<FleetStore>(
       "GET",
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
+    ),
+  // Record why a store's data resting outside its own country is correct (ADR-0114), behind
+  // console.stores.manage.
+  //
+  // Both country codes go in the body and they are the precondition: the route refuses if either
+  // has moved since this screen was drawn, so an admin cannot approve a transfer they were never
+  // shown. Send the codes exactly as the read returned them, not codes reconstructed from anywhere
+  // else.
+  acknowledgeRegion: (
+    tenantId: string,
+    storeId: string,
+    difference: { profile_country: string; region_country: string; reason: string },
+  ) =>
+    requestJson<RegionAcknowledgement>(
+      "POST",
+      `/admin/stores/${encodeURIComponent(storeId)}/region-acknowledgement`,
+      { tenant_id: tenantId, ...difference },
     ),
   taskHealth: () => requestJson<TaskHealthReport>("GET", "/admin/health/tasks"),
 

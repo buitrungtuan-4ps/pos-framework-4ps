@@ -175,8 +175,9 @@ use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
     HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
-    RegionAgreement, RegionRefusal, RetireOutcome, SettleOutcome, handover_state, lease_node,
-    region_agreement, resolve_region,
+    RegionAcknowledgement, RegionAcknowledgementStore, RegionAgreement, RegionRefusal,
+    RetireOutcome, SettleOutcome, handover_state, lease_node, region_agreement, resolve_region,
+    standing_acknowledgement,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
@@ -6918,7 +6919,7 @@ const FLEET_ONLINE_THRESHOLD_MS: i64 = 180_000;
 /// model, plus the admin and clock every session guard (and the online-at-read derivation) uses. Like
 /// [`RegistryState`], it carries its own state and is merged into the main router.
 #[derive(Clone)]
-struct FleetState<F, A, C, Cfg> {
+struct FleetState<F, A, C, Cfg, Ack> {
     fleet: F,
     admin: A,
     clock: C,
@@ -6934,6 +6935,36 @@ struct FleetState<F, A, C, Cfg> {
     /// move the node backwards while the copy keeps asserting the old value — a silent disagreement
     /// about a store's country, which is the exact failure ADR-0114 exists to prevent.
     config_trees: Cfg,
+    /// A store's recorded answer to its region difference
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)) — read by the
+    /// single-store read beside the comparison it answers, and written by the acknowledge route.
+    acknowledgements: Ack,
+    /// The trail the acknowledge route writes to. The row holds *what is currently answered*; this
+    /// holds every answer ever given, with the person against it, and nothing overwrites it.
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A recorded answer to a store's region difference, as the console sees it
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// The two country codes ride along rather than being left implicit: the console renders them in
+/// the sentence it shows ("data in SG, store registered in VN — acknowledged"), and a reader of the
+/// payload can see *what* was answered without inferring it from the fields beside it.
+///
+/// No `acknowledged_by`. The row does not carry one — the audit action
+/// `store.edge_placement.acknowledge` does, and it is the copy that survives the next answer. The
+/// console links to the store's audit tab rather than showing a name this read cannot honestly give.
+#[derive(Debug, Clone, serde::Serialize)]
+struct RegionAcknowledgementView {
+    /// The country the store was registered in when the answer was written.
+    profile_country: String,
+    /// The country its data was resting in when the answer was written.
+    region_country: String,
+    /// Why the difference is correct, as somebody typed it. Carried verbatim, never parsed.
+    reason: String,
+    /// When it was written, in milliseconds since the epoch — the same representation every other
+    /// instant on this read uses.
+    acknowledged_at_ms: i64,
 }
 
 /// One bound print agent as the fleet console sees it
@@ -7062,6 +7093,17 @@ struct FleetStoreView {
     /// comparison there would be one config-tree load per row.
     #[serde(skip_serializing_if = "Option::is_none")]
     region_agreement: Option<&'static str>,
+    /// The answer somebody recorded for **this** difference, or absent
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Present only when a stored acknowledgement names the same two country codes the store has
+    /// right now. An answer written about a difference the store no longer has is not returned —
+    /// see [`standing_acknowledgement`] — so a console that renders "acknowledged" whenever this key
+    /// is present is correct without knowing the rule.
+    ///
+    /// Omitted on the listing with the two fields above it, for the same reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    region_acknowledgement: Option<RegionAcknowledgementView>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
     ///
@@ -7162,10 +7204,12 @@ impl FleetStoreView {
                 .as_ref()
                 .map(|region| region.country_str().to_owned()),
             region_label: row.region.as_ref().map(|region| region.label().to_owned()),
-            // Filled in by the single-store route after this builds; the listing leaves both
-            // absent, because it does not perform the comparison.
+            // Filled in by the single-store route after this builds; the listing leaves all three
+            // absent, because it does not perform the comparison and so has nothing an
+            // acknowledgement could be measured against.
             profile_country: None,
             region_agreement: None,
+            region_acknowledgement: None,
             lease_superseded_generation: row.superseded_generation,
             handover: handover_state(HandoverFacts {
                 authoritative: row.lease_generation_authoritative.map(LeaseGeneration::new),
@@ -7192,24 +7236,43 @@ impl FleetStoreView {
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): the whole fleet, and one
 /// store's detail. Online/offline is derived here at read time, so the answer is always current
 /// without any background sweep.
-pub fn fleet_router<F, A, C, Cfg>(fleet: F, admin: A, clock: C, config_trees: Cfg) -> Router
+pub fn fleet_router<F, A, C, Cfg, Ack>(
+    fleet: F,
+    admin: A,
+    clock: C,
+    config_trees: Cfg,
+    acknowledgements: Ack,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
 where
     F: FleetStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Ack: RegionAcknowledgementStore + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/admin/fleet", get(admin_list_fleet::<F, A, C, Cfg>))
+        .route("/admin/fleet", get(admin_list_fleet::<F, A, C, Cfg, Ack>))
         .route(
             "/admin/fleet/{store_id}",
-            get(admin_fleet_store::<F, A, C, Cfg>),
+            get(admin_fleet_store::<F, A, C, Cfg, Ack>),
+        )
+        // Under `/admin/stores` because it is a fact about a store, and served from *this* router
+        // because answering it needs both halves of the comparison: the region, which lives on the
+        // lease behind `FleetStore`, and the published country, which lives in the config tree.
+        // `registry_router` holds neither, and giving it both to keep the paths together would put
+        // two store handles in a router whose whole payload is the registry record.
+        .route(
+            "/admin/stores/{store_id}/region-acknowledgement",
+            post(admin_acknowledge_region::<F, A, C, Cfg, Ack>),
         )
         .with_state(FleetState {
             fleet,
             admin,
             clock,
             config_trees,
+            acknowledgements,
+            audit,
         })
 }
 
@@ -7220,8 +7283,8 @@ fn fleet_error_response(error: &FleetStoreError) -> Response {
 }
 
 /// A super-admin (any console role) lists a tenant's whole fleet, online/offline derived at read.
-async fn admin_list_fleet<F, A, C, Cfg>(
-    State(state): State<FleetState<F, A, C, Cfg>>,
+async fn admin_list_fleet<F, A, C, Cfg, Ack>(
+    State(state): State<FleetState<F, A, C, Cfg, Ack>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
 ) -> Response
@@ -7230,6 +7293,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Ack: RegionAcknowledgementStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -7260,8 +7324,8 @@ where
 
 /// A super-admin (any console role) reads one store's fleet detail; `404` if the tenant has no such
 /// store.
-async fn admin_fleet_store<F, A, C, Cfg>(
-    State(state): State<FleetState<F, A, C, Cfg>>,
+async fn admin_fleet_store<F, A, C, Cfg, Ack>(
+    State(state): State<FleetState<F, A, C, Cfg, Ack>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Query(query): Query<RegistryTenantQuery>,
@@ -7271,6 +7335,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Ack: RegionAcknowledgementStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -7309,10 +7374,294 @@ where
         }
     };
     let agreement = region_agreement(row.region.as_ref(), profile_country);
+    // The answer, if somebody has given one for *this* difference. A read failure degrades the same
+    // way the tree's does and for the same reason — a store that has been answered showing as
+    // unanswered is a warning too many, which is the safe direction to fail in.
+    let recorded = match state.acknowledgements.current(tenant, store).await {
+        Ok(recorded) => recorded,
+        Err(error) => {
+            tracing::warn!(%error, "a store's region acknowledgement could not be read");
+            None
+        }
+    };
+    let standing =
+        standing_acknowledgement(recorded.as_ref(), row.region.as_ref(), profile_country).map(
+            |acknowledgement| RegionAcknowledgementView {
+                profile_country: acknowledgement.profile_country().as_str().to_owned(),
+                region_country: acknowledgement.region_country().as_str().to_owned(),
+                reason: acknowledgement.reason().to_owned(),
+                acknowledged_at_ms: acknowledgement
+                    .acknowledged_at()
+                    .as_milliseconds_since_epoch(),
+            },
+        );
     let mut view = FleetStoreView::from_row(row, now_ms);
     view.profile_country = profile_country.map(|country| country.as_str().to_owned());
     view.region_agreement = agreement.map(RegionAgreement::as_wire);
+    view.region_acknowledgement = standing;
     (StatusCode::OK, Json(view)).into_response()
+}
+
+/// What a console sends to answer a store's region warning
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// **The two country codes are the precondition, and they are in the body rather than in an
+/// `If-Match` header.** ADR-0114's Consequences said `If-Match`; the code does not, and the reason
+/// is the one [`LeaseStore::settle_handover`] already gives one table over: *the named value is the
+/// precondition*, and here it is strictly stronger than any version could be. There is no single
+/// resource whose `ETag` covers both halves of this comparison — the region lives on `store_lease`
+/// and the country lives in the config tree, two rows with two independent writers — so an
+/// `If-Match` would have to name one of them and silently miss changes to the other. Naming both
+/// codes catches every move of either, and says in the request exactly what the admin was looking at
+/// when they decided. The departure is written up in the record's delivery note.
+#[derive(Debug, Clone, Deserialize)]
+struct AcknowledgeRegionRequest {
+    /// The tenant the store belongs to.
+    tenant_id: String,
+    /// The country the console showed as the store's own when the admin decided.
+    profile_country: String,
+    /// The country the console showed the store's data resting in when the admin decided.
+    region_country: String,
+    /// Why the difference is correct. Required, non-blank, at most [`REGION_REASON_LIMIT`]
+    /// characters. `#[serde(default)]` so an omitted field is refused through the AIP-193 envelope
+    /// naming it, rather than by axum's extractor as a bare `422`.
+    #[serde(default)]
+    reason: String,
+}
+
+/// The difference a store has **right now**, confirmed to be the one the caller was looking at.
+///
+/// Both halves are read fresh, and a failure to read either is a `503` rather than a degraded
+/// answer. That is the difference between this and the single-store read: that read may show
+/// "country not recorded" when a config load fails, because a partial page beats no page — but
+/// *recording a decision* against a country this cloud could not actually read would put a fact in
+/// the audit trail that nothing checked.
+///
+/// # Errors
+///
+/// The finished refusal: `404` for an unknown store, `503` when either half is unreadable, and
+/// `FailedPrecondition` for a store with nothing to answer, a store whose codes have moved, or a
+/// store whose region agrees.
+async fn live_difference<F, Cfg>(
+    fleet: &F,
+    config_trees: &Cfg,
+    tenant: TenantId,
+    store: StoreId,
+    claimed: (CountryCode, CountryCode),
+) -> Result<RegionDifference, Response>
+where
+    F: FleetStore + Send + Sync,
+    Cfg: ConfigTreeStore + Send + Sync,
+{
+    let (claimed_profile, claimed_region) = claimed;
+    let row = match fleet.store_detail(tenant, store).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return Err(not_found("store")),
+        Err(error) => return Err(fleet_error_response(&error)),
+    };
+    let published = match config_trees.load(tenant, store).await {
+        Ok(tree) => tree.and_then(|tree| published_country(&tree.record)),
+        Err(error) => {
+            tracing::error!(%error, "a store's country could not be read to record an acknowledgement");
+            return Err(api_error(
+                ErrorStatus::Unavailable,
+                "the store's configuration could not be read; the acknowledgement was not recorded",
+            ));
+        }
+    };
+    let (Some(region), Some(published)) = (row.region.as_ref(), published) else {
+        return Err(api_error(
+            ErrorStatus::FailedPrecondition,
+            "this store has no region difference to acknowledge — it has no region, or has not \
+             published a country. Reload the store to see its current standing",
+        ));
+    };
+    if region.country() != claimed_region || published != claimed_profile {
+        return Err(api_error(
+            ErrorStatus::FailedPrecondition,
+            "the store has moved since this screen was drawn: the countries you named are not the \
+             ones it has now. Reload it and look at the difference as it stands",
+        ));
+    }
+    if region.country() == published {
+        return Err(api_error(
+            ErrorStatus::FailedPrecondition,
+            "this store's region agrees with the country it is registered in, so there is nothing \
+             to acknowledge",
+        ));
+    }
+    Ok(RegionDifference {
+        profile_country: published,
+        region_country: region.country(),
+    })
+}
+
+/// The two countries a store's live difference is between, confirmed against what the caller named.
+struct RegionDifference {
+    /// The country the store publishes in its `locale` node.
+    profile_country: CountryCode,
+    /// The country its data is resting in.
+    region_country: CountryCode,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/stores/{store_id}/region-acknowledgement",
+    params(("store_id" = String, Path, description = "The store's 26-character ULID")),
+    request_body(
+        description = "The tenant, the two country codes the console showed, and one sentence \
+                       saying why the difference between them is correct",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Recorded. The body is the answer as stored"),
+        (status = 400, description = "A country code is not two letters, or the reason is blank \
+                                      or over 280 characters", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "Nothing to answer, or the store has moved since this screen \
+                                      was drawn — the codes you named are not the ones it has now", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The fleet, the config tree, or the acknowledgement store is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fleet",
+)]
+/// An admin records why a store's region difference is correct
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Behind [`ConsolePermission::ManageStores`] rather than `PublishConfig`: this is a judgement about
+/// where a store's data may rest, which is the same judgement the bump that put it there was, and
+/// the person who makes it is the person who moves stores between machines.
+///
+/// # It answers one difference, not the store
+///
+/// The request names both country codes and the write refuses `FailedPrecondition` when either has
+/// moved since the console drew the screen. Without that check an admin could acknowledge a
+/// difference that no longer exists — or worse, one that changed to something they never saw — and
+/// the record would say a person approved a transfer they were never shown. The row then keeps the
+/// pair, so the *read* applies the same rule for free: an answer stops standing when the store
+/// moves, and the warning comes back unanswered.
+///
+/// Refused for a store with no difference at all, because there is nothing to answer: a store whose
+/// region agrees, or which has no region, or which has published no country, would otherwise
+/// accumulate reasons for questions nobody asked.
+async fn admin_acknowledge_region<F, A, C, Cfg, Ack>(
+    State(state): State<FleetState<F, A, C, Cfg, Ack>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Json(request): Json<AcknowledgeRegionRequest>,
+) -> Response
+where
+    F: FleetStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    Ack: RegionAcknowledgementStore + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant, store) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store)),
+            Err(refusal) => return refusal,
+        };
+    let (Ok(claimed_profile), Ok(claimed_region)) = (
+        CountryCode::parse(&request.profile_country),
+        CountryCode::parse(&request.region_country),
+    ) else {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "profile_country and region_country must both be ISO 3166-1 alpha-2 codes — the two \
+             the console showed you. They say which difference you are answering",
+            &[
+                ("profile_country", "INVALID_FORMAT"),
+                ("region_country", "INVALID_FORMAT"),
+            ],
+        );
+    };
+
+    let difference = match live_difference(
+        &state.fleet,
+        &state.config_trees,
+        tenant,
+        store,
+        (claimed_profile, claimed_region),
+    )
+    .await
+    {
+        Ok(difference) => difference,
+        Err(refusal) => return refusal,
+    };
+
+    let now = state.clock.now();
+    let acknowledgement = match RegionAcknowledgement::new(
+        difference.profile_country,
+        difference.region_country,
+        &request.reason,
+        now,
+    ) {
+        Ok(acknowledgement) => acknowledgement,
+        Err(refusal) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "reason is required and must be at most 280 characters — one sentence saying why \
+                 this store's data resting outside its own country is correct",
+                &[("reason", refusal.code())],
+            );
+        }
+    };
+    if let Err(error) = state
+        .acknowledgements
+        .record(tenant, store, &acknowledgement)
+        .await
+    {
+        tracing::error!(%error, "a region acknowledgement could not be recorded");
+        return api_error(
+            ErrorStatus::Unavailable,
+            "the acknowledgement could not be recorded",
+        );
+    }
+    // Unredacted, and deliberately: the two country codes are business metadata, and the reason is
+    // operator-supplied free text carried whole because a trail that summarises the reason answers
+    // nothing. It is never logged and never in an event payload.
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant),
+        "store.edge_placement.acknowledge",
+        "store",
+        &store.to_string(),
+        None,
+        Some(serde_json::json!({
+            "profile_country": acknowledgement.profile_country().as_str(),
+            "region_country": acknowledgement.region_country().as_str(),
+            "reason": acknowledgement.reason(),
+        })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(RegionAcknowledgementView {
+            profile_country: acknowledgement.profile_country().as_str().to_owned(),
+            region_country: acknowledgement.region_country().as_str().to_owned(),
+            reason: acknowledgement.reason().to_owned(),
+            acknowledged_at_ms: acknowledgement
+                .acknowledged_at()
+                .as_milliseconds_since_epoch(),
+        }),
+    )
+        .into_response()
 }
 
 /// The country a store's published `locale` node names, or `None` when it has never published one

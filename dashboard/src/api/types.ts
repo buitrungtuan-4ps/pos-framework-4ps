@@ -796,6 +796,28 @@ export interface FleetPrintAgent {
   readonly oldest_unacknowledged_secs?: number;
 }
 
+/**
+ * A recorded answer to a store's region difference (ADR-0114).
+ *
+ * Carries the two country codes it was written about, because that is what makes it an answer to a
+ * *difference* rather than a permanent "this store is fine": the server stops returning it the
+ * moment either code moves.
+ *
+ * No author. The row does not hold one — the audit action `store.edge_placement.acknowledge` does,
+ * and it is the copy that survives the next answer. Link to the audit trail rather than inventing a
+ * name here.
+ */
+export interface RegionAcknowledgement {
+  /** The country the store was registered in when the answer was written. */
+  readonly profile_country: string;
+  /** The country its data was resting in when the answer was written. */
+  readonly region_country: string;
+  /** Why the difference is correct, as somebody typed it. Render verbatim. */
+  readonly reason: string;
+  /** When it was written, in Unix milliseconds. */
+  readonly acknowledged_at_ms: number;
+}
+
 export interface FleetStore {
   readonly store_id: string;
   readonly name: string;
@@ -883,6 +905,16 @@ export interface FleetStore {
    * rendering that as agreement would be a lie of exactly the kind this record exists to prevent.
    */
   readonly region_agreement?: string | null;
+  /**
+   * The answer somebody recorded for **this** difference, or absent (ADR-0114).
+   *
+   * Present only when a stored answer names the same two country codes the store has now. An answer
+   * about a difference the store no longer has is not sent, so rendering "acknowledged" whenever
+   * this is present is correct without re-implementing the rule.
+   *
+   * Single-store read only, like the two fields above it.
+   */
+  readonly region_acknowledgement?: RegionAcknowledgement;
   /**
    * The generation the last bump displaced and nothing has yet proved drained, or `null` (ADR-0110).
    *

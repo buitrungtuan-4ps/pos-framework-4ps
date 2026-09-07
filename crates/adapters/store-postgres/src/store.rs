@@ -199,6 +199,12 @@ const MIGRATION_0057: &str = include_str!("../migrations/0057_print_agent_standi
 /// only write is the bump, so a region cannot drift from the placement it describes.
 const MIGRATION_0058: &str = include_str!("../migrations/0058_edge_placement_region.sql");
 
+/// A person's answer to the region warning
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)). One row per store
+/// carrying the two country codes that were being compared, so an answer stops counting the moment
+/// either of them moves — a reason written about one difference must not silence a different one.
+const MIGRATION_0059: &str = include_str!("../migrations/0059_store_region_acknowledgement.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -489,6 +495,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0058)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0059)
             .await
             .map_err(unavailable)
     }

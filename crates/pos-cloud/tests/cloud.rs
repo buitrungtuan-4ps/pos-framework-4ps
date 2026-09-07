@@ -59,7 +59,10 @@ use pos_cloud::floorplan::{
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::inventory::{InventoryStore, InventoryStoreError};
-use pos_cloud::lease::{Region, RegionWrite, StorePlacement};
+use pos_cloud::lease::{
+    Region, RegionAcknowledgement, RegionAcknowledgementError, RegionAcknowledgementStore,
+    RegionWrite, StorePlacement,
+};
 use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
@@ -773,6 +776,10 @@ struct FakeConfigTrees {
     /// replaces the entry rather than leaving it — a manager releasing the last terminal must not
     /// leave a stale agent on the console.
     print_agents: Arc<Mutex<RecordedAgents>>,
+    /// A store's recorded answer to its region difference, mirroring
+    /// `store_region_acknowledgement` ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// One row per store and overwritten, exactly as the table is.
+    acknowledgements: Arc<Mutex<HashMap<(TenantId, StoreId), RegionAcknowledgement>>>,
     /// The authoritative lease generation per store, mirroring `store_lease` (ADR-0108). Absent
     /// until the first bump, which is what "no lease in force" means.
     leases: Arc<Mutex<HashMap<(TenantId, StoreId), u64>>>,
@@ -1039,6 +1046,36 @@ impl FakeConfigTrees {
             .lock()
             .expect("lock")
             .insert((tenant, store), Versioned::new(state, version));
+    }
+}
+
+impl RegionAcknowledgementStore for FakeConfigTrees {
+    /// Overwrites, as the adapter's `ON CONFLICT … DO UPDATE` does — a fake that appended would
+    /// pass tests the real table could not.
+    async fn record(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        acknowledgement: &RegionAcknowledgement,
+    ) -> Result<(), RegionAcknowledgementError> {
+        self.acknowledgements
+            .lock()
+            .expect("lock")
+            .insert((tenant, store), acknowledgement.clone());
+        Ok(())
+    }
+
+    async fn current(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<RegionAcknowledgement>, RegionAcknowledgementError> {
+        Ok(self
+            .acknowledgements
+            .lock()
+            .expect("lock")
+            .get(&(tenant, store))
+            .cloned())
     }
 }
 
@@ -6920,6 +6957,20 @@ fn fleet_app_with_config(
     fleet: FakeFleet,
     config_trees: FakeConfigTrees,
 ) -> axum::Router {
+    fleet_app_with_audit(admin, fleet, config_trees, Arc::new(NoopAuditRecorder))
+}
+
+/// The same again, with a real audit recorder — for the acknowledge route, whose whole point is the
+/// entry it writes ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// The acknowledgement store is the same `FakeConfigTrees` handle the tree comes from, mirroring
+/// production, where both are the one `PostgresConfigTrees` over one pool.
+fn fleet_app_with_audit(
+    admin: FakeAdmin,
+    fleet: FakeFleet,
+    config_trees: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -6928,7 +6979,14 @@ fn fleet_app_with_config(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::fleet_router(fleet, admin, clock(), config_trees))
+    http::router(app).merge(http::fleet_router(
+        fleet,
+        admin,
+        clock(),
+        config_trees.clone(),
+        config_trees,
+        audit,
+    ))
 }
 
 /// An [`AlertChannel`] that records the batches it was handed, so a test can prove the evaluator
@@ -7280,6 +7338,333 @@ async fn the_single_store_read_compares_the_region_against_the_stores_own_countr
         assert_eq!(
             body["region_country"], "SG",
             "and the region itself is reported either way — the comparison never hides it"
+        );
+    }
+}
+
+/// A person can answer the region warning, the answer reaches the read, and the trail records who
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// The whole point of the record: a mismatch that warns forever with no way to say why it is correct
+/// is a warning people learn to ignore. Three things have to be true together — the row is written,
+/// the read reports it standing, and the audit trail carries the reason with a name against it.
+#[tokio::test]
+async fn a_region_difference_can_be_answered_and_the_answer_is_audited() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let mut row = store_in_handover(store, Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let fleet = FakeFleet::default().with_row(tenant(), row);
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store,
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    let audit = FakeAudit::default();
+    let sink: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(audit.clone()));
+    let router = fleet_app_with_audit(provisioned_admin(), fleet, trees, sink);
+    let cookie = admin_cookie(&router).await;
+
+    // Before: the difference is visible and unanswered.
+    let before = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fleet/{store}?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(before["region_agreement"], "differs");
+    assert!(
+        before.get("region_acknowledgement").is_none(),
+        "an unanswered difference omits the key entirely rather than sending null"
+    );
+
+    let answered = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{store}/region-acknowledgement"),
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "profile_country": "VN",
+                "region_country": "SG",
+                "reason": "Customer consent recorded at sign-up; DTA in force.",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(answered.status(), StatusCode::OK);
+
+    // After: the same difference now reads as answered, carrying the reason as typed.
+    let after = json_body(
+        router
+            .oneshot(get_with_cookie(
+                &format!("/admin/fleet/{store}?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the read again"),
+    )
+    .await;
+    assert_eq!(
+        after["region_agreement"], "differs",
+        "an answer explains the difference; it does not erase it"
+    );
+    assert_eq!(
+        after["region_acknowledgement"]["reason"],
+        "Customer consent recorded at sign-up; DTA in force."
+    );
+    assert_eq!(after["region_acknowledgement"]["profile_country"], "VN");
+    assert_eq!(after["region_acknowledgement"]["region_country"], "SG");
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let entry = entries
+        .iter()
+        .find(|entry| entry.action == "store.edge_placement.acknowledge")
+        .expect("the acknowledgement is audited");
+    assert_eq!(entry.entity_type, "store");
+    assert_eq!(entry.entity_id, store.to_string());
+    let after_detail = entry.after.as_ref().expect("the detail");
+    assert_eq!(
+        after_detail["reason"], "Customer consent recorded at sign-up; DTA in force.",
+        "the reason is carried whole — a trail that summarises it answers nothing"
+    );
+    assert_eq!(after_detail["profile_country"], "VN");
+    assert_eq!(after_detail["region_country"], "SG");
+    assert!(
+        !entry.actor.email.is_empty(),
+        "the trail carries who decided; the row deliberately does not"
+    );
+}
+
+/// An answer is about **one** difference: it stops standing the moment either country moves
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// This is the property the stored country pair exists for, and it is the one a simpler design
+/// would get wrong: a boolean "acknowledged" flag would silence the warning for a store that has
+/// since been moved somewhere nobody approved. Nothing clears the row — it stops matching, which is
+/// the same thing and cannot be forgotten.
+#[tokio::test]
+async fn an_answer_stops_standing_when_the_store_moves_somewhere_else() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let hosted_in = |country: &str| {
+        let mut row = store_in_handover(store, Some(1), None, None);
+        row.region = Region::stored(country, "a rack somewhere");
+        FakeFleet::default().with_row(tenant(), row)
+    };
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store,
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+
+    // Answer the SG-versus-VN difference.
+    let router = fleet_app_with_audit(
+        provisioned_admin(),
+        hosted_in("SG"),
+        trees.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let answered = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{store}/region-acknowledgement"),
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "profile_country": "VN",
+                "region_country": "SG",
+                "reason": "Approved for Singapore.",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(answered.status(), StatusCode::OK);
+
+    // The same tenant, the same store, the same stored answer — but the machine is now in Japan.
+    let moved = fleet_app_with_audit(
+        provisioned_admin(),
+        hosted_in("JP"),
+        trees.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&moved).await;
+    let body = json_body(
+        moved
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fleet/{store}?tenant_id={tenant_ulid}"),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(body["region_agreement"], "differs");
+    assert!(
+        body.get("region_acknowledgement").is_none(),
+        "an answer about Singapore must not silence a warning about Japan"
+    );
+
+    // And a second acknowledgement naming the *old* pair is refused rather than recorded: the admin
+    // is answering a screen that no longer describes the store.
+    let stale = moved
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{store}/region-acknowledgement"),
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "profile_country": "VN",
+                "region_country": "SG",
+                "reason": "Approved for Singapore.",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the stale acknowledgement");
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+}
+
+/// The reason is required, bounded, and counted in characters
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// A warning silenced with no explanation is a warning deleted. The ceiling is counted in Unicode
+/// scalar values so a Vietnamese or Japanese reason is measured the way the person who typed it
+/// would measure it — 280 three-byte characters is a sentence, not an over-long one.
+#[tokio::test]
+async fn the_reason_is_required_and_its_ceiling_counts_characters() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let mut row = store_in_handover(store, Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store,
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    let router = fleet_app_with_audit(
+        provisioned_admin(),
+        FakeFleet::default().with_row(tenant(), row),
+        trees,
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let acknowledge = |reason: serde_json::Value| {
+        let mut body = serde_json::json!({
+            "tenant_id": tenant_ulid.clone(),
+            "profile_country": "VN",
+            "region_country": "SG",
+        });
+        if let serde_json::Value::Object(map) = &mut body
+            && !reason.is_null()
+        {
+            map.insert("reason".to_owned(), reason);
+        }
+        post_with_cookie(
+            &format!("/admin/stores/{store}/region-acknowledgement"),
+            &body,
+            &cookie,
+        )
+    };
+
+    // Absent, blank, and whitespace-only are the same refusal — and absent goes through the
+    // envelope rather than axum's bare 422, which is what `#[serde(default)]` buys.
+    for reason in [
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("   "),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(acknowledge(reason.clone()))
+            .await
+            .expect("route the acknowledgement");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "a warning silenced with no explanation is a warning deleted: {reason:?}"
+        );
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["details"][0]["field"], "reason");
+    }
+
+    // 280 Vietnamese characters is 840 bytes; a byte ceiling would refuse a sentence a person can
+    // read at a glance.
+    let at_the_ceiling: String = "ộ".repeat(280);
+    assert!(at_the_ceiling.len() > 280, "the test string is multi-byte");
+    let accepted = router
+        .clone()
+        .oneshot(acknowledge(serde_json::json!(at_the_ceiling)))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let over = router
+        .oneshot(acknowledge(serde_json::json!("ộ".repeat(281))))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(over.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(over).await;
+    assert_eq!(body["error"]["details"][0]["field"], "reason");
+}
+
+/// A store with nothing to answer cannot be acknowledged
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Refused rather than stored, because a row saying somebody approved a transfer that is not
+/// happening is a record of a decision nobody made — and a fleet that accumulates them teaches its
+/// readers that the record means nothing.
+#[tokio::test]
+async fn a_store_with_no_difference_has_nothing_to_acknowledge() {
+    let store = store_id();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store,
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    // (what the store's region is, what the two codes named in the request are)
+    let cases: [(Option<&str>, &str); 2] = [
+        // Agreeing: hosted in the country the store is registered in.
+        (Some("VN"), "VN"),
+        // No region at all: an in-store machine, which is not a transfer anybody decided on.
+        (None, "SG"),
+    ];
+    for (region, claimed) in cases {
+        let mut row = store_in_handover(store, Some(1), None, None);
+        row.region = region.and_then(|country| Region::stored(country, "a rack somewhere"));
+        let router = fleet_app_with_audit(
+            provisioned_admin(),
+            FakeFleet::default().with_row(tenant(), row),
+            trees.clone(),
+            Arc::new(NoopAuditRecorder),
+        );
+        let cookie = admin_cookie(&router).await;
+        let response = router
+            .oneshot(post_with_cookie(
+                &format!("/admin/stores/{store}/region-acknowledgement"),
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "profile_country": "VN",
+                    "region_country": claimed,
+                    "reason": "There is nothing here to approve.",
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the acknowledgement");
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT,
+            "a store whose region is {region:?} has no difference to answer"
         );
     }
 }

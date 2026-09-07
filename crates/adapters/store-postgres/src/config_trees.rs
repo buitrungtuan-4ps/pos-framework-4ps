@@ -116,6 +116,24 @@ pub enum StoredRetire {
 ///
 /// The two travel together because one statement wrote them, and a caller that took only the
 /// generation would have to read the placement back in a second query — reopening exactly the
+/// A store's recorded answer to its region difference, exactly as the row holds it
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Every field is the column's own type, un-validated: reconstructing a `CountryCode` from two
+/// letters is the caller's job, and a row this build cannot read must not stop it being returned
+/// from here — the layer above decides what an unreadable answer means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredRegionAcknowledgement {
+    /// The country the store was registered in when the answer was written.
+    pub profile_country: String,
+    /// The country its data was resting in when the answer was written.
+    pub region_country: String,
+    /// Why the difference is correct, as somebody typed it. Never parsed here.
+    pub reason: String,
+    /// When it was written, in milliseconds since the epoch.
+    pub acknowledged_at_ms: i64,
+}
+
 /// window ADR-0110 closed by making them one write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredBump {
@@ -602,6 +620,70 @@ impl PostgresConfigTrees {
                 current: row.get(0),
             },
         })
+    }
+
+    /// Records a person's answer to a store's region difference, replacing any answer it had
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// An upsert rather than an insert, because this row holds *what is currently answered* and not
+    /// the history of answers — the audit trail holds that, and nothing overwrites it. The two
+    /// country codes go in beside the reason: they are what the answer was about, and the read
+    /// compares them against the store's current pair rather than assuming the answer still applies.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_region_acknowledgement(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        profile_country: &str,
+        region_country: &str,
+        reason: &str,
+        acknowledged_at_ms: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "INSERT INTO store_region_acknowledgement                      (tenant_id, store_id, profile_country, region_country, reason, acknowledged_at)                  VALUES ($1, $2, $3, $4, $5, $6::bigint)                  ON CONFLICT (tenant_id, store_id) DO UPDATE SET                      profile_country = EXCLUDED.profile_country,                      region_country = EXCLUDED.region_country,                      reason = EXCLUDED.reason,                      acknowledged_at = EXCLUDED.acknowledged_at",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &profile_country,
+                    &region_country,
+                    &reason,
+                    &acknowledged_at_ms,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// A store's recorded answer to its region difference, or `None` if nobody has written one.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn region_acknowledgement(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+    ) -> Result<Option<StoredRegionAcknowledgement>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT profile_country, region_country, reason, acknowledged_at                  FROM store_region_acknowledgement                  WHERE tenant_id = $1 AND store_id = $2",
+                &[&tenant.to_string(), &store_id.to_string()],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| StoredRegionAcknowledgement {
+            profile_country: row.get(0),
+            region_country: row.get(1),
+            reason: row.get(2),
+            acknowledged_at_ms: row.get(3),
+        }))
     }
 
     /// Records that a settled handover's outgoing machine is no longer needed.

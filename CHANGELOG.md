@@ -14,6 +14,44 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Added
+
+- **A store's region warning can be answered, by a named person, with a reason**
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md), Program C Phase 1 slice 3b —
+  the record's last slice).
+
+  `POST /admin/stores/{store_id}/region-acknowledgement`, behind `console.stores.manage`, records
+  why a store's data resting outside its own country is correct. The store hub shows the form on a
+  live difference and the answer once given; the single-store read carries it back as
+  `region_acknowledgement`; the audit trail carries every one under
+  `store.edge_placement.acknowledge` with the acting admin against it.
+
+  **An answer is about one difference, not about the store.** The row stores the two country codes
+  it was written about, and the read compares them against the store's current pair — so an answer
+  written while a store rested in Singapore stops standing the moment it moves to Japan, and the
+  warning comes back unanswered. Nothing clears the row: it is retired by not matching, which cannot
+  be forgotten the way a cleanup job can. The write applies the same rule from the other side and
+  refuses `409` when either code has moved since the console drew the screen, so nobody can approve a
+  transfer they were never shown. A store whose region agrees, or which has no region, is refused
+  too — there is nothing there to answer.
+
+  The reason is required, non-blank, and at most 280 characters counted in Unicode scalar values, so
+  a Vietnamese or Japanese sentence is measured the way the person who typed it would measure it.
+
+  **Upgrade note** One additive migration, `0059_store_region_acknowledgement.sql` — a new table,
+  RLS-isolated by `tenant_id`, applied idempotently on boot; rollback-safe, since nothing else reads
+  it. One new `/admin` route and one new audit action; no permission identifier is added, nothing on
+  the wire to a store moves, and `PROTOCOL_VERSION` does not change.
+
+  **Two deliberate departures from the ADR, both written into its delivery note.** The route carries
+  **no `If-Match`**: no single resource's `ETag` covers both halves of a comparison whose facts live
+  on two rows with two independent writers, so the country pair named in the body *is* the
+  precondition — the same reasoning `settle_handover` already uses one table over. And the row has
+  **no `acknowledged_by`**: it is overwritten by the next answer while the audit trail is not, so
+  storing "who" there would create exactly the copy that goes missing.
+
+  With this, ADR-0114 is delivered end to end.
+
 ### Changed
 
 - **BREAKING — a store must say which country it is in: `country_code` is now required on the locale

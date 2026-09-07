@@ -454,8 +454,9 @@ and `HOSTED_BY_PLATFORM`, which an admin stands up by choosing a region and pres
 Target shape: 500+ stores, 10+ brands, ~5 countries.
 
 **Phase 0 is done: five records.** Phase 1 has since built the placement column and its readers,
-the handover's conditional bump, the whole of ADR-0111 and the whole of the print queue; the container
-image and the host agent are the remainder. Each item below carries its own state.
+the handover's conditional bump, the whole of ADR-0111, the whole of the print queue and the whole of
+ADR-0114; the container image and the host agent are the remainder. Each item below carries its own
+state.
 
 - **C0.1** — [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md): `edge_placement` is an
   attribute of a store; ADR-0001's offline guarantee is a property of the `IN_STORE` mode only; the
@@ -597,6 +598,54 @@ end:
 
   **Not in it:** the drawer following the printer. This record settles which machine the kick lands
   on; ADR-0103's missing console field still means no drawer opens anywhere.
+
+- The **region** ([ADR-0114](adr/0114-region-is-required-recorded-visible.md)), three slices across
+  #224–#227 and now complete — required, recorded and visible, in that order.
+
+  `store_lease` gained `region_country` and `region_label` (migration `0058`), written inside the
+  bump's own statement for the reason ADR-0110 put the placement there: that table's only write is
+  the bump, so a region cannot drift from the placement it describes. Both nullable, and `NULL` is
+  *correct* rather than unknown for most of a fleet — an in-store machine is in the shop and has no
+  region. The rule lives in the write and not in a `CHECK`, so a refusal can name the field it is
+  about instead of arriving as a `503`.
+
+  Building the comparison then found the gap the record could not have known about: **nothing wrote
+  `locale.country_code`**, the field ADR-0114 compares against. The locale publish carried currency,
+  timezone and cutoff and no country; the registry row had none; the store profile read one and
+  discarded it. Built as specified, the warning would have reported "country not recorded" for every
+  store in every fleet, forever. Rather than ship that, the slice recorded the gap and put the shape
+  of the fix to the owner, who chose **required**: `PUT /admin/config/locale` now refuses a publish
+  without a `country_code`. That is a breaking change on an `/admin` route and the only one of three
+  shapes whose failure is loud — a publish rebuilds the node wholesale, so an optional field either
+  erases a recorded country on an unrelated edit or behaves unlike `display_language` one key away.
+
+  The verdict is **three-valued and derived on the server**: `agrees`, `differs`, or
+  `country-not-recorded`, and nothing at all for a store with no region. Absence never renders as
+  agreement, which is the single property the record exists to protect. It **warns and never
+  blocks** — whether a cross-border placement is lawful turns on the basis for the transfer and what
+  was said when consent was taken, which the operator holds under law that changes without a
+  release; a block that is wrong gets routed around, and a dismissed warning is recorded where a
+  dodged block is not.
+
+  A difference can be **answered**: `POST /admin/stores/{store_id}/region-acknowledgement` behind
+  `ConsolePermission::ManageStores`, one row per store (`0059`) and one audit entry under
+  `store.edge_placement.acknowledge`. The row stores the two country codes it was written about, so
+  an answer about Singapore stops standing the moment the store moves to Japan — nothing clears it,
+  it simply stops matching, which cannot be forgotten the way a cleanup job can. The write applies
+  the same rule from the other side and refuses `FailedPrecondition` when either code has moved
+  since the screen was drawn.
+
+  **Two departures from the record, both written into its delivery notes.** There is no `If-Match`:
+  no single resource's `ETag` covers both halves of a comparison whose two facts live on different
+  rows with different writers, so the named country pair is the precondition — the same reasoning
+  `settle_handover` already uses. And there is no `acknowledged_by` column: this row is overwritten
+  by the next answer and the audit trail is not, so storing "who" here would create the copy that
+  goes missing.
+
+  **Not in it:** `/admin/stores` still does not carry the region, and the list routes render no
+  verdict. Both are the same decision — the region is a fact of the lease, not of the registry
+  record, and a comparison on the listing is one config-tree load per row, work that grows with the
+  fleet.
 
 **Not started:** the edge container image and the host agent — and the two spikes above still gate
 every estimate on them.

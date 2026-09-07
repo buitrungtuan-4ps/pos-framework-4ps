@@ -98,7 +98,8 @@ use crate::floorplan::{
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
 use crate::lease::{
-    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region, RegionWrite, RetireOutcome,
+    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region, RegionAcknowledgement,
+    RegionAcknowledgementError, RegionAcknowledgementStore, RegionWrite, RetireOutcome,
     SettleOutcome, StorePlacement,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
@@ -480,6 +481,56 @@ impl ConfigTreeStore for PostgresConfigTrees {
         )
         .await
         .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+}
+
+impl RegionAcknowledgementStore for PostgresConfigTrees {
+    /// Forwards to the adapter's upsert. The country codes go down as the two letters the column
+    /// holds, through the same `CountryCode` the store's own region was written with, so the read's
+    /// comparison is an equality test rather than a case fold
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    async fn record(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        acknowledgement: &RegionAcknowledgement,
+    ) -> Result<(), RegionAcknowledgementError> {
+        self.record_region_acknowledgement(
+            tenant,
+            store,
+            acknowledgement.profile_country().as_str(),
+            acknowledgement.region_country().as_str(),
+            acknowledgement.reason(),
+            acknowledgement
+                .acknowledged_at()
+                .as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| RegionAcknowledgementError(error.to_string()))
+    }
+
+    /// A row whose country codes this build cannot read, or whose stored instant is not a time,
+    /// becomes `None` rather than an error — the same posture `Region::stored` takes one table over.
+    /// An unreadable answer could not match the store's current pair anyway, so the warning it would
+    /// have answered is already back, which is the honest outcome.
+    async fn current(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<RegionAcknowledgement>, RegionAcknowledgementError> {
+        let stored = self
+            .region_acknowledgement(tenant, store)
+            .await
+            .map_err(|error| RegionAcknowledgementError(error.to_string()))?;
+        Ok(stored.and_then(|stored| {
+            let at = Timestamp::from_milliseconds_since_epoch(stored.acknowledged_at_ms).ok()?;
+            RegionAcknowledgement::stored(
+                &stored.profile_country,
+                &stored.region_country,
+                &stored.reason,
+                at,
+            )
+        }))
     }
 }
 
