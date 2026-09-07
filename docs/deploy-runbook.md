@@ -65,7 +65,7 @@ application secret (the box mints those itself, [ADR-0044](adr/0044-fork-and-dep
 | Secret | What |
 |---|---|
 | `VPS_HOST` | host or IP to SSH to |
-| `VPS_USER` | SSH user (a sudo-less deploy user, or root) |
+| `VPS_USER` | SSH user: **root, or a non-root user with passwordless `sudo`**. Not a sudo-less one — `bootstrap.sh` chowns `secrets/cloud.toml` to the app container's uid so it can read its own config, and from that point on needs root or `sudo -n` to touch the file again. Without either, the chown itself fails (the app cannot read its config), and the three reconciles that follow — `trusted_proxy_hops`, `table_token_secret`, the Garage `[artifacts]` block — each degrade to a `warn`. Every one of those is a `warn` rather than a failure on purpose, so the symptom is a box that boots with features quietly off, not a red deploy |
 | `VPS_SSH_KEY` | that user's private key (PEM) |
 | `VPS_KNOWN_HOSTS` | the box's SSH host key(s) — `ssh-keyscan <host>` (add `-p <port>` for a non-default port) — so the deploy is not trust-on-first-use |
 | `DOMAIN` | your host (or `<vps-ip>.sslip.io`) |
