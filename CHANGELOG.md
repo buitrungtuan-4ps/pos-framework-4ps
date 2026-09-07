@@ -14,6 +14,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+### Fixed
+
+- **The cloud image could not build: the dashboard's build script validated files the image does
+  not contain.**
+
+  `deploy/Dockerfile`'s dashboard stage copies only `dashboard/`, then runs `pnpm build`. That
+  script had grown a chained `pnpm installers` step, which reads `deploy/edge/*.ps1` — two
+  directories above `dashboard/scripts/`. Inside the image that path does not exist, so the build
+  died on `ENOENT` 53 seconds in. Deploy run #16 is where this surfaced, on a tree whose twelve PR
+  gates were all green.
+
+  **CI could not have caught it, and that is the interesting part.** The `dashboard` job runs the
+  same `pnpm build` with `working-directory: dashboard` against a full checkout, where
+  `../../deploy/` is right there. The two environments differ only in what is present on disk, so
+  the check passed in the one place it was run and failed in the one place nobody had run since the
+  installer check landed — the last deploy predates it.
+
+  The fix is to unchain it: validating PowerShell installers under `deploy/` is not part of building
+  the dashboard, and that coupling is the whole defect. Nothing is lost, because the check was
+  already redundant — `build (windows-2022)` in `pr.yml` runs the very same script, where a real
+  PowerShell parser checks the emitted installers *and* their drift against the generators. That job
+  is the check's proper home; it has a PowerShell parser and the dashboard image stage does not.
+
+  `deploy/Dockerfile`'s comment described three of the six checks `pnpm build` ran and is now
+  accurate, and states the constraint that was violated: a check chained into that script may read
+  only `dashboard/`.
+
 ### Added
 
 - **A store's region warning can be answered, by a named person, with a reason**
