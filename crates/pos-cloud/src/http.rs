@@ -174,8 +174,8 @@ use crate::images::{self, ImagePipelineError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
-    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome,
-    SettleOutcome, handover_state, lease_node,
+    HandoverFacts, HandoverState, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region,
+    RegionRefusal, RetireOutcome, SettleOutcome, handover_state, lease_node, resolve_region,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, NewMediaAsset, Rendition};
 use crate::openapi::ApiDoc;
@@ -11414,6 +11414,21 @@ struct BumpLeaseRequest {
     store_id: String,
     #[serde(default)]
     edge_placement: Option<String>,
+    /// Where in the world the machine taking this generation is — its ISO 3166-1 alpha-2 country
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Required together with `region_label` when `edge_placement` names a hosted mode, and refused
+    /// on any other bump: an in-store machine is in the shop, and a bump that names no placement is
+    /// a swap in place, so a region on either would be a region edited without moving the store.
+    #[serde(default)]
+    region_country: Option<String>,
+    /// The place a person recognises — `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai`.
+    ///
+    /// Stored verbatim and never parsed by anything. It is free text an admin typed, so the
+    /// console's helper text asks for a place and not a person; it is never logged and never enters
+    /// an event payload.
+    #[serde(default)]
+    region_label: Option<String>,
     /// The undrained generation this bump is knowingly abandoning, or absent.
     ///
     /// It names the value already sitting in `superseded_generation` — *not* the generation this
@@ -11906,6 +11921,78 @@ where
     }
 }
 
+/// `412` for a bump whose `If-Match` does not match the row
+/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+///
+/// `current` is read *after* the refusal, so it can already be stale by the time it is rendered.
+/// That is fine and deliberate: it is for the message, never for a decision. The decision was the
+/// write's own `WHERE`, which cannot race.
+fn lease_moved_response(current: Option<LeaseGeneration>) -> Response {
+    api_error_with_details(
+        ErrorStatus::FailedPrecondition,
+        "the store's lease has moved since you read it; re-read and retry",
+        &[(
+            "if-match",
+            &current.map_or_else(
+                || "NO_LEASE_ISSUED".to_owned(),
+                |generation| generation.value().to_string(),
+            ),
+        )],
+    )
+}
+
+/// `422` for a bump that would abandon a machine still holding events
+/// ([ADR-0096](../../../docs/adr/0096-unprocessable-status.md)).
+///
+/// You do not move a store off a machine whose events are still on it — not without a person
+/// saying, by name and in the trail, that those events are being abandoned. The detail names the
+/// generation the caller has to acknowledge to proceed.
+fn lease_undrained_response(superseded: LeaseGeneration) -> Response {
+    api_error_with_details(
+        ErrorStatus::Unprocessable,
+        "this store's previous machine still holds events this cloud has never seen; acknowledge \
+         that generation to move the store anyway, which abandons them",
+        &[("acknowledge_undrained", &superseded.value().to_string())],
+    )
+}
+
+/// Turns a region refusal into its [AIP-193](../../../docs/naming-and-api.md) envelope
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Extracted from [`admin_bump_lease`] rather than inlined: five messages is most of a screen, and
+/// the handler it sits in already carries the generation, the placement, the acknowledgement and
+/// the publish.
+///
+/// Each message names what the field accepts, not only what it rejected — the same rule the
+/// placement's own refusal one screen up follows, and the difference between an admin who fixes the
+/// form and one who guesses at it.
+fn region_refusal_response(refusal: RegionRefusal) -> Response {
+    let message = match refusal {
+        RegionRefusal::Incomplete => {
+            "a hosted edge placement needs both region_country and region_label — where a store's \
+             data rests is recorded, not inferred"
+        }
+        RegionRefusal::NotForPlacement => {
+            "a region belongs only to a hosted edge placement: an in-store machine is in the shop, \
+             and a bump that names no edge_placement is a swap in place. To move a hosted store's \
+             region, name its edge_placement again alongside the new one"
+        }
+        RegionRefusal::CountryShape => {
+            "region_country must be an ISO 3166-1 alpha-2 code — two letters, such as SG or JP"
+        }
+        RegionRefusal::LabelEmpty => "region_label must name a place",
+        RegionRefusal::LabelTooLong => {
+            "region_label must be at most 64 characters — it names a place for a person to \
+             recognise, not an address"
+        }
+    };
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        message,
+        &[(refusal.field(), "INVALID_VALUE")],
+    )
+}
+
 /// `POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it
 /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
 ///
@@ -11983,6 +12070,17 @@ where
             Some(placement) => Some(placement),
         },
     };
+    // Where the store's data will rest, decided by the same request that decides which machine
+    // holds it (ADR-0114). The rule is a pure function so it can be tested without an HTTP stack;
+    // here it is only turned into an envelope.
+    let region = match resolve_region(
+        requested_placement,
+        request.region_country.as_deref(),
+        request.region_label.as_deref(),
+    ) {
+        Ok(region) => region,
+        Err(refusal) => return region_refusal_response(refusal),
+    };
     // The counter moves first. If the publish then fails the store is on a generation no till has
     // been told about, which is the safe half of the split: every box keeps the generation it holds
     // and keeps updating, and the next bump (or a re-publish) closes it. The opposite order would
@@ -12002,6 +12100,7 @@ where
             store_id,
             state.clock.now(),
             requested_placement,
+            region,
             acknowledged,
             expected_generation,
         )
@@ -12012,25 +12111,10 @@ where
         // the point: the comment above explains why the counter moves before the publish, and a
         // request that issued no generation must not reach a publish that would have to name one.
         Ok(LeaseBumpOutcome::VersionMismatch { current }) => {
-            return api_error_with_details(
-                ErrorStatus::FailedPrecondition,
-                "the store's lease has moved since you read it; re-read and retry",
-                &[(
-                    "if-match",
-                    &current.map_or_else(
-                        || "NO_LEASE_ISSUED".to_owned(),
-                        |generation| generation.value().to_string(),
-                    ),
-                )],
-            );
+            return lease_moved_response(current);
         }
         Ok(LeaseBumpOutcome::Undrained { superseded }) => {
-            return api_error_with_details(
-                ErrorStatus::Unprocessable,
-                "this store's previous machine still holds events this cloud has never seen; \
-                 acknowledge that generation to move the store anyway, which abandons them",
-                &[("acknowledge_undrained", &superseded.value().to_string())],
-            );
+            return lease_undrained_response(superseded);
         }
         Err(error) => return lease_store_error_response(&error),
     };
@@ -12053,6 +12137,16 @@ where
                 "generation": bump.generation.value(),
                 "edge_placement": bump.edge_placement.as_wire(),
                 "edge_placement_moved": requested_placement.is_some(),
+                // Where the store's data now rests, and the place a person would recognise
+                // (ADR-0114). Both read from what the write returned rather than echoed from the
+                // request, so a swap in place records the region the store *has* rather than the
+                // nothing this body said. A country code is business metadata and goes in whole;
+                // the label is free text and goes in whole too, because an entry whose payload is
+                // redacted does not record what was chosen, which is the only thing this entry
+                // exists to record (ADR-0069's redaction rule is about personal data, and the
+                // console's field asks for a place).
+                "region_country": bump.region.as_ref().map(Region::country_str),
+                "region_label": bump.region.as_ref().map(Region::label),
                 // The generation whose events this bump knowingly abandoned, or `null`. It has to
                 // be here because it is nowhere else: an acknowledged bump does not *clear*
                 // `superseded_generation`, it rolls it forward to the machine it is displacing now.

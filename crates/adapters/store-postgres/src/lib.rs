@@ -60,7 +60,9 @@ pub use catalog::{
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
     ItemOrder, PostgresCatalog,
 };
-pub use config_trees::{BumpOutcome, PostgresConfigTrees, StoredBump, StoredRetire, StoredSettle};
+pub use config_trees::{
+    BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionWrite, StoredRetire, StoredSettle,
+};
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fleet::{FleetStoreRow, PostgresFleet};
 pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};

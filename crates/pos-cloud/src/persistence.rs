@@ -98,8 +98,8 @@ use crate::floorplan::{
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
 use crate::inventory::{InventoryStore, InventoryStoreError};
 use crate::lease::{
-    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, RetireOutcome, SettleOutcome,
-    StorePlacement,
+    LeaseBump, LeaseBumpOutcome, LeaseStore, LeaseStoreError, Region, RegionWrite, RetireOutcome,
+    SettleOutcome, StorePlacement,
 };
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
@@ -494,15 +494,27 @@ impl LeaseStore for PostgresConfigTrees {
         store: StoreId,
         issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
+        region: RegionWrite,
         acknowledge_undrained: Option<LeaseGeneration>,
         expected_generation: Option<LeaseGeneration>,
     ) -> Result<LeaseBumpOutcome, LeaseStoreError> {
+        // The seam's three cases map one-for-one onto the adapter's, which is the point of both
+        // being enums: there is no arm here that could construct a hosted placement with no region.
+        let stored_region = match &region {
+            RegionWrite::Keep => store_postgres::StoredRegionWrite::Keep,
+            RegionWrite::Clear => store_postgres::StoredRegionWrite::Clear,
+            RegionWrite::Set(region) => store_postgres::StoredRegionWrite::Set {
+                country: region.country_str(),
+                label: region.label(),
+            },
+        };
         let outcome = self
             .bump_store_lease(
                 tenant,
                 store,
                 issued_at.as_milliseconds_since_epoch(),
                 edge_placement.map(EdgePlacement::as_wire),
+                stored_region,
                 acknowledge_undrained.map(stored_generation_out),
                 expected_generation.map(stored_generation_out),
             )
@@ -521,9 +533,18 @@ impl LeaseStore for PostgresConfigTrees {
                 });
             }
         };
+        // Both columns or neither: the write sets and clears them together, so a row holding one
+        // alone is a repair somebody made by hand. Reported as no region rather than as half of
+        // one — `Region::stored` then declines a country that is not two letters, on the same
+        // posture, because a fleet page must not fail over one bad row.
+        let region = match (&stored.region_country, &stored.region_label) {
+            (Some(country), Some(label)) => Region::stored(country, label),
+            _ => None,
+        };
         Ok(LeaseBumpOutcome::Issued(LeaseBump {
             generation: stored_lease_generation(stored.generation)?,
             edge_placement: stored_edge_placement(&stored.edge_placement)?,
+            region,
             // Same refusal posture as the generation beside it, and for the same reason: a negative
             // number is not something this cloud ever wrote, so reporting a handover as settled
             // because a corrupt value would not convert is the one answer that must not be given.

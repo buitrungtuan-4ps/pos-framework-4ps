@@ -59,7 +59,7 @@ use pos_cloud::floorplan::{
 use pos_cloud::health::{self, TaskHealth, TaskHealthError, TaskHealthStore};
 use pos_cloud::http::CloudApp;
 use pos_cloud::inventory::{InventoryStore, InventoryStoreError};
-use pos_cloud::lease::StorePlacement;
+use pos_cloud::lease::{Region, RegionWrite, StorePlacement};
 use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
 };
@@ -792,6 +792,15 @@ struct FakeConfigTrees {
     /// has a new outgoing machine, so a retirement from the previous one no longer describes
     /// anything.
     retired: Arc<Mutex<Retirements>>,
+    /// Where each store's hosted machine is, mirroring the `store_lease.region_country` and
+    /// `region_label` columns added by migration 0058 (ADR-0114). Absent is the honest state for an
+    /// in-store placement: the machine is in the shop and has no region.
+    ///
+    /// One map holding the pair rather than two maps holding a half each, because the real
+    /// statement writes and clears both columns together and there is no write anywhere that
+    /// touches one alone — a fake with two maps would let a test produce a row the schema's writes
+    /// cannot.
+    regions: Arc<Mutex<HashMap<(TenantId, StoreId), Region>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing publish to land *between* the next read and its write, so a test can produce the
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
@@ -814,6 +823,7 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         store: StoreId,
         _issued_at: Timestamp,
         edge_placement: Option<EdgePlacement>,
+        region: RegionWrite,
         acknowledge_undrained: Option<pos_core::lease::LeaseGeneration>,
         expected_generation: Option<pos_core::lease::LeaseGeneration>,
     ) -> Result<pos_cloud::lease::LeaseBumpOutcome, pos_cloud::lease::LeaseStoreError> {
@@ -821,6 +831,7 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
         let mut placements = self.placements.lock().expect("lock");
         let mut superseded = self.superseded.lock().expect("lock");
         let mut retired = self.retired.lock().expect("lock");
+        let mut regions = self.regions.lock().expect("lock");
         let held = leases.get(&(tenant, store)).copied();
         // The two conditions the real statement evaluates in its own `WHERE`, in the same order and
         // for the same reason: a caller holding a stale read is told *that*, rather than being sent
@@ -857,10 +868,26 @@ impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
                 .unwrap_or(EdgePlacement::InStore)
         });
         placements.insert((tenant, store), placement);
+        // The `CASE WHEN $7` the statement uses: `Keep` leaves both columns exactly as they are,
+        // and the other two decide them. Written under the same lock section as the placement it
+        // qualifies, because in the adapter they are one statement — a fake that wrote them
+        // separately would pass tests the real row could not.
+        match region {
+            RegionWrite::Keep => {}
+            RegionWrite::Clear => {
+                regions.remove(&(tenant, store));
+            }
+            RegionWrite::Set(region) => {
+                regions.insert((tenant, store), region);
+            }
+        }
         Ok(pos_cloud::lease::LeaseBumpOutcome::Issued(
             pos_cloud::lease::LeaseBump {
                 generation: pos_core::lease::LeaseGeneration::new(next),
                 edge_placement: placement,
+                // Read back out of the map rather than echoed from the argument, as the adapter
+                // reads it out of `RETURNING`: a swap in place reports the region the store has.
+                region: regions.get(&(tenant, store)).cloned(),
                 superseded_generation: superseded
                     .get(&(tenant, store))
                     .copied()
@@ -11381,6 +11408,10 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
     // Naming one is a move, and it is the same act as issuing the generation — one request, one
     // write. The trail records both halves, so "who moved this store off the shop LAN, and when"
     // has an answer that does not require reading a second table at a second time (ADR-0110).
+    //
+    // The region rides the same request, and is required here rather than optional: a hosted
+    // placement without one is the state ADR-0114 exists to prevent, so the route refuses this body
+    // without it. Which is why this test names a region and the swap below does not.
     let moved = router
         .clone()
         .oneshot(bump_with_if_match(
@@ -11388,6 +11419,8 @@ async fn a_bump_is_the_only_thing_that_writes_where_a_store_runs() {
                 "tenant_id": tenant_ulid,
                 "store_id": store_ulid,
                 "edge_placement": "EDGE_PLACEMENT_HOSTED_BY_PLATFORM",
+                "region_country": "SG",
+                "region_label": "ap-southeast-1",
             }),
             &cookie,
             "\"0\"",
@@ -11762,6 +11795,266 @@ async fn an_acknowledged_bump_records_the_generation_it_abandoned() {
     assert_eq!(
         latest["generation"], 2,
         "and the generation the store moved to, which is a different number"
+    );
+}
+
+/// ADR-0114: a hosted edge placement moves a whole store's operational data — three parts of it
+/// personal — onto a machine somebody chose, and until this landed nothing recorded *where*.
+///
+/// The move and the record are one request, because they are one act. A second route that could
+/// edit the region on its own would let the record say a store rests in Singapore while the machine
+/// holding its lease sits in Tokyo.
+#[tokio::test]
+async fn a_hosted_move_records_where_the_store_now_rests_and_the_trail_names_it() {
+    let audit = FakeAudit::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app_with_audit(
+        provisioned_admin(),
+        config_trees.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let moved = router
+        .clone()
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "edge_placement": "EDGE_PLACEMENT_HOSTED_BY_OPERATOR",
+                "region_country": "sg",
+                "region_label": "  ap-southeast-1  ",
+            }),
+            &cookie,
+            "*",
+        ))
+        .await
+        .expect("route the hosted move");
+    assert_eq!(moved.status(), StatusCode::OK);
+
+    let entry = |audit: &[AuditEntry]| {
+        audit
+            .iter()
+            .find(|entry| entry.action == "config.lease.bump")
+            .expect("a bump was audited")
+            .after
+            .clone()
+            .expect("a bump records what it wrote")
+    };
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let after = entry(&recorded);
+    assert_eq!(
+        after["region_country"], "SG",
+        "the code is normalised on the way in, so the console's comparison against a store's \
+         published locale is an equality test rather than a case fold"
+    );
+    assert_eq!(
+        after["region_label"], "ap-southeast-1",
+        "the label is trimmed, because the emptiness and length checks ran on the trimmed value"
+    );
+    assert_eq!(after["edge_placement"], "EDGE_PLACEMENT_HOSTED_BY_OPERATOR");
+
+    // A swap in place: the machine is replaced, the *place* is not. The trail has to keep naming
+    // the region, because a reader asking "where has this store been running since March" is asking
+    // about the store, not about what this particular request happened to mention.
+    let swapped = router
+        .clone()
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "acknowledge_undrained": 0,
+            }),
+            &cookie,
+            "\"0\"",
+        ))
+        .await
+        .expect("route the swap");
+    assert_eq!(swapped.status(), StatusCode::OK);
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let after = entry(&recorded);
+    assert_eq!(after["region_country"], "SG");
+    assert_eq!(after["region_label"], "ap-southeast-1");
+    assert_eq!(
+        after["edge_placement_moved"], false,
+        "and the trail still distinguishes a move from a swap, which is the flag ADR-0110 added"
+    );
+
+    // Moving the store back into its shop ends the region: an in-store machine is in the shop, and
+    // a stale `SG` on the row would answer the transfer question with a lie.
+    let home = router
+        .clone()
+        .oneshot(bump_with_if_match(
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "edge_placement": "EDGE_PLACEMENT_IN_STORE",
+                "acknowledge_undrained": 0,
+            }),
+            &cookie,
+            "\"1\"",
+        ))
+        .await
+        .expect("route the move home");
+    assert_eq!(home.status(), StatusCode::OK);
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let after = entry(&recorded);
+    assert!(
+        after["region_country"].is_null() && after["region_label"].is_null(),
+        "an in-store placement has no region, and the columns are cleared by the same statement"
+    );
+}
+
+/// Five refusals, each naming the one field an admin can fix, and none of them issuing a
+/// generation on the way to refusing ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+#[tokio::test]
+async fn a_region_that_does_not_belong_or_does_not_parse_is_refused_by_field() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let hosted = "EDGE_PLACEMENT_HOSTED_BY_PLATFORM";
+
+    // (what the body adds, which field the refusal must name, what the case is)
+    let cases: [(serde_json::Value, &str, &str); 7] = [
+        (
+            serde_json::json!({ "edge_placement": hosted }),
+            "region_country",
+            "a hosted placement with no region at all",
+        ),
+        (
+            serde_json::json!({ "edge_placement": hosted, "region_country": "SG" }),
+            "region_country",
+            "a country with no label names a place nobody can picture",
+        ),
+        (
+            serde_json::json!({ "edge_placement": hosted, "region_label": "a rack" }),
+            "region_country",
+            "a label with no country is missing the one field the framework reads",
+        ),
+        (
+            serde_json::json!({
+                "edge_placement": hosted,
+                "region_country": "Singapore",
+                "region_label": "a rack",
+            }),
+            "region_country",
+            "the country is an alpha-2 code, not a name",
+        ),
+        (
+            serde_json::json!({
+                "edge_placement": hosted,
+                "region_country": "SG",
+                "region_label": "   ",
+            }),
+            "region_label",
+            "whitespace is not a place",
+        ),
+        (
+            serde_json::json!({
+                "edge_placement": "EDGE_PLACEMENT_IN_STORE",
+                "region_country": "SG",
+                "region_label": "a rack",
+            }),
+            "region_country",
+            "an in-store machine is in the shop and has no region",
+        ),
+        (
+            serde_json::json!({ "region_country": "JP", "region_label": "Sakai" }),
+            "region_country",
+            "a bump naming no placement is a swap in place, so this would edit the region alone",
+        ),
+    ];
+
+    for (extra, field, why) in cases {
+        let mut body = serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+        });
+        for (key, value) in extra.as_object().expect("an object of extra fields") {
+            body[key] = value.clone();
+        }
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/config/lease/bump", &body, &cookie))
+            .await
+            .expect("route the bump");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{why}");
+        let payload = json_body(refused).await;
+        assert_eq!(payload["error"]["details"][0]["field"], field, "{why}");
+    }
+
+    // And nothing moved. Every refusal above ran before the counter did, so this store is still one
+    // nobody has leased — a refusal that had already bumped would supersede a box over a typo.
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert!(json_body(read).await["generation"].is_null());
+}
+
+/// The label's ceiling is 64 *characters*, not bytes
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// A byte limit would give a fork writing Japanese a third of the field a fork writing English
+/// gets, for a value neither of them parses. 64 Japanese characters is 192 bytes, so a byte limit
+/// refuses the case this asserts must pass.
+#[tokio::test]
+async fn the_region_labels_ceiling_counts_characters_rather_than_bytes() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let hosted = "EDGE_PLACEMENT_HOSTED_BY_PLATFORM";
+
+    for (label, expected) in [
+        ("堺".repeat(64), StatusCode::OK),
+        ("堺".repeat(65), StatusCode::BAD_REQUEST),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(bump_with_if_match(
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid,
+                    "store_id": store_ulid,
+                    "edge_placement": hosted,
+                    "region_country": "JP",
+                    "region_label": label,
+                }),
+                &cookie,
+                "*",
+            ))
+            .await
+            .expect("route the bump");
+        assert_eq!(
+            response.status(),
+            expected,
+            "{} characters",
+            label.len() / 3
+        );
+    }
+
+    // The accepted label issued exactly one generation; the refused one issued none.
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config/lease?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the lease read");
+    assert_eq!(
+        json_body(read).await["generation"],
+        0,
+        "a refusal that had already bumped would supersede a box over a typo in a label"
     );
 }
 

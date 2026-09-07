@@ -1,0 +1,58 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0058 — where in the world a hosted edge placement's machine is (ADR-0114, Program C Phase 1).
+--
+-- ADR-0110 gave a store one new degree of freedom: `edge_placement`, which of three machines is the
+-- store. Two of those three modes move a whole store's operational data onto a machine somebody
+-- chose, and three parts of that data are personal. Nothing in this schema recorded *where* that
+-- machine is — and the one thing already called "region" in the tree is the OTA rollout's ring,
+-- which is a fleet-ramp position and not a place.
+--
+-- Two columns, on `store_lease` beside the placement they qualify, and for exactly the reason 0052
+-- put the placement there: **the table's only write is the bump**, so a region cannot drift from
+-- the placement it describes. On `stores` it would sit one careless `UPDATE stores SET …` away from
+-- being editable without moving the store — and a region edited on its own is how a record comes to
+-- say a store rests in Singapore while the machine holding its lease sits in Tokyo. Here the
+-- property is structural: one statement writes the generation, the placement and the region, or
+-- writes none of them.
+--
+-- **Both nullable, and NULL is correct rather than unknown for most of the fleet.** An in-store
+-- placement has no region: the machine is in the shop, and inventing "the shop's region" would be a
+-- second, weaker copy of the address `store_profile` already carries. So NULL means *in-store, and
+-- therefore no region*, which is what every row in the fleet holds the day this lands. There is no
+-- default and there must not be one — a default would assert a place for five hundred machines
+-- nobody has looked at.
+--
+-- **The requirement lives in the write, not in a constraint.** "Both present when hosted, both
+-- absent when in-store" is expressible as a CHECK, and it is deliberately not written as one. A
+-- CHECK here would be a second copy of a rule the bump already enforces, in a language that cannot
+-- explain itself to the admin who tripped it: the route answers `InvalidArgument` naming
+-- `region_country` or `region_label`, and a constraint violation arriving as a 503 would replace
+-- that with nothing. It would also make this migration fail on any fork whose rows a hand-written
+-- repair had left half-filled, turning a data problem into a box that will not boot.
+--
+-- **The set of regions is not closed, so neither column has a CHECK on its values.** 0052 closed
+-- `edge_placement` to three tokens because a fourth would be a behaviour the code does not
+-- implement. A region names a place in the world; a framework shipping a closed list of places has
+-- decided which places exist, and would be stale the week a fork opens somewhere the list forgot.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+
+-- ISO 3166-1 alpha-2, upper-cased by `CountryCode::parse` on the way in — the same parse the store
+-- profile's own publish calls, so the console's comparison against `locale.country_code` is an
+-- equality test rather than a case-folding one. `text` and not `char(2)`: every other identifier in
+-- this schema is `text`, and a fixed-width type would pad rather than refuse a wrong-length value.
+ALTER TABLE store_lease ADD COLUMN IF NOT EXISTS region_country text;
+
+-- The place a person recognises: `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai`. Stored
+-- verbatim and **never parsed** by anything. The 64-character ceiling is enforced at the write in
+-- Unicode scalar values, which a `varchar(64)` could not express — Postgres counts characters, but
+-- the refusal has to name the field and say what it accepts, and a truncation-shaped error cannot.
+--
+-- This column holds free text an admin typed, so it is the one place on this row where a person's
+-- name could land if somebody types premises instead of a place. It is never written to a log line
+-- and never into an event payload — `AGENTS.md` §2 forbids both, and `pos_proto::pii` makes the
+-- second a compile error. The console's helper text asks for a place and not a person. The residual
+-- is named in ADR-0114 rather than designed away.
+ALTER TABLE store_lease ADD COLUMN IF NOT EXISTS region_label text;

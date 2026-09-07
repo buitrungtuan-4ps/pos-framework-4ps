@@ -16,6 +16,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Where a hosted store's data rests is recorded when the store is moved there**
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)).
+
+  Moving a store's edge off its shop LAN moves a whole store's operational data onto a machine
+  somebody chose — employee identifiers and PIN hashes among it — and nothing recorded *where*. The
+  lease bump now takes `region_country` (an ISO 3166-1 alpha-2 code) and `region_label` (the place a
+  person recognises: `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai`), required together
+  when the bump names a hosted edge placement.
+
+  They are written by the bump and by nothing else, inside the same statement that issues the
+  generation and sets the placement. There is deliberately no route that edits a region on its own:
+  moving where a store's data rests and replacing the machine it rests on are the same act, and a
+  region that could move without the placement moving is a record that can say Singapore while the
+  machine sits in Tokyo. A bump that names no placement is a swap in place and keeps the region it
+  had; one that moves a store back in-store clears it, because the machine is in the shop.
+
+  The audit entry names both fields, so "where has this store been running since March, and who
+  decided" has an answer. **The framework attaches no rule to the value** — whether a placement is
+  lawful, whether a transfer is covered, whether anyone was told, are the operator's, under law this
+  repository was never told about.
+
+  **Upgrade note** Migration `0058_edge_placement_region.sql` adds two nullable columns to
+  `store_lease`; additive and rollback-safe. No permission change and nothing on the wire moves.
+  `POST /admin/config/lease/bump` gains two optional body fields — but a bump naming a *hosted*
+  `edge_placement` now requires them and is refused `InvalidArgument` without them, which is a
+  behaviour change for any caller already moving stores to a hosted placement. Bumps that name no
+  placement, or name `EDGE_PLACEMENT_IN_STORE`, are unaffected.
+
 - **A hosted store hands out a pairing URL its devices can actually reach**
   ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 
