@@ -19,7 +19,7 @@
 
 use core::future::Future;
 
-use crate::lease::StorePlacement;
+use crate::lease::{Region, StorePlacement};
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::time::Timestamp;
 
@@ -122,6 +122,16 @@ pub struct FleetRow {
     /// [`StorePlacement`]. The alert engine reads this same row, and those two absences carry
     /// opposite severities.
     pub edge_placement: StorePlacement,
+    /// Where in the world that machine is, or `None`
+    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Deliberately a plain `Option` rather than a three-valued type like [`StorePlacement`] beside
+    /// it. That distinction exists because "no lease row" and "a token this binary cannot read"
+    /// carry *opposite* severities for a quiet store, and a reader that collapsed them would page
+    /// one level too low. A region has no such asymmetry: nothing scores urgency by it, nothing
+    /// routes by it here, and every way of not having one — never bumped, in-store, a row written
+    /// before migration `0058` — means the same thing to every reader: there is nothing to show.
+    pub region: Option<Region>,
     /// The print-agent standings the store last reported, or `None` if it never has — an older edge,
     /// or one whose record could not be read ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
     ///

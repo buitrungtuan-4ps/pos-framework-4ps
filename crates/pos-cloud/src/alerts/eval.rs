@@ -372,6 +372,7 @@ mod tests {
             lease_reported_at: None,
             lease_generation_authoritative: None,
             edge_placement: StorePlacement::NeverIssued,
+            region: None,
             superseded_generation: None,
             retired_at: None,
             retired_by: None,

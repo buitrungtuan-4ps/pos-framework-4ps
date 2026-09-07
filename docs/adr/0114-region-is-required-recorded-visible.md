@@ -59,6 +59,52 @@ console rendering it; and the mismatch warning with its audited acknowledgement 
 Until those land, a region is recorded and attributed but not yet *visible* — two of this record's
 three verbs.
 
+## Delivery — 2026-09-07, the region reaches the reads
+
+`/admin/fleet` and `/admin/fleet/{store_id}` carry `region_country` and `region_label`. They ride
+the `LEFT JOIN store_lease` the read already performs for `edge_placement` — two more columns in one
+`SELECT`, no second query, and no work that grows with the fleet. The store hub inherits them
+through `api.fleetStore`, so ADR-0099's rule holds: no new endpoint, one more field on a read that
+already runs.
+
+`FleetRow::region` is a plain `Option<Region>`, deliberately unlike the three-valued
+`StorePlacement` beside it. That distinction exists because "no lease row" and "a token this binary
+cannot read" carry *opposite* severities for a quiet store. A region has no such asymmetry: nothing
+scores urgency by it and nothing routes by it, so never-bumped, in-store, and written-before-`0058`
+all mean the same thing to every reader — there is nothing to show.
+
+**This record's comparison could not be built, and the reason is a gap in the tree rather than a
+choice.** This record specifies the comparison against `locale.country_code`. **No route writes
+that field.** `admin_publish_locale` builds the `locale` node by hand from
+`PublishLocaleRequest` — currency, timezone, cutoff hour, inclusive-price posture, cash rounding,
+denominations, and an optional display language — and the request has no country at all. The
+`stores` registry row carries none either, and `StoreProfile` does not: the `country_code` on the
+*profile* request is read once to pick a country module for a tax-number format check and then
+discarded. `LocalePack` in `pos-proto` does have the field, but no cloud route publishes a
+`LocalePack`.
+
+So the comparison, built as written, would report **"country not recorded" for every store in every
+fleet, permanently** — a feature that looks like it works and never fires. It is not built here.
+
+The gap looks like an omission rather than a decision: this programme's own task for the locale
+publish is titled *"store locale settings (country/currency/timezone/cutoff)"*, and the code shipped
+the last three. `locale` already carries currency and timezone, which
+[D21](../roadmap-v3.md) names as attributes of a *store* alongside country, so the country belongs
+beside them rather than anywhere new. Closing it is one optional request field, one node key parsed
+by the same `CountryCode::parse` that file already imports, and one decision this slice deliberately
+does not take on its own: a publish rebuilds the node wholesale, so an omitted `country_code` would
+**erase** a stored one until the console sends it, and choosing between preserve-on-absent and
+requiring the console first is a call worth making explicitly.
+
+**Also not in this slice:** `/admin/stores` does not carry the region, and that is a decision. This
+record names the stores table as a third surface, but the payload is `StoreRecord` — the *registry*
+record: identity, name, brand, status. The region is a fact of the lease, and ADR-0110's whole
+argument for putting `edge_placement` on `store_lease` rather than `stores` was that these are
+different facts with different writers; copying the region onto the registry record repeats that
+mistake one layer up. `edge_placement` itself is not on that payload either, and a region with no
+placement beside it says less than nothing. The Stores screen can show both from the fleet read it
+can already make, which is where the console work belongs.
+
 ## The problem
 
 ### A hosted edge placement moves a store's personal data onto a machine somebody chose

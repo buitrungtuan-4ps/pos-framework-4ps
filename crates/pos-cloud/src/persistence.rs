@@ -1942,6 +1942,15 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // down", the same as hosted, so a token this binary cannot read pages at the higher
         // severity rather than the lower one.
         edge_placement: fleet_placement(row.edge_placement.as_deref()),
+        // Both columns or neither: the bump writes and clears them together and no statement
+        // touches one alone, so a row holding half a region is a repair somebody made by hand. It
+        // reports as no region rather than as half of one, and `Region::stored` then declines a
+        // country that is not two letters — the same posture as the placement above, for the same
+        // reason: one bad row must not take down the console an operator is holding open.
+        region: match (&row.region_country, &row.region_label) {
+            (Some(country), Some(label)) => Region::stored(country, label),
+            _ => None,
+        },
         // Same narrowing rule as the generations above: a negative number cannot have been written
         // by this cloud, and "did not say" is a truer answer for a reader than a wrapped-around one.
         // Here it also fails in the safe direction — a store whose handover cannot be read reports

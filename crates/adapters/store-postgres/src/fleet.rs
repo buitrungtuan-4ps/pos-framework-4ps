@@ -97,6 +97,17 @@ pub struct FleetStoreRow {
     /// The deciding admin's id, or `None`. An id and never an email — the audit trail carries the
     /// address, and this row is read by the fleet console.
     pub retired_by: Option<String>,
+    /// Where in the world the machine holding the authoritative generation is — its ISO 3166-1
+    /// alpha-2 country ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)),
+    /// or `None`.
+    ///
+    /// `None` for three different stores, and all three are honest: one nobody has bumped (no lease
+    /// row to join), one whose edge placement is in-store (the machine is in the shop and has no
+    /// region), and one bumped by a build that predates migration `0058`.
+    pub region_country: Option<String>,
+    /// The place a person recognises, or `None`. Always present exactly when `region_country` is:
+    /// the bump sets and clears the pair together and no statement touches one alone.
+    pub region_label: Option<String>,
     /// The print-agent standings the store last reported, as the raw JSON array text
     /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), or `None` if it never has.
     ///
@@ -136,6 +147,8 @@ const FLEET_SELECT: &str = "SELECT \
      lease.superseded_generation, \
      lease.retired_at, \
      lease.retired_by, \
+     lease.region_country, \
+     lease.region_label, \
      l.print_agents::text, \
      l.print_agents_reported_at \
      FROM stores s \
@@ -222,7 +235,11 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         superseded_generation: row.get(18),
         retired_at: row.get(19),
         retired_by: row.get(20),
-        print_agents: row.get(21),
-        print_agents_reported_at_ms: row.get(22),
+        // The region rides the same `LEFT JOIN store_lease` the placement above does, so it costs
+        // no extra round trip and no per-row work (ADR-0114).
+        region_country: row.get(21),
+        region_label: row.get(22),
+        print_agents: row.get(23),
+        print_agents_reported_at_ms: row.get(24),
     }
 }

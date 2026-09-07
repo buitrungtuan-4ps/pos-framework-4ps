@@ -16,6 +16,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The fleet console can see where each store's data rests**
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)).
+
+  `GET /admin/fleet` and `GET /admin/fleet/{store_id}` now carry `region_country` and
+  `region_label` beside the `edge_placement` they qualify. The store hub inherits them through the
+  same read. A store nobody has bumped, and a store whose edge is in its own shop, report `null` for
+  both — an in-store machine is in the shop and has no region, and a fabricated one would answer the
+  transfer question with a lie.
+
+  The fields ride the join the read already performs, so this costs no second query and no work that
+  grows with the fleet.
+
+  **Upgrade note** No migration, no permission change, nothing on the wire to a store moves. Two
+  additive fields on two `/admin` reads.
+
+  **Known gap, recorded rather than worked around:** ADR-0114 also specifies a warning when a
+  store's region differs from its country, compared against `locale.country_code`. **Nothing writes
+  that field** — the locale publish carries currency, timezone and cutoff but no country, and
+  neither the store registry row nor the store profile holds one. Built as specified the comparison
+  would report "country not recorded" for every store, permanently. It is not built; the gap and
+  what closing it costs are written up in the ADR's delivery note.
+
 - **Where a hosted store's data rests is recorded when the store is moved there**
   ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)).
 
