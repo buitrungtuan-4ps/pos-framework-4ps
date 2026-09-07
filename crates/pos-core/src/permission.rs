@@ -247,6 +247,21 @@ permissions! {
         default_roles: [Server, Supervisor, Manager, Owner],
         description: "Move an order to another table",
     },
+    /// Release a guest's QR order to the kitchen, or refuse it
+    /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
+    ///
+    /// No PIN: the intended actor is a server standing at the table, and a PIN prompt on every
+    /// guest order would be abandoned within a shift — `Medium` risk with a named actor in the
+    /// event is the trade ADR-0116 records. The default roles are the ones who may open an order
+    /// in the first place.
+    ConfirmQrOrder {
+        id: "sales.order.confirm_qr",
+        group: Sales,
+        risk: Medium,
+        pin: false,
+        default_roles: [Cashier, Server, Supervisor, Manager, Owner],
+        description: "Confirm or reject a guest's QR order",
+    },
 
     // ---- Billing ----
     /// Apply a discount within the role's ceiling.

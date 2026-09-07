@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A guest's QR order now has to be confirmed before the kitchen sees it.**
+
+  ADR-0012 calls staff confirmation the protection on a printed QR code, and
+  `OrderAcceptance::awaiting_staff_confirmation` says it is *"what stops a passer-by ordering forty
+  pizzas to a table they are not sitting at"*. **It was never enforced.** The flag had three
+  readers — the relay response, the public intake response, and the idempotency ledger row — and
+  all three only reported it. Nothing on the fire path consulted it, so a guest's order reached the
+  kitchen the moment any member of staff pressed fire, exactly as an order with no hold would.
+
+  The hold is now derived rather than stored (the QR channel, a table, the store's live `qr`
+  policy, and no decision recorded yet), and it gates `POST /api/lines/{id}/fire`. Two new routes
+  end it — `POST /api/orders/{id}/confirm` releases the order, `POST /api/orders/{id}/reject`
+  refuses it with a reason from the managed list and closes it — and
+  `GET /api/orders/awaiting-confirmation` plus a new **Guests** screen on the till are what staff
+  press. See [ADR-0116](docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md).
+
+  **Upgrade note.** This is a behaviour change for any store already accepting QR orders: on the
+  default policy a guest's tabled order must be confirmed before it can be fired. A store that does
+  not want the hold turns it off in its `qr` guardrail node, and every held order is released on
+  the next read — the policy is an input to the predicate, not a flag to be cleared per order. One
+  new permission, `sales.order.confirm_qr` (Medium risk, no PIN, granted by default to Cashier,
+  Server, Supervisor, Manager and Owner). No migration, no new wire field; `PROTOCOL_VERSION` stays
+  at 1.
+
 - **A reason code is now something that exists.**
 
   `docs/pos-spec.md` §11 item 2 makes reasons from a *cloud-managed list* one of the six fraud

@@ -8,6 +8,7 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `sales.item.open` | SALES | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `sales.item.mark_unavailable` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `sales.order.transfer` | SALES | LOW | · | ✓ | ✓ | ✓ | · | ✓ | · |
+| `sales.order.confirm_qr` | SALES | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `billing.discount.apply` | BILLING | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `billing.discount.override_ceiling` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.comp.apply` | BILLING | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
