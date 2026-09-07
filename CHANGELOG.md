@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A reason code is now something that exists.**
+
+  `docs/pos-spec.md` §11 item 2 makes reasons from a *cloud-managed list* one of the six fraud
+  controls, and eleven event fields declare a `reason_code_id` documented as coming from it
+  (`docs/snapshots/events.txt` counts them). Nothing produced that list: `ReasonCodeId` appeared only in two port signatures
+  and in test fixtures that invented one. So `pos_core::decision`'s void branch — which already
+  steps the line machine, gates a void-after-fire on `Permission::VoidFiredLine` and demands a
+  verified PIN — could not be reached by any route, because a route would have had no valid reason
+  to put in the event.
+
+  `pos_proto::reason_codes` is the missing input: one catalogue (`PublishedReasonCodes`), each
+  entry tagged with the actions it is valid for (`ReasonAction`), published as the twelfth config
+  node. `ReasonAction` names all eleven actions whose events require a reason, not only the
+  specification's six — an operator who cannot author a reason for a cash paid-in cannot record
+  one. See [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  **Upgrade note.** Unlike every other config node, an absent `reason_codes` node does *not* mean
+  "feature off": `PublishedReasonCodes::framework_default()` ships a set in the binary, so a store
+  can void a mis-keyed line during a cloud outage and on its first day. A published node
+  **replaces** that set wholesale rather than merging with it, so an operator can remove a
+  framework reason they judge wrong for their business. The default wording is deliberately generic
+  and is a business decision to review before the pilot, not an engineering one. Additive: no wire
+  field changed, so `PROTOCOL_VERSION` stays at 1.
+
 - **The release now builds and signs a Windows edge binary.**
 
   `deploy/edge/install-pos-edge.ps1` asked for a `pos-edge.exe` that no workflow produced. The

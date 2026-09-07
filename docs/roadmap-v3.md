@@ -387,8 +387,8 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 
 ### B·W2 — Full FnB flow
 - **B2.1** — Pre-bill (bill check): effect + `billing.prebill.printed` event + projection marker + flag `pre_bill` (D9: an effect, not a new state).
-- **B2.2** — Void line / void bill routes end-to-end with manager PIN + reason codes.
-- **B2.3** — Discount / comp / price-override / refund routes with real ceilings in the `Grant`; over-ceiling emits `security.permission.overridden` with the approver.
+- **B2.2** — Void line / void bill routes end-to-end with manager PIN + reason codes. *The reason-code half is its own foundation and was found to be entirely absent: `ReasonCodeId` had no producer anywhere in the tree, so a route could not have filled the field its own event declares. [ADR-0115](adr/0115-reason-codes-are-a-managed-list.md) decides the shape and splits the work — (1) ADR + `pos-proto` node type, (2) storage seam + adapter + fake, (3) `/admin/reason-codes/*` CRUD + console screen, (4) publish the `reason_codes` node + the edge applies it, (5) the void routes themselves, (6) the till's void control and reason picker. Slice 1 is delivered.*
+- **B2.3** — Discount / comp / price-override / refund routes with real ceilings in the `Grant`; over-ceiling emits `security.permission.overridden` with the approver. *Shares B2.2's reason-code list (ADR-0115): discount, comp and refund are three of the eleven actions it covers, so slices 1–4 are a shared prerequisite and only the routes are per-feature.*
 - **B2.4** — Split / merge / transfer routes + Pay UI (the pure functions exist and are property-tested; only routes/events/screens are missing).
 - **B2.5** — Modifiers/toppings on the dine-in path (additive line/event fields; min/max enforced from the modifier group; KDS shows them). *B1.1's proper home for the plumbing.*
 - **B2.6** — Real note text + serving style (note text kept local/PII-safe; serving style an open line attribute).
