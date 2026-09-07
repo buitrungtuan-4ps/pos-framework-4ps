@@ -16,6 +16,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud can hold a tenant's reason codes.** `ReasonCodeStore` (the seam), migration `0060`
+  (the tenant-scoped, RLS-isolated table), the `store-postgres` adapter, and a fake with the
+  contract cases — B2.2 slice 2 of [ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md).
+
+  Authored per **tenant**, not per store: "waste" and "staff error" mean the same thing in every
+  store a brand runs, and a per-store list would make the per-employee void-rate comparison
+  `docs/pos-spec.md` §11 item 3 asks for meaningless across stores. An entry leaves service by
+  going **inactive**, not by being deleted — a historic `sales.order_line.voided` names its
+  `reason_code_id` forever, and a deleted row turns that event's reason into an unreadable ULID.
+  `delete` exists for the entry created by mistake and never cited.
+
+  Nothing is wired to a route yet: authoring (`/admin/reason-codes/*`), the publish, and the void
+  routes are slices 3–5.
+
 - **A guest's QR order now has to be confirmed before the kitchen sees it.**
 
   ADR-0012 calls staff confirmation the protection on a printed QR code, and

@@ -89,6 +89,7 @@ pub mod people_compiler;
 mod persistence;
 pub mod qr;
 pub mod qr_http;
+pub mod reason_codes;
 pub mod reconcile;
 pub mod registry;
 pub mod relay;

@@ -31,12 +31,12 @@ use store_postgres::{
     PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
     PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
     PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
-    PostgresOrderQueue, PostgresPeople, PostgresReconcile, PostgresRegistry, PostgresReleases,
-    PostgresRollups, PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory,
-    PostgresSubjects, PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers,
-    PostgresWebhooks, ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate,
-    ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
-    VoucherRow,
+    PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile, PostgresRegistry,
+    PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
+    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
+    PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReasonCodeRow, ReleaseArtifactRow,
+    RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
+    TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
 
 use pos_ports::PortError;
@@ -47,8 +47,8 @@ use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, StationId, StoreId, SubjectId,
-    SupplierId, TableId, TaxClassId, TenantId,
+    DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
+    SubjectId, SupplierId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::{TaxComponent, TaxRate};
@@ -114,6 +114,7 @@ use crate::people::{
     NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
     RoleTemplateStoreError, RoleTemplateUpdate,
 };
+use crate::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
@@ -2394,6 +2395,98 @@ fn versioned_inventory<T: serde::de::DeserializeOwned>(
         decode_inventory(&row.doc_json)?,
         Version::new(row.version.clone()),
     ))
+}
+
+/// Decodes one stored reason-code document into the wire record it is.
+fn decode_reason_code(
+    json: &str,
+) -> Result<pos_proto::reason_codes::PublishedReasonCode, ReasonCodeStoreError> {
+    serde_json::from_str(json).map_err(|error| {
+        ReasonCodeStoreError::new(format!(
+            "a stored reason code could not be decoded: {error}"
+        ))
+    })
+}
+
+/// Pairs a stored reason-code row with the version the read saw.
+fn versioned_reason_code(
+    row: &ReasonCodeRow,
+) -> Result<Versioned<pos_proto::reason_codes::PublishedReasonCode>, ReasonCodeStoreError> {
+    Ok(Versioned::new(
+        decode_reason_code(&row.doc_json)?,
+        Version::new(row.version.clone()),
+    ))
+}
+
+impl ReasonCodeStore for PostgresReasonCodes {
+    async fn list(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<pos_proto::reason_codes::PublishedReasonCode>>, ReasonCodeStoreError>
+    {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| ReasonCodeStoreError::new(error.to_string()))?;
+        rows.iter().map(versioned_reason_code).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<Option<Versioned<pos_proto::reason_codes::PublishedReasonCode>>, ReasonCodeStoreError>
+    {
+        let row = self
+            .fetch_one(&tenant_id.to_string(), &reason_code_id.to_string())
+            .await
+            .map_err(|error| ReasonCodeStoreError::new(error.to_string()))?;
+        row.as_ref().map(versioned_reason_code).transpose()
+    }
+
+    async fn create(
+        &self,
+        tenant_id: TenantId,
+        reason_code: &pos_proto::reason_codes::PublishedReasonCode,
+    ) -> Result<CreateOutcome, ReasonCodeStoreError> {
+        let json = serde_json::to_string(reason_code).map_err(|error| {
+            ReasonCodeStoreError::new(format!("could not serialize a reason code: {error}"))
+        })?;
+        self.insert(&tenant_id.to_string(), &reason_code.id.to_string(), &json)
+            .await
+            .map(create_outcome)
+            .map_err(|error| ReasonCodeStoreError::new(error.to_string()))
+    }
+
+    async fn update(
+        &self,
+        tenant_id: TenantId,
+        reason_code: &pos_proto::reason_codes::PublishedReasonCode,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, ReasonCodeStoreError> {
+        let json = serde_json::to_string(reason_code).map_err(|error| {
+            ReasonCodeStoreError::new(format!("could not serialize a reason code: {error}"))
+        })?;
+        self.update_at(
+            &tenant_id.to_string(),
+            &reason_code.id.to_string(),
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| ReasonCodeStoreError::new(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<(), ReasonCodeStoreError> {
+        self.delete(&tenant_id.to_string(), &reason_code_id.to_string())
+            .await
+            .map_err(|error| ReasonCodeStoreError::new(error.to_string()))
+    }
 }
 
 impl InventoryStore for PostgresInventory {
