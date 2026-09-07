@@ -672,6 +672,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Reason-code publish (ADR-0115, roadmap B2.2): assemble the tenant's authored reason codes
+        // into the store's `reason_codes` config node, so the till's void, discount, comp, refund,
+        // drawer, rejection, cash-movement and stock-correction pickers offer the operator's own
+        // list. The node REPLACES the framework default wholesale, which is why the route refuses an
+        // empty publish: that would leave a trading store with no reason it could cite for anything.
+        .merge(http::config_reason_codes_router(
+            store.reason_codes(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // OTA rollout levers (ADR-0078, Track O3): publish a `fleet_update` rollout or engage its
         // kill switch from typed fields, instead of hand-editing the config node.
         .merge(http::ota_config_router(

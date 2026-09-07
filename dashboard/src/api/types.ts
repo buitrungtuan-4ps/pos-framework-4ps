@@ -498,6 +498,21 @@ export interface ReasonCode {
 }
 
 /**
+ * What a reason-code publish put on a store (ADR-0115) — how many entries went on, how many staff
+ * may pick, and the acts the published list leaves with **no** reason to cite.
+ *
+ * `uncovered_actions` is the part that matters: a published list replaces the framework set, so an
+ * action with no entry has an empty picker and cannot be recorded at all. That may be exactly what
+ * the operator meant; the console says it out loud either way.
+ */
+export interface ReasonCodePublishResult {
+  readonly config_version_id: string;
+  readonly published: number;
+  readonly active: number;
+  readonly uncovered_actions: ReasonAction[];
+}
+
+/**
  * The authoring fields of a reason-code create/update — a `ReasonCode` without its server-minted id
  * or the version it was read at (a write sends that as `If-Match`, not in the body).
  */

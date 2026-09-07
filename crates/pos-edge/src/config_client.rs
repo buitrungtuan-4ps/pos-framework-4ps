@@ -54,6 +54,7 @@ use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
+use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
@@ -301,6 +302,29 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         let (book, thresholds) = inventory_from_published(&published);
         session.recipes = book;
         session.recipe_thresholds = thresholds;
+    }
+    // The `reason_codes` node the reason-code publish writes
+    // ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2): the
+    // managed list a void, a discount, a comp, a refund, an out-of-sale drawer opening, a staff
+    // rejection, either cash movement and either stock correction must cite. `docs/pos-spec.md` §11
+    // item 2 makes these reasons a fraud control, and until this node arrived a store could only
+    // ever cite the framework set compiled into the binary.
+    //
+    // A present node **replaces** the framework default wholesale rather than merging with it, which
+    // is what lets an operator remove a framework reason they judge wrong for their business —
+    // merging would quietly resurrect it. Absent or unparseable leaves the framework set in place, so
+    // a store that has never published one can still void a mis-keyed line on its first day, during a
+    // cloud outage, before anyone has opened the console (ADR-0001).
+    //
+    // The cloud refuses to publish an empty list for the same reason: with the replace rule, an empty
+    // node is not "no opinion", it is taking every reason away from a trading store.
+    if let Some(published) = document
+        .get("reason_codes")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedReasonCodes>(&text).ok())
+        .filter(|published| !published.is_empty())
+    {
+        session.reason_codes = published;
     }
     // The `channels` node the channels publish writes (ADR-0080, Track M7): the sales channels a store
     // accepts. A present node is authoritative — the edge refuses an order on a channel it does not
@@ -1700,6 +1724,94 @@ mod tests {
             malformed.floor.table(table_id).is_some(),
             "a malformed floor node leaves the plan unchanged"
         );
+    }
+
+    /// A published reason list replaces the framework default wholesale, and an absent one leaves it.
+    ///
+    /// The replace rule is ADR-0115's, and it is the point of the node: an operator who judges
+    /// "customer changed their mind" wrong for their business removes it, and a merge would put it
+    /// straight back. The other half matters just as much — a store that has never published a list
+    /// must still be able to void a mis-keyed line during a cloud outage on its first day (ADR-0001),
+    /// so an absent node leaves the framework set standing rather than blanking the pickers.
+    #[test]
+    fn a_published_reason_list_replaces_the_framework_set_and_an_absent_one_leaves_it() {
+        use pos_proto::ids::ReasonCodeId;
+        use pos_proto::reason_codes::{
+            PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
+        };
+
+        let base = EdgeSession::bootstrap();
+        assert!(
+            base.reason_codes.codes().len() > 1,
+            "the bootstrap ships the framework set, so a store can void before it ever syncs"
+        );
+
+        // One authored entry, valid only for voiding a line.
+        let authored = PublishedReasonCodes::from_parts(vec![PublishedReasonCode::new(
+            ReasonCodeId::new(Ulid::from_u128(9_000)),
+            ReasonCode::new("KEYED_WRONG"),
+            DisplayName::new("Keyed in error"),
+            vec![ReasonAction::VoidLine],
+        )]);
+        let document = serde_json::json!({
+            "reason_codes": serde_json::to_value(&authored).expect("serialize"),
+        });
+
+        let rebuilt = session_from_config(&base, &document);
+        assert_eq!(
+            rebuilt.reason_codes.codes().len(),
+            1,
+            "the published list replaced the framework set rather than merging with it"
+        );
+        assert_eq!(
+            rebuilt
+                .reason_codes
+                .for_action(ReasonAction::DrawerOpen)
+                .count(),
+            0,
+            "so the framework's MAKING_CHANGE is gone, which is the operator's call to make"
+        );
+        assert_eq!(
+            rebuilt
+                .reason_codes
+                .for_action(ReasonAction::VoidLine)
+                .count(),
+            1,
+            "and the entry they did author is what a void now cites"
+        );
+
+        // Nothing published: the framework set stays, so the store keeps trading.
+        let untouched = session_from_config(&base, &serde_json::json!({}));
+        assert_eq!(
+            untouched.reason_codes.codes().len(),
+            base.reason_codes.codes().len(),
+            "an absent node leaves the framework set in place (ADR-0001)"
+        );
+    }
+
+    /// A malformed or empty `reason_codes` node leaves the store's pickers alone.
+    ///
+    /// The cloud refuses to publish an empty list, but the edge cannot assume that: a node written
+    /// before that rule, hand-edited into the tree, or truncated in transit would otherwise take
+    /// every reason away from a trading store. So the edge applies the same floor from its own side.
+    #[test]
+    fn a_bad_reason_code_node_never_blanks_a_trading_stores_pickers() {
+        let base = EdgeSession::bootstrap();
+        let framework = base.reason_codes.codes().len();
+
+        for bad in [
+            serde_json::json!({ "reason_codes": { "codes": [] } }),
+            serde_json::json!({ "reason_codes": "WASTE" }),
+            serde_json::json!({ "reason_codes": { "codes": "not a list" } }),
+            serde_json::json!({ "reason_codes": null }),
+        ] {
+            let rebuilt = session_from_config(&base, &bad);
+            assert_eq!(
+                rebuilt.reason_codes.codes().len(),
+                framework,
+                "document {bad} should have left the framework set standing"
+            );
+        }
     }
 }
 

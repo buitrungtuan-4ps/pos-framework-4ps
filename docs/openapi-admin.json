@@ -10,6 +10,86 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/admin/config/reason-codes": {
+      "put": {
+        "tags": [
+          "reason codes"
+        ],
+        "summary": "A super-admin publishes the tenant's authored reason codes onto one store's config tree.",
+        "operationId": "admin_publish_reason_codes",
+        "requestBody": {
+          "description": "The tenant and the store to publish to. The entries come from what the tenant has authored, never from this body",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published. The body carries the new config version, how many entries went on (retired ones included, so a historic event still resolves), how many staff may pick, and `uncovered_actions` — the acts this list leaves with no reason to cite, which a store cannot then record"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The tenant has authored no reasons (a published list replaces the framework set, so an empty one would leave the store unable to cite anything), or an authored entry is valid for no action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The store's config tree changed under a contended publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The reason code store or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/login": {
       "post": {
         "tags": [

@@ -70,6 +70,7 @@ import type {
   PublishRolloutRequest,
   ReasonCode,
   ReasonCodeInput,
+  ReasonCodePublishResult,
   ReconcileRun,
   Recipe,
   RecipeInput,
@@ -1358,6 +1359,14 @@ export const api = {
       "DELETE",
       `/admin/reason-codes/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
+  // Assemble the tenant's authored reason codes into one store's `reason_codes` config node, behind
+  // console.config.publish; the edge REPLACES its framework default with it wholesale, which is why
+  // the cloud refuses an empty publish and why the answer names the actions nothing now covers.
+  publishReasonCodes: (tenantId: string, storeId: string) =>
+    requestJson<ReasonCodePublishResult>("PUT", "/admin/config/reason-codes", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
