@@ -21,6 +21,44 @@ Fifth and last of the five records on the **Edge Anywhere** programme, after
 [ADR-0111](0111-a-second-origin-may-address-the-edge.md), [ADR-0112](0112-print-agents.md) and
 [ADR-0113](0113-the-host-agent.md). All five are on disk and all five are linked here as documents.
 
+## Delivery — 2026-09-07, the write half
+
+The region is a fact of the lease row and is written by the bump, exactly as this record specifies.
+`store_lease` gains `region_country` and `region_label` (migration `0058`), both nullable, with no
+`CHECK` on either: the "both when hosted, neither when in-store" rule lives in the write, where it
+can answer the admin who tripped it by name, rather than in a constraint that would arrive as a
+`503` and would fail the migration on any fork whose rows a hand repair had left half-filled.
+
+**One statement writes the generation, the placement and the region.** The `UPDATE` carries
+`region_country = CASE WHEN $7 THEN $8 ELSE region_country END` and the same for the label, so a
+swap in place leaves both columns untouched while a move decides them; the `INSERT` branch writes
+the pair directly, because a store with no lease row has no region to keep. Both columns are always
+written together, and no statement anywhere touches one alone.
+
+**The rule is one pure function**, `resolve_region` in `crates/pos-cloud/src/lease.rs`, returning a
+three-variant `RegionWrite` (`Keep` / `Clear` / `Set`). Modelling it as an enum rather than two
+`Option`s is what makes "a hosted placement always has a region" structural at the seam: the one
+state this record exists to prevent is not expressible below the route.
+
+**Six refusals rather than the five this record named**, and the sixth follows from the fifth. A
+region on an `EDGE_PLACEMENT_IN_STORE` bump is refused, as specified. So is a region on a bump that
+names **no** placement — that is ADR-0003's swap in place, where the machine changes and the place
+does not, so a region there would be a region edited without moving the store, which is the failure
+"written by the bump and by nothing else" exists to prevent. To move a hosted store's region, name
+its `edge_placement` again alongside the new one. Each refusal is `InvalidArgument` on the AIP-193
+envelope naming `region_country` or `region_label`.
+
+The audit entry carries both fields, read from what the write returned rather than echoed from the
+request, so a swap records the region the store *has* rather than the nothing its body said.
+
+**Not in this slice, and it is the larger half:** the region reaching `/admin/fleet`,
+`/admin/fleet/{store_id}` and `/admin/stores`; the two single-store reads gaining the
+`ConfigTreeStore` handle that lets them compare `region_country` against `locale.country_code`; the
+console rendering it; and the mismatch warning with its audited acknowledgement over
+`POST /admin/stores/{store_id}/region-acknowledgement` and the `store_region_acknowledgement` row.
+Until those land, a region is recorded and attributed but not yet *visible* — two of this record's
+three verbs.
+
 ## The problem
 
 ### A hosted edge placement moves a store's personal data onto a machine somebody chose

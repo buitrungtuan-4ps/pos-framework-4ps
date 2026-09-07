@@ -193,6 +193,12 @@ const MIGRATION_0056: &str = include_str!("../migrations/0056_device_agent.sql")
 /// Print-agent standings on the liveness read model ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
 const MIGRATION_0057: &str = include_str!("../migrations/0057_print_agent_standings.sql");
 
+/// Where in the world a hosted edge placement's machine is
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)). On `store_lease`
+/// beside the placement it qualifies, for the reason 0052 put the placement there: that table's
+/// only write is the bump, so a region cannot drift from the placement it describes.
+const MIGRATION_0058: &str = include_str!("../migrations/0058_edge_placement_region.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -479,6 +485,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0057)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0058)
             .await
             .map_err(unavailable)
     }

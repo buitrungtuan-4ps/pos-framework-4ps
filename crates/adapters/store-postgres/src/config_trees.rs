@@ -132,6 +132,56 @@ pub struct StoredBump {
     /// so. A store with no handover in flight carries `None`, and so does one that has never been
     /// bumped — the two are the same to a reader, because neither has a machine owing events.
     pub superseded_generation: Option<i64>,
+    /// The store's region country as an ISO 3166-1 alpha-2 code, or `None` for an in-store
+    /// placement — which has none, because the machine is in the shop
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    ///
+    /// Read from `RETURNING` beside the placement, never echoed from the request, and for the same
+    /// reason: a bump that named no placement keeps the region it had.
+    pub region_country: Option<String>,
+    /// The store's region label — the place a person recognises. Never parsed by anything here.
+    ///
+    /// Always present exactly when `region_country` is: the write sets and clears the pair
+    /// together, and there is no statement that touches one alone.
+    pub region_label: Option<String>,
+}
+
+/// What one bump does to the store's two region columns
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// The adapter's mirror of `pos_cloud::lease::RegionWrite`, taking borrowed strings because the
+/// caller already owns them and this is a statement parameter, not a stored value. Three variants
+/// and no fourth: a hosted placement with no region is not expressible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoredRegionWrite<'a> {
+    /// The bump named no placement, so it is a swap in place and the stored region stays exactly as
+    /// it is. Every bump that existed before these columns did.
+    Keep,
+    /// The bump moved the store in-store, which has no region: both columns go to NULL.
+    Clear,
+    /// The bump moved the store to a hosted placement, and this is where.
+    Set {
+        /// ISO 3166-1 alpha-2, already upper-cased by the caller's `CountryCode::parse`.
+        country: &'a str,
+        /// The place a person recognises, already trimmed and length-checked by the caller.
+        label: &'a str,
+    },
+}
+
+impl<'a> StoredRegionWrite<'a> {
+    /// The three statement parameters this write becomes: whether to touch the columns at all, and
+    /// what to put in them.
+    ///
+    /// `Keep` answers `false` and the `CASE` in the statement leaves both columns alone; the two
+    /// NULLs beside it are what the *insert* branch writes, and a store with no row has no region
+    /// to keep, so NULL is right there too.
+    const fn parameters(self) -> (bool, Option<&'a str>, Option<&'a str>) {
+        match self {
+            Self::Keep => (false, None, None),
+            Self::Clear => (true, None, None),
+            Self::Set { country, label } => (true, Some(country), Some(label)),
+        }
+    }
 }
 
 impl PostgresConfigTrees {
@@ -338,6 +388,12 @@ impl PostgresConfigTrees {
     /// keeps the placement it had. It is written **in this same statement**, which is why the row
     /// and the generation beside it can never disagree: there is no window between them to read.
     ///
+    /// `region` is the same fact one level further out
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)): where in the
+    /// world the machine holding the new generation is. It rides the same statement for the same
+    /// reason, and a caller cannot express the one state ADR-0114 exists to prevent — a hosted
+    /// placement with no region — because [`StoredRegionWrite`] has no variant for it.
+    ///
     /// One statement, so two admins bumping at once serialise on the row rather than racing to the
     /// same number.
     ///
@@ -350,6 +406,7 @@ impl PostgresConfigTrees {
         store_id: StoreId,
         issued_at_ms: i64,
         edge_placement: Option<&str>,
+        region: StoredRegionWrite<'_>,
         acknowledge_undrained: Option<i64>,
         expected_generation: Option<i64>,
     ) -> Result<BumpOutcome, PortError> {
@@ -392,6 +449,17 @@ impl PostgresConfigTrees {
         // machine. Left in place they would say a machine still in the shop had been decided
         // unnecessary. Every retirement's history is the audit trail's, which keeps it.
         let requested = edge_placement.map(ToOwned::to_owned);
+        // `$7` says whether this bump *decided* the region; `$8`/`$9` are what it decided. A swap in
+        // place sends `false` and the `CASE` leaves both columns exactly as they are, which is what
+        // keeps every bump written before these columns existed behaving identically. On the insert
+        // branch there is nothing to keep — a store with no lease row has no region — so the pair
+        // goes in directly, and `Keep` puts NULL there, which is the truth for a first-ever lease.
+        //
+        // Both columns are always written together. There is no statement anywhere that touches one
+        // without the other, which is what makes "a hosted placement always has a region, an
+        // in-store one never does" a property of the schema's *writes* rather than a rule a reader
+        // has to trust.
+        let (region_decided, region_country, region_label) = region.parameters();
         let row = connection
             .query_opt(
                 "WITH bumped AS ( \
@@ -401,20 +469,24 @@ impl PostgresConfigTrees {
                      retired_at = NULL, \
                      retired_by = NULL, \
                      issued_at = $3, \
-                     edge_placement = COALESCE($4, edge_placement) \
+                     edge_placement = COALESCE($4, edge_placement), \
+                     region_country = CASE WHEN $7 THEN $8 ELSE region_country END, \
+                     region_label = CASE WHEN $7 THEN $9 ELSE region_label END \
                      WHERE tenant_id = $1 AND store_id = $2 \
                        AND generation = $6::bigint \
                        AND (superseded_generation IS NULL \
                             OR superseded_generation = $5::bigint) \
-                     RETURNING generation, edge_placement, superseded_generation \
+                     RETURNING generation, edge_placement, superseded_generation, \
+                               region_country, region_label \
                  ), issued AS ( \
                      INSERT INTO store_lease \
                      (tenant_id, store_id, generation, issued_at, edge_placement, \
-                      superseded_generation) \
-                     SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL \
+                      superseded_generation, region_country, region_label) \
+                     SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL, $8, $9 \
                      WHERE $6::bigint IS NULL \
                      ON CONFLICT (tenant_id, store_id) DO NOTHING \
-                     RETURNING generation, edge_placement, superseded_generation \
+                     RETURNING generation, edge_placement, superseded_generation, \
+                               region_country, region_label \
                  ) \
                  SELECT * FROM bumped UNION ALL SELECT * FROM issued",
                 &[
@@ -424,6 +496,9 @@ impl PostgresConfigTrees {
                     &requested,
                     &acknowledge_undrained,
                     &expected_generation,
+                    &region_decided,
+                    &region_country,
+                    &region_label,
                 ],
             )
             .await
@@ -474,6 +549,8 @@ impl PostgresConfigTrees {
             generation: row.get(0),
             edge_placement: row.get(1),
             superseded_generation: row.get(2),
+            region_country: row.get(3),
+            region_label: row.get(4),
         }))
     }
 
