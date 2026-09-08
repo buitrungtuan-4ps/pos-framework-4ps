@@ -7,7 +7,12 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { FleetStore, TaskHealthEntry, TaskHealthReport } from "../api/types";
+import type {
+  AdmittedDevice,
+  FleetStore,
+  TaskHealthEntry,
+  TaskHealthReport,
+} from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
@@ -77,6 +82,35 @@ export function Fleet() {
   const [settling, setSettling] = createSignal<FleetStore | null>(null);
   const [retiring, setRetiring] = createSignal<FleetStore | null>(null);
   const [handoverBusy, setHandoverBusy] = createSignal(false);
+  // Which devices the store itself admitted (ADR-0118 §4). Loaded when the drawer opens rather than
+  // with the fleet listing: it is a second read per store, and the fleet view polls — so fetching it
+  // for every row would multiply a 15-second poll by the size of the fleet to answer a question
+  // nobody asked. `null` is "not read yet", which the drawer renders differently from an empty
+  // roster, because a store that has admitted nothing and a store we have not asked about are not
+  // the same answer.
+  const [admitted, setAdmitted] = createSignal<AdmittedDevice[] | null>(null);
+  const [admittedError, setAdmittedError] = createSignal("");
+
+  // Opens the detail drawer for a store and reads its admitted-device roster.
+  const openDetail = (store: FleetStore) => {
+    setSelected(store);
+    setAdmitted(null);
+    setAdmittedError("");
+    const tenant = tenantId();
+    if (!tenant) {
+      return;
+    }
+    void api
+      .admittedDevices(tenant, store.store_id)
+      .then(setAdmitted)
+      // A roster that cannot be read must not take the drawer down with it: the liveness the rest of
+      // this panel shows is what an operator opened it for, and it is already loaded.
+      .catch((failure: unknown) =>
+        setAdmittedError(
+          failure instanceof ApiError ? failure.message : t("fleet.admittedUnavailable"),
+        ),
+      );
+  };
 
   const fail = (caught: unknown) => {
     const message = caught instanceof ApiError ? caught.message : String(caught);
@@ -419,7 +453,7 @@ export function Fleet() {
                   empty={<EmptyState title={t("fleet.empty")} description={t("fleet.emptyHint")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (
-                    <Button variant="secondary" onClick={() => setSelected(row)}>
+                    <Button variant="secondary" onClick={() => openDetail(row)}>
                       {t("fleet.details")}
                     </Button>
                   )}
@@ -554,6 +588,72 @@ export function Fleet() {
                     {t("fleet.leaseBump")}
                   </Button>
                   <p class="text-xs text-ink-muted">{t("fleet.leaseBumpHint")}</p>
+                </div>
+                {/* What the store *itself* admitted (ADR-0118 §4) — folded from its own events,
+                    so a tablet paired during an internet outage appears here once the link
+                    returns. Distinct from the named devices an admin created in the registry: the
+                    ids differ and nothing joins them, which the hint says out loud, because two
+                    lists of "devices" that disagree is exactly the confusion to pre-empt. */}
+                <div class="flex flex-col gap-2">
+                  <h3 class="text-sm font-semibold">{t("fleet.admitted")}</h3>
+                  <p class="text-xs text-ink-muted">{t("fleet.admittedHint")}</p>
+                  <Show when={admittedError()}>
+                    {(message) => <Banner tone="danger" message={message()} />}
+                  </Show>
+                  <Show
+                    when={admitted()}
+                    fallback={
+                      <Show when={!admittedError()}>
+                        <p class="text-sm text-ink-muted">{t("common.loading")}</p>
+                      </Show>
+                    }
+                  >
+                    {(devices) => (
+                      <Show
+                        when={devices().length > 0}
+                        fallback={
+                          <p class="text-sm text-ink-muted">{t("fleet.admittedNone")}</p>
+                        }
+                      >
+                        <ul class="flex flex-col gap-2">
+                          <For each={devices()}>
+                            {(device) => (
+                              <li class="flex flex-col gap-1 rounded border border-line p-2">
+                                <div class="flex items-center gap-2">
+                                  <StatusBadge
+                                    tone={device.revoked_at_ms === null ? "active" : "archived"}
+                                    label={
+                                      device.revoked_at_ms === null
+                                        ? t("fleet.admittedLive")
+                                        : t("fleet.admittedRetired")
+                                    }
+                                  />
+                                  <span class="text-sm">
+                                    {device.admitted_at_ms > 0
+                                      ? formatRelativeAge(ageSeconds(device.admitted_at_ms))
+                                      : t("fleet.admittedUnknownWhen")}
+                                  </span>
+                                </div>
+                                {/* Which till authorised it, where one did. Absent means the code a
+                                    box announces at boot — the only admission nothing authorised,
+                                    because on a virgin box nothing could. */}
+                                <p class="text-xs text-ink-muted">
+                                  {device.admitted_by_device_id === null
+                                    ? t("fleet.admittedByBoot")
+                                    : t("fleet.admittedByTill")}
+                                </p>
+                                <TechnicalDetails label={t("common.technicalDetails")}>
+                                  {device.admitted_by_device_id === null
+                                    ? device.local_device_id
+                                    : `${device.local_device_id} · ${device.admitted_by_device_id}`}
+                                </TechnicalDetails>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </Show>
+                    )}
+                  </Show>
                 </div>
                 <TechnicalDetails label={t("common.technicalDetails")}>
                   {store().store_id}

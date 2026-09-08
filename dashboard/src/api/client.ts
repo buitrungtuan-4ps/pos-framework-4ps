@@ -41,6 +41,7 @@ import type {
   DeviceProposalSummary,
   DisplayCategory,
   DisplaySubcategory,
+  AdmittedDevice,
   Employee,
   EntityStatus,
   ETag,
@@ -1861,6 +1862,14 @@ export const api = {
     requestJson<FleetStore>(
       "GET",
       `/admin/fleet/${encodeURIComponent(storeId)}?${tenantQuery(tenantId)}`,
+    ),
+  // Which devices the store itself admitted (ADR-0118 §4) — folded from the store's own events, so
+  // it reflects tablets paired offline too. A different identity space from `listDevices`, which
+  // returns the console's *named* devices; nothing joins the two ids.
+  admittedDevices: (tenantId: string, storeId: string) =>
+    requestJson<AdmittedDevice[]>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/devices/admitted?${tenantQuery(tenantId)}`,
     ),
   // Record why a store's data resting outside its own country is correct (ADR-0114), behind
   // console.stores.manage.

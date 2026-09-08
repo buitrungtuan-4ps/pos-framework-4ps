@@ -24,10 +24,11 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
-use crate::cloud::{DailyCash, DailyRevenue, DailyRollup, XzReport};
+use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
 use super::rollup::{
-    RollupWindow, fold_cash, fold_event, fold_revenue, render_revenue_window, render_window,
+    RollupWindow, fold_cash, fold_devices, fold_event, fold_revenue, render_devices,
+    render_revenue_window, render_window,
 };
 
 /// How many events one projection page reads and folds.
@@ -55,6 +56,27 @@ pub struct StoredRollups {
     /// O4). `#[serde(default)]` for the same forward-compatible reason as `revenue`.
     #[serde(default)]
     pub cash: BTreeMap<String, DailyCash>,
+    /// The store's **admitted-device roster**, keyed by the edge-minted local device id
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4). The
+    /// one map here that is not per-trading-day, because *which tills does this store have* is a
+    /// question about the present; see [`fold_devices`].
+    ///
+    /// `#[serde(default)]` for the same forward-compatible reason as `revenue` and `cash`: a blob
+    /// written before ADR-0118 loads with an empty roster and accrues from the cursor forward. To
+    /// backfill a store's history, reset the rollup (the ADR-0036 reset-cursor-and-replay lever) so
+    /// the projector re-folds the whole log — the admissions are on it, at-least-once and durable.
+    ///
+    /// # Why it lives in this blob rather than in a table of its own
+    ///
+    /// ADR-0118 §4 asks for "a `local_device_id` column". A column on the console's `devices` table
+    /// cannot be it: that table's key is a **console-minted** device id and nothing joins it to an
+    /// edge-minted one, which is the record's own argument (a browser till presents no identity and
+    /// clearing its storage creates a new device). So the roster needs its own home, and this blob is
+    /// the one the tree already keeps per `(tenant, store)` — which buys the property a separate
+    /// table would have to earn: it is saved **in the same write as the cursor**, so a crash mid-pass
+    /// can only re-fold, never lose a row or double-count one.
+    #[serde(default)]
+    pub devices: BTreeMap<String, AdmittedDevice>,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -148,6 +170,7 @@ where
             fold_event(&mut state.days, event);
             fold_revenue(&mut state.revenue, event);
             fold_cash(&mut state.cash, event);
+            fold_devices(&mut state.devices, event);
             folded = folded.saturating_add(1);
         }
         let short = batch.len() < page_len;
@@ -181,6 +204,36 @@ where
 {
     let state = rollups.load(tenant, store_id).await?;
     Ok(render_window(state.days, window))
+}
+
+/// Answers a store's **admitted-device roster** from the materialised rollup — which devices this
+/// store admitted, which it has retired, and when
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+///
+/// No window: the roster is a handful of rows per store, at the rate a store commissions tills, and
+/// the question it answers is about the present rather than about a date range. Unwindowed and
+/// unpaged is the honest shape for it; if a fork's roster ever grows past that, it grows because
+/// pairing expiry is still deferred (ADR-0091), and reclaim is the fix rather than paging.
+///
+/// **T3.** Device identifiers and instants. Who admitted a device is not here and never reaches the
+/// cloud (ADR-0118 §5), so this read needs no revenue-grade permission — `console.read` is enough,
+/// the same standing the fleet detail beside it takes.
+///
+/// `tenant` is the caller's authenticated tenant, so the read is confined to that tenant's rollups.
+///
+/// # Errors
+///
+/// [`RollupError::Store`] if the rollup store cannot be read.
+pub async fn admitted_devices<R>(
+    rollups: &R,
+    tenant: TenantId,
+    store_id: StoreId,
+) -> Result<Vec<AdmittedDevice>, RollupError>
+where
+    R: RollupStore,
+{
+    let state = rollups.load(tenant, store_id).await?;
+    Ok(render_devices(state.devices))
 }
 
 /// Answers a store's **revenue** dashboard from the materialised rollup — the recognised-revenue and

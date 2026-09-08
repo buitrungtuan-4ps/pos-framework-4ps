@@ -15,10 +15,88 @@ use std::collections::BTreeMap;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
     BillingBillSettled, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftOpened,
-    SalesOrderLineAdded,
+    DeviceAdmissionGranted, DeviceAdmissionRevoked, SalesOrderLineAdded,
 };
 
-use crate::cloud::{DailyCash, DailyRevenue, DailyRollup};
+use crate::cloud::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup};
+
+/// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
+/// id ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+///
+/// The reader ADR-0118 §4 requires in the same slice as the two events, so they are not an event
+/// with no reader — the state the tree already had one of.
+///
+/// Two arms, one shape each, and every other event ignored. Like [`fold_revenue`], a payload that
+/// fails to decode is skipped rather than failing the pass: these are events this system wrote, so a
+/// decode failure is a corrupt row, not the norm.
+///
+/// # Not keyed by trading day
+///
+/// Every other fold here buckets by `business_date`, because a day's takings are the question. This
+/// one is keyed by **device**, because "which tills does this store have" is a question about the
+/// present, not about a day — and because a revocation has to reach the row an admission created,
+/// which a per-day bucket would scatter. So the roster is a single map, and both arms are upserts.
+///
+/// # A revocation keeps the row
+///
+/// It stamps `revoked_at_ms` rather than removing the entry. A roster that forgets what it retired
+/// cannot answer *was this tablet ever admitted here*, which is the first thing asked about a device
+/// that turns up where it should not — and the answer would be gone precisely in the case it
+/// matters. A revocation for a device the cloud never saw admitted still records the row, because a
+/// store may have paired it before this rollup was ever projected: the id and the retirement are the
+/// truth available, and inventing an `admitted_at_ms` would be worse than admitting none.
+pub fn fold_devices(
+    devices: &mut BTreeMap<String, AdmittedDevice>,
+    event: &EventEnvelope<RawPayload>,
+) {
+    match event.event_type.as_str() {
+        "device.admission.granted" => {
+            let Ok(admitted) = event.data.decode::<DeviceAdmissionGranted>() else {
+                return;
+            };
+            let id = admitted.admitted_device_id.to_string();
+            let row = devices.entry(id.clone()).or_default();
+            row.local_device_id = id;
+            row.admitted_at_ms = event.event_time.as_milliseconds_since_epoch();
+            row.admitted_by_device_id = admitted
+                .admitted_by_device_id
+                .map(|device_id| device_id.to_string());
+            // A re-pair of the same device id cannot happen — the edge mints a fresh id per pairing
+            // — but a *replayed* admission for a row already revoked must not read as still
+            // retired, so the stamp is cleared by the admission that supersedes it.
+            row.revoked_at_ms = None;
+        }
+        "device.admission.revoked" => {
+            let Ok(revoked) = event.data.decode::<DeviceAdmissionRevoked>() else {
+                return;
+            };
+            let id = revoked.revoked_device_id.to_string();
+            let row = devices.entry(id.clone()).or_default();
+            row.local_device_id = id;
+            row.revoked_at_ms = Some(event.event_time.as_milliseconds_since_epoch());
+        }
+        _ => {}
+    }
+}
+
+/// The roster as the console reads it: still-admitted devices first, newest admission first within
+/// each group, so the tills a store is actually running are at the top and the retired ones remain
+/// visible below them.
+///
+/// The device id breaks a tie, so the order is stable across reads — a list that reshuffles between
+/// a render and a click is a list an operator acts on the wrong row of.
+#[must_use]
+pub fn render_devices(devices: BTreeMap<String, AdmittedDevice>) -> Vec<AdmittedDevice> {
+    let mut rows: Vec<AdmittedDevice> = devices.into_values().collect();
+    rows.sort_by(|left, right| {
+        left.revoked_at_ms
+            .is_some()
+            .cmp(&right.revoked_at_ms.is_some())
+            .then_with(|| right.admitted_at_ms.cmp(&left.admitted_at_ms))
+            .then_with(|| left.local_device_id.cmp(&right.local_device_id))
+    });
+    rows
+}
 
 /// Folds one event into `days`, creating the trading day's rollup if absent and counting the event
 /// against its total and its type.
@@ -548,6 +626,148 @@ mod tests {
         assert!(
             revenue.is_empty(),
             "a fired line carries no money and folds nothing"
+        );
+    }
+
+    // --- the admitted-device roster (ADR-0118 §4) ---
+
+    use super::{fold_devices, render_devices};
+    use crate::cloud::AdmittedDevice;
+    use pos_proto::ids::DeviceId;
+    use pos_proto::time::Timestamp;
+
+    /// A device id from a small number, so a case can name two readably.
+    fn device(n: u128) -> DeviceId {
+        DeviceId::new(Ulid::from_u128(n))
+    }
+
+    /// The device-roster fold reads `event_time`, not `business_date` — the roster is a fact about
+    /// the present, not about a trading day — so these cases stamp the instant rather than the date.
+    fn at(
+        event_time_ms: i64,
+        event_type: EventType,
+        payload: &serde_json::Value,
+    ) -> EventEnvelope<RawPayload> {
+        let mut event = event_with("2026-09-08", event_type, payload);
+        event.event_time =
+            Timestamp::from_milliseconds_since_epoch(event_time_ms).expect("valid instant");
+        event
+    }
+
+    /// An admission of `admitted`, authorised by the till `by` where there was one.
+    fn granted(event_time_ms: i64, admitted: u128, by: Option<u128>) -> EventEnvelope<RawPayload> {
+        at(
+            event_time_ms,
+            EventType::DeviceAdmissionGranted,
+            &json!({
+                "admitted_device_id": ulid(admitted),
+                "admitted_by_device_id": by.map(ulid),
+            }),
+        )
+    }
+
+    /// A revocation of `retired`.
+    fn revoked(event_time_ms: i64, retired: u128) -> EventEnvelope<RawPayload> {
+        at(
+            event_time_ms,
+            EventType::DeviceAdmissionRevoked,
+            &json!({ "revoked_device_id": ulid(retired) }),
+        )
+    }
+
+    /// Folds a sequence the way the projector does.
+    fn roster(events: &[EventEnvelope<RawPayload>]) -> BTreeMap<String, AdmittedDevice> {
+        let mut devices = BTreeMap::new();
+        for event in events {
+            fold_devices(&mut devices, event);
+        }
+        devices
+    }
+
+    #[test]
+    fn an_admission_records_the_device_and_the_till_that_authorised_it() {
+        let devices = roster(&[granted(1_000, 11, Some(7))]);
+        let row = devices
+            .get(&device(11).to_string())
+            .expect("the admitted device is on the roster");
+        assert_eq!(row.local_device_id, device(11).to_string());
+        assert_eq!(row.admitted_at_ms, 1_000);
+        assert_eq!(row.admitted_by_device_id, Some(device(7).to_string()));
+        assert_eq!(row.revoked_at_ms, None, "it is still admitted");
+    }
+
+    #[test]
+    fn the_boot_code_admits_with_no_authorising_device() {
+        let devices = roster(&[granted(1_000, 11, None)]);
+        let row = devices.get(&device(11).to_string()).expect("on the roster");
+        assert_eq!(
+            row.admitted_by_device_id, None,
+            "nothing authorised the first device on a virgin box, because nothing could"
+        );
+    }
+
+    #[test]
+    fn a_revocation_stamps_the_row_rather_than_removing_it() {
+        let devices = roster(&[granted(1_000, 11, Some(7)), revoked(5_000, 11)]);
+        assert_eq!(devices.len(), 1, "the row is kept, not deleted");
+        let row = devices.get(&device(11).to_string()).expect("on the roster");
+        assert_eq!(row.revoked_at_ms, Some(5_000));
+        assert_eq!(
+            row.admitted_at_ms, 1_000,
+            "and when it was admitted survives the retirement — 'was this ever here' is the \
+             question a deleted row could not answer"
+        );
+    }
+
+    #[test]
+    fn a_revocation_for_a_device_never_seen_admitted_still_records_it() {
+        // A store may have paired the device before its rollup was ever projected. The id and the
+        // retirement are the truth available; inventing an admission instant would be worse.
+        let devices = roster(&[revoked(5_000, 11)]);
+        let row = devices.get(&device(11).to_string()).expect("on the roster");
+        assert_eq!(row.revoked_at_ms, Some(5_000));
+        assert_eq!(row.admitted_at_ms, 0, "no admission was ever seen for it");
+    }
+
+    #[test]
+    fn activation_is_a_different_fact_and_stays_off_the_roster() {
+        let mut devices = BTreeMap::new();
+        fold_devices(
+            &mut devices,
+            &at(
+                1_000,
+                EventType::DeviceActivationCompleted,
+                &json!({ "activated_device_id": ulid(11) }),
+            ),
+        );
+        assert!(
+            devices.is_empty(),
+            "activation is the box getting a cloud identity, not a store admitting a tablet"
+        );
+    }
+
+    #[test]
+    fn the_roster_reads_still_admitted_first_then_newest_admission() {
+        let devices = roster(&[
+            granted(1_000, 11, None),
+            granted(2_000, 12, Some(11)),
+            granted(3_000, 13, Some(11)),
+            revoked(4_000, 12),
+        ]);
+        let rows = render_devices(devices);
+        let ids: Vec<&str> = rows
+            .iter()
+            .map(|row| row.local_device_id.as_str())
+            .collect();
+        let (live_newest, live_older, retired) = (
+            device(13).to_string(),
+            device(11).to_string(),
+            device(12).to_string(),
+        );
+        assert_eq!(
+            ids,
+            [live_newest.as_str(), live_older.as_str(), retired.as_str()],
+            "live tills newest-first, then the retired one — an operator looks at what is running"
         );
     }
 }
