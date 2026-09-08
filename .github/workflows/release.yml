@@ -214,8 +214,20 @@ jobs:
           set -euo pipefail
           rustup target add aarch64-unknown-linux-gnu
           sudo apt-get update
+          # THE ARM64 LIBC DEV PACKAGE IS NOT OPTIONAL, and it is not implied by the compiler.
+          # `libc6-dev-arm64-cross` is a *Recommends* of `gcc-aarch64-linux-gnu`, so
+          # `--no-install-recommends` drops it — and then the cross gcc falls through to the
+          # runner's own /usr/include and dies on `bits/libc-header-start.h: No such file or
+          # directory` the first time a crate compiles C for the target. Two crates in `pos-edge`
+          # do: `ring` (curve25519.c and friends, the rustls provider) and `libsqlite3-sys`
+          # (bundled sqlite3.c). The link step needs this package's arm64 libraries as well.
+          # [`deploy/Dockerfile`](../../deploy/Dockerfile) installs the same pair for the same
+          # reason; this leg had the compiler without the headers, which is why the first tagged
+          # release built nothing.
+          #
           # `zip` for the Windows archive: a .zip is what Windows hands you a working extractor for.
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu minisign zip
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross minisign zip
 
       - name: Build the operator UI
         # A shipped edge embeds the real SolidJS bundle (rust-embed); a fresh checkout has none
@@ -239,6 +251,12 @@ jobs:
 
       - name: Cross-compile pos-edge for both store architectures
         env:
+          # Two variables, two readers. cargo reads `CARGO_TARGET_<TRIPLE>_LINKER` to link; a
+          # `cc`-rs build script reads `CC_<triple>` to compile C. Naming the compiler explicitly
+          # rather than leaving `cc`-rs to guess `aarch64-linux-gnu-gcc` from the triple is what
+          # `deploy/Dockerfile` does, and it means an arm64 release does not depend on that
+          # heuristic. Neither applies to the amd64 build, which uses the host toolchain.
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           # Stamp the release into the binary (R1b). `crates/pos-edge/Cargo.toml` is `0.0.0`, so
           # without this every artifact reports the same version and the OTA progress model
