@@ -1871,6 +1871,22 @@ export const api = {
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/devices/admitted?${tenantQuery(tenantId)}`,
     ),
+  // Retire one of the store's own tills remotely (ADR-0118 §6). `localDeviceId` must come from
+  // `admittedDevices` above — it is the id the STORE minted, not a console `Device.device_id`, and
+  // nothing joins those two spaces, so an id from the wrong list retires nothing.
+  //
+  // A `200` means the instruction is published, NOT that the device is off. The store applies it on
+  // its next config pull and may refuse it whole (its blast-radius caps are the only place the
+  // roster is authoritative) with no channel to say so. Re-read the roster to see it land.
+  //
+  // There is deliberately no un-revoke: the list only grows, and the store's deletion of the
+  // pairing row is what makes a config rollback unable to undo it.
+  revokeDevice: (tenantId: string, storeId: string, localDeviceId: string) =>
+    requestJson<PublishedConfig>(
+      "POST",
+      `/admin/stores/${encodeURIComponent(storeId)}/devices/revoke`,
+      { tenant_id: tenantId, local_device_id: localDeviceId },
+    ),
   // Record why a store's data resting outside its own country is correct (ADR-0114), behind
   // console.stores.manage.
   //

@@ -124,18 +124,33 @@ pub fn decide(document: &serde_json::Value, applied: &[DeviceId], paired: &[Devi
     // The cap is measured against *bound* devices only. An entry naming a till the store no longer
     // has costs the shop nothing, and counting those would mean a document could become
     // permanently unappliable simply by naming devices that are long gone.
+    let mut violations = Vec::new();
     if bound.len() > 1 {
-        return Decision::Refused(vec![format!(
+        violations.push(format!(
             "the {NODE} node would retire {} admitted devices at once, and this rail retires one: \
-             it is refused whole",
+             it is refused whole. Retire them one publish at a time, or bump the store's lease to \
+             supersede the whole box",
             bound.len()
-        )]);
+        ));
     }
-    if !paired.is_empty() && bound.len() == paired.len() {
-        return Decision::Refused(vec![format!(
-            "the {NODE} node would leave this store with no admitted device, so nobody could sell \
-             or pair another without physical access to the box: it is refused whole"
-        )]);
+    // Set containment, not `bound.len() == paired.len()`. Comparing cardinalities fails *open* on
+    // an input this function cannot exclude: an adapter whose `paired_devices()` returns two rows
+    // for one device — a fork that keeps the pre-re-pair row, say — gives `paired = [X, X]` and
+    // `bound = [X]`, the lengths disagree, and the store retires its last till after all. Asking
+    // "is every paired device on the way out" answers the question the rule is actually about.
+    if !paired.is_empty() && paired.iter().all(|id| bound.contains(id)) {
+        violations.push(format!(
+            "the {NODE} node would leave this store with no admitted device: nobody could sell, and \
+             nobody could pair a replacement without physical access to the box. It is refused \
+             whole. To take a whole box out of service, bump the store's lease; to retire its last \
+             till, somebody has to be at the box"
+        ));
+    }
+    // Both, not the first. The operator's only channel for a refusal is this store's log, so a
+    // refusal that named one of two problems would cost them a whole publish cycle to find the
+    // other — and on a store nobody can reach, a cycle is not cheap.
+    if !violations.is_empty() {
+        return Decision::Refused(violations);
     }
     Decision::Apply { bound, unbound }
 }
@@ -174,9 +189,16 @@ impl DeviceRevocations {
     ///
     /// # Errors
     ///
-    /// [`PortError`] if the applied-revocation record could not be read. Nothing else fails: a
-    /// revoke that cannot be written is logged and the remaining ids are still attempted, because
-    /// this runs on a poll and the next pass retries anyway.
+    /// [`PortError`] if the applied-revocation record could not be read, or if any device on the
+    /// list could not be retired. Both are the caller's signal to **hold the config version back**
+    /// so the same document is fetched and attempted again — see
+    /// [`ConfigClient::pump_once`](crate::config_client::ConfigClient::pump_once). Without that,
+    /// the version would be recorded as held, the cloud would answer "already current" to every
+    /// later pull, and the store would never see the document again: a device left trading that the
+    /// console was told had been retired.
+    ///
+    /// Every id is still attempted before the error is returned. One tablet whose row will not
+    /// delete must not stop the next one being retired.
     pub async fn apply(&self, document: &serde_json::Value) -> Result<usize, PortError> {
         let applied = self.registry.revocations_applied().await?;
         let paired: Vec<DeviceId> = self
@@ -198,6 +220,9 @@ impl DeviceRevocations {
             }
             Decision::Apply { bound, unbound } => {
                 let mut retired = 0;
+                // Kept, not returned early: every id is attempted, and the *caller* is told at the
+                // end so it holds the config version back and the whole document is retried.
+                let mut failure = None;
                 for device_id in bound {
                     // Revoke first, record second. A crash between them re-applies on the next
                     // pull, which is idempotent; recording first and crashing would leave a device
@@ -206,9 +231,11 @@ impl DeviceRevocations {
                         tracing::error!(
                             %error,
                             %device_id,
-                            "a device the console retired could not be retired here; it still has \
-                             access and this will be retried on the next config pull"
+                            "a device the console retired could not be retired here, and it still \
+                             has access; this config version will be held back and the whole \
+                             document attempted again on the next pull"
                         );
+                        failure = Some(error);
                         continue;
                     }
                     self.record(device_id).await;
@@ -226,23 +253,29 @@ impl DeviceRevocations {
                          nothing to do; recorded as carried out"
                     );
                 }
-                Ok(retired)
+                match failure {
+                    Some(error) => Err(error),
+                    None => Ok(retired),
+                }
             }
         }
     }
 
     /// Records one id as carried out, logging rather than failing if it cannot be written.
     ///
-    /// The device is already retired by the time this runs, and un-retiring it because a bookkeeping
-    /// row would not write would hand a lost tablet its access back to protect a log line. The cost
-    /// of the failure is that the next pull retires it again — a duplicate event, not a hole.
+    /// The only failure here that is *not* worth holding the config version back for. The device is
+    /// already retired — durably, its pairing row deleted — so the security outcome has already
+    /// happened; what is missing is only the bookkeeping that stops the id being re-decided. And
+    /// the cost of that is small and self-healing: the id is no longer paired, so the next time the
+    /// store does see the document (a newer version, or this box's next boot, which re-reads the
+    /// stored one unconditionally) it lands in `unbound` and is recorded then, with no second event.
     async fn record(&self, device_id: DeviceId) {
         if let Err(error) = self.registry.record_revocation_applied(device_id).await {
             tracing::warn!(
                 %error,
                 %device_id,
-                "could not record that this device's revocation was carried out; it is retired, and \
-                 the next config pull will retire it again"
+                "could not record that this device's revocation was carried out; the device IS \
+                 retired, and the record will be made the next time this store reads the document"
             );
         }
     }
@@ -384,6 +417,108 @@ mod tests {
                 unbound: vec![device(1)],
             }
         );
+    }
+
+    #[test]
+    fn a_node_whose_inner_key_is_misspelled_is_refused_not_read_as_an_empty_list() {
+        // The silent no-op. With a defaulted `device_ids`, `{"device_id": [...]}` deserialises to
+        // an *empty* list, `pending` is empty, and the decision is `AlreadyDone` — a document
+        // naming a stolen tablet read as a document naming nothing, with nothing in the log. The
+        // field being required is what turns that into a refusal an operator can see.
+        let Decision::Refused(violations) = decide(
+            &json!({ "revoked_devices": { "device_id": [device(1).to_string()] } }),
+            &[],
+            &[device(1), device(2)],
+        ) else {
+            panic!("a misspelled inner key must be refused, not silently applied as nothing");
+        };
+        assert_eq!(violations.len(), 1, "{violations:?}");
+    }
+
+    #[test]
+    fn an_unknown_sibling_key_is_still_applied() {
+        // The other side of the same coin: the config tree's forward-compatibility rule says a
+        // store must apply a document carrying keys it does not understand. A future sibling of
+        // `device_ids` must not turn this node into a refusal on an older build.
+        assert_eq!(
+            decide(
+                &json!({
+                    "revoked_devices": {
+                        "device_ids": [device(1).to_string()],
+                        "added_in_a_later_release": true
+                    }
+                }),
+                &[],
+                &[device(1), device(2)],
+            ),
+            Decision::Apply {
+                bound: vec![device(1)],
+                unbound: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn both_caps_are_reported_when_both_are_broken() {
+        // Two tills, both named. That breaks the one-device cap *and* the floor. The operator's
+        // only channel for a refusal is this box's log, so naming one and not the other would cost
+        // them a publish cycle to discover the second.
+        let Decision::Refused(violations) = decide(&node(&[1, 2]), &[], &[device(1), device(2)])
+        else {
+            panic!("both caps are broken");
+        };
+        assert_eq!(violations.len(), 2, "{violations:?}");
+        assert!(
+            violations.iter().any(|v| v.contains("at once")),
+            "{violations:?}"
+        );
+        assert!(
+            violations.iter().any(|v| v.contains("no admitted device")),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn the_floor_holds_when_a_roster_repeats_a_device() {
+        // A cardinality comparison fails open here: `paired = [X, X]`, `bound = [X]`, lengths
+        // disagree, and the store retires its last till. Set containment is what makes the rule
+        // mean what it says. No shipped adapter returns a duplicate row — the contract suite
+        // forbids it — but a fork's might, and the failure mode is the one the cap exists to stop.
+        let Decision::Refused(violations) = decide(&node(&[1]), &[], &[device(1), device(1)])
+        else {
+            panic!("every paired row names the same one device, so this empties the store");
+        };
+        assert!(
+            violations.iter().any(|v| v.contains("no admitted device")),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn the_one_device_cap_is_per_apply_by_design() {
+        // Retiring four tills over four publishes is legal and intended: each is a separate
+        // console act with its own audit row and its own typed-name confirmation. The cap bounds
+        // what ONE document can do, which is what §6 says; it is not a lifetime quota, and the
+        // floor is what stops the sequence before the store is empty.
+        assert_eq!(
+            decide(&node(&[1]), &[], &[device(1), device(2), device(3)]),
+            Decision::Apply {
+                bound: vec![device(1)],
+                unbound: vec![],
+            }
+        );
+        assert_eq!(
+            decide(&node(&[1, 2]), &[device(1)], &[device(2), device(3)]),
+            Decision::Apply {
+                bound: vec![device(2)],
+                unbound: vec![],
+            }
+        );
+        // …and the third publish hits the floor rather than emptying the store.
+        assert!(matches!(
+            decide(&node(&[1, 2, 3]), &[device(1), device(2)], &[device(3)]),
+            Decision::Refused(_)
+        ));
     }
 
     #[test]

@@ -813,6 +813,92 @@
         }
       }
     },
+    "/admin/stores/{store_id}/devices/revoke": {
+      "post": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Retires one till on a store the console cannot otherwise reach\n([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).",
+        "description": "**Appends to the `revoked_devices` node, never replaces it**, and the append happens *inside* the\nconditional-write retry (see [`publish_config_nodes_with`]). Two admins each retiring a different\ntill therefore cannot lose each other's entry — which for a deny-list would mean a device left\ntrading that somebody was told had been retired.\n\n**There is no un-revoke route, and that is the design.** The list is monotone: retiring a device\ndeletes its pairing row on the box, and no document can put it back. A till that legitimately\nreturns is a *fresh pairing* with a fresh id, which the list never names.\n\n**A `200` is not proof the device is off.** It means the instruction is published. The store\napplies it on its next pull and may refuse it whole — its blast-radius caps are the only place\nthe roster is authoritative — and it has no channel to say so. Read the admitted-devices roster\nto see the retirement land; if it does not, the box's own log says why (ADR-0117).\n\n`console.stores.manage` (Owner/Admin) rather than the `PublishConfig` norm that includes Ops. The\nsame standing as the lease bump beside it on the Fleet screen, and for the same reason: this is\nnot a day-to-day publish, it takes a terminal out of service, and a mistake can leave a shop\nunable to sell.\n\nThe trail records the store and the device id. No employee: who at the console did this is the\naudit row's actor, and no *store* employee is involved at all (ADR-0118 §5).",
+        "operationId": "admin_revoke_device",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store the till belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The deny-list now names the device, as of the config version returned. The store carries it out on its next config pull — within thirty seconds for a store with a working link, and on its next boot otherwise — and the admitted-devices roster then shows the device retired. Re-revoking a device already on the list succeeds and adds nothing"
+          },
+          "400": {
+            "description": "tenant_id, store_id or local_device_id is absent or not a ULID, or this store's deny-list is already at its cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrent config publishes kept winning the race",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The composed node did not validate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/region-acknowledgement": {
       "post": {
         "tags": [

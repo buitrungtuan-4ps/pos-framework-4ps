@@ -774,24 +774,42 @@ where
             apply_origins(origins, &synced.document);
         }
         // And the same again for the device deny-list, which additionally has to `await` a durable
-        // write — something the pure `session_from_config` could not do even if it wanted to. A
-        // failure to *read* the applied record is logged and the pull carries on: refusing a
-        // document the counter is already selling on, over a revocation the next poll will retry
-        // thirty seconds later, would be the wrong trade.
-        if let Some(revocations) = &self.revocations
-            && let Err(error) = revocations.apply(&synced.document).await
-        {
-            tracing::warn!(
-                %error,
-                "could not read which device revocations this store has already carried out; the                  published deny-list was not applied on this pull and will be retried on the next"
-            );
-        }
+        // write — something the pure `session_from_config` could not do even if it wanted to. The
+        // session is already swapped and the counter is already selling on it, so a failure here
+        // does not refuse the document; what it does is hold the version back (below), because an
+        // unapplied revocation must not be forgotten.
+        let revocations_applied = match &self.revocations {
+            None => true,
+            Some(revocations) => match revocations.apply(&synced.document).await {
+                Ok(_) => true,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        version = %synced.config_version_id,
+                        "could not read which device revocations this store has already carried out; holding this config version back so the next pull re-fetches it and the published deny-list is applied then"
+                    );
+                    false
+                }
+            },
+        };
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
         // after a restart), not a reason to refuse a document the counter is already selling on.
         self.persist(&synced).await;
-        *self.held_version.lock().expect("held-version lock") =
-            Some(synced.config_version_id.clone());
+        // The held version is what the *next* pull sends, and the cloud answers "already current"
+        // to it — so recording a version whose deny-list did not apply would mean the store never
+        // sees that document again, and the revocation would be lost until somebody published a
+        // newer version for an unrelated reason. Holding it back costs one repeated pull per
+        // interval and buys a security directive that keeps being attempted until it lands.
+        //
+        // A *refusal* is deliberately not retried this way: the caps returned `Ok`, the document is
+        // as applied as it is ever going to be, and re-deciding it every interval would produce the
+        // same refusal and the same log line for ever. The escape hatch there is a corrected
+        // publish or a rollback, not a retry.
+        if revocations_applied {
+            *self.held_version.lock().expect("held-version lock") =
+                Some(synced.config_version_id.clone());
+        }
         tracing::info!(version = %synced.config_version_id, "applied a new store config");
         Ok(Some(synced.config_version_id))
     }

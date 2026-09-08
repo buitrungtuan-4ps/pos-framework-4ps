@@ -52,9 +52,19 @@ pub const MAX_REVOKED_DEVICES: usize = 512;
 /// beside it in the tree use.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct DeviceRevocationConfig {
-    /// The local device ids to retire, each a ULID the *store* minted at pairing. Absent means the
-    /// node says nothing, which is not the same as an empty list and is handled by the caller.
-    #[serde(default)]
+    /// The local device ids to retire, each a ULID the *store* minted at pairing.
+    ///
+    /// **Required, deliberately, where every other node in the tree defaults its fields.** A
+    /// deny-list is not like the rest of the configuration: if `device_ids` defaulted, a node whose
+    /// key was misspelled or renamed — `{"device_id": [...]}` — would deserialize to an *empty*
+    /// list, and the store would treat a document naming a stolen tablet as a document naming
+    /// nothing. Silently. The whole posture of this node is that a shape the store cannot read is
+    /// refused whole and logged, so the one field it turns on must be the field whose absence makes
+    /// it fail. An empty `device_ids` is still legal — that is a store that has had nothing retired.
+    ///
+    /// Unknown *sibling* keys are still accepted (no `deny_unknown_fields`), so a later version can
+    /// add one without breaking a store running an older build — the tree's forward-compatibility
+    /// rule, which this keeps.
     pub device_ids: Vec<String>,
 }
 
@@ -130,12 +140,17 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_list_validates_as_empty() {
+    fn an_explicitly_empty_list_validates_as_empty() {
         let parsed = DeviceRevocationConfig::default()
             .validate()
-            .expect("a node with no ids is a node that revokes nothing");
+            .expect("a node that lists no ids is a node that revokes nothing");
         assert!(parsed.ids().is_empty());
     }
+
+    // The deserialize behaviour `device_ids` being required buys — a misspelled key refused rather
+    // than read as an empty list — is asserted at the two call sites that must refuse it, in
+    // `pos_edge::device_revocations` and the cloud's `CapabilityValidator`. It cannot be asserted
+    // here: `pos-core` has no `serde_json` dependency, deliberately (ADR-0013).
 
     #[test]
     fn every_id_parses_and_the_order_is_kept() {

@@ -120,6 +120,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_delete_reason_code,
         crate::http::admin_publish_reason_codes,
         crate::http::admin_admitted_devices,
+        crate::http::admin_revoke_device,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
