@@ -18,6 +18,7 @@
 use std::time::Duration;
 
 use futures_util::StreamExt;
+use pos_edge::pairing::Minter;
 use pos_edge::{AppState, EdgeConfig, ServerMessage};
 use pos_proto::ClockSource;
 use pos_proto::ids::StoreId;
@@ -37,7 +38,10 @@ async fn state_with_paired_device(store: u128) -> (AppState, String) {
     let config = EdgeConfig::new("127.0.0.1:0".parse().expect("valid addr"), store);
     let state = AppState::new(config);
     let now = state.clock.now();
-    let (code, _) = state.pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = state
+        .pairing
+        .mint(now, Minter::Boot)
+        .expect("mint a pairing code");
     let token = state
         .pairing
         .redeem(&code, now)

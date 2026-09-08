@@ -137,8 +137,8 @@ impl fmt::Debug for TokenDigest {
     }
 }
 
-/// A device the store has admitted: its local id, the digest of the token it holds, and when it
-/// paired.
+/// A device the store has admitted: its local id, the digest of the token it holds, when it
+/// paired, and who admitted it.
 ///
 /// `paired_at` is stored for the operator's benefit — a pairing list that cannot say *when* is hard
 /// to audit — and is what a future pairing expiry would read
@@ -151,6 +151,23 @@ pub struct PairedDevice {
     pub token_digest: TokenDigest,
     /// When the device redeemed its pairing code.
     pub paired_at: Timestamp,
+    /// The employee who minted the code this device redeemed, where a person did
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §5).
+    /// `None` for the code a boot announces, which nobody was signed in to mint.
+    ///
+    /// # Why this is here and reaches no cloud
+    ///
+    /// It is the whole of "who admitted this device", and it is answerable **at the box** on
+    /// purpose. The cloud-bound `device.admission.granted` event carries device ids and no actor, because an
+    /// employee identity in the fleet's event log would be a durable, central, cross-border,
+    /// attributable record of managerial activity, and the purpose that event serves does not need
+    /// one. This port is the store's own record, on the store's own disk, under the store's own
+    /// retention — and ADR-0091 §147-148 deliberately gives it no store-postgres adapter, which is
+    /// what keeps that true rather than merely intended.
+    ///
+    /// It is not a new category of local data: `DeviceSession` already records which employee is
+    /// signed in on which device, durably, on the same box.
+    pub admitted_by: Option<EmployeeId>,
 }
 
 /// Who is signed in on one device, and when that device was last heard from.

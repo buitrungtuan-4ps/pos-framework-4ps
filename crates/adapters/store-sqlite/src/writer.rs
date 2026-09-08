@@ -165,6 +165,9 @@ pub(crate) struct PairedDeviceRow {
     pub(crate) device_id: String,
     pub(crate) token_digest: String,
     pub(crate) paired_at_ms: i64,
+    /// The employee who minted the code this device redeemed (migration 0011, ADR-0118 §5).
+    /// `None` for the code a boot announces, and for every row written before that migration.
+    pub(crate) admitted_by: Option<String>,
 }
 
 /// A sign-in row, likewise.
@@ -1625,13 +1628,22 @@ fn record_pairing(conn: &Connection, device: &PairedDeviceRow) -> Result<(), Por
         params![&device.token_digest],
     )
     .map_err(|error| db_error(REGISTRY, error))?;
+    // `admitted_by` is overwritten on a re-pair rather than preserved: the row describes the
+    // admission that issued the token it holds, and a re-pair is a new admission by whoever minted
+    // the new code — which may be nobody, on a box that just restarted.
     conn.execute(
-        "INSERT INTO paired_devices (device_id, token_digest, paired_at_ms)
-         VALUES (?1, ?2, ?3)
+        "INSERT INTO paired_devices (device_id, token_digest, paired_at_ms, admitted_by)
+         VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (device_id) DO UPDATE SET
              token_digest = excluded.token_digest,
-             paired_at_ms = excluded.paired_at_ms",
-        params![&device.device_id, &device.token_digest, device.paired_at_ms],
+             paired_at_ms = excluded.paired_at_ms,
+             admitted_by  = excluded.admitted_by",
+        params![
+            &device.device_id,
+            &device.token_digest,
+            device.paired_at_ms,
+            &device.admitted_by
+        ],
     )
     .map(|_| ())
     .map_err(|error| db_error(REGISTRY, error))
@@ -1649,7 +1661,7 @@ fn device_for_digest(conn: &Connection, token_digest: &str) -> Result<Option<Str
 
 fn paired_devices(conn: &Connection) -> Result<Vec<PairedDeviceRow>, PortError> {
     let mut statement = conn
-        .prepare("SELECT device_id, token_digest, paired_at_ms FROM paired_devices")
+        .prepare("SELECT device_id, token_digest, paired_at_ms, admitted_by FROM paired_devices")
         .map_err(|error| db_error(REGISTRY, error))?;
     let rows = statement
         .query_map([], |row| {
@@ -1657,6 +1669,7 @@ fn paired_devices(conn: &Connection) -> Result<Vec<PairedDeviceRow>, PortError> 
                 device_id: row.get(0)?,
                 token_digest: row.get(1)?,
                 paired_at_ms: row.get(2)?,
+                admitted_by: row.get(3)?,
             })
         })
         .map_err(|error| db_error(REGISTRY, error))?;

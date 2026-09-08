@@ -24,6 +24,20 @@
 //! the resolved pairing **URL** is written to that file, owner-only, and [`Pairing::redeem`] deletes
 //! it the moment a device pairs. Exposure is bounded by [`CODE_TTL`] and by single-use redemption —
 //! the same bound a console already had, now reachable without one.
+//!
+//! # What leaves the box, and what does not
+//!
+//! Admission stays edge-local, offline and unconditional
+//! ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §2): the four
+//! refusals here — the attempt budget, the lockout, an unknown code, an expired code — are all
+//! derived from state this store owns alone, and **no refusal on this path may derive from a document
+//! the store did not author**. What is new is only that the store *reports*: an admission and a
+//! revocation each ride the durable outbox as an event, so a till paired during a WAN outage reaches
+//! the fleet console when the link returns. See [`crate::admission_events`].
+//!
+//! Those events name **devices**. Who admitted a device is recorded here too, on the store's own
+//! disk, as [`PairedDevice::admitted_by`] — and goes no further. The split is [`Minter`]'s two
+//! accessors, and ADR-0118 §5 is why it exists.
 
 use core::fmt::{self, Write as _};
 use std::collections::HashMap;
@@ -36,11 +50,12 @@ use std::time::Duration;
 
 use pos_ports::device_registry::{PairedDevice, TokenDigest};
 use pos_ports::error::PortError;
-use pos_proto::ids::DeviceId;
+use pos_proto::ids::{DeviceId, EmployeeId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use sha2::{Digest as _, Sha256};
 
+use crate::admission_events::AdmissionEvents;
 use crate::durable_auth::DurableAuth;
 
 /// How long a freshly minted pairing code stays valid.
@@ -267,10 +282,10 @@ struct Issued {
 /// exactly as long as it takes [`Self::redeem`] to hand it back to the device that will hold it.
 #[derive(Default)]
 pub struct Pairing {
-    /// Active codes to their expiry (ms since epoch). Deliberately **not** persisted: a code lives
-    /// five minutes and is single-use, so surviving a restart would buy nothing and would keep a
-    /// credential-shaped value on disk for no reason.
-    codes: Mutex<HashMap<Code, i64>>,
+    /// Active codes to what is known about them. Deliberately **not** persisted: a code lives five
+    /// minutes and is single-use, so surviving a restart would buy nothing and would keep a
+    /// credential-shaped value on disk for no reason. At most one entry — see [`Self::mint`].
+    codes: Mutex<HashMap<Code, Minted>>,
     /// The redemption attempt budget (**S4**): consecutive failures, and when the endpoint reopens.
     ///
     /// One counter for the box, not one per code: an attacker guessing has no identity to key on, and
@@ -288,6 +303,79 @@ pub struct Pairing {
     /// ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md) decision 4). `None` — the
     /// Linux units, `just run-edge`, the examples and every test — and no such file is ever created.
     url_file: Option<PathBuf>,
+    /// Where admissions and revocations are reported so the cloud can learn about them
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    /// `None` keeps the pre-ADR-0118 behaviour: the store admits devices and tells nobody.
+    events: Option<Arc<dyn AdmissionEvents>>,
+}
+
+/// A live pairing code, and what it will admit a device as.
+///
+/// The two fields go **different places on purpose**, and holding them together here is what makes
+/// that split happen at the one moment both facts are known. See [`Minter`].
+#[derive(Debug, Clone, Copy)]
+struct Minted {
+    /// When the code stops redeeming (ms since epoch).
+    expires_at_ms: i64,
+    /// Who minted it.
+    minter: Minter,
+}
+
+/// Who minted a pairing code — and therefore who authorised the admission it performs.
+///
+/// # Why this is one type with two accessors rather than two arguments
+///
+/// The two facts about an admission leave the box by **different routes**, and ADR-0118 §5 is the
+/// decision that they do:
+///
+/// * [`Self::device_id`] reaches the cloud, on `device.admission.granted`. A device id is what the fleet
+///   console needs to show a store's real tills and what a remote revocation names.
+/// * [`Self::employee_id`] reaches the store's own disk, and nothing else. An employee identity in
+///   the cloud's event log would be a durable, central, cross-border, attributable record of
+///   managerial activity — a lawful basis, a retention period, a DPIA and a transfer basis under
+///   Decree 13/2023, and a failure of GDPR's prior question, because the purpose the event serves
+///   does not need it.
+///
+/// An enum rather than a pair of `Option`s because "a device but no employee" and "an employee but
+/// no device" are both impossible: the mint route sits behind the paired gate *and* the signed-in
+/// gate, and the boot path has neither. Making that structural means no caller can invent half a
+/// minter, and no future caller can be forced to.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Minter {
+    /// Boot announced the code. Nothing authorised it, because on a virgin box nothing could: the
+    /// first device has no credential to present and no manager can be signed in before it.
+    #[default]
+    Boot,
+    /// A signed-in manager minted it from a paired device (`POST /api/pair/codes`).
+    Manager {
+        /// The paired device the request came from.
+        device_id: DeviceId,
+        /// The employee signed in on it.
+        employee_id: EmployeeId,
+    },
+}
+
+impl Minter {
+    /// The authorising device, for `device.admission.granted`. `None` for [`Self::Boot`].
+    #[must_use]
+    pub const fn device_id(self) -> Option<DeviceId> {
+        match self {
+            Self::Boot => None,
+            Self::Manager { device_id, .. } => Some(device_id),
+        }
+    }
+
+    /// The authorising employee, for the store's own `paired_devices` row. `None` for [`Self::Boot`].
+    ///
+    /// **This value must not reach an event payload or the cloud.** It is the local half of the
+    /// split ADR-0118 §5 decided, and [`AdmissionEvents`] is shaped so that it cannot.
+    #[must_use]
+    pub const fn employee_id(self) -> Option<EmployeeId> {
+        match self {
+            Self::Boot => None,
+            Self::Manager { employee_id, .. } => Some(employee_id),
+        }
+    }
 }
 
 #[expect(
@@ -304,6 +392,7 @@ impl fmt::Debug for Pairing {
             .field("issued", &self.issued_count())
             .field("durable", &self.registry.is_some())
             .field("hands_over_the_url_in_a_file", &self.url_file.is_some())
+            .field("reports_admissions", &self.events.is_some())
             .finish()
     }
 }
@@ -374,6 +463,19 @@ impl Pairing {
     #[must_use]
     pub fn with_pairing_file(mut self, path: Option<PathBuf>) -> Self {
         self.url_file = path;
+        self
+    }
+
+    /// Names where admissions and revocations are reported, so the cloud can learn what this store
+    /// admitted ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md)
+    /// §4).
+    ///
+    /// Pass the composed `Arc<Edge<S>>`: it implements [`AdmissionEvents`] by appending to the
+    /// durable outbox the store already drains. `None` — the examples and most tests — and the store
+    /// admits devices and tells nobody, which is what it did before ADR-0118.
+    #[must_use]
+    pub fn with_admission_events(mut self, events: Option<Arc<dyn AdmissionEvents>>) -> Self {
+        self.events = events;
         self
     }
 
@@ -468,10 +570,18 @@ impl Pairing {
     /// just invalidated. The boot path re-publishes it; a mint on a live route does not
     /// ([`crate::http::pair`]).
     ///
+    /// # The minter is recorded now, not at redemption
+    ///
+    /// [`Minter`] rides on the code, because the moment the code is minted is the only moment both
+    /// halves of "who authorised this" are known: the redeeming device presents six digits and
+    /// nothing else. [`Self::redeem`] then splits them — the authorising **device** onto
+    /// `device.admission.granted` for the cloud, the authorising **employee** onto the store's own
+    /// `paired_devices` row and nowhere else (ADR-0118 §5).
+    ///
     /// # Errors
     ///
     /// [`getrandom::Error`] if the OS entropy source is unavailable — a code is never faked.
-    pub fn mint(&self, now: Timestamp) -> Result<(Code, i64), getrandom::Error> {
+    pub fn mint(&self, now: Timestamp, minter: Minter) -> Result<(Code, i64), getrandom::Error> {
         let mut bytes = [0_u8; 3];
         getrandom::fill(&mut bytes)?;
         let code = Code::from_entropy(bytes);
@@ -483,7 +593,13 @@ impl Pairing {
             // whole pairing surface is reasoned about under, and until ADR-0118 it held only because
             // exactly one caller existed.
             codes.clear();
-            codes.insert(code.clone(), expiry);
+            codes.insert(
+                code.clone(),
+                Minted {
+                    expires_at_ms: expiry,
+                    minter,
+                },
+            );
         }
         // Whatever the file held names a code this call has just invalidated, so it is now worse
         // than nothing: an operator would read a URL that cannot redeem and conclude pairing is
@@ -525,16 +641,18 @@ impl Pairing {
         if let Some(until_ms) = self.shut_until(now_ms) {
             return Ok(Redeemed::TooManyAttempts { until_ms });
         }
+        // The code is removed whether or not it was still live: an expired one is spent either way,
+        // and leaving it would let a second attempt find it again. What comes back with it is who
+        // minted it, which is the only record of that fact anywhere.
         let live = {
             let mut codes = self.codes.lock().unwrap_or_else(PoisonError::into_inner);
-            match codes.remove(code) {
-                Some(expiry) => now_ms < expiry,
-                None => false,
-            }
+            codes
+                .remove(code)
+                .filter(|minted| now_ms < minted.expires_at_ms)
         };
-        if !live {
+        let Some(minted) = live else {
             return Ok(self.record_failure(now_ms));
-        }
+        };
         // Sixteen bytes seed the bearer token; ten more seed the device id it binds to. Two fixed
         // arrays rather than one sliced buffer, so no indexing or unwrap can panic here.
         let mut token_bytes = [0_u8; 16];
@@ -551,6 +669,9 @@ impl Pairing {
                     device_id,
                     token_digest: digest,
                     paired_at: now,
+                    // The local half of ADR-0118 §5. This is the store's own answer to "who let
+                    // this tablet in", and the only one that exists.
+                    admitted_by: minted.minter.employee_id(),
                 })
                 .await
                 .map_err(PairError::Registry)?;
@@ -572,6 +693,11 @@ impl Pairing {
         // outlive it (ADR-0117 decision 4). One `unlink` on a path that is usually already absent,
         // on a route a store takes once per till.
         self.withdraw_pairing_url();
+        // Last, and after the durable record: the event says the store *has* admitted a device, so
+        // it must not be written before that is true. The device id it names is the cloud's half of
+        // ADR-0118 §5; the employee who minted the code is not on it.
+        self.report_admission(device_id, minted.minter.device_id())
+            .await;
         Ok(Redeemed::Paired(token))
     }
 
@@ -667,6 +793,7 @@ impl Pairing {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .retain(|_, held| held.device_id != device_id);
+        self.report_revocation(device_id).await;
         Ok(())
     }
 
@@ -678,6 +805,15 @@ impl Pairing {
     /// [`PortError`] if the registry could not be written. As with [`Self::revoke`], memory is
     /// cleared only after the durable table is.
     pub async fn revoke_all(&self) -> Result<(), PortError> {
+        // Read the ids before anything is cleared: after the break-glass there is nothing left to
+        // name, and one `device.admission.revoked` per device is what keeps the cloud's reader to a single
+        // shape rather than making it read an absent field as *all of them*
+        // ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+        let retired: Vec<DeviceId> = self
+            .paired_devices()
+            .into_iter()
+            .map(|(device_id, _paired_at)| device_id)
+            .collect();
         if let Some(registry) = self.registry.as_ref() {
             registry.revoke_all_devices().await?;
         }
@@ -685,7 +821,51 @@ impl Pairing {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+        for device_id in retired {
+            self.report_revocation(device_id).await;
+        }
         Ok(())
+    }
+
+    /// Tells the cloud a device was admitted, and carries on if it cannot.
+    ///
+    /// The failure is a warning, never an error the caller sees. The device **is** admitted: the
+    /// durable row is written and the token is about to be handed over. Refusing the pairing at this
+    /// point would leave a device holding a credential the store has forgotten, which is the exact
+    /// failure ADR-0091 exists to remove — and it would do so to protect an observability feature.
+    /// The event is at-least-once on a durable outbox, so the ways this can fail are a full disk or
+    /// an unencodable payload, both of which the operator learns about from every other write too.
+    async fn report_admission(&self, admitted: DeviceId, admitted_by: Option<DeviceId>) {
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(error) = events.device_admitted(admitted, admitted_by).await {
+            tracing::warn!(
+                %error,
+                %admitted,
+                "the store admitted a device but could not record the event the cloud learns from; \
+                 the device is admitted and the fleet console will not know about it"
+            );
+        }
+    }
+
+    /// Tells the cloud a device was retired, and carries on if it cannot.
+    ///
+    /// Swallowed for the mirror-image reason: the device is already revoked here and in the durable
+    /// table, and un-revoking it because the cloud could not be told would hand a lost tablet back
+    /// its access to protect a console column.
+    async fn report_revocation(&self, revoked: DeviceId) {
+        let Some(events) = self.events.as_ref() else {
+            return;
+        };
+        if let Err(error) = events.device_revoked(revoked).await {
+            tracing::warn!(
+                %error,
+                %revoked,
+                "the store retired a device but could not record the event the cloud learns from; \
+                 the device is revoked here and the fleet console will still list it"
+            );
+        }
     }
 
     /// Whether this state writes through to a registry — what the pairing screen reports so an
@@ -751,8 +931,8 @@ fn mint_device_id(now: Timestamp, randomness: &[u8]) -> DeviceId {
 #[cfg(test)]
 mod tests {
     use super::{
-        CODE_TTL, Code, DeviceToken, MAX_FAILED_REDEMPTIONS, PairError, Pairing, REDEEM_LOCKOUT,
-        Redeemed, fs, hosted_pairing_url, pairing_url,
+        CODE_TTL, Code, DeviceToken, MAX_FAILED_REDEMPTIONS, Minter, PairError, Pairing,
+        REDEEM_LOCKOUT, Redeemed, fs, hosted_pairing_url, pairing_url,
     };
     use pos_proto::time::Timestamp;
 
@@ -872,7 +1052,7 @@ mod tests {
         // The budget is checked before the code table is touched. Otherwise a script's last guess
         // would consume the single-use code the operator standing at the box is reading off it.
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let wrong = Code::parse("000001").expect("six digits");
         for _ in 0..MAX_FAILED_REDEMPTIONS {
             let _ = block_on(pairing.redeem(&wrong, at(0)));
@@ -901,7 +1081,7 @@ mod tests {
             let _ = block_on(pairing.redeem(&wrong, at(0)));
         }
 
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         assert!(
             block_on(redeem(&pairing, &code, at(0)))
                 .expect("redeem")
@@ -919,7 +1099,7 @@ mod tests {
     #[test]
     fn a_minted_code_redeems_once() {
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
 
         let token = block_on(redeem(&pairing, &code, at(1_000))).expect("redeem");
         assert!(token.is_some(), "a fresh code pairs a device");
@@ -982,7 +1162,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let path = directory.path().join("pairing-url.txt");
         let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         pairing.publish_pairing_url(&pairing_url(
             "10.0.0.4".parse().expect("an address"),
             8080,
@@ -1004,7 +1184,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let path = directory.path().join("pairing-url.txt");
         let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
-        let (live, _) = pairing.mint(at(0)).expect("mint");
+        let (live, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         pairing.publish_pairing_url(&pairing_url(
             "10.0.0.4".parse().expect("an address"),
             8080,
@@ -1037,7 +1217,7 @@ mod tests {
         // Every test above this line, every example, and every Linux unit take this path.
         let pairing = Pairing::new();
         pairing.publish_pairing_url("http://10.0.0.4:8080/pair?code=428913");
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         assert!(
             block_on(redeem(&pairing, &code, at(1_000)))
                 .expect("redeem")
@@ -1066,7 +1246,7 @@ mod tests {
         // With no registry composed this exercises the in-memory half only; the durable half is
         // proven by the DeviceRegistry contract suite, which both implementations pass.
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("a fresh code pairs a device");
@@ -1087,11 +1267,11 @@ mod tests {
         let pairing = Pairing::new();
         // Mint, redeem, mint, redeem — the real shape of commissioning two tills, now that a mint
         // replaces the live code rather than adding beside it (ADR-0118).
-        let (first, _) = pairing.mint(at(0)).expect("mint");
+        let (first, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let one = block_on(redeem(&pairing, &first, at(1_000)))
             .expect("redeem")
             .expect("token");
-        let (second, _) = pairing.mint(at(1_000)).expect("mint");
+        let (second, _) = pairing.mint(at(1_000), Minter::Boot).expect("mint");
         let two = block_on(redeem(&pairing, &second, at(1_000)))
             .expect("redeem")
             .expect("token");
@@ -1108,11 +1288,11 @@ mod tests {
         // Production-readiness O1: `revoke` takes a device id and, until this, no surface handed one
         // out — so an operator with a lost till had nothing to act on but the break-glass.
         let pairing = Pairing::new();
-        let (first, _) = pairing.mint(at(0)).expect("mint");
+        let (first, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         block_on(redeem(&pairing, &first, at(1_000)))
             .expect("redeem")
             .expect("token");
-        let (second, _) = pairing.mint(at(2_000)).expect("mint");
+        let (second, _) = pairing.mint(at(2_000), Minter::Boot).expect("mint");
         block_on(redeem(&pairing, &second, at(9_000)))
             .expect("redeem")
             .expect("token");
@@ -1137,7 +1317,7 @@ mod tests {
     #[test]
     fn debug_reports_counts_and_never_a_digest() {
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("token");
@@ -1157,7 +1337,7 @@ mod tests {
     #[test]
     fn an_expired_code_does_not_redeem() {
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let past_ttl = i64::try_from(CODE_TTL.as_millis()).expect("fits") + 1;
         assert!(
             block_on(redeem(&pairing, &code, at(past_ttl)))
@@ -1197,7 +1377,7 @@ mod tests {
     #[test]
     fn a_redeemed_token_resolves_to_its_device_and_a_stranger_does_not() {
         let pairing = Pairing::new();
-        let (code, _) = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0), Minter::Boot).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("a fresh code pairs");

@@ -25,6 +25,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   service: every till's and kitchen display's live session dropped and the outbox drained
   ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md), #246). A restart is
   still the fallback for a store with no till paired yet.
+- **The cloud learns which tills a store actually admitted.** Two event types —
+  `device.admission.granted` and `device.admission.revoked` — ride the store's durable outbox, so a
+  tablet paired during an internet outage reaches the fleet when the link returns instead of staying
+  invisible forever. Until now the cloud's picture of a store's devices was literally zero rows: the
+  heartbeat carries liveness and backlog, the sync report carries the installed version, and the
+  catalogue's only device event was activation. This is what a remote revocation will name, and it
+  is why the deny-list could not ship first
+  ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+- **The store records who admitted each device**, as an additive `admitted_by` column on its own
+  `paired_devices` table (store-SQLite migration 0011). A code minted by a signed-in manager carries
+  that manager through to the row the redemption writes; the code a box announces at boot carries
+  nobody, because nobody can be signed in before the first device is admitted.
 
 ### Fixed
 
@@ -51,6 +63,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   unpaired caller never reaches the handler. The reply body is the only place the code exists: the
   handler writes no file and logs no code, and its log line carries no employee id either, so no
   per-employee managerial stream reaches the durable log the entries below create.
+- **The cloud-bound admission event names devices and no employee, and the interface is what
+  enforces it.** `AdmissionEvents` has no method that accepts one, so the identity cannot be added by
+  accident. An employee on that event would be a durable, central, **cross-border**, attributable
+  record of managerial activity — held in the cloud, replicated by its backups, retained under the
+  cloud's retention rather than the store's — needing a lawful basis, a stated retention period, a
+  DPIA and a transfer basis under **Decree 13/2023**, and failing GDPR's prior question, because the
+  purpose (the cloud knows which tills a store admitted, and can revoke one) is served in full by
+  device ids. So the identity stays on the box, where it is already reachable by
+  [ADR-0035](docs/adr/0035-retention-and-pii-masking.md)'s masking and
+  [ADR-0076](docs/adr/0076-subject-request-tooling.md)'s erasure. Carrying the actor centrally would
+  be an additive field on a **v2** event with its own record, and ADR-0118 deliberately does not
+  pre-authorise one.
 - **One live pairing code is now enforced rather than incidental.** `Pairing::mint` replaces the code
   table instead of inserting beside it. Until there was a second caller the invariant held by
   accident; two live codes would have doubled the window a guess has to hit and left an operator
@@ -84,6 +108,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   only on the decide path, so the literal would be inert on an HTTP route while advertising a PIN
   nothing enforces). `Pairing::mint` now returns the code **and** its expiry, which is a source-level
   change for a fork that calls it directly.
+- **The two new event types are additive** — two entries in `docs/snapshots/events.txt`, no rename
+  and no removal, so `PROTOCOL_VERSION` is unchanged. A cloud that does not know them ignores them,
+  which is what the wire's forward compatibility is for. `PairedDevice` gains `admitted_by` and
+  `Pairing::mint` takes a `Minter`: both are source-level changes for a fork with its own
+  `DeviceRegistry` adapter or its own caller.
+- **Store-SQLite migration 0011 adds a nullable `admitted_by`.** It runs on the next start and needs
+  no downtime. Rows written before it stay `NULL` — the fact was not recorded then and is not
+  recoverable, and a backfilled guess would be worse than an honest absence.
 - **Re-run the Windows installer on any box installed before this release.** The two variables are
   read by the Service Control Manager at service start, not on the fly, and the installer restarts
   the service for exactly that reason. Nothing else changes: the layout, the update slots and the

@@ -20,6 +20,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::{Permission, PermissionSet};
+use pos_edge::pairing::Minter;
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
     StaffRoster, StoreIdentity, SystemClock,
@@ -84,7 +85,9 @@ async fn paired_pair() -> (Router, String, String) {
     let now = SystemClock.now();
     let mut tokens = Vec::new();
     for _ in 0..2 {
-        let (code, _) = pairing.mint(now).expect("mint a pairing code");
+        let (code, _) = pairing
+            .mint(now, Minter::Boot)
+            .expect("mint a pairing code");
         tokens.push(
             pairing
                 .redeem(&code, now)

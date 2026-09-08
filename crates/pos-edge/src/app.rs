@@ -46,10 +46,11 @@ use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillOpened, BillingBillSettled, BillingBillVoided, BillingPaymentCaptured,
-    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, EventType,
-    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
-    SalesOrderLineFired, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
-    SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
+    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted,
+    DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType, KitchenTicketBumped,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableOpened, SecurityPermissionOverridden,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -1682,35 +1683,107 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
     /// cannot be written.
     pub async fn record_activation(&self, activated_device_id: DeviceId) -> Result<(), AppError> {
+        self.record_device_fact(
+            activated_device_id,
+            &DeviceActivationCompleted {
+                activated_device_id,
+            },
+        )
+        .await
+    }
+
+    /// Records that the store admitted a device by pairing it (`device.admission.granted`,
+    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    ///
+    /// `admitted_by_device_id` is the paired device whose signed-in manager minted the code, and
+    /// `None` for the code a boot announces — nothing authorised that one, because nothing could.
+    ///
+    /// # No employee reaches this event, deliberately
+    ///
+    /// The signature cannot carry one, which is the point: an employee identity here would be a
+    /// durable, central, cross-border, attributable record of managerial activity, and the purpose
+    /// this event serves is served in full by device ids (ADR-0118 §5 and its *Compliance posture*).
+    /// Who admitted a device is recorded on the store's own disk, as
+    /// [`PairedDevice::admitted_by`](pos_ports::device_registry::PairedDevice::admitted_by).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
+    /// cannot be written. Callers on the admission path **log and continue**: a device the store has
+    /// already admitted must not be un-admitted because an event could not be written.
+    pub async fn record_device_admitted(
+        &self,
+        admitted_device_id: DeviceId,
+        admitted_by_device_id: Option<DeviceId>,
+    ) -> Result<(), AppError> {
+        self.record_device_fact(
+            admitted_device_id,
+            &DeviceAdmissionGranted {
+                admitted_device_id,
+                admitted_by_device_id,
+            },
+        )
+        .await
+    }
+
+    /// Records that the store retired a device's admission (`device.admission.revoked`,
+    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    ///
+    /// One call per device, including for the break-glass that retires every device at once, so a
+    /// reader never has to interpret an absent field as *all of them*.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] as [`Self::record_device_admitted`], and treated the same way by its caller: the
+    /// device is already revoked locally when this runs, and a revocation must not be undone because
+    /// the cloud could not be told about it.
+    pub async fn record_device_revoked(&self, revoked_device_id: DeviceId) -> Result<(), AppError> {
+        self.record_device_fact(
+            revoked_device_id,
+            &DeviceAdmissionRevoked { revoked_device_id },
+        )
+        .await
+    }
+
+    /// Appends one **system** fact about a device and publishes it to the connected screens.
+    ///
+    /// Shared by activation, admission and revocation because they share everything about them that
+    /// is easy to get wrong, and because a fourth copy of this envelope was the alternative:
+    ///
+    /// * **no employee.** There is none at first boot, and an admission records none by decision
+    ///   (ADR-0118 §5). An `employee_id` that crept onto one of these would be a compliance change
+    ///   disguised as a refactor, so no caller here is able to supply one.
+    /// * **no shift.** None of the three is a trading act and none of them opens or belongs to one.
+    /// * **the subject device reports.** A system event has no separate reporter, so the device the
+    ///   fact is *about* is the device on the envelope — which is what `record_activation` has always
+    ///   done, since at first boot the box's new identity is all there is.
+    async fn record_device_fact<P: EventPayload>(
+        &self,
+        device_id: DeviceId,
+        payload: &P,
+    ) -> Result<(), AppError> {
         let now = self.clock.now();
         let session = self.session();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_ignored| AppError::Clock)?;
-        let payload = DeviceActivationCompleted {
-            activated_device_id,
-        };
-        let data = RawPayload::encode(&payload).map_err(AppError::Encode)?;
+        let data = RawPayload::encode(payload).map_err(AppError::Encode)?;
         let envelope = EventEnvelope {
             event_id: pos_proto::ids::EventId::new(self.next_ulid()),
-            event_type: EventTypeRef::from_known(DeviceActivationCompleted::EVENT_TYPE),
+            event_type: EventTypeRef::from_known(P::EVENT_TYPE),
             event_time: now,
             business_date,
-            schema_version: DeviceActivationCompleted::SCHEMA_VERSION,
+            schema_version: P::SCHEMA_VERSION,
             tenant_id: self.identity.tenant_id,
             brand_id: self.identity.brand_id,
             store_id: self.identity.store_id,
-            // At first boot the box's new identity is the device that was activated; there is no
-            // separate reporting device and no shift open yet.
-            device_id: activated_device_id,
+            device_id,
             employee_id: None,
             shift_id: None,
             data,
         };
-        let published = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+        let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
         let message = ServerMessage::Event {
-            event_type: EventTypeRef::from_known(DeviceActivationCompleted::EVENT_TYPE)
-                .as_str()
-                .to_owned(),
+            event_type: EventTypeRef::from_known(P::EVENT_TYPE).as_str().to_owned(),
             payload: published,
         };
         self.append_and_publish(vec![envelope], vec![message]).await

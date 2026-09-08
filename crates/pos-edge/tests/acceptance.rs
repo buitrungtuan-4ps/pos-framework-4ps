@@ -220,7 +220,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
     // operator UI posts to. Nothing here reaches inside `Pairing` to fabricate a token.
     let code = composed
         .pairing
-        .mint(pos_edge::SystemClock.now())
+        .mint(pos_edge::SystemClock.now(), pos_edge::pairing::Minter::Boot)
         .expect("the OS entropy source mints a pairing code")
         .0
         .as_str()

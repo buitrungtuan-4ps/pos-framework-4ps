@@ -777,6 +777,43 @@ event_catalogue! {
         /// The device that was activated, which may differ from the reporting device.
         activated_device_id: DeviceId,
     },
+    /// A store admitted a device by pairing it
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    ///
+    /// Declared beyond the specification's list, and the reason is the one ADR-0041 §55-57 rejected
+    /// and this record argued back: a tablet paired during a WAN outage was invisible to the cloud
+    /// **forever**, so the fleet console's picture of a store's tills was literally zero rows. This
+    /// rides the durable outbox, so an admission made with the cable unplugged reaches the cloud
+    /// when the link returns.
+    ///
+    /// # It names devices and never an employee
+    ///
+    /// Deliberately, and it is decision 5 of that record rather than an omission. An employee
+    /// identity here would create a durable, central, cross-border, attributable record of
+    /// managerial activity — needing a lawful basis, a retention period, a DPIA and a transfer basis
+    /// under Decree 13/2023, and failing GDPR's prior question, because the purpose (*the cloud
+    /// knows which tills a store admitted, and can revoke one*) is served in full by device ids.
+    /// Who admitted a device is recorded on the store's own disk. A v2 carrying the actor would be
+    /// its own record, and this one does not pre-authorise it.
+    DeviceAdmissionGranted => "device.admission.granted", version = 1 {
+        /// The device that was admitted — the id the **edge** minted at redemption, which is a
+        /// separate identity from the cloud's approved-device registry.
+        admitted_device_id: DeviceId,
+        /// The paired device whose signed-in manager minted the code, where one did. `None` for the
+        /// code a boot announces, which no device authorised because none existed yet.
+        admitted_by_device_id: Option<DeviceId>,
+    },
+    /// A store retired a device's admission
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+    ///
+    /// Declared beyond the specification's list, and paired with [`DeviceAdmissionGranted`] because a
+    /// roster that only ever grows is not a roster. One event per device: the break-glass that
+    /// retires every device at once emits one of these each, so a reader has a single shape to
+    /// handle and never has to interpret an absent field as *all of them*.
+    DeviceAdmissionRevoked => "device.admission.revoked", version = 1 {
+        /// The device whose token stops authenticating.
+        revoked_device_id: DeviceId,
+    },
     /// A release reached a store.
     FleetUpdateRolledOut => "fleet.update.rolled_out", version = 1 {
         /// The release.

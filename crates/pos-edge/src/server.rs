@@ -24,6 +24,7 @@ use pos_proto::ids::{DeviceId, StoreId};
 use updater_minisign::MinisignVerifier;
 
 use crate::activation::{activation_router, boot_standing};
+use crate::admission_events::AdmissionEvents;
 use crate::app::Edge;
 use crate::auth::Sessions;
 use crate::clock::SystemClock;
@@ -43,7 +44,7 @@ use crate::lease_state::LeaseAuthority;
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
-use crate::pairing::{ANNOUNCE_TARGET, Pairing, hosted_pairing_url, pairing_url};
+use crate::pairing::{ANNOUNCE_TARGET, Minter, Pairing, hosted_pairing_url, pairing_url};
 use crate::queue::QueueNumberAuthority;
 use crate::relay_client::RelayClient;
 use crate::state::AppState;
@@ -235,7 +236,7 @@ fn announce_pairing(
     advertised_host: Option<std::net::IpAddr>,
     port: u16,
 ) {
-    let Ok((code, _expires_at_ms)) = pairing.mint(SystemClock.now()) else {
+    let Ok((code, _expires_at_ms)) = pairing.mint(SystemClock.now(), Minter::Boot) else {
         tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
         return;
     };
@@ -624,9 +625,16 @@ where
     // Windows service has no console to read the announcement off, and no route mints a second code
     // (ADR-0117). Read here, at the one place the real edge is composed, so the examples and the
     // tests are unaffected.
+    //
+    // Admissions and revocations are reported to the cloud on the durable outbox, so a till paired
+    // during a WAN outage stops being invisible to the fleet console forever (ADR-0118 §4). The
+    // reporter is the same `Arc<Edge<S>>` composed above, reached through the seam in
+    // `crate::admission_events` — again no new parameter, and again `main.rs` is unchanged.
+    let admissions: Arc<dyn AdmissionEvents> = Arc::<Edge<S>>::clone(&edge);
     let pairing = Arc::new(
         Pairing::durable(Arc::clone(&registry))
-            .with_pairing_file(crate::pairing::pairing_file_from_env()),
+            .with_pairing_file(crate::pairing::pairing_file_from_env())
+            .with_admission_events(Some(admissions)),
     );
     let sessions = Arc::new(Sessions::durable(registry, idle_timeout));
 

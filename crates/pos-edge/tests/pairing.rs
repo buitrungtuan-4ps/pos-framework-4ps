@@ -7,6 +7,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
+use pos_edge::pairing::Minter;
 use pos_edge::{AppState, EdgeConfig};
 use pos_proto::ClockSource;
 use pos_proto::ids::StoreId;
@@ -20,7 +21,7 @@ fn app_with_code() -> (Router, String) {
     let state = AppState::new(config);
     let code = state
         .pairing
-        .mint(state.clock.now())
+        .mint(state.clock.now(), Minter::Boot)
         .expect("mint a code")
         .0
         .as_str()

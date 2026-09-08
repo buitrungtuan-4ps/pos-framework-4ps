@@ -15,6 +15,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::PermissionSet;
+use pos_edge::pairing::Minter;
 use pos_edge::printing::{Printers, TransportFactory};
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
@@ -89,7 +90,9 @@ async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Route
     );
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
-    let (code, _) = pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = pairing
+        .mint(now, Minter::Boot)
+        .expect("mint a pairing code");
     let token = pairing
         .redeem(&code, now)
         .await
