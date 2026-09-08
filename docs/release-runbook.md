@@ -33,6 +33,14 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    a password, add `MINISIGN_PASSWORD` the same way. **Never commit the secret key**; the
    secret-scanning gate (`gitleaks`) will reject it if you try.
 
+   **Both lines, and the line break between them.** Step 3 below takes the *second line* of
+   `minisign.pub`, and carrying that habit one step back is the mistake to avoid. A
+   `MINISIGN_SECRET_KEY` holding only the base64 line — or holding both with the break lost to a
+   paste — makes `minisign` refuse the file with a single line, `Error while loading the secret key
+   file`. The release job checks that shape in its preflight now (*Fail early if the signing key is
+   absent or malformed*), so a malformed key stops the run in seconds instead of after both builds,
+   with an error that names what to fix.
+
 3. **Publish the public half — as a build input, and only as a build input.** `minisign.pub` is not a
    secret. Set the repository **variable** `POS_EDGE_TRUSTED_KEYS` to the **second line** of the file,
    verbatim; `release.yml` **fails before it builds** without it, and `pos-edge` bakes it in at compile

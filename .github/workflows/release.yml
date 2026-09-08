@@ -83,7 +83,7 @@ jobs:
       # Both preflights run here, in the FIRST job, rather than only in the signing one. They cost
       # seconds and they gate two builds: discovering a missing signing key after fifteen minutes of
       # Windows compilation, and then asking a reviewer to approve it, is the same failure told late.
-      - name: Fail early if the signing key is absent
+      - name: Fail early if the signing key is absent or malformed
         shell: bash
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
@@ -91,6 +91,29 @@ jobs:
           set -euo pipefail
           if [ -z "${MINISIGN_SECRET_KEY}" ]; then
             echo "::error::the MINISIGN_SECRET_KEY secret is not set — a release is never published unsigned. See docs/release-runbook.md."
+            exit 1
+          fi
+          # Shape, not just presence, because presence was not enough. `minisign -G` writes a
+          # TWO-LINE file: an `untrusted comment:` line, then the base64 key. Store only the base64
+          # line — the mistake the runbook's very next step invites, because the trust anchor really
+          # is the second line of `minisign.pub` — or lose the line break in a paste, and minisign
+          # refuses the file with a single line, "Error while loading the secret key file". It says
+          # that after the whole build, because signing is the second-to-last step.
+          #
+          # Verified against minisign 0.11: it signs happily with the two lines under either LF or
+          # CRLF endings, and rejects each of the three shapes below. Nothing here echoes the value —
+          # only its non-empty line count, and whether the first line carries the expected prefix.
+          key_lines="$(printf '%s\n' "${MINISIGN_SECRET_KEY}" | tr -d '\r' | grep -c . || true)"
+          key_head="$(printf '%s\n' "${MINISIGN_SECRET_KEY}" | tr -d '\r' | head -n 1)"
+          case "${key_head}" in
+            "untrusted comment:"*) ;;
+            *)
+              echo "::error::MINISIGN_SECRET_KEY does not begin with an 'untrusted comment:' line, so minisign cannot load it. Store the WHOLE minisign.key file — both lines — not just the base64 one, which is what POS_EDGE_TRUSTED_KEYS takes. See docs/release-runbook.md."
+              exit 1
+              ;;
+          esac
+          if [ "${key_lines}" -lt 2 ]; then
+            echo "::error::MINISIGN_SECRET_KEY holds ${key_lines} non-empty line(s); minisign needs two — the 'untrusted comment:' line and the base64 key beneath it. A paste that lost its line break arrives as one. See docs/release-runbook.md."
             exit 1
           fi
 
@@ -182,13 +205,36 @@ jobs:
           esac
           echo "TAG=$tag" >> "$GITHUB_ENV"
 
-      - name: Fail early if the signing key is absent
+      - name: Fail early if the signing key is absent or malformed
         env:
           MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: |
           set -euo pipefail
           if [ -z "${MINISIGN_SECRET_KEY}" ]; then
             echo "::error::the MINISIGN_SECRET_KEY secret is not set — a release is never published unsigned. See docs/release-runbook.md."
+            exit 1
+          fi
+          # Shape, not just presence, because presence was not enough. `minisign -G` writes a
+          # TWO-LINE file: an `untrusted comment:` line, then the base64 key. Store only the base64
+          # line — the mistake the runbook's very next step invites, because the trust anchor really
+          # is the second line of `minisign.pub` — or lose the line break in a paste, and minisign
+          # refuses the file with a single line, "Error while loading the secret key file". It says
+          # that after the whole build, because signing is the second-to-last step.
+          #
+          # Verified against minisign 0.11: it signs happily with the two lines under either LF or
+          # CRLF endings, and rejects each of the three shapes below. Nothing here echoes the value —
+          # only its non-empty line count, and whether the first line carries the expected prefix.
+          key_lines="$(printf '%s\n' "${MINISIGN_SECRET_KEY}" | tr -d '\r' | grep -c . || true)"
+          key_head="$(printf '%s\n' "${MINISIGN_SECRET_KEY}" | tr -d '\r' | head -n 1)"
+          case "${key_head}" in
+            "untrusted comment:"*) ;;
+            *)
+              echo "::error::MINISIGN_SECRET_KEY does not begin with an 'untrusted comment:' line, so minisign cannot load it. Store the WHOLE minisign.key file — both lines — not just the base64 one, which is what POS_EDGE_TRUSTED_KEYS takes. See docs/release-runbook.md."
+              exit 1
+              ;;
+          esac
+          if [ "${key_lines}" -lt 2 ]; then
+            echo "::error::MINISIGN_SECRET_KEY holds ${key_lines} non-empty line(s); minisign needs two — the 'untrusted comment:' line and the base64 key beneath it. A paste that lost its line break arrives as one. See docs/release-runbook.md."
             exit 1
           fi
 
