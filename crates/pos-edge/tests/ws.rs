@@ -37,7 +37,7 @@ async fn state_with_paired_device(store: u128) -> (AppState, String) {
     let config = EdgeConfig::new("127.0.0.1:0".parse().expect("valid addr"), store);
     let state = AppState::new(config);
     let now = state.clock.now();
-    let code = state.pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = state.pairing.mint(now).expect("mint a pairing code");
     let token = state
         .pairing
         .redeem(&code, now)

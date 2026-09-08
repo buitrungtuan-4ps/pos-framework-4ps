@@ -26,6 +26,7 @@ POST /api/orders/{id}/bill
 POST /api/orders/{id}/confirm
 POST /api/orders/{id}/reject
 POST /api/pair
+POST /api/pair/codes
 POST /api/pair/revoke
 POST /api/print/agent
 POST /api/print/agent/revoke

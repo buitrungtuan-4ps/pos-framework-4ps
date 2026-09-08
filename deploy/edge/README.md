@@ -224,8 +224,13 @@ that matter when you are reading it:
   ```
 
   Treat that file as a five-minute password: the code in it expires with `CODE_TTL`, is single-use,
-  and the edge deletes the file the moment a device redeems it. To pair a second device, restart the
-  service — which drops every till's live session, so commission tills together.
+  and the edge deletes the file the moment a device redeems it.
+
+  It is the **first** device's code. For the second and every later one, a manager signed in on an
+  already-paired till mints from the **Devices** screen — `POST /api/pair/codes`
+  ([ADR-0118](../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md)), which needs no
+  restart and no file. A restart stays the fallback for a store with no till paired yet, and it drops
+  every till's live session.
 * **It goes quiet when the service is not running.** `sc.exe query pos-edge` first; a service that
   never reached `RUNNING` may have written nothing at all.
 

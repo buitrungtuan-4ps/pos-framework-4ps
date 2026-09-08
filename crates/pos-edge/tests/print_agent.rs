@@ -84,7 +84,7 @@ async fn paired_pair() -> (Router, String, String) {
     let now = SystemClock.now();
     let mut tokens = Vec::new();
     for _ in 0..2 {
-        let code = pairing.mint(now).expect("mint a pairing code");
+        let (code, _) = pairing.mint(now).expect("mint a pairing code");
         tokens.push(
             pairing
                 .redeem(&code, now)

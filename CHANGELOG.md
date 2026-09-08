@@ -16,6 +16,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **A manager can add a till without restarting the store.** `POST /api/pair/codes` mints the pairing
+  code for the next device, and the **Devices** screen on any paired till shows it — six digits and
+  the URL to open on the new tablet. Before this, a code was minted once per process start and
+  nothing minted another, so commissioning a second till on a trading store meant stopping the
+  service: every till's and kitchen display's live session dropped and the outbox drained
+  ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md), #246). A restart is
+  still the fallback for a store with no till paired yet.
+
 ### Fixed
 
 - **A Windows store can be paired with.** It could not be, at all. A service started by the Service
@@ -34,6 +44,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Minting a code needs a manager, and both gates.** The route sits behind the paired-device gate
+  *and* the signed-in gate, and checks `ManageDevices` against the roster the console published — the
+  same permission ADR-0112 put on binding a print agent, because admitting hardware and pointing the
+  kitchen's tickets somewhere are the same kind of act. A waiter on a paired till gets `403`; an
+  unpaired caller never reaches the handler. The reply body is the only place the code exists: the
+  handler writes no file and logs no code, and its log line carries no employee id either, so no
+  per-employee managerial stream reaches the durable log the entries below create.
+- **One live pairing code is now enforced rather than incidental.** `Pairing::mint` replaces the code
+  table instead of inserting beside it. Until there was a second caller the invariant held by
+  accident; two live codes would have doubled the window a guess has to hit and left an operator
+  unable to say which of two codes they were told to use. Minting also unlinks the pairing file,
+  because the code that file named is the one just invalidated.
 - **A pairing code no longer reaches a durable log.** [ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)
   has always said a pairing code *"is never logged"*; that was false in the code, which logged it
   inside the pairing URL. The announcement now carries a target of its own, which the file sink
@@ -57,6 +79,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Upgrade notes
 
+- **`POST /api/pair/codes` is additive** — one new line in `docs/snapshots/routes.txt`, no permission
+  added (`ManageDevices` already exists and is **not** flipped to `pin: true`; `pin_required` is read
+  only on the decide path, so the literal would be inert on an HTTP route while advertising a PIN
+  nothing enforces). `Pairing::mint` now returns the code **and** its expiry, which is a source-level
+  change for a fork that calls it directly.
 - **Re-run the Windows installer on any box installed before this release.** The two variables are
   read by the Service Control Manager at service start, not on the fly, and the installer restarts
   the service for exactly that reason. Nothing else changes: the layout, the update slots and the

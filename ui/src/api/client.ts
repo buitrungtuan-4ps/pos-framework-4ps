@@ -23,6 +23,7 @@ import type {
   LayoutResponse,
   LocaleResponse,
   MenuResponse,
+  MintedCode,
   OpenShiftRequest,
   PairAccepted,
   PairingState,
@@ -240,6 +241,15 @@ export const api = {
   // device may still be paired after a restart and the screen must not claim otherwise.
   revokeDevice: (deviceId: string | null) =>
     request<void>("POST", "/api/pair/revoke", deviceId === null ? {} : { device_id: deviceId }),
+
+  // Mint the pairing code for the next device (ADR-0118). Behind **both** gates — this till must be
+  // paired *and* a manager must be signed in on it — because issuing a credential is a stronger act
+  // than retiring one. A `403` means the signed-in person lacks the permission, not that the till
+  // needs to pair again.
+  //
+  // Replaces whatever code was live, including the one the store server minted at boot. The reply is
+  // the only copy: show it, and mint again if it is lost.
+  mintPairingCode: () => request<MintedCode>("POST", "/api/pair/codes"),
 
   // Whether this store server holds its device credential yet (ADR-0050, ADR-0086). A store that is
   // not provisioned for a cloud does not mount the route at all, so a rejection here means "there is

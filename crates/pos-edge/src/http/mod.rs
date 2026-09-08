@@ -227,8 +227,10 @@ where
     let counter_edge = Arc::clone(&edge);
     let agent_edge = Arc::clone(&edge);
     let jobs_edge = Arc::clone(&edge);
+    let codes_edge = Arc::clone(&edge);
     let sessions_for_counter = Arc::clone(&sessions);
     let sessions_for_agents = Arc::clone(&sessions);
+    let sessions_for_codes = Arc::clone(&sessions);
 
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
     // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
@@ -318,6 +320,13 @@ where
     let binding = print_agent::router(agent_edge, agents.clone()).layer(
         axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
     );
+    // Minting the pairing code for the next device (ADR-0118): its own sub-router for the same
+    // reason — it reads the published roster off the application `Edge`, which is generic over the
+    // store — and behind the same two gates. A paired device *and* a signed-in manager, because
+    // issuing a credential is a stronger act than the paired-only posture `/api/pair/revoke` has.
+    let codes = pair::codes_router(codes_edge, Arc::clone(&pairing)).layer(
+        axum::middleware::from_fn_with_state(sessions_for_codes, auth::require_signed_in),
+    );
     // And the agent's own two routes, which carry the paired gate **and no second one**: an agent is
     // an unattended process, so requiring a sign-in would mean a manager's PIN before every kitchen
     // ticket (ADR-0112). They join the five paired-only routes the edge already serves rather than
@@ -329,6 +338,7 @@ where
         .merge(session)
         .merge(counter)
         .merge(binding)
+        .merge(codes)
         .merge(jobs)
         .layer(axum::middleware::from_fn_with_state(
             pairing,

@@ -73,7 +73,7 @@ async fn app(seed: impl FnOnce(&mut EdgeSession)) -> (Router, String) {
     );
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
-    let code = pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = pairing.mint(now).expect("mint a pairing code");
     let token = pairing
         .redeem(&code, now)
         .await
