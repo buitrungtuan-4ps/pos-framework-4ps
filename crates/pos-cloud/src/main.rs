@@ -546,6 +546,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Remote device retirement (ADR-0118 §6): appends one local device id to the store's
+        // `revoked_devices` deny-list, which the box carries out on its next config pull. Its own
+        // router because it takes `console.stores.manage`, not the `PublishConfig` norm the other
+        // node publishes take — the same standing as the lease bump beside it on the Fleet screen,
+        // because this takes a terminal out of service.
+        .merge(http::device_revoke_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Background-task health (ADR-0068 slice 4): the read-only console view of whether the
         // off-request loops are alive and keeping up. `expected_tasks` names the loops this
         // deployment actually turned on, so a loop dead since boot reads as unhealthy, not missing.

@@ -12,6 +12,7 @@
 use serde_json::Value;
 
 use pos_core::capability::{CapabilityContext, conflicts};
+use pos_core::device_revocation::DeviceRevocationConfig;
 use pos_core::lease::LeaseConfig;
 use pos_core::ota::{DeviceOtaConfig, FleetUpdateConfig};
 use pos_proto::display::LayoutBook;
@@ -66,6 +67,7 @@ impl ConfigValidator for CapabilityValidator {
         violations.extend(ota_violations(document));
         violations.extend(lease_violations(document));
         violations.extend(delivery_node_violations(document));
+        violations.extend(device_revocation_violations(document));
         if violations.is_empty() {
             Ok(())
         } else {
@@ -101,6 +103,38 @@ fn ota_violations(document: &Value) -> Vec<String> {
         }
     }
     violations
+}
+
+/// Validates the `revoked_devices` node when the document sets it
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), so a
+/// node the store would refuse whole is rejected here instead — with the violations an operator can
+/// act on, rather than in a log line on a box they cannot reach.
+///
+/// This arm is the *only* refusal the cloud can make about this node. The blast-radius caps — more
+/// than one bound device, or the store's last one — cannot be checked here: [`ConfigValidator`]
+/// takes a document and nothing else, and the cloud's only device roster is a lagging,
+/// at-least-once rollup that is empty for a store whose events have not projected yet. Enforcing a
+/// device-count rule from that would refuse a legitimate publish for a store that paired a till
+/// during a WAN outage. Those caps run edge-side, where the answer is authoritative.
+///
+/// Parsed via `to_string` → `from_str`, byte for byte the path the edge uses, so this accepts
+/// exactly what the store will — including refusing a node whose `device_ids` key is misspelled,
+/// which would otherwise be read as a list of nothing. An absent node is not a violation.
+fn device_revocation_violations(document: &Value) -> Vec<String> {
+    let Some(value) = document.get("revoked_devices") else {
+        return Vec::new();
+    };
+    let parsed = serde_json::to_string(value)
+        .ok()
+        .and_then(|text| serde_json::from_str::<DeviceRevocationConfig>(&text).ok());
+    let Some(config) = parsed else {
+        return vec![
+            "the `revoked_devices` node is not an object with a `device_ids` list of device ids — \
+             the store would refuse it whole"
+                .to_owned(),
+        ];
+    };
+    config.validate().err().unwrap_or_default()
 }
 
 /// Validates the `lease` node when the document sets it
@@ -367,6 +401,64 @@ mod tests {
         assert!(
             violations.iter().any(|v| v.contains("`layout` node")),
             "the reason names the layout node: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_coherent_revoked_devices_node_is_accepted() {
+        assert_eq!(
+            CapabilityValidator.validate(&json!({
+                "revoked_devices": { "device_ids": ["01ARZ3NDEKTSV4RRFFQ69G5FAV"] }
+            })),
+            Ok(())
+        );
+        // An empty list is a store that has had nothing retired; the node still parses.
+        assert_eq!(
+            CapabilityValidator.validate(&json!({ "revoked_devices": { "device_ids": [] } })),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_ulid_is_rejected_before_a_store_refuses_the_node_whole() {
+        // The store refuses this node whole and says so only in its own log, on a box the operator
+        // may not be able to reach. Catching it here is the difference between a `422` they can act
+        // on and a revocation that silently never happens.
+        let violations = CapabilityValidator
+            .validate(&json!({ "revoked_devices": { "device_ids": ["till-by-the-window"] } }))
+            .expect_err("a non-ULID entry must be rejected");
+        assert!(
+            violations.iter().any(|v| v.contains("till-by-the-window")),
+            "the reason names the entry: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_revoked_devices_node_whose_inner_key_is_misspelled_is_rejected() {
+        // Not a pedantic check. `device_id` instead of `device_ids` is the difference between a
+        // deny-list naming a stolen tablet and a deny-list naming nothing, and the store cannot
+        // tell those apart from the outside — so the shape is refused at the publish.
+        let violations = CapabilityValidator
+            .validate(&json!({
+                "revoked_devices": { "device_id": ["01ARZ3NDEKTSV4RRFFQ69G5FAV"] }
+            }))
+            .expect_err("a misspelled inner key must be rejected");
+        assert!(
+            violations.iter().any(|v| v.contains("device_ids")),
+            "the reason names the key it wanted: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_revoked_devices_node_of_the_wrong_shape_is_rejected() {
+        let violations = CapabilityValidator
+            .validate(&json!({ "revoked_devices": "everything" }))
+            .expect_err("a node that is not an object must be rejected");
+        assert!(
+            violations
+                .iter()
+                .any(|v| v.contains("`revoked_devices` node")),
+            "{violations:?}"
         );
     }
 

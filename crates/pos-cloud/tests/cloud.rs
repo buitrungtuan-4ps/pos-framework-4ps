@@ -17597,6 +17597,177 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
     assert!(rule_ids.contains(&"seats.requires.tables"));
 }
 
+// --- Remote device retirement (`POST /admin/stores/{id}/devices/revoke`, ADR-0118 §6) -----------
+
+/// The main app merged with the device-revoke router, sharing one config-tree fake so the test can
+/// read back the deny-list the publish appended to.
+fn device_revoke_app(admin: FakeAdmin, config: FakeConfigTrees) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::device_revoke_router(
+        config,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// The `revoked_devices` deny-list on a store's Store layer, as the tree currently holds it.
+///
+/// Empty when the store has no tree at all, which is the state a refused publish leaves it in — so
+/// this answers "what is on the list" rather than asserting a publish happened.
+async fn published_deny_list(
+    config: &FakeConfigTrees,
+    tenant: TenantId,
+    store: StoreId,
+) -> Vec<String> {
+    let Some(state) = config
+        .load(tenant, store)
+        .await
+        .expect("read the tree")
+        .map(|held| held.record)
+    else {
+        return Vec::new();
+    };
+    state
+        .layer(pos_cloud::config_tree::ConfigLevel::Store)
+        .get("revoked_devices")
+        .and_then(|node| node.get("device_ids"))
+        .and_then(serde_json::Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn revoking_a_device_appends_to_the_deny_list_and_never_replaces_it() {
+    // The property the whole rail rests on. Two tills retired one after the other must both stay on
+    // the list: a publish that replaced the node would drop the first, and a device somebody was
+    // told had been retired would be trading again after the store's next pull.
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = device_revoke_app(admin, config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/admin/stores/{store_ulid}/devices/revoke");
+    let first = Ulid::from_u128(0x21).to_string();
+    let second = Ulid::from_u128(0x22).to_string();
+
+    let revoke = |device: String| {
+        router.clone().oneshot(post_with_cookie(
+            &uri,
+            &serde_json::json!({ "tenant_id": tenant_ulid, "local_device_id": device }),
+            &cookie,
+        ))
+    };
+
+    let response = revoke(first.clone()).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        vec![first.clone()]
+    );
+
+    let response = revoke(second.clone()).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        vec![first.clone(), second.clone()],
+        "the second retirement appends; it does not replace the first"
+    );
+
+    // Idempotent: re-revoking an id already listed succeeds and adds nothing. A duplicate entry
+    // would make the node malformed, and the store refuses a malformed node whole — so a double
+    // tap in the console would disarm the very list it was adding to.
+    let response = revoke(second.clone()).await.expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        published_deny_list(&config, tenant(), store_id()).await,
+        vec![first, second]
+    );
+}
+
+#[tokio::test]
+async fn revoking_a_device_needs_a_session_and_the_store_manage_role() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = device_revoke_app(admin, config.clone());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/admin/stores/{store_ulid}/devices/revoke");
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid,
+        "local_device_id": Ulid::from_u128(0x21).to_string()
+    });
+
+    let unauth = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).expect("serialise")))
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the revoke");
+    assert_eq!(
+        unauth.status(),
+        StatusCode::UNAUTHORIZED,
+        "taking a terminal out of service is closed to an unauthenticated caller"
+    );
+    assert!(
+        published_deny_list(&config, tenant(), store_id())
+            .await
+            .is_empty(),
+        "and nothing was published"
+    );
+}
+
+#[tokio::test]
+async fn a_local_device_id_that_is_not_a_ulid_is_refused_by_name() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    let router = device_revoke_app(admin, config.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let response = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{store_ulid}/devices/revoke"),
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "local_device_id": "till-by-the-window"
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the revoke");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(response).await;
+    assert!(
+        body.to_string().contains("local_device_id"),
+        "the refusal names the field: {body}"
+    );
+    assert!(
+        published_deny_list(&config, tenant(), store_id())
+            .await
+            .is_empty()
+    );
+}
+
 /// The main app merged with the capability-publish router, sharing one config-tree fake so the test
 /// can read back the flags the publish merged onto the Store layer.
 fn config_capabilities_app(admin: FakeAdmin, config: FakeConfigTrees) -> axum::Router {

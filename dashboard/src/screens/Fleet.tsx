@@ -90,10 +90,18 @@ export function Fleet() {
   // the same answer.
   const [admitted, setAdmitted] = createSignal<AdmittedDevice[] | null>(null);
   const [admittedError, setAdmittedError] = createSignal("");
+  // The till the operator has asked to retire, held until they type its id (ADR-0118 §6). A
+  // separate signal from `selected()` because the drawer stays open behind the dialog, and from
+  // `retiring` above, which retires a whole STORE from the fleet — a different act entirely.
+  const [retiringDevice, setRetiringDevice] = createSignal<AdmittedDevice | null>(null);
+  const [retireDeviceBusy, setRetireDeviceBusy] = createSignal(false);
 
-  // Opens the detail drawer for a store and reads its admitted-device roster.
-  const openDetail = (store: FleetStore) => {
-    setSelected(store);
+  // Reads (or re-reads) one store's admitted-device roster into the drawer.
+  //
+  // Called on open and again after a retirement: the 15-second poll replaces `stores()`, but
+  // `selected()` holds a snapshot of one row, so the open drawer does not refresh from it. Without
+  // this explicit re-read the till an operator just retired would still show as live.
+  const loadAdmitted = (storeId: string) => {
     setAdmitted(null);
     setAdmittedError("");
     const tenant = tenantId();
@@ -101,7 +109,7 @@ export function Fleet() {
       return;
     }
     void api
-      .admittedDevices(tenant, store.store_id)
+      .admittedDevices(tenant, storeId)
       .then(setAdmitted)
       // A roster that cannot be read must not take the drawer down with it: the liveness the rest of
       // this panel shows is what an operator opened it for, and it is already loaded.
@@ -110,6 +118,34 @@ export function Fleet() {
           failure instanceof ApiError ? failure.message : t("fleet.admittedUnavailable"),
         ),
       );
+  };
+
+  // Opens the detail drawer for a store and reads its admitted-device roster.
+  const openDetail = (store: FleetStore) => {
+    setSelected(store);
+    loadAdmitted(store.store_id);
+  };
+
+  // Publishes one till onto the store's deny-list. The store carries it out on its next config
+  // pull, so the roster is re-read rather than patched in place — and the toast says "published",
+  // not "retired", because a `200` here is not proof the store applied it.
+  const retireDevice = async (device: AdmittedDevice) => {
+    const tenant = tenantId();
+    const store = selected();
+    if (!tenant || !store) {
+      return;
+    }
+    setRetireDeviceBusy(true);
+    try {
+      await api.revokeDevice(tenant, store.store_id, device.local_device_id);
+      setRetiringDevice(null);
+      toast.ok(t("fleet.retirePublished"));
+      loadAdmitted(store.store_id);
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setRetireDeviceBusy(false);
+    }
   };
 
   const fail = (caught: unknown) => {
@@ -647,6 +683,19 @@ export function Fleet() {
                                     ? device.local_device_id
                                     : `${device.local_device_id} · ${device.admitted_by_device_id}`}
                                 </TechnicalDetails>
+                                {/* Only on a live row: a retired device keeps its row so the
+                                    question "was this tablet ever admitted here" stays answerable,
+                                    and there is nothing to retire twice. */}
+                                <Show when={device.revoked_at_ms === null}>
+                                  <div>
+                                    <Button
+                                      variant="secondary"
+                                      onClick={() => setRetiringDevice(device)}
+                                    >
+                                      {t("fleet.retire")}
+                                    </Button>
+                                  </div>
+                                </Show>
                               </li>
                             )}
                           </For>
@@ -666,6 +715,29 @@ export function Fleet() {
             )}
           </Show>
         </Drawer>
+
+        {/* Retiring a till is the most destructive thing this screen can publish, so it is the one
+            control here that asks the operator to type the target — and what they type is the
+            device id, because a till has no name the console knows (ADR-0118 §6). */}
+        <ConfirmDialog
+          open={retiringDevice() !== null}
+          danger
+          busy={retireDeviceBusy()}
+          title={t("fleet.retireTitle")}
+          message={t("fleet.retireMessage")}
+          confirmLabel={t("fleet.retire")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          typeToConfirm={retiringDevice()?.local_device_id ?? ""}
+          typePrompt={t("fleet.retirePrompt")}
+          onCancel={() => setRetiringDevice(null)}
+          onConfirm={() => {
+            const device = retiringDevice();
+            if (device) {
+              void retireDevice(device);
+            }
+          }}
+        />
 
         <ConfirmDialog
           open={bumping() !== null}

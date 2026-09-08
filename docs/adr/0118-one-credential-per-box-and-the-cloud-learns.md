@@ -184,6 +184,21 @@ a store's tills is literally zero rows.
      a WAN outage. The edge has the only authoritative answer, so the edge decides — and the cap
      counts **bound** devices only, or a document could become permanently unappliable by naming
      hardware that is long gone.
+   * **The floor cap refuses the Context's own headline case, and that is the owner's decision.**
+     This record's Context names *"one whose only admitted till is the tablet that walked out of the
+     door"* as a reason the rail exists, and the zero-admitted-devices rule refuses exactly that: one
+     till, stolen, revoked → refused whole. The contradiction was found by an adversarial review of
+     the shipped edge half and put to the owner, who chose (2026-09-08) to **keep §6 as written**. So
+     the last till cannot be retired from the console, and the refusal names the two remedies
+     instead: bump the store's lease, which supersedes the whole box, or send somebody to it. Note
+     what the trade actually is — a stolen tablet keeps a working token until one of those happens,
+     bought against a store that can always be re-paired remotely. The alternative considered and
+     declined was dropping the floor rule and keeping only the one-bound-device cap.
+   * **The one-device cap is per *apply*, not a lifetime quota.** Four tills can be retired over four
+     publishes; each is a separate console act with its own audit row and its own typed-name
+     confirmation, and the floor rule is what stops the sequence before the store is empty. That is
+     what "in a single apply" above means, and it is deliberate — an operator commissioning a
+     replacement fleet should not have to wait out a quota.
    * **A refusal is invisible to the console.** The edge has no channel to report a refused node:
      `HeartbeatReport` carries no config field, and `pump_once` records the version as held even when
      a node was skipped, so the console shows the store as fully current. An operator whose remote

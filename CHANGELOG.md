@@ -46,6 +46,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   document. The panel says out loud that these ids are **not** the named devices in the registry —
   the store mints its own when a tablet pairs, and the two do not match up.
 
+- **A lost till can be retired from the console.** The store-detail drawer on **Fleet** now has a
+  *Retire this till* control on each still-admitted device in the roster, behind a typed-confirmation
+  of the device's own id (a till has no name the console knows). It appends that id to the store's
+  `revoked_devices` deny-list through `POST /admin/stores/{store_id}/devices/revoke`, which is in the
+  generated `/admin` OpenAPI document and behind `console.stores.manage` — the same standing as the
+  lease bump beside it, because this takes a terminal out of service. The reply means *published*,
+  not *retired*: the store applies it on its next check-in, and the panel re-reads the roster so an
+  operator can see it land
+  ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
 - **A store carries out a device retirement the console publishes.** A `revoked_devices` node on the
   store's configuration names local device ids; the box applies it on its next 30-second config pull
   and again at boot, retiring each named till so its token stops resolving both in memory and in the
@@ -57,6 +66,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A typed-name confirmation could be bypassed by cancelling and reopening the dialog.** Every
+  destructive console action that asks you to type a name — retiring a till, bumping a store's lease,
+  deleting a webhook or a reason code, erasing a subject's data — kept whatever you had typed after
+  you cancelled. Reopening the dialog found the confirm button already enabled, so the guard bought
+  nothing on the second attempt. The field is now cleared each time the dialog opens. The target name
+  is also trimmed as well as the input, so an entity whose name carries trailing whitespace is no
+  longer untypeable.
 - **A Windows store can be paired with.** It could not be, at all. A service started by the Service
   Control Manager has no console, `pos-edge`'s only log sink was standard output, and the pairing
   code — the one thing a tablet needs in order to join a store — is minted once per process start and
@@ -73,6 +89,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Four ways the device deny-list could have failed quietly, found by an adversarial review of it
+  and closed before the rail was reachable.** (1) A node whose inner key was misspelled —
+  `device_id` for `device_ids` — deserialised to an *empty* list, so a document naming a stolen
+  tablet was read as a document naming nothing, silently; the field is now required, and both the
+  publish and the store refuse the shape. (2) A transient failure applying the list was logged as
+  "will be retried" but never was: the store recorded the config version as held, and the cloud then
+  answered "already current" to every later pull, so the document was never seen again. The version
+  is now held back until the list actually applies — for a failed *read* of the applied record and
+  for a device whose retirement could not be written. (3) The rule refusing to leave a store with no
+  admitted device compared list lengths, which fails **open** on a roster that repeats a device; it
+  now asks whether every admitted device is on the way out. (4) A document breaking both caps at once
+  named only one of them, costing an operator a whole publish cycle to find the second on the one
+  channel they have.
 - **A published device retirement is one-shot, monotone, and blast-radius capped.** The deny-list
   only ever grows, and three separate things stop a configuration rollback handing a stolen tablet
   its access back: retiring a device **deletes** its pairing row, so nothing in a later document can
@@ -145,6 +174,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   which is what the wire's forward compatibility is for. `PairedDevice` gains `admitted_by` and
   `Pairing::mint` takes a `Minter`: both are source-level changes for a fork with its own
   `DeviceRegistry` adapter or its own caller.
+- **`POST /admin/stores/{store_id}/devices/revoke` is additive** — one new path in
+  `docs/openapi-admin.json`, no new permission (it reuses `console.stores.manage`, so
+  `docs/snapshots/permissions.txt` is unchanged), and no `PROTOCOL_VERSION` change. There is
+  deliberately **no un-revoke route**: the list only grows, and the store's deletion of the pairing
+  row is what makes a configuration rollback unable to undo a retirement.
 - **Store migration `0012_applied_revocations.sql` is additive** and runs on the first boot of this
   build — a new `applied_device_revocations` table, one row per device id, insert-only. It is a
   separate table rather than a column on `paired_devices` because retiring a device *deletes* that

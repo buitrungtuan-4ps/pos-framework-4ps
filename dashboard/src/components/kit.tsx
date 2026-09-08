@@ -6,6 +6,7 @@
 // nothing to flag here. Write outcomes are surfaced through the F1 `toast` primitive by the caller.
 
 import {
+  createEffect,
   createMemo,
   createSignal,
   For,
@@ -482,6 +483,9 @@ export function Drawer(
  * A confirm/cancel dialog for a mutating action. For a high-risk action (delete, revoke), pass
  * `typeToConfirm` (e.g. the entity's name) and `typePrompt`: the confirm button stays disabled until
  * the operator types the value exactly, so a destructive click is never a single slip.
+ *
+ * `typePrompt` is not optional in practice — omitting it ships a silently unlabelled input, and no
+ * lint catches that, because the i18n lint only sees string literals.
  */
 export function ConfirmDialog(props: {
   open: boolean;
@@ -498,7 +502,20 @@ export function ConfirmDialog(props: {
   onCancel: () => void;
 }) {
   const [typed, setTyped] = createSignal("");
-  const ready = () => !props.typeToConfirm || typed().trim() === props.typeToConfirm;
+  // Cleared every time the dialog opens. The input is rendered inside `Modal`, which mounts its
+  // children only while open — but this signal lives in the component body, and the component is
+  // mounted permanently on the screen. So without this, cancelling after typing the name and then
+  // reopening the dialog (for the same entity or a different one) finds the confirm button already
+  // enabled, and the typed-name guard has bought nothing at all.
+  createEffect(() => {
+    if (props.open) {
+      setTyped("");
+    }
+  });
+  // The target is trimmed as well as the input: a store or device name that arrives with trailing
+  // whitespace would otherwise be untypeable, and an operator cannot see the difference.
+  const ready = () =>
+    !props.typeToConfirm || typed().trim() === props.typeToConfirm.trim();
   return (
     <Modal
       open={props.open}
