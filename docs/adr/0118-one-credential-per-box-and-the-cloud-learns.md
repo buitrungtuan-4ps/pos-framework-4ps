@@ -110,14 +110,18 @@ a store's tills is literally zero rows.
    service restarts ADR-0117 §70 records as the price of commissioning tills.
 
 4. **The cloud learns admissions by event, not by asking.** Two catalogue additions beside
-   `DeviceActivationCompleted`: `device.admitted` v1 and `device.revoked` v1. They ride the existing
+   `DeviceActivationCompleted`: `device.admission.granted` v1 and `device.admission.revoked` v1
+   (**amended at implementation**: this record first wrote them as `device.admitted` and
+   `device.revoked`, which the catalogue's own test refuses — every token is `domain.resource.action`,
+   one taxonomy shared with permission identifiers, `docs/naming-and-api.md` §5. A published token can
+   never be renamed, so it was corrected before it shipped rather than after). They ride the existing
    durable outbox — at-least-once, idempotent by event id — so an admission made during a WAN outage
    reaches the cloud when the link returns, which is exactly the sync-back half of the proposal that
    prompted this record. **A cloud-side reader is part of the same slice**: a projector arm, a
    `local_device_id` column, and a console column that finally shows a store's real tills. An event
    with no reader is not a feature, and there is already one of those in the tree.
 
-5. **The cloud-bound event carries device ids and no actor.** `device.admitted` names *what* was
+5. **The cloud-bound event carries device ids and no actor.** `device.admission.granted` names *what* was
    admitted and *which paired device authorised it* — never which employee. Who admitted a device is
    recorded **locally**, as an additive `actor` column on `paired_devices`, on the store's own SQLite
    and nowhere else; ADR-0091 §147-148 deliberately gives that port no store-postgres adapter, and this
@@ -152,7 +156,7 @@ a store's tills is literally zero rows.
 
 ## Compliance posture — and what it forced
 
-Decision 5 is not a detail. A `device.admitted` event carrying an employee identity would create a
+Decision 5 is not a detail. A `device.admission.granted` event carrying an employee identity would create a
 **durable, central, cross-border, attributable record of managerial activity**: which named manager
 admitted which device, when, in which store — held in the cloud, replicated by its backups, and
 retained under whatever the cloud's retention says rather than the store's.
@@ -216,7 +220,7 @@ restart to get a code back — strictly worse than the ADR-0117 §70 cost it was
 **Slot-keyed remote revocation.** Cannot reach the admissions the offline scenario creates: a device
 admitted offline carries no slot id, so there is nothing to publish a revocation *for* it against, and
 ADR-0091 §135 stays open for exactly those devices. Device-id-keyed revocation, fed by
-`device.admitted`, reaches every device including those.
+`device.admission.granted`, reaches every device including those.
 
 **Revocation as mutable slot status on a config node.** Undoable by a config rollback performed for an
 unrelated reason. Revocation is monotone or it is decorative.
@@ -225,7 +229,7 @@ unrelated reason. Revocation is monotone or it is decorative.
 **ADR-0041 §55-57 rejected**. That rejection has to be argued against rather than cited, and it loses
 on both of its grounds. *"There is no such event in the catalogue"* is spent: `DeviceActivationCompleted`
 now exists and rides this exact rail. *"LAN-scan noise"* does not describe what this is — a discovery
-scan emits unbounded machine chatter, while `device.admitted` is **one bounded, deliberate human act by
+scan emits unbounded machine chatter, while `device.admission.granted` is **one bounded, deliberate human act by
 a signed-in manager**, at the rate a store commissions tills, which is a handful per store per year.
 ADR-0041 §58-60's rejection of store self-approval also stops applying once decision 8 deletes the slot
 cap: the store is not self-approving against a cloud gate, it is doing what it has always done, and the

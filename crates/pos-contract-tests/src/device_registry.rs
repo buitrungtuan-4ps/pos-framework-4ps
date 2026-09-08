@@ -44,6 +44,7 @@ macro_rules! device_registry_suite {
                 revoking_a_device_clears_its_sign_in,
                 revoking_is_idempotent,
                 revoke_all_retires_every_device,
+                remembers_who_admitted_a_device,
                 round_trips_a_sign_in,
                 a_second_sign_in_replaces_the_first,
                 touch_moves_last_seen_forward,
@@ -83,12 +84,21 @@ fn at(ms: i64) -> Timestamp {
     Timestamp::from_milliseconds_since_epoch(ms).unwrap_or(Timestamp::EPOCH)
 }
 
-/// A paired device record.
+/// A paired device record, admitted by nobody — the code a boot announces.
 fn paired(n: u128, digest_byte: u8, ms: i64) -> PairedDevice {
     PairedDevice {
         device_id: device(n),
         token_digest: digest(digest_byte),
         paired_at: at(ms),
+        admitted_by: None,
+    }
+}
+
+/// The same, admitted by an employee — a manager who minted the code from a till.
+fn paired_by(n: u128, digest_byte: u8, ms: i64, employee_n: u128) -> PairedDevice {
+    PairedDevice {
+        admitted_by: Some(employee(employee_n)),
+        ..paired(n, digest_byte, ms)
     }
 }
 
@@ -100,6 +110,46 @@ fn session(device_n: u128, employee_n: u128, ms: i64) -> DeviceSession {
         signed_in_at: at(ms),
         last_seen_at: at(ms),
     }
+}
+
+/// Who admitted a device is the store's own record, and it has to survive the restart the rest of
+/// this port exists for.
+///
+/// The cloud-bound `device.admission.granted` event carries device ids and **no** employee
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §5), so this
+/// column is the only place the answer lives. An adapter that quietly dropped it would leave the
+/// question unanswerable everywhere rather than in one place, which is why it is asserted here and
+/// not only in the edge.
+///
+/// `None` is asserted alongside it, because it is not a missing value: the code a box announces at
+/// boot is minted by nobody, and a re-pair replaces the record with whoever minted the new code.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn remembers_who_admitted_a_device<H: DeviceRegistryHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let registry = harness.fresh().await?;
+    registry
+        .record_pairing(paired_by(1, 0xa1, 1_000, 7))
+        .await?;
+    registry.record_pairing(paired(2, 0xa2, 2_000)).await?;
+    let obligation = obligation();
+    let mut listed = registry.paired_devices().await?;
+    listed.sort_unstable_by_key(|device| device.device_id);
+    let admitted = obligation.require_nth(listed.as_slice(), 0, "the device a manager admitted")?;
+    obligation.require_eq(
+        &admitted.admitted_by,
+        &Some(employee(7)),
+        "the employee who minted the code is stored with the device it admitted",
+    )?;
+    let boot = obligation.require_nth(listed.as_slice(), 1, "the device the boot code admitted")?;
+    obligation.require_eq(
+        &boot.admitted_by,
+        &None,
+        "and a device nobody minted for is recorded as admitted by nobody, not by a stand-in",
+    )
 }
 
 /// A digest in, the device it belongs to out.

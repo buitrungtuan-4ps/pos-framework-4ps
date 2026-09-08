@@ -18,6 +18,7 @@
 //! * minting **replaces** the live code rather than adding beside it, so the store never has two
 //!   codes a guess could hit and an operator is never holding one of two.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use axum::Router;
@@ -25,11 +26,14 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::{Permission, PermissionSet};
+use pos_edge::admission_events::AdmissionEvents;
+use pos_edge::pairing::Minter;
 use pos_edge::{
     Edge, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing, Sessions, StaffAuth,
     StaffRoster, StoreIdentity, SystemClock,
 };
 use pos_fakes::FakeStore;
+use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::ClockSource;
 use pos_proto::ids::{EmployeeId, StoreId};
 use pos_proto::ulid::Ulid;
@@ -52,11 +56,12 @@ fn hash_of(pin: &str) -> String {
         .to_string()
 }
 
-/// The domain router, the shared `Pairing`, and one paired device's token.
+/// The domain router, the shared `Pairing`, the composed `Edge`, and one paired device's token.
 ///
-/// The `Pairing` is handed back as well as wired in, because the assertions are about what the
-/// *store* holds after a call, not only about what the response said.
-async fn paired() -> (Router, Arc<Pairing>, String) {
+/// The `Pairing` and the `Edge` are handed back as well as wired in, because the assertions are
+/// about what the *store* holds after a call — the live code table and the durable event log — not
+/// only about what the response said.
+async fn paired() -> (Router, Arc<Pairing>, Arc<Edge<FakeStore>>, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut staff = StaffRoster::new();
     staff.insert(
@@ -84,11 +89,15 @@ async fn paired() -> (Router, Arc<Pairing>, String) {
         )
         .expect("seed"),
     );
-    let pairing = Arc::new(Pairing::new());
+    // Wired to the real reporter, so the mint route's end-to-end test can read what reached the
+    // cloud-bound log rather than trusting the handler to have named the right device (ADR-0118 §4).
+    let pairing = Arc::new(Pairing::new().with_admission_events(Some(
+        Arc::<Edge<FakeStore>>::clone(&edge) as Arc<dyn AdmissionEvents>,
+    )));
     let now = SystemClock.now();
     // The boot code and the first device — the floor this route deliberately does not replace,
     // because the first tablet on a virgin box has nothing to authenticate with.
-    let (boot_code, _) = pairing.mint(now).expect("mint the boot code");
+    let (boot_code, _) = pairing.mint(now, Minter::Boot).expect("mint the boot code");
     let token = pairing
         .redeem(&boot_code, now)
         .await
@@ -98,7 +107,7 @@ async fn paired() -> (Router, Arc<Pairing>, String) {
         .as_str()
         .to_owned();
     let router = pos_edge::http::domain_router(
-        edge,
+        Arc::<Edge<FakeStore>>::clone(&edge),
         InMemoryQueueNumbers::new(),
         Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new()),
         pos_edge::print_queue::InMemoryPrintQueue::new(),
@@ -107,7 +116,7 @@ async fn paired() -> (Router, Arc<Pairing>, String) {
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),
     );
-    (router, pairing, token)
+    (router, pairing, edge, token)
 }
 
 async fn sign_in(app: &Router, token: &str, code: &str) {
@@ -161,7 +170,7 @@ fn code_from(body: &str) -> String {
 
 #[tokio::test]
 async fn a_signed_in_manager_mints_a_code_that_pairs_the_next_device() {
-    let (app, pairing, token) = paired().await;
+    let (app, pairing, _edge, token) = paired().await;
     sign_in(&app, &token, MANAGER_CODE).await;
 
     let (status, body) = mint(&app, Some(&token)).await;
@@ -199,7 +208,7 @@ async fn minting_replaces_the_live_code_rather_than_adding_beside_it() {
     // The invariant the pairing surface is reasoned about under: one live code. Before ADR-0118 it
     // held only because one caller existed. Two live codes would double the window a guess has to
     // hit, and leave an operator unable to say which of the two they were told to use.
-    let (app, pairing, token) = paired().await;
+    let (app, pairing, _edge, token) = paired().await;
     sign_in(&app, &token, MANAGER_CODE).await;
 
     let (_, first_body) = mint(&app, Some(&token)).await;
@@ -238,7 +247,7 @@ async fn a_waiter_on_a_paired_till_cannot_mint() {
     // Standing, not paired-ness, is what this route is gated on. A waiter's tap must not be able to
     // admit hardware to the store — and the refusal must not read as "sign in again", because
     // somebody *is* signed in.
-    let (app, pairing, token) = paired().await;
+    let (app, pairing, _edge, token) = paired().await;
     sign_in(&app, &token, WAITER_CODE).await;
 
     let (status, body) = mint(&app, Some(&token)).await;
@@ -258,7 +267,7 @@ async fn a_waiter_on_a_paired_till_cannot_mint() {
 async fn an_unpaired_caller_is_refused_before_the_handler() {
     // The outer gate. A laptop plugged into the store switch gets `401` from the paired-device
     // middleware and never reaches the permission check.
-    let (app, pairing, _token) = paired().await;
+    let (app, pairing, _edge, _token) = paired().await;
 
     let (status, _body) = mint(&app, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -276,7 +285,7 @@ async fn a_paired_device_with_nobody_signed_in_is_refused() {
     // route's: the device *is* admitted, so the UI's answer is the sign-in screen and not the
     // pairing screen, and `require_signed_in` answers the same way whether nobody signed in or the
     // session went idle (ADR-0091) so the till does not have to tell those apart.
-    let (app, pairing, token) = paired().await;
+    let (app, pairing, _edge, token) = paired().await;
 
     let (status, body) = mint(&app, Some(&token)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -288,5 +297,74 @@ async fn a_paired_device_with_nobody_signed_in_is_refused() {
         pairing.code_count(),
         0,
         "a till with nobody signed in minted a code"
+    );
+}
+
+/// The device the code was minted **from** is what reaches the cloud — not the store, not the
+/// manager, not the device that redeems.
+///
+/// The unit tests prove `Minter::Manager { device_id }` lands on `admitted_by_device_id`. What this
+/// pins is the one line between them: that the handler builds the minter from the `Actor` the
+/// signed-in gate assembled, whose `device_id` came from the paired gate's extension. Getting that
+/// wrong would publish a plausible, wrong answer to "which till admitted this one", which is worse
+/// than publishing none.
+#[tokio::test]
+async fn the_admission_names_the_till_the_code_was_minted_from() {
+    let (app, pairing, edge, token) = paired().await;
+    sign_in(&app, &token, MANAGER_CODE).await;
+    // The till doing the minting is the device the boot code paired, which is what `token`
+    // authenticates as.
+    let minting_till = pairing
+        .paired_devices()
+        .first()
+        .map(|(device_id, _)| *device_id)
+        .expect("the boot code paired one device");
+
+    let (status, body) = mint(&app, Some(&token)).await;
+    assert_eq!(status, StatusCode::OK, "the manager mints: {body}");
+    let code = pos_edge::Code::parse(&code_from(&body)).expect("well formed");
+    assert!(
+        pairing
+            .redeem(&code, SystemClock.now())
+            .await
+            .expect("redeem")
+            .token()
+            .is_some(),
+        "the minted code pairs the next device"
+    );
+
+    let query = EventQuery::first(
+        StoreId::new(Ulid::from_u128(7)),
+        NonZeroU32::new(64).expect("non-zero"),
+    );
+    let admissions: Vec<serde_json::Value> = edge
+        .store()
+        .read(&query)
+        .await
+        .expect("read the log")
+        .into_iter()
+        .filter(|envelope| envelope.event_type.as_str() == "device.admission.granted")
+        .map(|envelope| {
+            serde_json::from_str(envelope.data.as_json()).unwrap_or(serde_json::Value::Null)
+        })
+        .collect();
+    // Two admissions: the boot code's, then this one.
+    assert_eq!(
+        admissions.len(),
+        2,
+        "one event per admission: {admissions:?}"
+    );
+    let second = admissions.get(1).expect("the second admission");
+    assert_eq!(
+        second.get("admitted_by_device_id").and_then(|v| v.as_str()),
+        Some(minting_till.to_string().as_str()),
+        "the authorising device is the till the manager was signed in on: {second}"
+    );
+    let first = admissions.first().expect("the first admission");
+    assert!(
+        first
+            .get("admitted_by_device_id")
+            .is_some_and(serde_json::Value::is_null),
+        "and the boot code's admission still names nobody: {first}"
     );
 }

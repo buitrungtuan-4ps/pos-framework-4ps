@@ -33,6 +33,7 @@
 
 pub mod activation;
 pub mod active_config;
+pub mod admission_events;
 pub mod app;
 pub mod auth;
 pub mod clock;

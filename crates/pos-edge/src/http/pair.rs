@@ -34,7 +34,7 @@ use pos_proto::ClockSource;
 
 use crate::app::Edge;
 use crate::clock::SystemClock;
-use crate::pairing::{Code, Pairing, Redeemed};
+use crate::pairing::{Code, Minter, Pairing, Redeemed};
 use crate::state::AppState;
 
 /// A device presenting a pairing code.
@@ -294,6 +294,13 @@ pub(crate) struct MintedCode {
 /// per-employee managerial-activity stream on a shop-floor box is the thing ADR-0117 §6 kept off
 /// disk; who admitted a device is answered by the durable pairing record, not by this line
 /// ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §5).
+///
+/// # What it records for later
+///
+/// The [`Minter`] rides on the code, and the redemption splits it: the **device** this request came
+/// from is named on the cloud-bound `device.admission.granted` event, and the **employee** signed in
+/// on it is written to the store's own `paired_devices` row and goes no further. Both facts are
+/// known only here, at mint time — the tablet that redeems presents six digits and nothing else.
 async fn mint<S>(
     State(deps): State<Arc<PairCodeDeps<S>>>,
     Extension(actor): Extension<Actor>,
@@ -304,7 +311,14 @@ where
     if !may_manage_devices(&deps.edge, actor) {
         return needs_manage_devices();
     }
-    match deps.pairing.mint(SystemClock.now()) {
+    // The [`Actor`] the signed-in gate assembled already carries both halves of the minter, and it
+    // is the only place either is trustworthy: the device comes from the paired gate's extension and
+    // the employee from the session this box holds, never from anything the request body said.
+    let minter = Minter::Manager {
+        device_id: actor.device_id,
+        employee_id: actor.employee_id,
+    };
+    match deps.pairing.mint(SystemClock.now(), minter) {
         Ok((code, expires_at_ms)) => {
             // No code and no employee id. That a manager minted one is the whole durable fact.
             tracing::info!("a new pairing code was minted for the next device");

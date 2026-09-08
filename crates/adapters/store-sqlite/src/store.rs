@@ -745,6 +745,14 @@ fn to_paired(row: &PairedDeviceRow) -> Result<PairedDevice, PortError> {
         device_id: parse_id(&row.device_id, "device id")?,
         token_digest: parse_digest(&row.token_digest)?,
         paired_at: parse_instant(row.paired_at_ms, "pairing instant")?,
+        // `NULL` is the honest value for the code a boot announces and for every row written
+        // before migration 0011, so an absent column is not a fault. A *present* one that is not
+        // a ULID is, and is reported rather than dropped.
+        admitted_by: row
+            .admitted_by
+            .as_deref()
+            .map(|text| parse_id(text, "admitting employee id"))
+            .transpose()?,
     })
 }
 
@@ -765,6 +773,7 @@ impl DeviceRegistry for SqliteStore {
             device_id: id_text(device.device_id),
             token_digest: device.token_digest.to_hex(),
             paired_at_ms: device.paired_at.as_milliseconds_since_epoch(),
+            admitted_by: device.admitted_by.map(id_text),
         };
         self.registry(move |reply| RegistryCommand::RecordPairing { device: row, reply })
             .await

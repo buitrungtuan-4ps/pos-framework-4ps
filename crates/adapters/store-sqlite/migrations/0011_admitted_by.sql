@@ -1,0 +1,34 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0011 — who admitted each paired device (ADR-0118 §5).
+--
+-- The store's own answer to "who let this tablet in". ADR-0118 calls for exactly this column and
+-- calls it the actor column; it is named `admitted_by` here because `paired_devices` already has
+-- `paired_at` and the two read as a pair, and because "actor" in this tree already means the
+-- console's admin actor (ADR-0069), which a store employee explicitly is not — that record has no
+-- non-admin actor and cannot name one.
+--
+-- **THIS COLUMN IS WHY THE CLOUD-BOUND EVENT CARRIES NO EMPLOYEE.** `device.admission.granted`
+-- admitted device and the paired device that authorised it, and stops there. An employee identity
+-- on that event would be a durable, central, cross-border, attributable record of managerial
+-- activity — held in the cloud, replicated by its backups, retained under the cloud's retention
+-- rather than the store's — needing a lawful basis, a stated retention period, a DPIA and a
+-- transfer basis under Decree 13/2023, and failing GDPR's prior question, because the purpose the
+-- event serves (the cloud knows which tills a store admitted, and can revoke one) is served in
+-- full by device ids. So the identity stays here: on this box, in this file, under this store's
+-- retention, within reach of ADR-0035's masking and ADR-0076's erasure. ADR-0091 §147-148
+-- deliberately gives this port no store-postgres adapter, and ADR-0118 keeps it that way.
+--
+-- It is not a new category of local data. `device_sessions.employee_id` in migration 0005 already
+-- records, durably, which employee is signed in on which device on this same box. This is one more
+-- identifier on a table whose row counts are in the tens.
+--
+-- NULLABLE, and it has to be: the code a boot announces is minted by no person, because nobody can
+-- be signed in before the first device is admitted. Every row written before this migration is
+-- likewise `NULL` — the fact was not recorded then and is not recoverable, and a backfilled guess
+-- would be worse than an honest absence.
+--
+-- Additive-only (ADR-0017): immutable once merged. A change is a new numbered file.
+
+ALTER TABLE paired_devices ADD COLUMN admitted_by TEXT;

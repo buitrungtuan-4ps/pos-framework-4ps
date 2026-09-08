@@ -20,6 +20,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
+use pos_edge::pairing::Minter;
 use pos_edge::print_agent::PrintAgents;
 use pos_edge::print_queue::{InMemoryPrintQueue, PrintQueue};
 use pos_edge::print_wake::{PrintWake, SharedPrintWake};
@@ -113,7 +114,9 @@ impl Harness {
         let mut tokens = Vec::new();
         let mut devices = Vec::new();
         for _ in 0..2 {
-            let (code, _) = pairing.mint(now).expect("mint a pairing code");
+            let (code, _) = pairing
+                .mint(now, Minter::Boot)
+                .expect("mint a pairing code");
             let token = pairing
                 .redeem(&code, now)
                 .await
