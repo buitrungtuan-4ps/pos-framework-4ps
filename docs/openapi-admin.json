@@ -738,6 +738,81 @@
         }
       }
     },
+    "/admin/stores/{store_id}/devices/admitted": {
+      "get": {
+        "tags": [
+          "devices"
+        ],
+        "summary": "Which devices a store has admitted, which it has retired, and when\n([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).",
+        "description": "The read that makes `device.admission.granted` and `device.admission.revoked` a feature rather\nthan two events with no reader — the state the tree already had one of, and which that record\nnamed as the thing not to repeat. Before this the console's picture of a store's tills was zero\nrows, however many tablets the store had actually paired.\n\n**T3**, so `console.data.read` — the same standing the fleet detail beside it takes. The roster\ncarries device identifiers and instants: no money, and **no employee**, because who admitted a\ndevice is recorded on the store's own disk and reaches no cloud (ADR-0118 §5). The tenant is\nnamed explicitly, as on every `/admin` read, because the console admin is global.\n\nUnwindowed and unpaged: a store's roster is a handful of rows, at the rate it commissions tills.",
+        "operationId": "admin_admitted_devices",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store whose roster to read (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The store's admitted devices, still-admitted first and newest admission first within each group. Each entry carries the edge-minted local device id, when it was admitted, the paired device whose signed-in manager minted the code (absent for the code a box announces at boot), and when it was retired if it has been. A retired device keeps its row. Empty for a store that has admitted nothing, and for one whose rollup has not been projected yet"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/region-acknowledgement": {
       "post": {
         "tags": [
@@ -1001,6 +1076,10 @@
     {
       "name": "reason codes",
       "description": "The managed list a void, a discount, a comp, a refund, a drawer opening, a staff rejection, either cash movement and either stock correction must cite (ADR-0115, `docs/pos-spec.md` §11 item 2). Documented rather than deferred because it is a **fraud control**: a fork writing its own console needs to know that ids are server-minted, that an entry leaves service by going inactive rather than by being deleted, and that every write is conditional."
+    },
+    {
+      "name": "devices",
+      "description": "What a store has actually admitted (ADR-0118). Documented rather than deferred with the rest of the device surface because it is the **only** read that answers it: a store admits tablets locally and offline, and until these events the cloud's picture of a store's tills was zero rows. Note the two identity spaces — the ids here are minted by the edge at pairing, and nothing joins them to the console-minted ids of `/admin/stores/{store_id}/devices`."
     },
     {
       "name": "fleet",

@@ -26,7 +26,8 @@ pub mod projector;
 pub mod rollup;
 
 pub use projection::{
-    ProjectReport, RollupError, RollupStore, StoredRollups, dashboard, project, revenue, xz_report,
+    ProjectReport, RollupError, RollupStore, StoredRollups, admitted_devices, dashboard, project,
+    revenue, xz_report,
 };
 pub use projector::{FleetReport, StoreCatalog, project_fleet};
 pub use rollup::RollupWindow;

@@ -893,6 +893,31 @@ export interface RegionAcknowledgement {
   readonly acknowledged_at_ms: number;
 }
 
+/**
+ * One device a store has admitted, as the fleet console now sees it (ADR-0118 §4).
+ *
+ * Folded from the two events the edge publishes on the durable outbox, so a tablet paired during an
+ * internet outage appears here when the link returns rather than staying invisible forever.
+ *
+ * **A different identity space from `Device`.** `local_device_id` is minted by the *edge* at
+ * pairing; a `Device`'s id is minted by the *console* when an admin names a terminal, and nothing
+ * joins the two — a browser till presents no identity of its own, and clearing its storage creates a
+ * new device. This roster answers "what did this store admit", the named registry answers "what did
+ * we intend it to have".
+ *
+ * Who admitted a device is deliberately absent: that is recorded on the store's own disk and reaches
+ * no cloud (ADR-0118 §5). `admitted_by_device_id` is a *device* — the till whose signed-in manager
+ * minted the code.
+ */
+export interface AdmittedDevice {
+  readonly local_device_id: string;
+  readonly admitted_at_ms: number;
+  /** The till that authorised it, or `null` for the code a box announces at boot. */
+  readonly admitted_by_device_id: string | null;
+  /** When the store retired it, or `null` while it is still admitted. */
+  readonly revoked_at_ms: number | null;
+}
+
 export interface FleetStore {
   readonly store_id: string;
   readonly name: string;

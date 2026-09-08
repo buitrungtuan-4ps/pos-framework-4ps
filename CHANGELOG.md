@@ -37,6 +37,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `paired_devices` table (store-SQLite migration 0011). A code minted by a signed-in manager carries
   that manager through to the row the redemption writes; the code a box announces at boot carries
   nobody, because nobody can be signed in before the first device is admitted.
+- **The fleet console shows which tills a store actually has.** The store-detail drawer on **Fleet**
+  now lists the devices the store admitted, live ones first, each with when it was admitted and
+  whether a manager at a till authorised it or it came in on the code the box printed at start-up. A
+  retired device keeps its row, because *was this tablet ever admitted here* is the first question
+  asked about one that turns up somewhere it should not. Read from
+  `GET /admin/stores/{store_id}/devices/admitted`, which is in the generated `/admin` OpenAPI
+  document. The panel says out loud that these ids are **not** the named devices in the registry —
+  the store mints its own when a tablet pairs, and the two do not match up.
 
 ### Fixed
 
@@ -113,6 +121,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   which is what the wire's forward compatibility is for. `PairedDevice` gains `admitted_by` and
   `Pairing::mint` takes a `Minter`: both are source-level changes for a fork with its own
   `DeviceRegistry` adapter or its own caller.
+- **No cloud migration.** The roster is a fourth map in the materialised rollup the cloud already
+  keeps per store, so it needs no table and no schema change; a rollup written before this release
+  loads with an empty roster and accrues from its cursor forward. To backfill a store's history, use
+  the existing **reset rollup** lever — the projector then re-folds the whole log, and the admissions
+  are on it.
 - **Store-SQLite migration 0011 adds a nullable `admitted_by`.** It runs on the next start and needs
   no downtime. Rows written before it stay `NULL` — the fact was not recorded then and is not
   recoverable, and a backfilled guess would be worse than an honest absence.

@@ -151,6 +151,40 @@ pub struct DailyCash {
     pub variance: i64,
 }
 
+/// One device a store has admitted, as the fleet console finally sees it
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+///
+/// Folded from `device.admission.granted` and `device.admission.revoked`. Until those events the
+/// cloud's picture of a store's tills was **zero rows**, so a lost tablet meant sending somebody to
+/// the store and a remote revocation had nothing to name.
+///
+/// # Not the console's named-device registry, and not confusable with it
+///
+/// `local_device_id` is minted by the **edge** at redemption (ADR-0030); the `devices` table's ids
+/// are minted by the **console** when an admin names a terminal. Nothing joins the two, by decision
+/// — a browser till presents no identity of its own and clearing its storage creates a new device —
+/// so this roster sits beside that registry rather than inside it. A row here means *this store
+/// admitted this thing*, which is the fact the registry has never been able to state.
+///
+/// **T3 (internal): device identifiers and instants, no money and no person.** Who admitted a
+/// device is deliberately absent — that is recorded on the store's own disk and reaches no cloud
+/// (ADR-0118 §5). `admitted_by_device_id` is a *device*, the till whose signed-in manager minted the
+/// code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct AdmittedDevice {
+    /// The edge-minted device id the store issued a token to.
+    pub local_device_id: String,
+    /// When it was admitted, Unix ms — the event's own instant, so a re-projection reproduces it.
+    pub admitted_at_ms: i64,
+    /// The paired till whose signed-in manager minted the code, where one did. `None` for the code a
+    /// box announces at boot, which nothing authorised because nothing could.
+    pub admitted_by_device_id: Option<String>,
+    /// When the store retired it, Unix ms, or `None` while it is still admitted. A revocation does
+    /// not delete the row: a roster that forgets what it retired cannot answer "was this tablet ever
+    /// here", which is the first question asked about a device that turns up somewhere it should not.
+    pub revoked_at_ms: Option<i64>,
+}
+
 /// An **X or Z report** for one store's trading day (ADR-0081, Track O4, resolving spec gap D10).
 ///
 /// An **X** report is the current (open) day's running totals — non-resetting, recomputed each call.

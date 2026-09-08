@@ -118,7 +118,16 @@ a store's tills is literally zero rows.
    durable outbox — at-least-once, idempotent by event id — so an admission made during a WAN outage
    reaches the cloud when the link returns, which is exactly the sync-back half of the proposal that
    prompted this record. **A cloud-side reader is part of the same slice**: a projector arm, a
-   `local_device_id` column, and a console column that finally shows a store's real tills. An event
+   per-store roster keyed by the edge-minted `local_device_id`, and a console panel that finally
+   shows a store's real tills. (**Amended at implementation**: this record first said "a
+   `local_device_id` **column**", which cannot be built as written. A column on the console's
+   `devices` table has nothing to hold — that table's key is a **console**-minted id, and this
+   record's own argument is that nothing joins it to an edge-minted one. So the roster is a fourth
+   map in the materialised rollup blob the cloud already keeps per `(tenant, store)`, folded by the
+   same cursor that folds the money: same at-least-once guarantee, no new table, and the roster is
+   saved in the *same write* as the cursor, so a crash mid-pass can only re-fold — never lose a row
+   or double-count one. A separate table would have had to earn that property; this one has it by
+   construction.) An event
    with no reader is not a feature, and there is already one of those in the tree.
 
 5. **The cloud-bound event carries device ids and no actor.** `device.admission.granted` names *what* was

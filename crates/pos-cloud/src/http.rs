@@ -158,7 +158,8 @@ use crate::config_tree::{
 };
 use crate::dashboard::rollup::WindowError;
 use crate::dashboard::{
-    RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, revenue, xz_report,
+    RollupError, RollupStore, RollupWindow, StoredRollups, admitted_devices, dashboard, revenue,
+    xz_report,
 };
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
@@ -667,6 +668,16 @@ where
         .route(
             "/admin/stores/{store_id}/rollups/daily",
             get(admin_daily_rollups::<S, R, K, C, A, T, W>),
+        )
+        // Beside the other rollup reads, and on **this** router, because the roster is folded into
+        // the same materialised blob the reads above answer from — the state that answers it lives
+        // here. It is under `/admin/stores/…/devices/` rather than `/admin/devices/` because it is a
+        // fact about one store, and `admitted` distinguishes it from the sibling
+        // `/admin/stores/{store_id}/devices`, which lists the console's **named** devices: a
+        // different identity space that nothing joins to this one (ADR-0118 §4).
+        .route(
+            "/admin/stores/{store_id}/devices/admitted",
+            get(admin_admitted_devices::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/daily",
@@ -21287,6 +21298,74 @@ struct AdminRollupWindowQuery {
     to: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/devices/admitted",
+    params(
+        ("store_id" = String, Path, description = "The store whose roster to read (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The store's admitted devices, still-admitted first and \
+                                      newest admission first within each group. Each entry carries \
+                                      the edge-minted local device id, when it was admitted, the \
+                                      paired device whose signed-in manager minted the code (absent \
+                                      for the code a box announces at boot), and when it was \
+                                      retired if it has been. A retired device keeps its row. \
+                                      Empty for a store that has admitted nothing, and for one \
+                                      whose rollup has not been projected yet"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "devices",
+)]
+/// Which devices a store has admitted, which it has retired, and when
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+///
+/// The read that makes `device.admission.granted` and `device.admission.revoked` a feature rather
+/// than two events with no reader — the state the tree already had one of, and which that record
+/// named as the thing not to repeat. Before this the console's picture of a store's tills was zero
+/// rows, however many tablets the store had actually paired.
+///
+/// **T3**, so `console.data.read` — the same standing the fleet detail beside it takes. The roster
+/// carries device identifiers and instants: no money, and **no employee**, because who admitted a
+/// device is recorded on the store's own disk and reaches no cloud (ADR-0118 §5). The tenant is
+/// named explicitly, as on every `/admin` read, because the console admin is global.
+///
+/// Unwindowed and unpaged: a store's roster is a handful of rows, at the rate it commissions tills.
+async fn admin_admitted_devices<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: RollupStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    match admitted_devices(&app.rollups, tenant_id, store_id).await {
+        Ok(devices) => (StatusCode::OK, Json(devices)).into_response(),
+        Err(error) => rollup_error_response(&error),
+    }
 }
 
 /// The materialised **revenue** rollup for one store, windowed exactly as [`admin_daily_rollups`].

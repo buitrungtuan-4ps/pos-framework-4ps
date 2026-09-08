@@ -119,6 +119,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_update_reason_code,
         crate::http::admin_delete_reason_code,
         crate::http::admin_publish_reason_codes,
+        crate::http::admin_admitted_devices,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
@@ -138,6 +139,16 @@ pub(crate) struct ErrorResponse {
                            fork writing its own console needs to know that ids are server-minted, \
                            that an entry leaves service by going inactive rather than by being \
                            deleted, and that every write is conditional."
+        ),
+        (
+            name = "devices",
+            description = "What a store has actually admitted (ADR-0118). Documented rather than \
+                           deferred with the rest of the device surface because it is the **only** \
+                           read that answers it: a store admits tablets locally and offline, and \
+                           until these events the cloud\'s picture of a store\'s tills was zero \
+                           rows. Note the two identity spaces — the ids here are minted by the \
+                           edge at pairing, and nothing joins them to the console-minted ids of \
+                           `/admin/stores/{store_id}/devices`."
         ),
         (
             name = "fleet",
