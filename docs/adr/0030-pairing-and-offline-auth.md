@@ -45,7 +45,10 @@ selling paths never depend on it. No mDNS dependency enters the framework now.
 
 *Device pairing is a short-lived, single-use 6-digit code.* The edge mints a 6-digit code from a
 vetted CSPRNG (`getrandom`), shows it (on the edge console and in the pairing QR), and a device that
-presents a valid code is issued a device token. The code **expires** (five minutes) and is **single
+presents a valid code is issued a device token. **A headless service has no console** — a Windows box
+under the Service Control Manager, or any placement started without a terminal — so the code also
+reaches an operator through the ephemeral pairing file of
+[ADR-0117](0117-a-headless-store-keeps-a-log.md), which redemption deletes. The code **expires** (five minutes) and is **single
 use**, so a shoulder-surfed code is worth little. This is device-level trust — which tablets may reach
 the edge — and is distinct from who is using the tablet.
 
@@ -68,6 +71,12 @@ things logged. A **PIN and its hash are secrets** and never enter a log, a span,
 the fan-out. The pairing code is a short-lived secret and is likewise never logged. This is the no-PII,
 no-secrets rule of [`telemetry`](../../crates/pos-edge/src/telemetry.rs) applied to authentication.
 
+> **This rule was aspirational until [ADR-0117](0117-a-headless-store-keeps-a-log.md).** `announce_pairing`
+> emitted the pairing URL — code included — through `tracing`, so the sentence above described an intent the
+> code did not keep. ADR-0117 made it true rather than amending it away: those emissions carry their own
+> target and are excluded from any durable sink, so they remain on a console and in the journal, where they
+> are as ephemeral as the process, and reach a headless operator through a file that redemption unlinks.
+
 **Dependencies added**, at the binary layer only (the dependency-rule test keeps them out of the
 backbone): `getrandom` (the OS CSPRNG, for the pairing code and the ULID `IdGenerator`'s randomness)
 and `argon2` (PIN hashing). No mDNS crate yet — that arrives with the real `Advertiser` at hardware
@@ -82,4 +91,6 @@ bring-up.
 - The real mDNS advertiser and cloud-minted device certificates are deferred, and the code is
   structured (a trait, a synced-hash input) so they slot in without reshaping the callers.
 - Cost: an operator may have to read an IP off the edge's console once per device. That is the price of
-  not depending on name resolution that is not there when it matters.
+  not depending on name resolution that is not there when it matters. On a headless placement the same
+  value comes from the boot log or the pairing file ([ADR-0117](0117-a-headless-store-keeps-a-log.md)),
+  because there is no console to read it off.

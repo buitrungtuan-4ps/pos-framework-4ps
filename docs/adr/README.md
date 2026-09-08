@@ -121,5 +121,8 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0112](0112-print-agents.md) | A paired device may own a printer's transport, and the edge still renders every byte | Accepted |
 | [0113](0113-the-host-agent.md) | The host agent pulls jobs and starts one container per store, and it never holds a store's credential | Accepted |
 | [0114](0114-region-is-required-recorded-visible.md) | Region is a required, recorded, visible attribute of every hosted edge placement | Accepted |
+| [0115](0115-reason-codes-are-a-managed-list.md) | Reason codes are a managed list the cloud publishes, and absence is not a brick | Accepted |
+| [0116](0116-the-qr-hold-is-derived-and-it-gates-firing.md) | The staff-confirmation hold is derived state, and it gates firing | Accepted |
+| [0117](0117-a-headless-store-keeps-a-log.md) | A headless store keeps a log, and hands over its pairing code without logging it | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
