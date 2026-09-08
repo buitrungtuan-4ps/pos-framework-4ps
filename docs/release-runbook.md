@@ -150,10 +150,22 @@ minisign -Vm pos-edge-v1.2.0-x86_64-unknown-linux-gnu.tar.gz -P "$(cat minisign.
 `Signature and comment signature verified` means the artifact is authentic and unmodified — the same
 check the edge makes automatically (ADR-0047).
 
-## Deferred (flagged)
+## What is not proven here
 
-- **Windows.** `x86_64-pc-windows-msvc` is a real edge target but needs the MSVC toolchain on a
-  Windows runner; it joins the release matrix with the Windows service wrapper (roadmap-v3 E4).
-- **Serving the artifacts.** Publishing to a GitHub Release is R1. The OTA artifact server that mirrors
-  these to the fleet's own store (Garage) and drives the rollout is R2; the cloud stays a dumb host and
-  never holds the signing key.
+Both items this section used to defer have shipped, and saying so matters more than the tidiness of
+deleting them: a reader who came looking for "the Windows binary is not built yet" would otherwise
+find nothing and not know which answer is current.
+
+- **Windows is in the matrix.** `x86_64-pc-windows-msvc` builds on a `windows-2022` runner and is
+  signed on the Linux job, so the signing key still reaches exactly one runner (R1c).
+- **The cloud hosts the artifacts.** `POST /admin/releases` puts the bare executable and its
+  signature line into the object store, `GET /admin/releases/{release}` says what is held, and
+  promoting a version with nothing hosted is refused (R2). The cloud is still a dumb host: it never
+  holds the signing key, and it never re-signs.
+
+What is genuinely unproven is downstream of this document and needs hardware rather than code:
+that a real Windows service reaches `RUNNING`, drains on a stop and restarts on exit `1`; that the
+`systemd` unit does the same; that the headless keyring survives a reboot; power loss
+mid-transaction; and the 222 ev/s soak. [`gate-register.md`](gate-register.md) §6 is the list. A
+signed release is what those checks need in order to run at all, which is why cutting one is not
+gated on them.

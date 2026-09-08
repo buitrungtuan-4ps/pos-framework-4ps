@@ -14,6 +14,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+## [0.9.0] — 2026-09-08
+
+**Product version** 0.9.0 · **Protocol version** 1 · **MSRV** 1.94
+**For restaurant staff:** the first release — the till, the kitchen display and the back office as
+one system. Nothing changes on screen, because nothing came before it.
+
+The **first** release of `pos-edge` and `pos_cloud`, and everything below it shipped in it: there is
+no earlier version to have changed from.
+
+**Why 0.9 and not 1.0.** The code for the v1.0 milestone is complete
+([`docs/roadmap-v3.md`](docs/roadmap-v3.md)), and the checks that need a real machine are not:
+that the Windows service reaches `RUNNING`, drains on stop and restarts on exit `1`; that the
+`systemd` restart does the same; that the headless keyring survives a reboot; power loss mid-transaction;
+and the 222 ev/s soak. [`docs/gate-register.md`](docs/gate-register.md) §6 is the list, and a build
+is what those checks need in order to run at all — which is what this release is for. 1.0.0 is the
+version that carries their results, not the version that promises them.
+
+### Upgrade notes
+
+- **No migration from anything.** A first install runs every schema migration from empty, on both
+  the edge's SQLite and the cloud's Postgres.
+- `PROTOCOL_VERSION` is **1**. Every `/sync` and `/v1` handshake in this release negotiates it, and
+  the minimum supported version is the same, so there is no older edge for this cloud to serve.
+- The trust anchor is baked in at compile time ([ADR-0092](docs/adr/0092-artifact-trust-chain.md)),
+  so a store trades on whatever key signed the build it was installed from. Rotating the signing key
+  means a new release, not a configuration change.
+
 ### Added
 
 - **The till can void, and the picker offers only what the act accepts.**
