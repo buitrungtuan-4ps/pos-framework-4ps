@@ -58,6 +58,7 @@ use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
+use crate::device_revocations::DeviceRevocations;
 use crate::origins::Origins;
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
@@ -542,6 +543,32 @@ pub async fn restore_session_from_store<S>(edge: &Edge<S>) -> Result<Option<Stri
 where
     S: EventStore + ConfigStore,
 {
+    let Some((version, document)) = stored_document(edge).await? else {
+        return Ok(None);
+    };
+    let rebuilt = session_from_config(&edge.session(), &document);
+    edge.apply_session(rebuilt);
+    tracing::info!(%version, "restored the last synced configuration from local storage");
+    Ok(Some(version))
+}
+
+/// The last document this store applied, as its version and its parsed JSON, or `None` if there is
+/// none to read or it will not parse.
+///
+/// Shared by the two boot restores, which read the same document for two different readers — the
+/// session, and the device deny-list — and must not disagree about which document that is. Both
+/// log-and-continue rather than failing the boot: a store that will not start is worse than a store
+/// on a stale menu.
+///
+/// # Errors
+///
+/// [`PortError`] if the local store cannot be read at all.
+async fn stored_document<S>(
+    edge: &Edge<S>,
+) -> Result<Option<(String, serde_json::Value)>, PortError>
+where
+    S: EventStore + ConfigStore,
+{
     let store_id = edge.store_id();
     let store = edge.store();
     let stored = match store.current(store_id).await? {
@@ -568,10 +595,54 @@ where
         );
         return Ok(None);
     };
-    let rebuilt = session_from_config(&edge.session(), &document);
-    edge.apply_session(rebuilt);
-    tracing::info!(%version, "restored the last synced configuration from local storage");
-    Ok(Some(version))
+    Ok(Some((version, document)))
+}
+
+/// Carries out any device revocation the stored document still names that this box has not already
+/// carried out ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+///
+/// # Why boot needs its own call, and why it runs *after* the pairing table loads
+///
+/// `apply_origins` has a hole this deliberately does not copy: it runs only inside `pump_once`, so a
+/// box that boots with its broadband down comes up with an empty allow-list until the first
+/// successful pull. Here that would be worse than cosmetic — a store that reboots after the console
+/// retires a till would have to reach the cloud before the retirement took effect.
+///
+/// It is a separate call rather than a branch of [`restore_session_from_store`] because of an
+/// ordering fact in `compose`: the session restore runs before `Pairing::load()`, and the
+/// blast-radius cap cannot be evaluated before the pairing table is in memory — it would read every
+/// store as having nothing admitted, and the "would leave this store with no admitted device" rule
+/// would never fire. So `compose` calls this one after the load, with the same document.
+///
+/// **This is not what makes a revocation survive the boot.** `Pairing::revoke` deletes the
+/// `paired_devices` row and `Pairing::load()` cannot resurrect it, so a device already retired stays
+/// retired with or without this call. What this closes is the window where the console published
+/// while the box was down.
+///
+/// # Errors
+///
+/// [`PortError`] if the local store cannot be read at all — the same fault that would stop the event
+/// log opening, so the caller treats it as one.
+pub async fn restore_device_revocations<S>(
+    edge: &Edge<S>,
+    revocations: &DeviceRevocations,
+) -> Result<usize, PortError>
+where
+    S: EventStore + ConfigStore,
+{
+    let Some((version, document)) = stored_document(edge).await? else {
+        return Ok(0);
+    };
+    let retired = revocations.apply(&document).await?;
+    if retired > 0 {
+        tracing::warn!(
+            %version,
+            retired,
+            "retired devices the console had revoked while this store was down, from the stored \
+             configuration"
+        );
+    }
+    Ok(retired)
 }
 
 /// A store's effective config as pulled from the cloud: its version and the document itself.
@@ -624,6 +695,10 @@ pub struct ConfigClient<T, S> {
     /// The same `Arc<Origins>` the CORS layer reads, or `None` on a client built without one — the
     /// on-fakes example and most tests, which serve no cross-origin caller.
     origins: Option<Arc<Origins>>,
+    /// The pairing state and applied-revocation record the cloud's device deny-list is carried into
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), or
+    /// `None` on a client built without one.
+    revocations: Option<Arc<DeviceRevocations>>,
 }
 
 impl<T, S> ConfigClient<T, S>
@@ -643,6 +718,7 @@ where
             edge,
             held_version: Mutex::new(held_version),
             origins: None,
+            revocations: None,
         }
     }
 
@@ -655,6 +731,17 @@ where
     #[must_use]
     pub fn with_origins(mut self, origins: Arc<Origins>) -> Self {
         self.origins = Some(origins);
+        self
+    }
+
+    /// Shares the pairing state and the applied-revocation record this loop carries the cloud's
+    /// deny-list into ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+    ///
+    /// Optional for the same reason `origins` is: the examples and the tests compose a loop with no
+    /// pairing state, and a store whose console never revoked a device is unaffected either way.
+    #[must_use]
+    pub fn with_device_revocations(mut self, revocations: Arc<DeviceRevocations>) -> Self {
+        self.revocations = Some(revocations);
         self
     }
 
@@ -685,6 +772,19 @@ where
         // Beside the session swap, not inside it: a different reader on a different carrier.
         if let Some(origins) = &self.origins {
             apply_origins(origins, &synced.document);
+        }
+        // And the same again for the device deny-list, which additionally has to `await` a durable
+        // write — something the pure `session_from_config` could not do even if it wanted to. A
+        // failure to *read* the applied record is logged and the pull carries on: refusing a
+        // document the counter is already selling on, over a revocation the next poll will retry
+        // thirty seconds later, would be the wrong trade.
+        if let Some(revocations) = &self.revocations
+            && let Err(error) = revocations.apply(&synced.document).await
+        {
+            tracing::warn!(
+                %error,
+                "could not read which device revocations this store has already carried out; the                  published deny-list was not applied on this pull and will be retried on the next"
+            );
         }
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull

@@ -149,6 +149,48 @@ a store's tills is literally zero rows.
    rather than a mutable status on a node, because a config rollback performed for an unrelated reason
    must not un-revoke a stolen tablet.
 
+   **Amended at implementation (three of this clause's premises were wrong about the tree).** The
+   decision stands unchanged; three things it asserts about the code it was shaped on do not.
+
+   1. **`fleet_update` is not in `pos-proto`.** It is `pos_core::ota::FleetUpdateConfig`, and
+      `revoked_key_ids` there denies **OTA release-signing keys** — sixteen hex digits parsed to a
+      `SigningKeyId`, read by `decide_rollout` and the pre-install signature check. It never touches
+      `paired_devices` or `DeviceRegistry`. So there was nothing to extend: the shipped shape is a
+      new `revoked_devices` node (`pos_core::device_revocation`), a new store-sqlite table
+      (`applied_device_revocations`, migration 0012), and a new apply beside the session rebuild.
+   2. **The cited precedent is not monotone, on either side.** `admin_publish_rollout` overwrites the
+      whole node from a request body, and the edge replaces `session.fleet_update` wholesale on every
+      poll — so a *valid* shorter list un-revokes a signing key immediately, which is exactly the
+      hazard this clause says the precedent avoids. Monotonicity had to be built, and it is built
+      three times over: the publish route appends to the list it read **inside** the
+      conditional-write retry (so two admins cannot lose each other's entry), the store records each
+      id as carried out in a table nothing deletes from, and revoking is a durable *deletion* of the
+      pairing row that `Pairing::load()` cannot resurrect. The third is what actually makes a
+      rollback unable to un-revoke; the record only stops the re-fire.
+   3. **The applied-once record's purpose is narrower than stated here.** "Because a re-pair mints a
+      fresh device id" is true and is why the list does not fight a legitimate re-pair — but the
+      record is not what makes the revocation durable (2 is). Without it the box would re-revoke
+      every id on the list every thirty seconds for ever, each pass a durable write and a fresh
+      `device.admission.revoked` into the outbox. It is the event storm it prevents, not the
+      revocation it preserves.
+
+   Two further implementation facts this clause did not anticipate, recorded because they change what
+   an operator sees:
+
+   * **The cap is evaluated on the edge, not at publish.** The cloud's only device roster is the
+     lagging, at-least-once `AdmittedDevice` rollup, and a `ConfigValidator` cannot consult a store
+     at all (`validate` takes only a `&Value`). Enforcing "would leave the store with zero admitted
+     devices" from the cloud would refuse legitimate publishes for a store that paired a till during
+     a WAN outage. The edge has the only authoritative answer, so the edge decides — and the cap
+     counts **bound** devices only, or a document could become permanently unappliable by naming
+     hardware that is long gone.
+   * **A refusal is invisible to the console.** The edge has no channel to report a refused node:
+     `HeartbeatReport` carries no config field, and `pump_once` records the version as held even when
+     a node was skipped, so the console shows the store as fully current. An operator whose remote
+     revoke did not take effect has to read the box's own log (ADR-0117 gives a headless box one).
+     The escape hatch from a refused document is a config rollback, which works here precisely
+     because monotonicity does not depend on the node.
+
 7. **`ManageDevices` is not flipped to `pin: true`.** `pin_required` is read only on the decide path, so
    the literal would be **inert** on an HTTP mint route while making `permissions.txt` advertise a PIN
    that nothing enforces — including on the already-shipped print-agent route. If a PIN at mint is

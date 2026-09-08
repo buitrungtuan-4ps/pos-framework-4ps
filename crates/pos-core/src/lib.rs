@@ -39,6 +39,7 @@ pub mod campaign;
 pub mod capability;
 pub mod channels;
 pub mod decision;
+pub mod device_revocation;
 pub mod error;
 pub mod floor;
 pub mod inventory;

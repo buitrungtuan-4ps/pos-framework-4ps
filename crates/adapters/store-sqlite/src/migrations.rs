@@ -28,6 +28,10 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (9, include_str!("../migrations/0009_print_jobs.sql")),
     (10, include_str!("../migrations/0010_print_agents.sql")),
     (11, include_str!("../migrations/0011_admitted_by.sql")),
+    (
+        12,
+        include_str!("../migrations/0012_applied_revocations.sql"),
+    ),
 ];
 
 /// Applies every migration the database has not yet seen.

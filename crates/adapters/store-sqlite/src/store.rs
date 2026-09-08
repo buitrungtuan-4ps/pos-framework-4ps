@@ -817,6 +817,24 @@ impl DeviceRegistry for SqliteStore {
         .await
     }
 
+    async fn record_revocation_applied(&self, device_id: DeviceId) -> Result<(), PortError> {
+        let id = id_text(device_id);
+        self.registry(move |reply| RegistryCommand::RecordRevocationApplied {
+            device_id: id,
+            reply,
+        })
+        .await
+    }
+
+    async fn revocations_applied(&self) -> Result<Vec<DeviceId>, PortError> {
+        let rows = self
+            .registry(|reply| RegistryCommand::RevocationsApplied { reply })
+            .await?;
+        rows.iter()
+            .map(|text| parse_id(text, "applied revocation device id"))
+            .collect()
+    }
+
     async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {
         let row = DeviceSessionRow {
             device_id: id_text(session.device_id),

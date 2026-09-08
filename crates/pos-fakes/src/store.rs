@@ -476,6 +476,14 @@ impl DeviceRegistry for FakeStore {
         self.devices.revoke_all_devices().await
     }
 
+    async fn record_revocation_applied(&self, device_id: DeviceId) -> Result<(), PortError> {
+        self.devices.record_revocation_applied(device_id).await
+    }
+
+    async fn revocations_applied(&self) -> Result<Vec<DeviceId>, PortError> {
+        self.devices.revocations_applied().await
+    }
+
     async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {
         self.devices.record_sign_in(session).await
     }
