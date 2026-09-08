@@ -12,6 +12,12 @@ ULID typed, no command run on the server. This is the store-tier counterpart to
 - A **store machine** — a mini-PC in the shop, Windows or Linux — with the `pos_edge` binary on it.
 - The machine and its devices (till, printer, KDS) share one LAN.
 
+The five steps are in the order they have to happen: **create · install · activate · publish · sell.**
+Each one is a precondition of the next, and none of them can be skipped or reordered — an
+unactivated box serves nothing but `/setup`, and a box with no published configuration has no staff
+roster to sign anyone in against. [`docs/go-live.md`](../go-live.md) is the same sequence for a whole
+estate.
+
 ## The mental model — two tiers, three artefacts
 
 The [two tiers](README.md#the-one-thing-to-understand-first-there-are-two-tiers) split cleanly: the
@@ -23,14 +29,20 @@ matters which is which:
 |---|---|---|---|
 | **`config.toml`** | Names *which store* this machine is (`store_id`), *which cloud* it dials (`cloud_url`), and *which event stream* it publishes into (`[nats]`) | On the store machine, on disk | No — a store id, a cloud URL and a stream name are all public facts ([ADR-0004](../adr/0004-cloud-owned-configuration.md)) |
 | **`env`** | The store's scoped sync key, and the event-bus URL when there is one | `/etc/pos-edge/env`, root-owned, mode 0600 | **Yes** — this is the file that holds a credential |
-| **Activation code** | A one-time `XXXX-XXXX-XXXX` a device trades for its credential | Handed to the device once, then spent | Treat as one — it *is* the credential until spent ([ADR-0050](../adr/0050-activation-code-exchange.md)) |
+| **Activation code** | A one-time `XXXX-XXXX-XXXX` the **store server** trades for its cloud credential — one per box, not one per till | Typed once at `/setup`, then spent | Treat as one — it *is* the credential until spent ([ADR-0050](../adr/0050-activation-code-exchange.md)) |
 | **API key** (optional) | A token for the public `/v1` API | Your integration's secret store | Yes — shown once, never recoverable ([ADR-0037](../adr/0037-api-keys.md)) |
 
-Each **device**'s credential is never in either file: it is minted by activation and kept in the
-machine's OS keyring ([ADR-0051](../adr/0051-device-credential-provisioning.md)). That separation is
-deliberate — a leaked `config.toml` cannot sell, and a machine swap re-activates without re-editing
-anything. The **store**'s sync key is different: it authenticates the box itself to `/sync`, so it
-lives in the keyring where possible and in the mode-0600 `env` file otherwise.
+The box's credential is never in either file: it is minted by activation and kept in the machine's OS
+keyring ([ADR-0051](../adr/0051-device-credential-provisioning.md)). That separation is deliberate — a
+leaked `config.toml` cannot sell, and a machine swap re-activates without re-editing anything. The
+**store**'s sync key is different: it authenticates the box itself to `/sync`, so it lives in the
+keyring where possible and in the mode-0600 `env` file otherwise.
+
+The tills are a **third** thing, and the one most often confused with activation. A tablet does not
+activate; it **pairs**, with a six-digit code the store server itself mints and holds in memory for
+five minutes ([ADR-0030](../adr/0030-pairing-and-offline-auth.md)). Activation is the box telling the
+cloud who it is; pairing is the box telling a tablet it may talk to it. They involve different codes,
+different lifetimes and different sides of the wire, and the steps below do them in that order.
 
 ---
 
@@ -159,42 +171,110 @@ wrong.
 Either way, the machine now knows which store it is, opens its SQLite event log, and serves the store
 UI on the LAN (`0.0.0.0:8787` by default).
 
-## Step 3 — Start selling
+### Reading the boot log
 
-Open the store UI from a device on the same LAN — scan the pairing QR the console prints, or type
-`IP:8787` and the 6-digit pairing code ([ADR-0030](../adr/0030-pairing-and-offline-auth.md)). Sign a
-cashier in with their PIN, open a table, ring up an item. **Unplug the network — it keeps working.**
+**Do this now, before Step 3.** Everything the store server has to say — a config it will not parse, a
+missing font, a refused sync, and the pairing URL Step 5 needs — is in its log, and each of the
+remaining steps sends you back here when it does not behave.
 
-This is the milestone that matters: the store can trade. Everything below connects it to the cloud, and
-none of it is on the path of a sale.
+* **Linux** — `journalctl -u pos-edge -n 50`. `systemd` captures the process's output by default; the
+  unit configures no log file, and needs none.
+* **Windows** — `Get-Content C:\ProgramData\pos-edge\pos-edge.log -Tail 50`. A service started by the
+  Service Control Manager has **no console**, so that output goes nowhere unless the server is pointed
+  at a file — which is what the installer's `POS_EDGE_LOG_FILE` does
+  ([ADR-0117](../adr/0117-a-headless-store-keeps-a-log.md)). The file is rewritten at every start-up,
+  keeping the previous run beside it as `pos-edge.log.1`, and it is capped so it cannot fill the disk
+  `store.sqlite` lives on. `-Tail 50` rather than Notepad: it is the bounded read `journalctl -n 50`
+  is, and `tracing` writes LF-only lines that older Notepad renders as one.
 
-## Step 4 — Name and activate the store's devices
+The line to look for is `pos_edge listening`. If it is not there, nothing after it happened either.
 
-Each till, printer, and kitchen display becomes a named device that trades on its own credential:
+## Step 3 — Activate the store
+
+Activation is what gives the box its cloud identity, and it is **ahead of pairing and ahead of
+selling**: until it is done the store serves nothing but `/setup`, and no cloud loop runs
+([ADR-0086](../adr/0086-edge-keyvault-and-activation.md)).
 
 1. In the dashboard, **Activation** (with the store in context): pick the device by name, or **Add a
    device** (name + kind — POS terminal, printer, kitchen display, tablet). It is created in the
    registry — no ULID typed.
-2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**. Give it to that device.
-3. On the device, open the store's address in the browser. An unactivated box lands straight on
-   **`/setup`**; type the code there. It exchanges the code with the cloud for a device credential,
-   stores it in the OS keyring, and is activated from then on. A spent code is refused — one code,
-   one device ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous
-   glyphs (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the
-   counter rather than after a round-trip.
+2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**.
+3. On any device on the store's LAN, open the store server's address in a browser. An unactivated box
+   lands straight on **`/setup`**; type the code there. The **store server** — not the browser —
+   exchanges it with the cloud for a credential and keeps it in its own OS keyring. From then on the
+   store is activated and its config, heartbeat and order-relay loops run. A spent code is refused
+   ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous glyphs
+   (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the counter
+   rather than after a round-trip.
+
+> **One credential per box, not one per device.** This is the thing to get right, because the console
+> will happily issue a code per named device and only the first one typed can ever be redeemed. The box
+> holds a single `DeviceCredential`; a second code presented to an already-activated store is refused
+> `409`. So issue **one** code, for the store server, and let the named printer and kitchen-display
+> rows in the registry be what they are — inventory, not credential holders. Per-device cloud
+> credentials are a recorded, deferred end state
+> ([ADR-0041](../adr/0041-device-onboarding.md)), not what this release does.
+>
+> `-SyncKey` does **not** substitute for this. The scoped store key authenticates the box to `/sync`;
+> the boot gate reads the *device credential*, and with no credential the loops are not spawned at all.
 
 > **Status today.** Activation and the cloud loops are composed into the shipping `pos_edge` binary
 > (roadmap-v3 E1/E2/E3, [ADR-0086](../adr/0086-edge-keyvault-and-activation.md),
 > [ADR-0087](../adr/0087-edge-relay-and-event-publish.md)): with `cloud_url` set in `config.toml`, the
-> box serves `/setup` and `POST /api/activate`, stores the device credential in the OS keyring, and —
-> once activated — pulls config, heartbeats, and pulls its cloud-placed orders automatically.
+> box serves `/setup` and `POST /api/activate`, stores the credential in the OS keyring, and — once
+> activated — pulls config, heartbeats, and pulls its cloud-placed orders automatically.
 >
 > The store's scoped key must carry **`relay_orders` as well as `read_config`**; with only the latter
-> the relay is dark and the edge logs a `403` on every pull. Two flagged gaps remain: on a
-> **headless Linux** box the kernel keyring is not durable across a reboot (the TPM-sealed hardening is
-> the tracked hardware handoff), and the loops authenticate with that scoped key (the keyring's
-> `sync_key`, or the `POS_EDGE_SYNC_KEY` env override) until the device credential is accepted on
-> `/sync`. A store with no `cloud_url` still **sells fully offline from Step 3**.
+> the relay is dark and the edge logs a `403` on every pull — which is exactly the symptom *Reading the
+> boot log* above exists for, because the box otherwise looks healthy. One flagged gap remains: on a
+> **headless Linux** box the kernel keyring is not durable across a reboot, and the TPM-sealed
+> hardening is a tracked hardware handoff ([`gate-register.md`](../gate-register.md) row P2).
+
+## Step 4 — Publish the store's configuration
+
+From **Configuration** (store in context), publish a config level — menu, tax, layout, capability
+flags, and **permissions**, which is the staff roster the store authorises sign-ins against. The store
+pulls the new version over its sync channel and hot-reloads it, keeping the last-known-good if a
+version is rejected ([ADR-0004](../adr/0004-cloud-owned-configuration.md)). Authoring the catalogue and
+menu is its own workstream (roadmap Phase 2a); until then, publish a hand-written document here.
+
+**The permissions node is not optional and neither is the menu.** A freshly installed store boots with
+an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the
+same `401` as a wrong PIN — there is no roster to check the PIN against — and without a menu there is
+nothing to price. That is why this step is ahead of Step 5 rather than after it: a reader who tries to
+sell first finds a till that refuses every cashier and no error that says why.
+
+Watch the box take it: *Reading the boot log* above shows the pull. The interval is 30 seconds, so a
+publish reaches a healthy store inside a minute.
+
+## Step 5 — Start selling
+
+Open the store UI from a device on the same LAN. It needs the pairing URL, and on a store server there
+is no screen to read it off — so read it from the box:
+
+* **Windows** — `Get-Content C:\ProgramData\pos-edge\pairing-url.txt`. The Windows installer also
+  prints it before it exits.
+* **Linux** — `journalctl -u pos-edge | grep pair`.
+
+Either way it is `http://<ip>:8787/pair?code=NNNNNN` (or `https://<host>/pair?code=NNNNNN` on a store
+given a public origin, [ADR-0111](../adr/0111-a-second-origin-may-address-the-edge.md)). Scan it, or
+type `IP:8787` and the six digits ([ADR-0030](../adr/0030-pairing-and-offline-auth.md),
+[ADR-0117](../adr/0117-a-headless-store-keeps-a-log.md)). Then sign a cashier in with their PIN, open
+a table, ring up an item. **Unplug the network — it keeps working.**
+
+> **One code per start-up.** The code is minted once when the process starts, lives **five minutes**,
+> and is single-use; redeeming it deletes the file. Nothing mints another. To pair a second device,
+> stop and start the store server — which drops every till's and kitchen display's live session and
+> forces the outbox to drain, so **commission your tills together**, or restart outside service hours.
+>
+> On Windows: `sc.exe stop pos-edge` then `sc.exe start pos-edge`. On Linux:
+> `sudo systemctl restart pos-edge`.
+
+This is the milestone that matters: the store can trade, and from here it trades whether or not the
+cloud is reachable. What it needed first was a published configuration — the roster it authorises
+sign-ins against and the menu it prices from both arrive in Step 4, and are empty until then.
+
+---
 
 ## Retiring a till that was lost or replaced
 
@@ -209,9 +289,11 @@ On any **paired** device in the store, open **Devices** in the top bar:
    tablet you are holding is marked **This device** — that is the one row not to retire by accident.
 2. **Retire** the row that is gone, then confirm. Its token stops resolving at once and does not come
    back after a restart. Everyone else keeps trading.
-3. If you cannot tell which row is the missing tablet, **Retire every device** is the break-glass:
-   type `ALL` to confirm, then re-pair each till you still have (Step 3's six-digit code, one per
-   device). Every till stops working at the same instant, so do it between services if you can.
+3. If you cannot tell which row is the missing tablet, **Retire every device** is the break-glass, and
+   it is expensive: type `ALL` to confirm, then re-pair the tills you still have — **one per store-server
+   restart**, because a boot mints exactly one single-use code that lives five minutes and nothing can
+   mint another (see Step 5). Every till stops working at the same instant. Retire one row at a time
+   wherever you can tell which one it is; save `ALL` for the case where you genuinely cannot.
 
 The edge does not know a device's *name* — device names live in the cloud's approved-device registry,
 and a store that has never synced has none — so the pairing moment and the **This device** mark are
@@ -222,19 +304,12 @@ strong as pairing and no stronger, and every retirement is written to the store'
 If a retirement answers an error, the store server could not write its durable device table — the
 tablet may still be paired after a restart. Try again rather than assuming it is locked out.
 
-## Step 5 — Publish the store's configuration
-
-From **Configuration** (store in context), publish a config level — menu, tax, layout, capability flags.
-The store pulls the new version over its sync channel and hot-reloads it, keeping the last-known-good if
-a version is rejected ([ADR-0004](../adr/0004-cloud-owned-configuration.md)). Authoring the catalogue and
-menu is its own workstream (roadmap Phase 2a); until then, publish a hand-written document here.
-
 ---
 
 ## The store is online
 
-It trades offline, it is named in the registry, its devices are activated, and it takes configuration
-from the cloud. To swap the machine later (the 5–10 minute "cattle, not pets" replacement), re-drop the
+It trades offline, it is named in the registry, it is activated, its tills are paired, and it takes
+configuration from the cloud. To swap the machine later (the 5–10 minute "cattle, not pets" replacement), re-drop the
 same `config.toml` and re-activate — the fresh box picks up where the old one left off
 ([ADR-0003](../adr/0003-cattle-not-pets.md)).
 

@@ -47,6 +47,14 @@ use crate::auth::{Lockout, Sessions, SignIn};
 use crate::clock::SystemClock;
 use crate::pairing::{DeviceToken, Pairing};
 
+/// The `tracing` target every event in this module carries.
+///
+/// Named rather than spelled out at the reader's end, so that
+/// [`crate::telemetry::EXCLUDED_TARGETS`] — which keeps this module's per-employee sign-in,
+/// wrong-PIN and lockout stream out of the durable log file (ADR-0117 decision 6) — cannot go stale
+/// if the module moves.
+pub(crate) const LOG_TARGET: &str = module_path!();
+
 /// Refuses a request that does not carry a valid device token, and resolves the paired device for the
 /// ones that do — placing its [`DeviceId`] in the request extensions for the next gate and the handler.
 ///

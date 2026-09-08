@@ -86,7 +86,7 @@ pub use error::EdgeError;
 pub use event_publish::EventPublisher;
 pub use fanout::{Fanout, ServerMessage};
 pub use idgen::EdgeIdGenerator;
-pub use installer::{SystemdInstaller, binary_directory};
+pub use installer::{SELF_TEST_FLAG, SystemdInstaller, binary_directory};
 pub use lease_state::{InMemoryLease, LeaseAuthority};
 pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};

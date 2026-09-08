@@ -14,12 +14,23 @@
 //!
 //! # Secrets
 //!
-//! A pairing code and a device token are secrets and never enter a log or the fan-out. The pairing
-//! **URL** the operator scans is shown once on the edge's own console.
+//! A pairing code and a device token are secrets. Neither enters the fan-out, and neither reaches
+//! the durable log file: the announcement carries the [`ANNOUNCE_TARGET`] target, which
+//! [`crate::telemetry::EXCLUDED_TARGETS`] keeps out of it
+//! ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md) decisions 2 and 3). It does
+//! still reach stdout and journald, where it is the one thing an operator at a console needs.
+//!
+//! A box with no console has no console to read, which is what [`PAIRING_FILE_VARIABLE`] answers:
+//! the resolved pairing **URL** is written to that file, owner-only, and [`Pairing::redeem`] deletes
+//! it the moment a device pairs. Exposure is bounded by [`CODE_TTL`] and by single-use redemption —
+//! the same bound a console already had, now reachable without one.
 
 use core::fmt::{self, Write as _};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write as _};
 use std::net::IpAddr;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -34,6 +45,68 @@ use crate::durable_auth::DurableAuth;
 
 /// How long a freshly minted pairing code stays valid.
 pub const CODE_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// The `tracing` target the pairing announcement carries, and nothing else does.
+///
+/// A target of its own is what lets one sink show the code and another refuse to: stdout and
+/// journald keep the line, the durable log file drops it
+/// ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md) decision 3, upholding
+/// ADR-0030 rather than amending it). Read by [`crate::telemetry::EXCLUDED_TARGETS`], so the two
+/// cannot disagree.
+pub const ANNOUNCE_TARGET: &str = "pos_edge::pairing_announce";
+
+/// The environment variable that names the file the pairing URL is written to.
+///
+/// Set by the generated Windows installer, because a service started by the Service Control Manager
+/// has no console to read the announcement off and no route mints a second code. Unset — the Linux
+/// units, `just run-edge`, the examples and the tests — and no file is ever created.
+pub const PAIRING_FILE_VARIABLE: &str = "POS_EDGE_PAIRING_FILE";
+
+/// The pairing file's path as the environment names it, or `None` when the variable is unset or
+/// empty.
+///
+/// Read once, where the real edge is composed ([`crate::serve_until`]), and handed to
+/// [`Pairing::with_pairing_file`]. Deliberately not read inside [`Pairing::redeem`]: a redemption is
+/// on the path a store takes to bring a till up, and what it does to the filesystem should be
+/// visible in how the [`Pairing`] was built rather than in the process's environment.
+#[must_use]
+pub fn pairing_file_from_env() -> Option<PathBuf> {
+    let raw = std::env::var_os(PAIRING_FILE_VARIABLE)?;
+    (!raw.is_empty()).then(|| PathBuf::from(raw))
+}
+
+/// Writes `url` to `path`, truncating whatever a previous run left there, owner-only where there is
+/// a mode.
+///
+/// The mode is set explicitly as well as through [`OpenOptions`], because `OpenOptions::mode`
+/// applies to a file this call *creates* and this one may already exist from the run before.
+///
+/// # Errors
+///
+/// Whatever creating the parent directory, opening the file or writing to it reports.
+fn write_pairing_file(path: &Path, url: &str) -> io::Result<()> {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(url.as_bytes())?;
+    file.write_all(b"\n")
+}
 
 /// How many failed redemptions the box answers before it stops answering at all
 /// (production-readiness **S4**).
@@ -211,6 +284,10 @@ pub struct Pairing {
     /// Where issued tokens are recorded so they survive a restart. `None` keeps the pre-S0d
     /// behaviour.
     registry: Option<Arc<dyn DurableAuth>>,
+    /// The file the pairing URL is written to, for a placement with no console to read it off
+    /// ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md) decision 4). `None` — the
+    /// Linux units, `just run-edge`, the examples and every test — and no such file is ever created.
+    url_file: Option<PathBuf>,
 }
 
 #[expect(
@@ -226,6 +303,7 @@ impl fmt::Debug for Pairing {
             .field("live_codes", &self.code_count())
             .field("issued", &self.issued_count())
             .field("durable", &self.registry.is_some())
+            .field("hands_over_the_url_in_a_file", &self.url_file.is_some())
             .finish()
     }
 }
@@ -282,10 +360,69 @@ impl Pairing {
     #[must_use]
     pub fn durable(registry: Arc<dyn DurableAuth>) -> Self {
         Self {
-            codes: Mutex::new(HashMap::new()),
-            attempts: Mutex::new(RedeemBudget::default()),
-            issued: Mutex::new(HashMap::new()),
             registry: Some(registry),
+            ..Self::default()
+        }
+    }
+
+    /// Names the file the pairing URL is handed over in, or `None` for the console placements that
+    /// need no such file ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md)
+    /// decision 4).
+    ///
+    /// Pass [`pairing_file_from_env`]. Held rather than re-read, so that what a redemption does to
+    /// the filesystem is a property of how this was built.
+    #[must_use]
+    pub fn with_pairing_file(mut self, path: Option<PathBuf>) -> Self {
+        self.url_file = path;
+        self
+    }
+
+    /// Writes the resolved pairing `url` to the file this was built with, if it was built with one.
+    ///
+    /// A no-op otherwise, which is every placement that has a console. Every failure is a warning
+    /// and nothing more: a box that cannot write this file must still come up and sell, and the
+    /// announcement is still on stdout for anyone who can see it.
+    pub fn publish_pairing_url(&self, url: &str) {
+        let Some(path) = self.url_file.as_deref() else {
+            return;
+        };
+        match write_pairing_file(path, url) {
+            // Deliberately not the URL: this line is durable, and the file it names is not.
+            Ok(()) => tracing::info!(
+                pairing_file = %path.display(),
+                ttl_seconds = CODE_TTL.as_secs(),
+                "the pairing URL is in this file until a device redeems it or it expires"
+            ),
+            Err(error) => tracing::warn!(
+                pairing_file = %path.display(),
+                %error,
+                "the pairing file could not be written; no device can pair on a box with no \
+                 console until it can"
+            ),
+        }
+    }
+
+    /// Deletes the pairing file, if there is one to delete.
+    ///
+    /// Called on a successful redemption, so the credential's window on disk closes with the
+    /// redemption rather than with the code's expiry. Already-gone is the ordinary case — an
+    /// operator may have deleted it, or this may be the second device on this box — and is silent.
+    fn withdraw_pairing_url(&self) {
+        let Some(path) = self.url_file.as_deref() else {
+            return;
+        };
+        match fs::remove_file(path) {
+            Ok(()) => tracing::info!(
+                pairing_file = %path.display(),
+                "a device paired, so the pairing file is gone"
+            ),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                pairing_file = %path.display(),
+                %error,
+                "a device paired but the pairing file could not be deleted; it holds a code that \
+                 is now spent"
+            ),
         }
     }
 
@@ -409,6 +546,10 @@ impl Pairing {
         // A successful pairing clears the budget: the operator is at the box, and the next device
         // they pair must not inherit a stranger's failed guesses.
         *self.attempts.lock().unwrap_or_else(PoisonError::into_inner) = RedeemBudget::default();
+        // The code this consumed is spent, so the file a headless operator read it out of should not
+        // outlive it (ADR-0117 decision 4). One `unlink` on a path that is usually already absent,
+        // on a route a store takes once per till.
+        self.withdraw_pairing_url();
         Ok(Redeemed::Paired(token))
     }
 
@@ -582,7 +723,7 @@ fn mint_device_id(now: Timestamp, randomness: &[u8]) -> DeviceId {
 mod tests {
     use super::{
         CODE_TTL, Code, DeviceToken, MAX_FAILED_REDEMPTIONS, PairError, Pairing, REDEEM_LOCKOUT,
-        Redeemed, hosted_pairing_url, pairing_url,
+        Redeemed, fs, hosted_pairing_url, pairing_url,
     };
     use pos_proto::time::Timestamp;
 
@@ -763,6 +904,116 @@ mod tests {
             "a redeemed code is spent"
         );
         assert_eq!(pairing.issued_count(), 1);
+    }
+
+    #[test]
+    fn the_pairing_file_holds_the_url_owner_only_and_nothing_else() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join("state").join("pairing-url.txt");
+        let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
+
+        pairing.publish_pairing_url("http://10.0.0.4:8080/pair?code=428913");
+
+        assert_eq!(
+            fs::read_to_string(&path).expect("the parents were created and the file written"),
+            "http://10.0.0.4:8080/pair?code=428913\n"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&path)
+                .expect("the file exists")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "mode was {:o}", mode & 0o777);
+        }
+    }
+
+    #[test]
+    fn a_second_boot_truncates_rather_than_leaving_a_stale_tail() {
+        // The failure a plain append would produce: a shorter URL over a longer one leaves the tail
+        // of a *previous* boot's code behind, and an operator pastes a code that cannot redeem.
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join("pairing-url.txt");
+        let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
+
+        pairing.publish_pairing_url("https://a-store.example.com/pair?code=111111");
+        pairing.publish_pairing_url("/pair?code=222222");
+
+        let held = fs::read_to_string(&path).expect("the file");
+        assert_eq!(held, "/pair?code=222222\n");
+        assert!(
+            !held.contains("111111"),
+            "the previous boot's code survived"
+        );
+    }
+
+    #[test]
+    fn pairing_a_device_deletes_the_file_the_operator_read_the_code_out_of() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join("pairing-url.txt");
+        let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
+        let code = pairing.mint(at(0)).expect("mint");
+        pairing.publish_pairing_url(&pairing_url(
+            "10.0.0.4".parse().expect("an address"),
+            8080,
+            &code,
+        ));
+        assert!(path.exists(), "the file was not written in the first place");
+
+        let token = block_on(redeem(&pairing, &code, at(1_000))).expect("redeem");
+
+        assert!(token.is_some(), "the code did not redeem");
+        assert!(
+            !path.exists(),
+            "the pairing file outlived the code it carried"
+        );
+    }
+
+    #[test]
+    fn a_refused_redemption_leaves_the_file_alone_so_a_typo_is_not_fatal() {
+        let directory = tempfile::tempdir().expect("a temporary directory");
+        let path = directory.path().join("pairing-url.txt");
+        let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
+        let live = pairing.mint(at(0)).expect("mint");
+        pairing.publish_pairing_url(&pairing_url(
+            "10.0.0.4".parse().expect("an address"),
+            8080,
+            &live,
+        ));
+
+        let wrong = Code::parse("000000").expect("a well-formed code");
+        assert!(
+            block_on(redeem(&pairing, &wrong, at(1_000)))
+                .expect("redeem")
+                .is_none(),
+            "an unknown code paired a device"
+        );
+
+        assert!(
+            path.exists(),
+            "one mistyped digit destroyed the only copy of the live code"
+        );
+        assert!(
+            block_on(redeem(&pairing, &live, at(2_000)))
+                .expect("redeem")
+                .is_some(),
+            "the live code no longer redeems"
+        );
+        assert!(!path.exists(), "and then it was not cleaned up");
+    }
+
+    #[test]
+    fn a_pairing_with_no_file_touches_the_filesystem_at_all() {
+        // Every test above this line, every example, and every Linux unit take this path.
+        let pairing = Pairing::new();
+        pairing.publish_pairing_url("http://10.0.0.4:8080/pair?code=428913");
+        let code = pairing.mint(at(0)).expect("mint");
+        assert!(
+            block_on(redeem(&pairing, &code, at(1_000)))
+                .expect("redeem")
+                .is_some()
+        );
     }
 
     #[test]

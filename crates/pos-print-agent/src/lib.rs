@@ -49,6 +49,7 @@ use pos_ports::printer::{PrintJob, PrinterCapabilities, PrinterConnection};
 use pos_proto::ids::EventId;
 
 pub mod printers;
+pub mod telemetry;
 pub mod wire;
 
 /// How long to wait before asking again after the edge could not be reached.
@@ -80,7 +81,7 @@ pub enum AgentError {
 ///
 /// Three fields and nothing else. An agent that could be configured would be an agent that decides
 /// something, and every decision about printing belongs on the edge.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Config {
     /// The store's edge, as `http://host:port` on a shop LAN or `https://host` for a hosted edge
     /// placement. Both are supported because the edge is in a different place in each
@@ -104,6 +105,19 @@ pub struct Config {
     /// Where to keep the one id per printer. Defaults beside the configuration file.
     #[serde(default = "default_state_path")]
     pub state_path: PathBuf,
+}
+
+impl core::fmt::Debug for Config {
+    /// Redacts the device token. The derived implementation printed it in full, and ADR-0117 gives
+    /// this process a durable log file — so a line that formatted the configuration would have
+    /// written a working credential to disk beside the state it describes.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Config")
+            .field("edge_url", &self.edge_url)
+            .field("device_token", &"<redacted>")
+            .field("state_path", &self.state_path)
+            .finish()
+    }
 }
 
 /// The default for [`Config::state_path`]: a file beside the binary's working directory.

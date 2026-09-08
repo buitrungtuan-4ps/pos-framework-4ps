@@ -5,8 +5,15 @@
 The store binary runs unattended on a mini-PC ([ADR-0003](../../docs/adr/0003-cattle-not-pets.md)), so
 it is installed as an operating-system service that starts on boot and restarts on crash. The binary
 itself is service-agnostic: it reads `POS_EDGE_CONFIG`, logs through `tracing`, and shuts down
-gracefully on Ctrl-C or `SIGTERM` (`crates/pos-edge/src/server.rs`), which is all any service manager
-needs.
+gracefully on Ctrl-C or `SIGTERM` (`crates/pos-edge/src/server.rs`).
+
+That is all **systemd** needs, because journald captures the process's output. It is **not** all the
+Windows **Service Control Manager** needs: a service SCM starts has no console, so that output is
+discarded — and with it the pairing code, which is minted once per process start and which no route
+mints a second time. A store installed without a log file could therefore not be paired with at all.
+`POS_EDGE_LOG_FILE` and `POS_EDGE_PAIRING_FILE`, both set by the generated Windows installer, are what
+close that ([ADR-0117](../../docs/adr/0117-a-headless-store-keeps-a-log.md)); see *Reading the log*
+below.
 
 ## Linux — systemd
 
@@ -174,6 +181,80 @@ knowing:
 A wrapper such as NSSM still works if you want its log rotation, but it is no longer what makes the
 service run.
 
+## Reading the log
+
+Every diagnostic this document calls load-bearing — the `403`-on-every-poll below, the missing-font
+warning, the over-the-air install trail — is a log line, and so is the pairing URL. Read it before
+concluding that a step failed silently.
+
+### Linux
+
+```
+journalctl -u pos-edge -n 50 -f
+```
+
+The unit sets no `StandardOutput`, because it does not need to: journald capturing a service's output
+is systemd's own default. Nothing under `deploy/` sets `POS_EDGE_LOG_FILE` on Linux, and setting it
+would only produce a second copy.
+
+### Windows
+
+```powershell
+Get-Content C:\ProgramData\pos-edge\pos-edge.log -Tail 50 -Wait
+```
+
+The installer points `POS_EDGE_LOG_FILE` at that path on the service's own environment key. Notes
+that matter when you are reading it:
+
+* **It is rewritten at every start-up**, with the previous run kept beside it as `pos-edge.log.1`. So
+  a crash loop leaves you the *last* run and the one before, and nothing older. Copy the file before
+  restarting the service if you need to keep it.
+* **It is capped per run** (8 MiB; 4 MiB for the print agent). A run that reaches the cap stops adding
+  to the file and keeps logging to standard output. That is a disk-full guard, not a retention rule:
+  the disk it would otherwise fill is the one holding `store.sqlite`.
+* **`-Tail`, not Notepad.** `tracing` writes LF-only lines, which Notepad before Windows 10 1809
+  renders as one long line, and the file can be megabytes.
+* **The pairing code is deliberately not in it.** Neither is the per-employee sign-in, wrong-PIN and
+  lockout stream, and neither becomes durable if you raise `RUST_LOG` — the writer excludes those
+  targets and pins the file at `info` ([ADR-0117](../../docs/adr/0117-a-headless-store-keeps-a-log.md)).
+  The pairing URL goes to its own file instead:
+
+  ```powershell
+  Get-Content C:\ProgramData\pos-edge\pairing-url.txt
+  ```
+
+  Treat that file as a five-minute password: the code in it expires with `CODE_TTL`, is single-use,
+  and the edge deletes the file the moment a device redeems it. To pair a second device, restart the
+  service — which drops every till's live session, so commission tills together.
+* **It goes quiet when the service is not running.** `sc.exe query pos-edge` first; a service that
+  never reached `RUNNING` may have written nothing at all.
+
+### Break-glass: run it in the foreground
+
+When the service will not start and the file says nothing, run the store in a console instead. It is
+the same binary and the same code path — Linux and a Windows console run take the identical branch —
+so what it prints is what the service would have logged:
+
+```powershell
+$env:POS_EDGE_CONFIG = 'C:\ProgramData\pos-edge\config.toml'
+C:\ProgramData\pos-edge\pos-edge.exe
+```
+
+Three caveats, all of them the reason this is break-glass and not the procedure:
+
+1. **Stop the service first.** Two processes on one `store.sqlite` is not a supported state.
+2. It runs as **you**, not as the service account, so a permissions problem — the very thing you may
+   be chasing — will not reproduce.
+3. It uses the **rescue copy** at the root of the state directory, not `bin\current`. If the box has
+   updated itself over the air, that is a different and older binary
+   ([ADR-0055](../../docs/adr/0055-edge-ota-updater.md) Amendment 1).
+
+**NSSM** is the other interim answer, and it is honestly the cheapest complete one for a store that
+needs Windows service logging this week — but it is an unsigned, unversioned third-party binary this
+repository does not verify (contrast [ADR-0047](../../docs/adr/0047-minisign-verification.md) for the edge
+binary itself), and it takes over the exit-action semantics `crates/pos-edge/src/service.rs` depends
+on, so the over-the-air restart path would need re-verifying against it.
+
 ## Configuration
 
 Both platforms point `POS_EDGE_CONFIG` at a `config.toml` holding the bootstrap configuration
@@ -183,8 +264,10 @@ at runtime ([ADR-0004](../../docs/adr/0004-cloud-owned-configuration.md)).
 
 **`public_origin` is for a store whose devices are not on the edge's LAN** — a hosted placement
 reached by hostname ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)). Set
-it and the pairing URL the edge prints at boot becomes `https://<host>/pair?code=NNNNNN` instead of
-the raw-IP form; leave it unset and an in-store box mints exactly what it always did. It must be
+it and the pairing URL the edge writes at boot becomes `https://<host>/pair?code=NNNNNN` instead of
+the raw-IP form; leave it unset and an in-store box mints exactly what it always did. Either way the
+URL is read from the box rather than off a screen — see *Reading the log* — and the file it is written
+to is deleted the moment a device redeems the code. It must be
 `https` and the edge refuses to start otherwise: a pairing URL carries a code redeemed for a bearer
 token, and one crossing a WAN in clear text is one given away.
 
@@ -372,6 +455,18 @@ and for parse errors by CI, exactly as the edge's is. It sets the service's fail
 the half that is easiest to skip and the half that decides whether the terminal comes back after a
 crash — and a crashed agent means a kitchen printing nothing while the till keeps reporting
 `QUEUED_TO_AGENT`, because the queue is doing its job.
+
+It also sets `POS_PRINT_AGENT_LOG_FILE`, so this process gets the log a service with no console
+otherwise would not have — `C:\ProgramData\pos-print-agent\pos-print-agent.log`, on the same terms
+as the edge's ([ADR-0117](../../docs/adr/0117-a-headless-store-keeps-a-log.md)). It carries no
+credential: both the client and the configuration redact the device token.
+
+**One caveat that matters more than the file does.** This binary has **no Service Control Manager
+handshake** — no `service.rs`, no `windows-service` dependency — which is the `error 1053` failure
+`crates/pos-edge/src/service.rs` documents at length. Until that is fixed the log file will be
+*empty* on Windows, because the process never gets far enough to write to it, and the diagnosis is
+`sc.exe query pos-print-agent` rather than the file. Linux is unaffected: `systemd` needs no
+handshake, and journald captures the output.
 
 ### What it does not do
 

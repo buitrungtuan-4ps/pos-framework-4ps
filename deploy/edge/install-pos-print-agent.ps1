@@ -101,12 +101,20 @@ if ($running) {
 }
 & sc.exe description $service "Pizza 4P's print agent (writes this terminal's printers)" | Out-Null
 
+# The log file. Registered with sc.exe, this process has no console either, so without this its
+# standard output is discarded and the *silence reported twice* signal ADR-0112 leans on — the
+# till says QUEUED_TO_AGENT and the kitchen says nothing came — has no third place to look
+# (ADR-0117). The current run, plus the previous run beside it as pos-print-agent.log.1. It
+# carries no credential: the client and the configuration both redact the device token.
+$logPath = Join-Path $Root 'pos-print-agent.log'
+
 # Service-scoped rather than machine-wide, for the reason the edge's installer gives at length: a
 # machine environment variable is readable by every local administrator and shows up in process
 # listings of unrelated services. The device token belongs in neither place.
 $environment = @(
     "POS_PRINT_AGENT_CONFIG=$configPath",
     "POS_PRINT_AGENT_TOKEN=$DeviceToken",
+    "POS_PRINT_AGENT_LOG_FILE=$logPath",
     'RUST_LOG=info'
 )
 $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$service"

@@ -25,6 +25,7 @@
 //! path and query produce, and the interpretation of a config-sync response — is a pure function
 //! beside it, so the branching is checked in the fast gate without a peer.
 
+use core::fmt;
 use core::time::Duration;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -88,12 +89,25 @@ struct CloudResponse {
 ///
 /// Cheap to clone — it holds a shared rustls [`ClientConfig`], the parsed base URL, and the bearer
 /// key — so the edge builds one and hands a clone to each transport.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CloudHttpClient {
     base: url::Url,
     bearer: Arc<str>,
     tls: Arc<ClientConfig>,
     timeout: Duration,
+}
+
+impl fmt::Debug for CloudHttpClient {
+    /// Redacts the bearer. The derived implementation printed the store's `read_config` API key in
+    /// full, so any line that formatted a struct holding one of these carried a live credential —
+    /// which ADR-0117 makes durable on a Windows store.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CloudHttpClient")
+            .field("base", &self.base)
+            .field("bearer", &"<redacted>")
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CloudHttpClient {

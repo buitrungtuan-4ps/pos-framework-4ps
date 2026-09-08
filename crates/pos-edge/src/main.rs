@@ -31,17 +31,13 @@ use store_sqlite::SqliteStore;
 #[cfg(windows)]
 mod service;
 
-/// The flag [`UpdateInstaller::self_test`](pos_edge::UpdateInstaller::self_test) runs the staged
-/// binary with.
-const SELF_TEST_FLAG: &str = "--self-test";
-
 fn main() -> Result<(), EdgeError> {
     telemetry::init();
 
     let path = std::env::var_os("POS_EDGE_CONFIG")
         .map_or_else(|| PathBuf::from("config.toml"), PathBuf::from);
 
-    if std::env::args().any(|argument| argument == SELF_TEST_FLAG) {
+    if std::env::args().any(|argument| argument == pos_edge::SELF_TEST_FLAG) {
         return self_test(&path);
     }
 

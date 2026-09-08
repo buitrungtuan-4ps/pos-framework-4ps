@@ -23,7 +23,7 @@ Runs as a Windows service or systemd unit on an ordinary PC or mini-PC.
 | UI | SolidJS bundle embedded in the binary (`rust-embed`), served over the LAN. Clients are browsers. |
 | Realtime | WebSocket push to every client: new lines, kitchen bumps, sold-out flags appear in under 50 ms. |
 | Devices | ESC/POS printers (USB or LAN), cash drawers, payment terminals, barcode scanners. |
-| Discovery | Publishes `pos.local` via mDNS. Clients pair by scanning a QR code containing `http://<ip>/pair?...`, or by typing `IP:port` plus a 6-digit code shown on the server screen. |
+| Discovery | Publishes `pos.local` via mDNS. Clients pair by scanning a QR code containing `http://<ip>/pair?...`, or by typing `IP:port` plus a 6-digit code the store server writes at boot — to `pairing-url.txt` in its state directory on Windows, and to its log (`journalctl -u pos-edge`) on Linux. A store server is a headless service and has no screen ([ADR-0117](adr/0117-a-headless-store-keeps-a-log.md)). |
 | Durability | Every sale is a transaction. Events land in a local outbox table before anything is sent anywhere. |
 
 **Order writes are append commands.** Two devices adding items to the same table produce two commands that merge; they never overwrite each other. Edits to the *same line* merge with **terminal states winning** — a `VOIDED` or `SETTLED` line is never overwritten by a later edit — and other fields resolving last-writer-wins on `(event_time, device_id)`; both versions stay in the audit log. The merge is commutative and associative, so sync order cannot change the result ([ADR-0029](adr/0029-append-command-merge-semantics.md)).

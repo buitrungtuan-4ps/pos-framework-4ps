@@ -35,6 +35,14 @@ use pos_proto::ids::{DeviceId, EmployeeId};
 use crate::durable_auth::DurableAuth;
 use pos_proto::time::Timestamp;
 
+/// The `tracing` target every event in this module carries.
+///
+/// Named rather than spelled out at the reader's end, so that
+/// [`crate::telemetry::EXCLUDED_TARGETS`] — which keeps this module's per-employee sign-in,
+/// wrong-PIN and lockout stream out of the durable log file (ADR-0117 decision 6) — cannot go stale
+/// if the module moves.
+pub(crate) const LOG_TARGET: &str = module_path!();
+
 /// Consecutive wrong PINs that trigger a lockout.
 pub const MAX_FAILURES: u32 = 5;
 

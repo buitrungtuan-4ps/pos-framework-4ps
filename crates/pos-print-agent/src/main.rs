@@ -17,19 +17,12 @@
 use std::path::PathBuf;
 
 use pos_print_agent::printers::EscPosPrinters;
+use pos_print_agent::telemetry::{self, SELF_TEST_FLAG};
 use pos_print_agent::wire::HttpEdge;
 use pos_print_agent::{AgentError, Config, LastWritten, VERSION};
 
-/// The flag the installer runs a staged binary with.
-const SELF_TEST_FLAG: &str = "--self-test";
-
 fn main() -> Result<(), AgentError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_unset| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    telemetry::init();
 
     let path = std::env::var_os("POS_PRINT_AGENT_CONFIG")
         .map_or_else(|| PathBuf::from("print-agent.toml"), PathBuf::from);
