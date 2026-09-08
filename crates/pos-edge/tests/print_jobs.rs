@@ -113,7 +113,7 @@ impl Harness {
         let mut tokens = Vec::new();
         let mut devices = Vec::new();
         for _ in 0..2 {
-            let code = pairing.mint(now).expect("mint a pairing code");
+            let (code, _) = pairing.mint(now).expect("mint a pairing code");
             let token = pairing
                 .redeem(&code, now)
                 .await

@@ -22,6 +22,7 @@ fn app_with_code() -> (Router, String) {
         .pairing
         .mint(state.clock.now())
         .expect("mint a code")
+        .0
         .as_str()
         .to_owned();
     (pos_edge::http::router(state.clone()), code)

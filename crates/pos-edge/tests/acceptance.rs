@@ -222,6 +222,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         .pairing
         .mint(pos_edge::SystemClock.now())
         .expect("the OS entropy source mints a pairing code")
+        .0
         .as_str()
         .to_owned();
 

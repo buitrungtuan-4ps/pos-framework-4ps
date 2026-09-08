@@ -235,7 +235,7 @@ fn announce_pairing(
     advertised_host: Option<std::net::IpAddr>,
     port: u16,
 ) {
-    let Ok(code) = pairing.mint(SystemClock.now()) else {
+    let Ok((code, _expires_at_ms)) = pairing.mint(SystemClock.now()) else {
         tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
         return;
     };

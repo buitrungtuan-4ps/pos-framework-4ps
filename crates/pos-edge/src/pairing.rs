@@ -453,22 +453,44 @@ impl Pairing {
         Ok(devices.len())
     }
 
-    /// Mints a new code valid for [`CODE_TTL`] from `now`.
+    /// Mints a new code valid for [`CODE_TTL`] from `now`, and returns it with the instant it
+    /// expires (Unix ms).
+    ///
+    /// # Exactly one code is live, and this enforces it
+    ///
+    /// Minting **replaces** the code table rather than adding to it. Until
+    /// [ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) that
+    /// invariant held only by accident — one caller existed, at boot — and a second caller inserting
+    /// beside it would have left two codes live at once, doubling the window a guess has to hit and
+    /// leaving an operator unable to say which of two codes was the one they were told to use.
+    ///
+    /// It also unlinks the pairing file, because whatever that file held names a code this call has
+    /// just invalidated. The boot path re-publishes it; a mint on a live route does not
+    /// ([`crate::http::pair`]).
     ///
     /// # Errors
     ///
     /// [`getrandom::Error`] if the OS entropy source is unavailable — a code is never faked.
-    pub fn mint(&self, now: Timestamp) -> Result<Code, getrandom::Error> {
+    pub fn mint(&self, now: Timestamp) -> Result<(Code, i64), getrandom::Error> {
         let mut bytes = [0_u8; 3];
         getrandom::fill(&mut bytes)?;
         let code = Code::from_entropy(bytes);
         let ttl = i64::try_from(CODE_TTL.as_millis()).unwrap_or(i64::MAX);
         let expiry = now.as_milliseconds_since_epoch().saturating_add(ttl);
-        self.codes
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(code.clone(), expiry);
-        Ok(code)
+        {
+            let mut codes = self.codes.lock().unwrap_or_else(PoisonError::into_inner);
+            // Replace, never add. See the doc comment above: one live code is the invariant the
+            // whole pairing surface is reasoned about under, and until ADR-0118 it held only because
+            // exactly one caller existed.
+            codes.clear();
+            codes.insert(code.clone(), expiry);
+        }
+        // Whatever the file held names a code this call has just invalidated, so it is now worse
+        // than nothing: an operator would read a URL that cannot redeem and conclude pairing is
+        // broken. Boot re-publishes it immediately afterwards; a mint on a live route deliberately
+        // does not, because the response body is that caller's only delivery channel (ADR-0118).
+        self.withdraw_pairing_url();
+        Ok((code, expiry))
     }
 
     /// Redeems a code, issuing a device token if it is live and unexpired.
@@ -682,8 +704,15 @@ impl Pairing {
             .len()
     }
 
-    /// How many pairing codes are live, for [`fmt::Debug`].
-    fn code_count(&self) -> usize {
+    /// How many pairing codes are live.
+    ///
+    /// Zero or one on a running store: [`Self::mint`] replaces rather than adds
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md)), and a
+    /// redemption consumes. Reported by [`fmt::Debug`], and asserted on by the tests that pin the
+    /// one-live-code invariant from outside the module — the count is the invariant, so a test that
+    /// can only read the response body cannot see a second code that should not exist.
+    #[must_use]
+    pub fn code_count(&self) -> usize {
         self.codes
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -843,7 +872,7 @@ mod tests {
         // The budget is checked before the code table is touched. Otherwise a script's last guess
         // would consume the single-use code the operator standing at the box is reading off it.
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         let wrong = Code::parse("000001").expect("six digits");
         for _ in 0..MAX_FAILED_REDEMPTIONS {
             let _ = block_on(pairing.redeem(&wrong, at(0)));
@@ -872,7 +901,7 @@ mod tests {
             let _ = block_on(pairing.redeem(&wrong, at(0)));
         }
 
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         assert!(
             block_on(redeem(&pairing, &code, at(0)))
                 .expect("redeem")
@@ -890,7 +919,7 @@ mod tests {
     #[test]
     fn a_minted_code_redeems_once() {
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
 
         let token = block_on(redeem(&pairing, &code, at(1_000))).expect("redeem");
         assert!(token.is_some(), "a fresh code pairs a device");
@@ -953,7 +982,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let path = directory.path().join("pairing-url.txt");
         let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         pairing.publish_pairing_url(&pairing_url(
             "10.0.0.4".parse().expect("an address"),
             8080,
@@ -975,7 +1004,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("a temporary directory");
         let path = directory.path().join("pairing-url.txt");
         let pairing = Pairing::new().with_pairing_file(Some(path.clone()));
-        let live = pairing.mint(at(0)).expect("mint");
+        let (live, _) = pairing.mint(at(0)).expect("mint");
         pairing.publish_pairing_url(&pairing_url(
             "10.0.0.4".parse().expect("an address"),
             8080,
@@ -1008,7 +1037,7 @@ mod tests {
         // Every test above this line, every example, and every Linux unit take this path.
         let pairing = Pairing::new();
         pairing.publish_pairing_url("http://10.0.0.4:8080/pair?code=428913");
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         assert!(
             block_on(redeem(&pairing, &code, at(1_000)))
                 .expect("redeem")
@@ -1037,7 +1066,7 @@ mod tests {
         // With no registry composed this exercises the in-memory half only; the durable half is
         // proven by the DeviceRegistry contract suite, which both implementations pass.
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("a fresh code pairs a device");
@@ -1056,11 +1085,13 @@ mod tests {
     #[test]
     fn revoke_all_is_the_break_glass() {
         let pairing = Pairing::new();
-        let first = pairing.mint(at(0)).expect("mint");
-        let second = pairing.mint(at(0)).expect("mint");
+        // Mint, redeem, mint, redeem — the real shape of commissioning two tills, now that a mint
+        // replaces the live code rather than adding beside it (ADR-0118).
+        let (first, _) = pairing.mint(at(0)).expect("mint");
         let one = block_on(redeem(&pairing, &first, at(1_000)))
             .expect("redeem")
             .expect("token");
+        let (second, _) = pairing.mint(at(1_000)).expect("mint");
         let two = block_on(redeem(&pairing, &second, at(1_000)))
             .expect("redeem")
             .expect("token");
@@ -1077,11 +1108,11 @@ mod tests {
         // Production-readiness O1: `revoke` takes a device id and, until this, no surface handed one
         // out — so an operator with a lost till had nothing to act on but the break-glass.
         let pairing = Pairing::new();
-        let first = pairing.mint(at(0)).expect("mint");
-        let second = pairing.mint(at(0)).expect("mint");
+        let (first, _) = pairing.mint(at(0)).expect("mint");
         block_on(redeem(&pairing, &first, at(1_000)))
             .expect("redeem")
             .expect("token");
+        let (second, _) = pairing.mint(at(2_000)).expect("mint");
         block_on(redeem(&pairing, &second, at(9_000)))
             .expect("redeem")
             .expect("token");
@@ -1106,7 +1137,7 @@ mod tests {
     #[test]
     fn debug_reports_counts_and_never_a_digest() {
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("token");
@@ -1126,7 +1157,7 @@ mod tests {
     #[test]
     fn an_expired_code_does_not_redeem() {
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         let past_ttl = i64::try_from(CODE_TTL.as_millis()).expect("fits") + 1;
         assert!(
             block_on(redeem(&pairing, &code, at(past_ttl)))
@@ -1166,7 +1197,7 @@ mod tests {
     #[test]
     fn a_redeemed_token_resolves_to_its_device_and_a_stranger_does_not() {
         let pairing = Pairing::new();
-        let code = pairing.mint(at(0)).expect("mint");
+        let (code, _) = pairing.mint(at(0)).expect("mint");
         let token = block_on(redeem(&pairing, &code, at(1_000)))
             .expect("redeem")
             .expect("a fresh code pairs");

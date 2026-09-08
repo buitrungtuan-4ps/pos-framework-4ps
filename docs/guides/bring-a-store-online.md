@@ -262,13 +262,23 @@ type `IP:8787` and the six digits ([ADR-0030](../adr/0030-pairing-and-offline-au
 [ADR-0117](../adr/0117-a-headless-store-keeps-a-log.md)). Then sign a cashier in with their PIN, open
 a table, ring up an item. **Unplug the network — it keeps working.**
 
-> **One code per start-up.** The code is minted once when the process starts, lives **five minutes**,
-> and is single-use; redeeming it deletes the file. Nothing mints another. To pair a second device,
-> stop and start the store server — which drops every till's and kitchen display's live session and
-> forces the outbox to drain, so **commission your tills together**, or restart outside service hours.
+> **The boot code pairs the first device. After that, mint from inside the store.**
 >
-> On Windows: `sc.exe stop pos-edge` then `sc.exe start pos-edge`. On Linux:
-> `sudo systemctl restart pos-edge`.
+> The boot code is minted once when the process starts, lives **five minutes**, and is single-use;
+> redeeming it deletes the file. For the **second and every later** device you do not restart
+> anything: on a till that is already paired, with a **manager signed in**, open **Devices** in the
+> top bar and choose *Get a pairing code*. The six digits appear on screen, along with the URL to
+> open on the new tablet ([ADR-0118](../adr/0118-one-credential-per-box-and-the-cloud-learns.md)).
+>
+> That code replaces whatever was live, including the boot one — the store never holds two at once.
+> It needs the `ManageDevices` permission, so a waiter's tap cannot admit hardware; if the button
+> answers *"needs a manager signed in on this device"*, that is standing missing, not a broken
+> pairing.
+>
+> **Restarting still works and is still the fallback** — for a store with no till paired yet, or one
+> whose only manager is not there. It costs every till's and kitchen display's live session and
+> forces the outbox to drain, so do it outside service hours. On Windows: `sc.exe stop pos-edge` then
+> `sc.exe start pos-edge`. On Linux: `sudo systemctl restart pos-edge`.
 
 This is the milestone that matters: the store can trade, and from here it trades whether or not the
 cloud is reachable. What it needed first was a published configuration — the roster it authorises
@@ -290,10 +300,11 @@ On any **paired** device in the store, open **Devices** in the top bar:
 2. **Retire** the row that is gone, then confirm. Its token stops resolving at once and does not come
    back after a restart. Everyone else keeps trading.
 3. If you cannot tell which row is the missing tablet, **Retire every device** is the break-glass, and
-   it is expensive: type `ALL` to confirm, then re-pair the tills you still have — **one per store-server
-   restart**, because a boot mints exactly one single-use code that lives five minutes and nothing can
-   mint another (see Step 5). Every till stops working at the same instant. Retire one row at a time
-   wherever you can tell which one it is; save `ALL` for the case where you genuinely cannot.
+   it is still the most expensive thing on this screen: type `ALL` to confirm, and **every till stops
+   working at the same instant** — including the one you are holding, which signs you out. Recovering
+   means pairing the first till from the boot code (so: restart the store server), and only then can
+   *Get a pairing code* on that till admit the rest. Retire one row at a time wherever you can tell
+   which one it is; save `ALL` for the case where you genuinely cannot.
 
 The edge does not know a device's *name* — device names live in the cloud's approved-device registry,
 and a store that has never synced has none — so the pairing moment and the **This device** mark are

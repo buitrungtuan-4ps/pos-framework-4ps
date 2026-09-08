@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApiError, api } from "../api/client";
-import type { PairedDevice } from "../api/types";
+import type { MintedCode, PairedDevice } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { locale, t } from "../i18n";
 
@@ -32,6 +32,13 @@ function pairedAt(ms: number): string {
 // mistap. Deliberately a word from the interface rather than free text.
 const CONFIRM_ALL = "ALL";
 
+// Where the new device goes. Built from this browser's own address rather than asked of the server:
+// this tablet reached the store somehow, and whatever address worked for it is the address that will
+// work for the one standing beside it — on a shop LAN and behind an ADR-0111 public origin alike.
+function pairingUrl(code: string): string {
+  return `${window.location.origin}/pair?code=${code}`;
+}
+
 export function Devices() {
   const [devices, setDevices] = createSignal<readonly PairedDevice[]>([]);
   const [durable, setDurable] = createSignal(true);
@@ -39,6 +46,7 @@ export function Devices() {
   const [busy, setBusy] = createSignal(false);
   const [confirming, setConfirming] = createSignal<string | null>(null);
   const [confirmAll, setConfirmAll] = createSignal("");
+  const [minted, setMinted] = createSignal<MintedCode | null>(null);
 
   const load = async () => {
     try {
@@ -66,6 +74,26 @@ export function Devices() {
       setConfirmAll("");
       await load();
     } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Mint the code for the next device (ADR-0118). Before this, adding a till meant restarting the
+  // store server — which drops every till's and kitchen display's live session — because a code was
+  // minted once per start-up and nothing minted another.
+  //
+  // The reply is the only copy of the code, so it is held in state and shown until this screen is
+  // left. A `403` means the signed-in person is not a manager, and the message says so rather than
+  // sending them back to the sign-in screen.
+  const mint = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setMinted(await api.mintPairingCode());
+    } catch (caught) {
+      setMinted(null);
       setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     } finally {
       setBusy(false);
@@ -145,6 +173,50 @@ export function Devices() {
           )}
         </For>
       </ul>
+
+      <div class="mt-6 rounded-token border border-line p-3">
+        <p class="font-semibold text-ink">{t("devices.add_title")}</p>
+        <p class="mt-1 text-sm text-ink-muted">{t("devices.add_hint")}</p>
+        <Show
+          when={minted()}
+          fallback={
+            <button
+              type="button"
+              class="mt-2 min-h-touch w-full rounded-token border border-line font-semibold text-ink disabled:opacity-50"
+              disabled={busy()}
+              onClick={() => void mint()}
+            >
+              {t("devices.add_button")}
+            </button>
+          }
+        >
+          {(code) => (
+            <div class="mt-2">
+              {/* Tracked wide and large: this is read aloud across a counter, or typed by somebody
+                  holding a second tablet. `select-all` so one tap copies it. */}
+              <p class="select-all text-center font-mono text-3xl tracking-[0.35em] text-ink">
+                {code().code}
+              </p>
+              <p class="mt-2 text-sm text-ink-muted">
+                {t("devices.add_expires", { moment: pairedAt(code().expires_at_ms) })}
+              </p>
+              <p class="mt-1 text-sm text-ink-muted">{t("devices.add_open")}</p>
+              <p class="select-all break-all font-mono text-xs text-ink-muted">
+                {pairingUrl(code().code)}
+              </p>
+              <p class="mt-2 text-sm text-ink-muted">{t("devices.add_replaced")}</p>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line text-ink disabled:opacity-50"
+                disabled={busy()}
+                onClick={() => void mint()}
+              >
+                {t("devices.add_button")}
+              </button>
+            </div>
+          )}
+        </Show>
+      </div>
 
       <div class="mt-6 rounded-token border border-danger p-3">
         <p class="font-semibold text-ink">{t("devices.all_title")}</p>

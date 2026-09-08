@@ -369,6 +369,18 @@ export interface RevokeRequest {
   device_id?: string;
 }
 
+// The pairing code for the next device (ADR-0118). Minted by a signed-in manager on a paired till,
+// so adding a second device no longer means restarting the store server.
+//
+// **This response is the only place the code exists.** It is not written to a file and not logged,
+// so a screen that loses it mints another rather than looking the old one up.
+export interface MintedCode {
+  /** The six digits the next device presents. */
+  readonly code: string;
+  /** When it stops working, Unix ms. From the server, so the till assumes no particular TTL. */
+  readonly expires_at_ms: number;
+}
+
 // The first-boot activation exchange (ADR-0050), mounted only when the store server is provisioned
 // for a cloud (ADR-0086) — a LAN-only edge serves neither route.
 export interface ActivateRequest {

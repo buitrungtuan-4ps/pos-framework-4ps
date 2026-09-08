@@ -89,7 +89,7 @@ async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Route
     );
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
-    let code = pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = pairing.mint(now).expect("mint a pairing code");
     let token = pairing
         .redeem(&code, now)
         .await

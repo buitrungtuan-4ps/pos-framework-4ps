@@ -42,7 +42,7 @@ fn at(ms: i64) -> Timestamp {
 
 /// Pairs a device against `pairing`, returning the token the device would hold.
 async fn pair(pairing: &Pairing, now: Timestamp) -> DeviceToken {
-    let code = pairing.mint(now).expect("mint a pairing code");
+    let (code, _) = pairing.mint(now).expect("mint a pairing code");
     pairing
         .redeem(&code, now)
         .await
