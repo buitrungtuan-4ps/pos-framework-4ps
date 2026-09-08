@@ -14,6 +14,74 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **A Windows store can be paired with.** It could not be, at all. A service started by the Service
+  Control Manager has no console, `pos-edge`'s only log sink was standard output, and the pairing
+  code — the one thing a tablet needs in order to join a store — is minted once per process start and
+  reaches the operator only as a log line. No route mints a second one. So on Windows the installer
+  closed by telling an operator to *"pair it"* against a mechanism that could not produce a code.
+  Two service-scoped variables, both set by the generated installers, close it: `POS_EDGE_LOG_FILE`
+  tees the log into a file, and `POS_EDGE_PAIRING_FILE` holds the pairing URL until a device redeems
+  it, at which point the edge deletes it. The installer now waits for that file and prints the URL
+  before it exits ([ADR-0117](docs/adr/0117-a-headless-store-keeps-a-log.md), #245).
+- **The diagnostics three documents call load-bearing are now readable on an unattended box** — the
+  `403`-on-every-poll symptom of an under-scoped store key, the missing-font early warning, and the
+  over-the-air install trail. `pos_print_agent` gets the same file sink under
+  `POS_PRINT_AGENT_LOG_FILE`, and its subscriber no longer `panic`s if one is already installed.
+
+### Security
+
+- **A pairing code no longer reaches a durable log.** [ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)
+  has always said a pairing code *"is never logged"*; that was false in the code, which logged it
+  inside the pairing URL. The announcement now carries a target of its own, which the file sink
+  excludes — so the line still reaches a console, where an operator needs it, and never reaches the
+  file. The rule is true for the first time rather than weakened to match.
+- **The durable log carries no employee sign-in stream.** Enforced by the writer, not by review: the
+  file excludes both authentication targets, so who signed in, who mistyped a PIN and who was locked
+  out never reach disk. Without that exclusion a shop-floor box would accumulate an
+  attendance-and-failed-auth record outside `SubjectStore` — invisible to
+  [ADR-0035](docs/adr/0035-retention-and-pii-masking.md)'s masking and
+  [ADR-0076](docs/adr/0076-subject-request-tooling.md)'s erasure, and an employee-monitoring surface
+  needing a lawful basis, staff notification and a DPIA. The same writer pins the file at `INFO`, so
+  raising `RUST_LOG=debug` to diagnose pairing cannot make a `DEBUG` span durable.
+- **Four `Debug` implementations stopped printing credentials.** `CloudHttpClient` printed the
+  store's scoped API key, the print agent's `HttpEdge` and `Config` printed its device token, and
+  `Approval` printed the approving manager's badge code. All four redact now. The request span
+  records the request **path** rather than the whole URI, which carried the query string —
+  `/pair?code=NNNNNN` is a route this server serves. And a font warning names at most six missing
+  characters plus a count, because the unbounded set of substituted glyphs from a Vietnamese or
+  Japanese buyer name is most of that name.
+
+### Upgrade notes
+
+- **Re-run the Windows installer on any box installed before this release.** The two variables are
+  read by the Service Control Manager at service start, not on the fly, and the installer restarts
+  the service for exactly that reason. Nothing else changes: the layout, the update slots and the
+  config are re-applied identically, which is what makes a second run safe.
+- **Nothing under `deploy/` sets either variable on Linux**, and unset is byte-for-byte the previous
+  behaviour — `journald` already captures the stream through the units' implicit default, and
+  `just run-edge` and the examples are untouched. Set `POS_EDGE_LOG_FILE` on Linux only if you want a
+  second copy.
+- **`<log file>` and `<log file>.1` are the current run and the previous one.** The per-run 8 MiB cap
+  (4 MiB for the print agent) is a disk-full guard, not a retention period: the file holds
+  identifiers, counts and outcomes, so [ADR-0035](docs/adr/0035-retention-and-pii-masking.md)'s
+  periods do not apply to it.
+- **Treat the pairing file as a five-minute password.** It is written owner-only where the platform
+  has a mode, deleted on redemption, and its contents expire with
+  [`CODE_TTL`](crates/pos-edge/src/pairing.rs). `C:\ProgramData\pos-edge` still carries no explicit
+  ACL — that is [`docs/gate-register.md`](docs/gate-register.md) row P12, pre-existing and recorded
+  rather than closed here.
+- **Not verified on Windows.** Nothing in this repository can observe the Service Control Manager
+  ([`docs/gate-register.md`](docs/gate-register.md) row P3) or parse PowerShell outside the
+  `windows-2022` job. Whether the sink produces a readable file on a real store box, and whether a
+  code read out of it redeems, is row **P11** — a blocking precondition on a Windows pilot, not a
+  footnote.
+
+---
+
 ## [0.9.0] — 2026-09-08
 
 **Product version** 0.9.0 · **Protocol version** 1 · **MSRV** 1.94

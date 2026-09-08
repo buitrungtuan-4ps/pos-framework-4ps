@@ -115,9 +115,20 @@ Following the organisation's T1/T2/T3 scheme:
   anything costs.
 - **T3 Internal** — fleet liveness, task health, audit metadata, this document.
 
-**Logs and metrics carry no personal data by construction.** The request-tracing layer records
-method, path and status and never a body; the metrics label alphabet forbids names, emails, phones
-and identifiers, with a compile-time assertion that a label can never hold a ULID.
+**Logs and metrics carry no personal data by construction.** The request-tracing layer records the
+method, the URI **path** and the status — never the query string, which on this server can carry a
+pairing code, and never a body; the metrics label alphabet forbids names, emails, phones and
+identifiers, with a compile-time assertion that a *metrics label* can never hold a ULID.
+
+Log **fields** are a separate surface and carry a separate rule: identifiers and counts, never the
+person (`crates/pos-edge/src/telemetry.rs`). Where a store keeps a **durable** log — a Windows box,
+which has no journald — that rule is enforced by the writer rather than by review
+([ADR-0117](adr/0117-a-headless-store-keeps-a-log.md)): the file excludes the pairing announcement and
+both employee-authentication targets, so neither a pairing code nor the per-employee
+sign-in/wrong-PIN/lockout stream reaches disk, and it is pinned at `info` so raising `RUST_LOG` to
+diagnose a problem cannot make a `debug` span durable. That exclusion is why no attendance-and-failed-auth
+record accumulates outside `SubjectStore`, where ADR-0035's masking and ADR-0076's erasure could not
+reach it.
 
 ## 6. Supply chain and the artefact trust chain
 

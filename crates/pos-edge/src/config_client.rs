@@ -549,7 +549,11 @@ where
         None => store.last_known_good(store_id).await?,
     };
     let Some(stored) = stored else {
-        tracing::info!("no configuration has been synced to this store yet; trading on defaults");
+        tracing::info!(
+            "no configuration has been synced to this store yet: the staff roster and the menu are \
+             both empty, so no sign-in will succeed and nothing is priced until the console \
+             publishes them"
+        );
         return Ok(None);
     };
     let version = stored.config_version_id.to_string();
@@ -557,7 +561,11 @@ where
         // Unreachable through the port (a `ConfigDocument` holds validated JSON), so this is the
         // hand-edited-database case. Logged without the document: config carries no personal data,
         // but a whole document in a log line is noise nobody reads.
-        tracing::warn!(%version, "the stored configuration is not JSON; trading on defaults");
+        tracing::warn!(
+            %version,
+            "the stored configuration is not JSON, so this store is starting as though it had never \
+             synced: empty roster, empty menu, no sign-in and no prices until the next successful pull"
+        );
         return Ok(None);
     };
     let rebuilt = session_from_config(&edge.session(), &document);

@@ -164,7 +164,21 @@ pub fn router(state: AppState) -> Router {
         .fallback(assets::serve)
         // Records a span per request; it logs the method, path and status — never a request body,
         // which is where PII would be (see `crate::telemetry`).
-        .layer(TraceLayer::new_for_http())
+        //
+        // The span is built by hand rather than taken from `DefaultMakeSpan`, which records the
+        // whole **URI**. That comment above was aspirational until ADR-0117: the URI carries the
+        // query string, `/pair?code=NNNNNN` is a route this server serves, and a durable log makes
+        // the difference between a path and a URI the difference between a spent credential and a
+        // live one. `uri().path()` is what the sentence always claimed.
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+                tracing::info_span!(
+                    "request",
+                    method = %request.method(),
+                    path = request.uri().path(),
+                )
+            }),
+        )
         // The release this box is running, on every `/api/*` answer including the asset fallback's
         // (ADR-0111). Outermost, so it also stamps a response a layer below refused.
         .layer(axum::middleware::from_fn(stamp_edge_version))

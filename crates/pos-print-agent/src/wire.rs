@@ -19,6 +19,7 @@
 //! connection pool would buy nothing at that rate and would add a class of failure — a half-closed
 //! socket a proxy reaped — that this shape simply does not have.
 
+use core::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -46,11 +47,24 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 /// The edge this agent claims from.
 ///
 /// Cheap to clone: a parsed URL, a shared rustls configuration, and the device token.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpEdge {
     base: url::Url,
     token: String,
     tls: Option<Arc<ClientConfig>>,
+}
+
+impl fmt::Debug for HttpEdge {
+    /// Redacts the device token. The derived implementation printed the bearer this machine pairs
+    /// with in full, and ADR-0117 gives this process a durable log file — so a line that formatted
+    /// the client would have written a working credential to disk.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpEdge")
+            .field("base", &self.base)
+            .field("token", &"<redacted>")
+            .field("tls", &self.tls.is_some())
+            .finish()
+    }
 }
 
 impl HttpEdge {

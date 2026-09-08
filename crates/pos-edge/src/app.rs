@@ -810,11 +810,15 @@ pub struct Approval {
 }
 
 impl fmt::Debug for Approval {
-    /// Redacts the PIN. A `Debug` that printed it would put a manager's credential into any log
-    /// line that formatted the surrounding request.
+    /// Redacts both halves. The PIN because a `Debug` that printed it would put a manager's
+    /// credential into any log line that formatted the surrounding request — and, since ADR-0117,
+    /// the badge **code** too: it names which manager authorised what, and a durable line carrying
+    /// it is a managerial-activity record outside `SubjectStore`. The approver reaches the event
+    /// catalogue as `approver_employee_id` on `security.permission.overridden`, which is the place
+    /// that question is meant to be answered from.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Approval")
-            .field("code", &self.code)
+            .field("code", &"<redacted>")
             .field("pin", &"<redacted>")
             .finish()
     }

@@ -655,6 +655,16 @@ impl TransportFactory for TcpTransports {
     }
 }
 
+/// How many distinct missing characters a font warning names before it stops naming them.
+///
+/// The warning exists so an operator knows which font to install, and a handful of characters says
+/// which script that is. The *whole* set says more than that: a receipt block carries a buyer's name
+/// (`pos_ports::printer`), and on a box with no Vietnamese or CJK face every character of that name
+/// substitutes — so an unbounded set in a durable log is the name itself, spelled with the
+/// duplicates removed ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md)
+/// decision 7). The count is reported alongside, so a truncation is visible as one.
+const MISSING_GLYPHS_REPORTED: usize = 6;
+
 /// Characters per line this build assumes of a printer it has never talked to.
 ///
 /// 42 is the 80mm standard. Nothing reads it yet — the documents here are single lines that a printer
@@ -890,9 +900,19 @@ impl Printers {
                 Ok(drawn) => {
                     if !drawn.substituted.is_empty() {
                         // The characters, not the line: which glyphs are missing is what an operator
-                        // needs to install a font for, and it is not personal data.
+                        // needs to install a font for.
+                        //
+                        // Truncated at `MISSING_GLYPHS_REPORTED`, because the *whole* set is not the
+                        // harmless thing the sentence above assumed. A receipt block carries a
+                        // buyer's name (`pos_ports::printer`); on a box with no CJK or Vietnamese
+                        // face, every character of that name substitutes, and a set of them in a
+                        // durable log reconstructs most of it (ADR-0117 decision 7). A handful names
+                        // the script and the font to install, which is the whole operational use.
+                        let missing = &drawn.substituted
+                            [..drawn.substituted.len().min(MISSING_GLYPHS_REPORTED)];
                         tracing::warn!(
-                            missing = ?drawn.substituted,
+                            missing = ?missing,
+                            missing_count = drawn.substituted.len(),
                             "no installed font covers these characters; they printed as boxes"
                         );
                     }

@@ -147,6 +147,22 @@ if ($exists) {
 }
 & sc.exe description $service "Pizza 4P's POS edge (store server)" | Out-Null
 
+# WITHOUT THESE TWO PATHS A WINDOWS STORE CANNOT BE PAIRED WITH AT ALL (ADR-0117).
+#
+# A service started by the Service Control Manager has no console, so everything the edge logs to
+# standard output is discarded — including the pairing URL, which is minted once per process start
+# and which no route mints a second time. The two variables below are what make a headless box
+# diagnosable and pairable:
+#
+#   * POS_EDGE_LOG_FILE tees the log into a file (the current run, plus the previous run beside it
+#     as pos-edge.log.1). It never contains the pairing code, the staff sign-in stream or a
+#     credential: the writer excludes those, and raising RUST_LOG cannot change it;
+#   * POS_EDGE_PAIRING_FILE is where the pairing URL itself is written, and the edge DELETES it the
+#     moment a device redeems the code. Treat it as a five-minute password: read it, pair, and it
+#     is gone.
+$logPath = Join-Path $Root 'pos-edge.log'
+$pairingPath = Join-Path $Root 'pairing-url.txt'
+
 # The environment, service-scoped rather than machine-wide. A machine environment variable is
 # readable by every local administrator and shows up in process listings of unrelated services;
 # this key is readable only by accounts that can read the service. REG_MULTI_SZ is how SCM passes
@@ -154,6 +170,8 @@ if ($exists) {
 # restart below is not optional.
 $environment = @(
     "POS_EDGE_CONFIG=$configPath",
+    "POS_EDGE_LOG_FILE=$logPath",
+    "POS_EDGE_PAIRING_FILE=$pairingPath",
     'RUST_LOG=info'
 )
 # The scoped store key (read_config + relay_orders). The keyring is the better home for it
@@ -198,5 +216,29 @@ if ($exists) { & sc.exe stop $service | Out-Null; Start-Sleep -Seconds 2 }
 & sc.exe query $service
 Write-Host ''
 Write-Host "pos_edge installed for $StoreId."
-Write-Host "Next: open http://<this box>:$BindPort/ on a device on the shop LAN and pair it."
+Write-Host ''
+# The pairing URL, read off the box. The service was started seconds ago, so the code in it is
+# live for five minutes from that start; if it has expired, `sc.exe stop pos-edge` and
+# `sc.exe start pos-edge` mints a new one. Printed here rather than left for the operator to find,
+# because it is the one step between an installed service and a till that works.
+#
+# The wait is what makes the happy path the one that prints a URL: `sc.exe start` returns as soon
+# as SCM has accepted the start, and the edge writes this file after it has opened the store and
+# replayed the log, which on a shop-floor PC with a season of history is not instant. Bounded, and
+# a timeout falls through to the else branch rather than failing the install — the service is
+# registered either way.
+$deadline = (Get-Date).AddSeconds(30)
+while (-not (Test-Path -LiteralPath $pairingPath) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+}
+
+Write-Host 'Next: pair a device on the shop LAN. Open the URL below on it.'
+if (Test-Path -LiteralPath $pairingPath) {
+    Write-Host ''
+    Write-Host (Get-Content -LiteralPath $pairingPath -Raw).Trim()
+    Write-Host ''
+    Write-Host "That code lives five minutes and pairs one device. For the next device: sc.exe stop $service; sc.exe start $service — then read $pairingPath again."
+} else {
+    Write-Host "The pairing URL is not there yet. Read $pairingPath in a moment, or $logPath for why the service did not get that far; the address is http://<this box>:$BindPort/."
+}
 if ($SyncKey) { Write-Host 'The store key is now in the service registry key. Clear it from your shell history.' }

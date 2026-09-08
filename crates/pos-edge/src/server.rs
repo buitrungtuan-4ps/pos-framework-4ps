@@ -43,7 +43,7 @@ use crate::lease_state::LeaseAuthority;
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
-use crate::pairing::{Pairing, hosted_pairing_url, pairing_url};
+use crate::pairing::{ANNOUNCE_TARGET, Pairing, hosted_pairing_url, pairing_url};
 use crate::queue::QueueNumberAuthority;
 use crate::relay_client::RelayClient;
 use crate::state::AppState;
@@ -205,14 +205,27 @@ where
 /// ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md),
 /// [ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
-/// The code is a secret and is never logged on its own: it appears only inside the URL an operator
-/// scans. Three cases, in the order of what the box actually knows about itself:
+/// The code is a secret. It appears only inside the URL an operator scans, on the
+/// [`ANNOUNCE_TARGET`] target — which reaches stdout and journald and is excluded from the durable
+/// log file, so ADR-0030's "never logged" holds for the artefact that outlives the boot
+/// ([ADR-0117](../../../docs/adr/0117-a-headless-store-keeps-a-log.md) decisions 2 and 3).
+///
+/// Three cases, in the order of what the box actually knows about itself:
 ///
 /// - A **public origin** was configured, so this box's devices are not on its LAN and the raw-IP
 ///   form would name an address they cannot reach. That form wins.
 /// - Otherwise an **advertised host** — today's behaviour for every in-store store, unchanged.
 /// - Otherwise a warning naming the two ways to fix it, because a box that cannot say where it is
 ///   cannot be paired with, and should say so loudly rather than print a URL with a hole in it.
+///
+/// # The headless case
+///
+/// A store run as a Windows service has no console, so neither line above reaches anybody, and no
+/// route mints a second code. [`crate::pairing::publish_pairing_url`] is what closes that: with
+/// `POS_EDGE_PAIRING_FILE` set the resolved URL goes to that file as well, owner-only, and
+/// [`Pairing::redeem`] deletes it the moment a device pairs. In the third case the file carries the
+/// path-and-query part alone, which is all a box that cannot name its own address honestly knows —
+/// an operator prefixes the address they reached it on.
 ///
 /// Extracted from [`serve_until`] rather than inlined: adding the third case took that function past
 /// the hundred-line ceiling, and a boot-time announcement is a whole thought on its own.
@@ -226,20 +239,25 @@ fn announce_pairing(
         tracing::error!("could not mint a pairing code: the OS entropy source is unavailable");
         return;
     };
-    if let Some(url) = public_origin.and_then(|origin| hosted_pairing_url(origin, &code)) {
-        tracing::info!(pairing_url = %url, "scan or type this to pair a device");
-    } else if let Some(host) = advertised_host {
+    let resolved = public_origin
+        .and_then(|origin| hosted_pairing_url(origin, &code))
+        .or_else(|| advertised_host.map(|host| pairing_url(host, port, &code)));
+    if let Some(url) = resolved.as_deref() {
         tracing::info!(
-            pairing_url = %pairing_url(host, port, &code),
+            target: ANNOUNCE_TARGET,
+            pairing_url = %url,
             "scan or type this to pair a device",
         );
     } else {
         tracing::warn!(
+            target: ANNOUNCE_TARGET,
             "a device pairs at http://<edge-ip>:{port}/pair?code={} — set advertised_ip or \
              public_origin, or read the LAN IP off this machine",
             code.as_str(),
         );
     }
+    pairing
+        .publish_pairing_url(&resolved.unwrap_or_else(|| format!("/pair?code={}", code.as_str())));
 }
 
 /// As [`serve`], but the caller says what a stop is.
@@ -602,7 +620,14 @@ where
     // is the edge's existing store, reached through the seam in `crate::durable_auth` — no new
     // parameter, and `main.rs` is unchanged.
     let registry: Arc<dyn DurableAuth> = Arc::new(EdgeRegistry(Arc::clone(&edge)));
-    let pairing = Arc::new(Pairing::durable(Arc::clone(&registry)));
+    // The pairing URL also goes to a file when `POS_EDGE_PAIRING_FILE` names one: a store run as a
+    // Windows service has no console to read the announcement off, and no route mints a second code
+    // (ADR-0117). Read here, at the one place the real edge is composed, so the examples and the
+    // tests are unaffected.
+    let pairing = Arc::new(
+        Pairing::durable(Arc::clone(&registry))
+            .with_pairing_file(crate::pairing::pairing_file_from_env()),
+    );
     let sessions = Arc::new(Sessions::durable(registry, idle_timeout));
 
     // Load both tables before the first request can arrive. Fatal if either fails: starting with an

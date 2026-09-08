@@ -25,9 +25,15 @@ git clone <your fork url> && cd pos-framework-4ps
 just run-edge          # or: cargo run -p minimal-edge
 ```
 
-Open **http://127.0.0.1:8787/**. Open a table, add items from two browser tabs at once, fire a course,
-split the bill, take payment. **Unplug your network** — it keeps working. That is the core promise:
-a store never stops selling. `Ctrl-C` stops it.
+It prints a pairing URL — `http://<ip>:8787/pair?code=NNNNNN` — because a browser has to be admitted
+before it can command the store ([ADR-0030](../adr/0030-pairing-and-offline-auth.md)). Open **that
+URL**, not the bare address: the code is single-use and lives five minutes, and `Ctrl-C` plus a fresh
+`just run-edge` mints another. (On a real store there is no console to read it off, which is a whole
+problem of its own — [ADR-0117](../adr/0117-a-headless-store-keeps-a-log.md).)
+
+Then open a table, add items from two browser tabs at once, fire a course, split the bill, take
+payment. **Unplug your network** — it keeps working. That is the core promise: a store never stops
+selling. `Ctrl-C` stops it.
 
 Nothing was installed, nothing was configured. If this worked, the framework is healthy on your machine.
 

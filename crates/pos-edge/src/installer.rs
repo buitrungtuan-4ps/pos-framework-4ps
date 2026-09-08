@@ -130,6 +130,14 @@ fn make_executable(_path: &Path) -> std::io::Result<()> {
 /// leave a genuinely broken release crash-looping for minutes while the shop cannot sell.
 pub const MAX_UNCONFIRMED_BOOTS: u32 = 3;
 
+/// The flag a `pos-edge` process is spawned with to answer *can these bytes run on this box*.
+///
+/// One definition, because three places need to agree on it: [`SystemdInstaller::self_test`] spawns
+/// it, `main` dispatches on it, and [`crate::telemetry`] declines to open a durable log file for a
+/// process carrying it (a self-test is a second process against the live store's state directory,
+/// and two of them rotating one file would cost the running store its log — ADR-0117 decision 1).
+pub const SELF_TEST_FLAG: &str = "--self-test";
+
 /// How long the staged binary gets to answer `--self-test` before the attempt is judged failed.
 ///
 /// The check itself is a config parse and a read-only database open, so this is generous by an order
@@ -427,7 +435,7 @@ impl UpdateInstaller for SystemdInstaller {
     fn self_test(&self) -> Result<bool, InstallError> {
         let staged = self.bin.join(STAGED);
         let spawned = std::process::Command::new(&staged)
-            .arg("--self-test")
+            .arg(SELF_TEST_FLAG)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
