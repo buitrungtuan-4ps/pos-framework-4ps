@@ -393,6 +393,15 @@ pub(crate) enum RegistryCommand {
         device_id: Option<String>,
         reply: oneshot::Sender<Result<(), PortError>>,
     },
+    /// Record that the cloud's revocation of one device has been carried out (migration 0012).
+    RecordRevocationApplied {
+        device_id: String,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// Every device id whose cloud revocation this store has already carried out.
+    RevocationsApplied {
+        reply: oneshot::Sender<Result<Vec<String>, PortError>>,
+    },
     /// Record (or replace) a sign-in.
     RecordSignIn {
         session: DeviceSessionRow,
@@ -669,6 +678,12 @@ fn run_registry(conn: &mut Connection, command: RegistryCommand) {
         }
         RegistryCommand::RevokeDevices { device_id, reply } => {
             let _ = reply.send(revoke_devices(conn, device_id.as_deref()));
+        }
+        RegistryCommand::RecordRevocationApplied { device_id, reply } => {
+            let _ = reply.send(record_revocation_applied(conn, &device_id));
+        }
+        RegistryCommand::RevocationsApplied { reply } => {
+            let _ = reply.send(revocations_applied(conn));
         }
         RegistryCommand::RecordSignIn { session, reply } => {
             let _ = reply.send(record_sign_in(conn, &session));
@@ -1699,6 +1714,37 @@ fn revoke_devices(conn: &mut Connection, device_id: Option<&str>) -> Result<(), 
             .map_err(|error| db_error(REGISTRY, error))?;
     }
     tx.commit().map_err(|error| db_error(REGISTRY, error))
+}
+
+/// Records that the cloud's revocation of one device has been carried out (migration 0012).
+///
+/// `DO NOTHING` rather than `DO UPDATE`: the row's meaning is "this happened", and the first time
+/// it happened is the truthful timestamp. The store re-reads the deny-list on every config pull, so
+/// re-recording an id it has already recorded is the normal case, not a correction — and there is
+/// deliberately no statement here that removes one.
+fn record_revocation_applied(conn: &Connection, device_id: &str) -> Result<(), PortError> {
+    // `datetime('now')` rather than a passed-in instant, as `ota_self_test` does: the column is for
+    // an operator reading the file and nothing decides on it, so it does not earn a `ClockSource`
+    // parameter through the port.
+    conn.execute(
+        "INSERT INTO applied_device_revocations (device_id, applied_time)
+         VALUES (?1, datetime('now'))
+         ON CONFLICT (device_id) DO NOTHING",
+        params![device_id],
+    )
+    .map(|_| ())
+    .map_err(|error| db_error(REGISTRY, error))
+}
+
+fn revocations_applied(conn: &Connection) -> Result<Vec<String>, PortError> {
+    let mut statement = conn
+        .prepare("SELECT device_id FROM applied_device_revocations")
+        .map_err(|error| db_error(REGISTRY, error))?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| db_error(REGISTRY, error))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| db_error(REGISTRY, error))
 }
 
 fn record_sign_in(conn: &Connection, session: &DeviceSessionRow) -> Result<(), PortError> {

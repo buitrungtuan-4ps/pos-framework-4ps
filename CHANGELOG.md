@@ -46,6 +46,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   document. The panel says out loud that these ids are **not** the named devices in the registry —
   the store mints its own when a tablet pairs, and the two do not match up.
 
+- **A store carries out a device retirement the console publishes.** A `revoked_devices` node on the
+  store's configuration names local device ids; the box applies it on its next 30-second config pull
+  and again at boot, retiring each named till so its token stops resolving both in memory and in the
+  store's own database. This is the path for a store nobody can reach — a shop that is closed, or one
+  whose only admitted till is the tablet that walked out of the door — and it needs no cloud→store
+  push channel: the store pulls, exactly as it already pulls its menu
+  ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6). The console half
+  ships next; a store on this build simply applies whatever is published.
+
 ### Fixed
 
 - **A Windows store can be paired with.** It could not be, at all. A service started by the Service
@@ -63,6 +72,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `POS_PRINT_AGENT_LOG_FILE`, and its subscriber no longer `panic`s if one is already installed.
 
 ### Security
+
+- **A published device retirement is one-shot, monotone, and blast-radius capped.** The deny-list
+  only ever grows, and three separate things stop a configuration rollback handing a stolen tablet
+  its access back: retiring a device **deletes** its pairing row, so nothing in a later document can
+  restore it; the store records each id it has carried out in a table with no delete path, so the
+  same instruction never fires twice; and the publish route appends to the list it just read, inside
+  the conditional-write retry, so two admins retiring two tills cannot lose each other's entry. The
+  cap is the other half: a document that would retire more than one **admitted** till at once, or
+  leave a store with no admitted device at all, is refused **whole** — not partly applied — because
+  this rail exists to retire *a* lost tablet, and closing a shop's whole floor from a console is a
+  different act. A fleet-wide retirement stays the local break-glass it already is. Note the limit
+  honestly: the store's only channel for a refusal is its own log, so an operator whose remote revoke
+  did not take effect has to read the box's log
+  ([ADR-0117](docs/adr/0117-a-headless-store-keeps-a-log.md) gives a headless box one) to find out
+  why.
 
 - **Minting a code needs a manager, and both gates.** The route sits behind the paired-device gate
   *and* the signed-in gate, and checks `ManageDevices` against the roster the console published — the
@@ -121,6 +145,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   which is what the wire's forward compatibility is for. `PairedDevice` gains `admitted_by` and
   `Pairing::mint` takes a `Minter`: both are source-level changes for a fork with its own
   `DeviceRegistry` adapter or its own caller.
+- **Store migration `0012_applied_revocations.sql` is additive** and runs on the first boot of this
+  build — a new `applied_device_revocations` table, one row per device id, insert-only. It is a
+  separate table rather than a column on `paired_devices` because retiring a device *deletes* that
+  row and a re-pair overwrites it, so a flag there would be destroyed by the act it records. The
+  `DeviceRegistry` port gains `record_revocation_applied` and `revocations_applied`, which is a
+  source-level change for a fork with its own adapter; the contract suite has a case for both.
 - **No cloud migration.** The roster is a fourth map in the materialised rollup the cloud already
   keeps per store, so it needs no table and no schema change; a rollup written before this release
   loads with an empty roster and accrues from its cursor forward. To backfill a store's history, use

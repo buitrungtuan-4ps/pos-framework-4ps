@@ -45,6 +45,7 @@ macro_rules! device_registry_suite {
                 revoking_is_idempotent,
                 revoke_all_retires_every_device,
                 remembers_who_admitted_a_device,
+                an_applied_revocation_outlives_the_device_row_and_never_un_records,
                 round_trips_a_sign_in,
                 a_second_sign_in_replaces_the_first,
                 touch_moves_last_seen_forward,
@@ -149,6 +150,60 @@ pub async fn remembers_who_admitted_a_device<H: DeviceRegistryHarness>(
         &boot.admitted_by,
         &None,
         "and a device nobody minted for is recorded as admitted by nobody, not by a stand-in",
+    )
+}
+
+/// An applied revocation is remembered after the pairing row it names is gone, and after the same
+/// tablet pairs again.
+///
+/// The obligation exists because of what the cloud's deny-list would otherwise do
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6). The list
+/// only ever grows and it rides every config pull, so the store subtracts the ids it has already
+/// carried out. If that record were a column on the pairing, `revoke_device` would delete it along
+/// with the row, the next pull would find the id un-done, and one lost tablet would become an
+/// endless stream of duplicate revocation events — an adapter can get this wrong in exactly one
+/// way, and this case is the one that catches it.
+///
+/// Re-recording the same id is asserted too: the store re-reads and re-writes on a schedule, so a
+/// second record of the same id is the normal case and must not be an error or a second entry.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn an_applied_revocation_outlives_the_device_row_and_never_un_records<
+    H: DeviceRegistryHarness,
+>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let registry = harness.fresh().await?;
+    let obligation = obligation();
+    obligation.require_eq(
+        &registry.revocations_applied().await?,
+        &Vec::new(),
+        "a store the console has never revoked a device on has recorded nothing",
+    )?;
+    registry.record_pairing(paired(1, 0xa1, 1_000)).await?;
+    registry.record_revocation_applied(device(1)).await?;
+    registry.revoke_device(device(1)).await?;
+    obligation.require_eq(
+        &registry.revocations_applied().await?,
+        &vec![device(1)],
+        "the record survives the deletion of the very row it is about",
+    )?;
+    // The same tablet coming back is a fresh pairing, and the framework mints a fresh id for it —
+    // but an adapter that stored the record inside the pairing would have it overwritten here even
+    // if the delete above spared it, so re-pairing the same id is the harsher test.
+    registry.record_pairing(paired(1, 0xb1, 2_000)).await?;
+    obligation.require_eq(
+        &registry.revocations_applied().await?,
+        &vec![device(1)],
+        "and it survives a re-pairing of the same id",
+    )?;
+    registry.record_revocation_applied(device(1)).await?;
+    obligation.require_eq(
+        &registry.revocations_applied().await?,
+        &vec![device(1)],
+        "recording the same id again succeeds and adds nothing: the store re-reads on a schedule",
     )
 }
 

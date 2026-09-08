@@ -213,6 +213,12 @@ pub struct DeviceSession {
 ///    it on every request, including on a device that has just been signed out by another
 ///    request — a race, not a fault.
 /// 7. **Nothing here stores a device token, a PIN, or a PIN hash.** Only digests and identifiers.
+/// 8. **`record_revocation_applied` is monotone and idempotent.** An id recorded stays recorded, and
+///    recording it twice succeeds and changes nothing. Nothing removes one — there is deliberately
+///    no un-record method, because the whole point of the record is that it cannot be taken back.
+/// 9. **The applied-revocation record outlives the device row it names.** `revoke_device` deletes
+///    the pairing; the record must survive that deletion and every re-pair afterwards, so it cannot
+///    be a column on the pairing itself.
 ///
 /// Everything here works with the cable unplugged
 /// ([ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)). A store noticing a missing
@@ -271,6 +277,42 @@ pub trait DeviceRegistry: Send + Sync {
     ///
     /// [`PortError::unavailable`] if the store cannot be written.
     fn revoke_all_devices(&self) -> impl Future<Output = Result<(), PortError>> + Send;
+
+    /// Records that the store has carried out the cloud's revocation of `device_id`, so it never
+    /// carries it out again ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+    ///
+    /// The `revoked_devices` config node is a deny-list that only ever grows, and it rides *every*
+    /// config pull. Without this record the store would re-revoke every id on it every thirty
+    /// seconds forever: each pass a durable write and a fresh `device.admission.revoked` into the
+    /// outbox, so one lost tablet would become an unbounded stream of events the cloud has to fold.
+    /// The record is what makes the directive one-shot.
+    ///
+    /// **It is not what makes the revocation durable.** That is [`Self::revoke_device`], which
+    /// deletes the pairing row outright — so a config rollback that shortens the deny-list cannot
+    /// hand a retired tablet its access back, whether or not this record exists.
+    ///
+    /// Monotone by omission: there is no method to un-record one. Adding a device again after a
+    /// revocation is a *fresh pairing* with a fresh id, which this record does not touch.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the store cannot be written.
+    fn record_revocation_applied(
+        &self,
+        device_id: DeviceId,
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
+
+    /// Every device id whose cloud revocation this store has already carried out
+    /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+    ///
+    /// Read once per config apply and once at boot, to subtract the already-done entries from the
+    /// published deny-list. Empty for a store the console has never revoked a device on, which is
+    /// every store until the first publish.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the store cannot be read.
+    fn revocations_applied(&self) -> impl Future<Output = Result<Vec<DeviceId>, PortError>> + Send;
 
     /// Records a sign-in, replacing any earlier one on that device.
     ///

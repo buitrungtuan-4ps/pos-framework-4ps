@@ -33,7 +33,8 @@ use crate::cloud_http::{
     RelayHttpTransport,
 };
 use crate::config::{EdgeConfig, NatsConfig};
-use crate::config_client::{ConfigClient, restore_session_from_store};
+use crate::config_client::{ConfigClient, restore_device_revocations, restore_session_from_store};
+use crate::device_revocations::DeviceRevocations;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
@@ -636,7 +637,9 @@ where
             .with_pairing_file(crate::pairing::pairing_file_from_env())
             .with_admission_events(Some(admissions)),
     );
-    let sessions = Arc::new(Sessions::durable(registry, idle_timeout));
+    // Cloned rather than moved: `revocations_at_boot` below reads the applied-revocation record
+    // through this same seam (ADR-0118 §6).
+    let sessions = Arc::new(Sessions::durable(Arc::clone(&registry), idle_timeout));
 
     // Load both tables before the first request can arrive. Fatal if either fails: starting with an
     // empty pairing table would silently unpair a store that *is* paired, and an operator would then
@@ -652,6 +655,9 @@ where
         idle_timeout_minutes = idle_timeout.as_secs() / 60,
         "restored device pairings and sign-ins from the store"
     );
+
+    // The deny-list the console published while this box was down (ADR-0118 §6).
+    let revocations = revocations_at_boot(&edge, &pairing, registry).await;
 
     // Share the edge's fan-out with the /ws route so a committed change reaches every device, and
     // the loaded pairing state so `/api/pair` and the gates agree.
@@ -747,6 +753,7 @@ where
             nats.as_ref(),
             held_config_version,
             &origins,
+            &revocations,
             shutdown_rx,
         )
         .await;
@@ -766,6 +773,36 @@ where
         publisher,
         farewell,
     })
+}
+
+/// Builds the device-revocation carrier and carries out anything the stored config still names
+/// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6).
+///
+/// Called from [`compose`] *after* `Pairing::load()`, and that ordering is the whole reason this is a
+/// function rather than two lines beside the session restore. The blast-radius cap reads the pairing
+/// table; evaluated before the load it would see every store as having nothing admitted, so the rule
+/// that refuses to leave a store with no admitted device would never fire — the cap would be there
+/// and would never say no.
+///
+/// A read failure is logged rather than fatal: the revocation is retried on the first config pull,
+/// and a box that will not start is worse than one that retires a lost tablet thirty seconds late.
+async fn revocations_at_boot<S>(
+    edge: &Edge<S>,
+    pairing: &Arc<Pairing>,
+    registry: Arc<dyn DurableAuth>,
+) -> Arc<DeviceRevocations>
+where
+    S: EventStore + ConfigStore,
+{
+    let revocations = Arc::new(DeviceRevocations::new(Arc::clone(pairing), registry));
+    if let Err(error) = restore_device_revocations(edge, &revocations).await {
+        tracing::warn!(
+            %error,
+            "could not read which device revocations this store has already carried out at boot; \
+             any published revocation will be applied on the first config pull instead"
+        );
+    }
+    revocations
 }
 
 /// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
@@ -802,6 +839,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
+    revocations: &Arc<DeviceRevocations>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> CloudSurface
 where
@@ -868,6 +906,7 @@ where
                 sync_key,
                 held_config_version,
                 origins,
+                revocations,
                 shutdown_rx,
                 drained_rx,
             ) {
@@ -989,6 +1028,7 @@ fn spawn_cloud_loops<S, Q, L, P>(
     sync_key: Option<String>,
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
+    revocations: &Arc<DeviceRevocations>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
     drained: tokio::sync::oneshot::Receiver<()>,
 ) -> Option<CloudLoops>
@@ -1024,7 +1064,10 @@ where
     )
     // The same list the CORS layer reads on every request, handed to the only writer there is: a
     // published `origins` node reaches the layer through this handle and nowhere else (ADR-0111).
-    .with_origins(Arc::clone(origins));
+    .with_origins(Arc::clone(origins))
+    // And the same pairing state the request gates answer from, so a `revoked_devices` node retires
+    // a till on this box rather than only in the console's picture of it (ADR-0118 §6).
+    .with_device_revocations(Arc::clone(revocations));
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet

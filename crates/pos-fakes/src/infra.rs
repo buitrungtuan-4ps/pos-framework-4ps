@@ -3,7 +3,7 @@
 
 //! The infrastructure fakes: link, blobs, metrics, signing, secrets, the device registry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use pos_ports::blob_store::{BlobKey, BlobStore};
@@ -405,6 +405,11 @@ impl KeyVault for FakeKeyVault {
 pub struct FakeDeviceRegistry {
     paired: Arc<Mutex<BTreeMap<DeviceId, PairedDevice>>>,
     sessions: Arc<Mutex<BTreeMap<DeviceId, DeviceSession>>>,
+    /// A third map, and deliberately not a field on `paired`: the applied-revocation record has to
+    /// outlive the pairing row it names (ADR-0118 §6), and a flag on the row would be destroyed by
+    /// the very deletion it records. A `BTreeSet` because the record is a set with no payload —
+    /// there is nothing to remember about an applied revocation except that it happened.
+    revocations_applied: Arc<Mutex<BTreeSet<DeviceId>>>,
 }
 
 impl FakeDeviceRegistry {
@@ -443,6 +448,17 @@ impl DeviceRegistry for FakeDeviceRegistry {
         lock(&self.paired).clear();
         lock(&self.sessions).clear();
         Ok(())
+    }
+
+    async fn record_revocation_applied(&self, device_id: DeviceId) -> Result<(), PortError> {
+        // A set insert, so recording the same id twice succeeds and changes nothing — the
+        // idempotence the contract requires, for free.
+        lock(&self.revocations_applied).insert(device_id);
+        Ok(())
+    }
+
+    async fn revocations_applied(&self) -> Result<Vec<DeviceId>, PortError> {
+        Ok(lock(&self.revocations_applied).iter().copied().collect())
     }
 
     async fn record_sign_in(&self, session: DeviceSession) -> Result<(), PortError> {

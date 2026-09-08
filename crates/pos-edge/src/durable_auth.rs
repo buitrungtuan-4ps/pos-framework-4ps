@@ -62,6 +62,13 @@ pub trait DurableAuth: Send + Sync {
     fn revoke_device(&self, device_id: DeviceId) -> BoxFuture<'_, Result<(), PortError>>;
     /// See [`DeviceRegistry::revoke_all_devices`].
     fn revoke_all_devices(&self) -> BoxFuture<'_, Result<(), PortError>>;
+    /// See [`DeviceRegistry::record_revocation_applied`].
+    fn record_revocation_applied(
+        &self,
+        device_id: DeviceId,
+    ) -> BoxFuture<'_, Result<(), PortError>>;
+    /// See [`DeviceRegistry::revocations_applied`].
+    fn revocations_applied(&self) -> BoxFuture<'_, Result<Vec<DeviceId>, PortError>>;
     /// See [`DeviceRegistry::record_sign_in`].
     fn record_sign_in(&self, session: DeviceSession) -> BoxFuture<'_, Result<(), PortError>>;
     /// See [`DeviceRegistry::sign_ins`].
@@ -92,6 +99,17 @@ impl<T: DeviceRegistry> DurableAuth for T {
 
     fn revoke_all_devices(&self) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(DeviceRegistry::revoke_all_devices(self))
+    }
+
+    fn record_revocation_applied(
+        &self,
+        device_id: DeviceId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(DeviceRegistry::record_revocation_applied(self, device_id))
+    }
+
+    fn revocations_applied(&self) -> BoxFuture<'_, Result<Vec<DeviceId>, PortError>> {
+        Box::pin(DeviceRegistry::revocations_applied(self))
     }
 
     fn record_sign_in(&self, session: DeviceSession) -> BoxFuture<'_, Result<(), PortError>> {
@@ -144,6 +162,20 @@ impl<S: pos_ports::EventStore + DeviceRegistry + Send + Sync> DurableAuth for Ed
 
     fn revoke_all_devices(&self) -> BoxFuture<'_, Result<(), PortError>> {
         Box::pin(DeviceRegistry::revoke_all_devices(self.0.store()))
+    }
+
+    fn record_revocation_applied(
+        &self,
+        device_id: DeviceId,
+    ) -> BoxFuture<'_, Result<(), PortError>> {
+        Box::pin(DeviceRegistry::record_revocation_applied(
+            self.0.store(),
+            device_id,
+        ))
+    }
+
+    fn revocations_applied(&self) -> BoxFuture<'_, Result<Vec<DeviceId>, PortError>> {
+        Box::pin(DeviceRegistry::revocations_applied(self.0.store()))
     }
 
     fn record_sign_in(&self, session: DeviceSession) -> BoxFuture<'_, Result<(), PortError>> {
