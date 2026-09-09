@@ -28,9 +28,9 @@ use pos_cloud::audit::{
 };
 use pos_cloud::auth::SuperAdminCredential;
 use pos_cloud::auth::admin::{
-    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
-    hash_session_token,
+    AdminCredential, AdminInvite, AdminLogin, AdminRole, AdminStatus, AdminStore, AdminStoreError,
+    AdminUser, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID, LiveSession, NewAdminInvite,
+    NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary, hash_session_token,
 };
 use pos_cloud::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, Scope, StoredApiKey,
@@ -329,20 +329,46 @@ struct StoredRecoveryCode {
     used: bool,
 }
 
+/// `credentials` is each admin's own password hash and TOTP secret — the `admin_users` columns that
+/// [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) makes sign-in read.
+/// `credential`/`last_used_totp_step` are the legacy single `super_admin` row, still on the seam.
 #[derive(Clone, Default)]
 struct FakeAdmin {
     credential: Arc<Mutex<Option<SuperAdminCredential>>>,
     last_used_totp_step: Arc<Mutex<Option<u64>>>,
     sessions: Arc<Mutex<SessionRows>>,
     admin_users: Arc<Mutex<Vec<AdminUser>>>,
+    credentials: Arc<Mutex<HashMap<String, AdminCredential>>>,
     invites: Arc<Mutex<Vec<StoredInvite>>>,
     recovery_codes: Arc<Mutex<HashMap<String, Vec<StoredRecoveryCode>>>>,
 }
 
 impl FakeAdmin {
+    /// An installation with one enrolled admin holding `credential` — the migrated/implicit owner,
+    /// which is the shape every real installation has today.
     fn provisioned(credential: SuperAdminCredential) -> Self {
+        Self::provisioned_as(IMPLICIT_OWNER_ID, IMPLICIT_OWNER_EMAIL, credential)
+    }
+
+    /// The same, but with the one admin under a named id and address — for the tests that assert on
+    /// *which* admin a route resolved to, and which therefore cannot use the placeholder identity.
+    fn provisioned_as(id: &str, email: &str, credential: SuperAdminCredential) -> Self {
         Self {
-            credential: Arc::new(Mutex::new(Some(credential))),
+            credential: Arc::new(Mutex::new(Some(credential.clone()))),
+            admin_users: Arc::new(Mutex::new(vec![AdminUser {
+                id: id.to_owned(),
+                email: email.to_owned(),
+                name: "Owner".to_owned(),
+                role: AdminRole::Owner,
+                status: AdminStatus::Active,
+            }])),
+            credentials: Arc::new(Mutex::new(HashMap::from([(
+                id.to_owned(),
+                AdminCredential {
+                    credential,
+                    last_used_totp_step: None,
+                },
+            )]))),
             ..Self::default()
         }
     }
@@ -569,6 +595,18 @@ impl AdminStore for FakeAdmin {
         {
             return Ok(false);
         }
+        // The credential lands with the identity, as the single `admin_users` INSERT writes it —
+        // which is what lets the new admin sign in at all (ADR-0119).
+        self.credentials.lock().expect("lock").insert(
+            user.id.clone(),
+            AdminCredential {
+                credential: SuperAdminCredential::new(
+                    user.password_phc,
+                    TotpSecret::new(user.totp_secret),
+                ),
+                last_used_totp_step: None,
+            },
+        );
         users.push(AdminUser {
             id: user.id,
             email: user.email,
@@ -577,6 +615,53 @@ impl AdminStore for FakeAdmin {
             status: AdminStatus::Active,
         });
         Ok(true)
+    }
+
+    async fn find_admin_login_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminLogin>, AdminStoreError> {
+        let users = self.admin_users.lock().expect("lock");
+        let Some(user) = users
+            .iter()
+            .find(|user| user.email.eq_ignore_ascii_case(email))
+        else {
+            return Ok(None);
+        };
+        let credentials = self.credentials.lock().expect("lock");
+        Ok(credentials
+            .get(&user.id)
+            .cloned()
+            .map(|credential| AdminLogin {
+                user: user.clone(),
+                credential,
+            }))
+    }
+
+    async fn record_admin_totp_step(
+        &self,
+        admin_id: &str,
+        step: u64,
+    ) -> Result<(), AdminStoreError> {
+        if let Some(stored) = self.credentials.lock().expect("lock").get_mut(admin_id) {
+            // Forward only, as the `IS NULL OR < $2` guard makes the real UPDATE.
+            if stored.last_used_totp_step.is_none_or(|seen| step > seen) {
+                stored.last_used_totp_step = Some(step);
+            }
+        }
+        Ok(())
+    }
+
+    async fn rotate_admin_totp_secret(
+        &self,
+        admin_id: &str,
+        secret: Vec<u8>,
+    ) -> Result<(), AdminStoreError> {
+        if let Some(stored) = self.credentials.lock().expect("lock").get_mut(admin_id) {
+            stored.credential = stored.credential.clone().with_totp(TotpSecret::new(secret));
+            stored.last_used_totp_step = None;
+        }
+        Ok(())
     }
 
     async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
@@ -731,12 +816,20 @@ fn fake_invite_to_domain(invite: &StoredInvite) -> AdminInvite {
 
 /// A super-admin provisioned with a known password and TOTP seed, for the login tests.
 fn provisioned_admin() -> FakeAdmin {
+    FakeAdmin::provisioned(admin_credential())
+}
+
+/// The same, under a named id and address — for the routes that report *which* admin acted, whose
+/// assertions would otherwise read the synthetic placeholder identity.
+fn provisioned_admin_as(id: &str, email: &str) -> FakeAdmin {
+    FakeAdmin::provisioned_as(id, email, admin_credential())
+}
+
+/// The shared test credential: `ADMIN_PASSWORD` hashed under a fixed salt, and `ADMIN_TOTP_SEED`.
+fn admin_credential() -> SuperAdminCredential {
     let salt = SaltString::encode_b64(b"cloud-admin-test-salt").expect("salt");
     let phc = hash_password(ADMIN_PASSWORD, &salt).expect("hash");
-    FakeAdmin::provisioned(SuperAdminCredential::new(
-        phc,
-        TotpSecret::new(ADMIN_TOTP_SEED.to_vec()),
-    ))
+    SuperAdminCredential::new(phc, TotpSecret::new(ADMIN_TOTP_SEED.to_vec()))
 }
 
 /// The current valid TOTP code for the provisioned admin at `clock()`'s instant.
@@ -9718,26 +9811,21 @@ async fn every_response_carries_the_admin_security_headers() {
 
 /// A router over a provisioned super-admin with a seeded active owner, so a real sign-in binds the
 /// session to an `admin_users` id — the shape the recovery-code and re-enrol tests need.
-async fn security_router() -> axum::Router {
-    let admin = provisioned_admin();
-    admin
-        .create_admin_user(NewAdminUser {
-            id: "id-owner".to_owned(),
-            email: "owner@example.test".to_owned(),
-            name: "Owner".to_owned(),
-            role: AdminRole::Owner,
-            // The login uses the super-admin credential, not this row's — these are placeholders.
-            password_phc: "$argon2id$not-a-real-hash".to_owned(),
-            totp_secret: b"not-a-real-totp-secret".to_vec(),
-        })
-        .await
-        .expect("seed owner");
-    registry_app(admin, FakeRegistry::default())
+fn security_router() -> axum::Router {
+    // One admin, `id-owner`, holding the shared test credential. It used to be two rows — the
+    // super-admin credential the login read, plus a placeholder-credentialled `id-owner` row for the
+    // session to point at — because those were separate things. Since ADR-0119 sign-in authenticates
+    // against the admin's own row, so the admin who signs in and the admin the route reports are one
+    // row, and a placeholder hash here would simply refuse the password.
+    registry_app(
+        provisioned_admin_as("id-owner", "owner@example.test"),
+        FakeRegistry::default(),
+    )
 }
 
 #[tokio::test]
 async fn recovery_codes_generate_once_and_sign_in_in_place_of_totp() {
-    let router = security_router().await;
+    let router = security_router();
     let cookie = admin_cookie(&router).await;
 
     // Generate the codes — returned once, with the count.
@@ -9805,7 +9893,7 @@ async fn recovery_codes_generate_once_and_sign_in_in_place_of_totp() {
 
 #[tokio::test]
 async fn totp_reenrol_needs_the_current_password() {
-    let router = security_router().await;
+    let router = security_router();
     let cookie = admin_cookie(&router).await;
 
     // Signed in but wrong password: a distinct 403, the knowledge factor not re-proved.
@@ -9843,7 +9931,7 @@ async fn totp_reenrol_needs_the_current_password() {
 
 #[tokio::test]
 async fn the_self_service_security_routes_require_a_session() {
-    let router = security_router().await;
+    let router = security_router();
     for request in [
         post_json("/admin/totp", &serde_json::json!({ "password": "x" })),
         post_json("/admin/recovery-codes", &serde_json::json!({})),
@@ -9858,7 +9946,7 @@ async fn the_self_service_security_routes_require_a_session() {
 
 #[tokio::test]
 async fn whoami_needs_a_session() {
-    let router = security_router().await;
+    let router = security_router();
     let denied = router
         .oneshot(get("/admin/whoami", None))
         .await
@@ -9868,7 +9956,7 @@ async fn whoami_needs_a_session() {
 
 #[tokio::test]
 async fn whoami_reports_the_acting_admins_identity_and_role() {
-    let router = security_router().await;
+    let router = security_router();
     let cookie = admin_cookie(&router).await;
     let me = json_body(
         router
@@ -10049,7 +10137,11 @@ async fn accept_rejects_a_bad_token_and_a_short_password() {
 
 #[tokio::test]
 async fn the_last_active_owner_cannot_be_demoted_or_suspended() {
-    let admin = provisioned_admin();
+    // The one thing this test needs is *exactly one* active owner, so it starts from an empty store
+    // and lets `role_session_cookie` seed that owner. `provisioned_admin()` would add the migrated
+    // one alongside, making two — and the invariant this asserts would correctly permit the demotion.
+    // Nothing here signs in, so no credential is needed.
+    let admin = FakeAdmin::default();
     let cookie = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
     let router = registry_app(admin, FakeRegistry::default());
     let demote = router

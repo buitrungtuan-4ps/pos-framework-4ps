@@ -66,6 +66,25 @@ impl fmt::Debug for AdminCredential {
     }
 }
 
+/// One admin's identity *and* their own credential — what a sign-in authenticates against
+/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+///
+/// [`AdminCredential`] is the single `super_admin` row; this is one `admin_users` row. The columns
+/// have existed since migration 0018 and were written by the invite-acceptance route from the day it
+/// shipped — they were simply never read, so an invited admin could never sign in and every session
+/// was bound to whichever owner row came back first. This type is the read that closes that.
+///
+/// [`AdminUser`] is deliberately kept as a separate field rather than flattened: it is the safe half,
+/// and it is what a caller hands on to [`AdminContext`]. `credential` redacts its own secrets, so a
+/// derived [`fmt::Debug`] cannot leak the hash or the TOTP seed.
+#[derive(Debug, Clone)]
+pub struct AdminLogin {
+    /// The admin's identity, role and status — safe to serialise.
+    pub user: AdminUser,
+    /// Their own password hash, TOTP secret, and newest step spent.
+    pub credential: AdminCredential,
+}
+
 /// A console admin's role — the least-privilege tier its session is granted
 /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)). This is the stable vocabulary the
 /// schema and seam store; the role→permission templates (the compile-forced §9-style registry) land
@@ -565,6 +584,58 @@ pub trait AdminStore {
     /// [`AdminStoreError`] if the store could not be read.
     fn count_active_owners(&self) -> impl Future<Output = Result<u64, AdminStoreError>> + Send;
 
+    // ---- Per-admin sign-in ([ADR-0119]) ----
+
+    /// The admin whose email matches `email` case-insensitively, **with their credential**, or
+    /// `None` — the read [`login`] authenticates against
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// Separate from [`find_admin_user_by_email`](Self::find_admin_user_by_email) rather than a
+    /// widening of it: only the sign-in path has any business holding a password hash and a TOTP
+    /// secret, and a listing route that reached for the wrong method would serialise both.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] only if the store itself could not be read — never for an absent admin,
+    /// which is `Ok(None)`.
+    fn find_admin_login_by_email(
+        &self,
+        email: &str,
+    ) -> impl Future<Output = Result<Option<AdminLogin>, AdminStoreError>> + Send;
+
+    /// Records `step` as the newest TOTP step **`admin_id`** has spent, advancing only forward — the
+    /// per-admin form of [`record_totp_step`](Self::record_totp_step)
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// Per-admin is not a tidiness point. The single-row version burns a step for *everybody*, so
+    /// admin A signing in at step *N* would make admin B's perfectly valid code in the same
+    /// 30-second window look like a replay — an availability bug that only appears once a second
+    /// admin exists, which is exactly when per-admin login starts being used. Monotone and
+    /// idempotent, as the global one is.
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn record_admin_totp_step(
+        &self,
+        admin_id: &str,
+        step: u64,
+    ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
+    /// Replaces `admin_id`'s TOTP secret with `secret` and resets *their* last-used step, so the
+    /// freshly-enrolled authenticator's codes verify from step zero — the per-admin form of
+    /// [`rotate_totp_secret`](Self::rotate_totp_secret)
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`AdminStoreError`] if the store could not be written.
+    fn rotate_admin_totp_secret(
+        &self,
+        admin_id: &str,
+        secret: Vec<u8>,
+    ) -> impl Future<Output = Result<(), AdminStoreError>> + Send;
+
     // ---- Invitations ([ADR-0067]) ----
 
     /// Records a pending invitation, keyed for acceptance by its token hash.
@@ -636,12 +707,25 @@ impl AdminStoreError {
     }
 }
 
-/// A super-admin sign-in request: the password and the current TOTP code.
+/// An admin sign-in request: who is signing in, their password, and the current TOTP code.
+///
+/// `email` is **optional**, and that is the one load-bearing choice in
+/// [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md). Migration 0018 gave the
+/// only admin every existing installation has a synthetic, non-routable address
+/// ([`IMPLICIT_OWNER_EMAIL`]) that nobody has seen and no route can change, so requiring the field
+/// would lock out every installation on the day this deployed. Absent, it resolves to the single
+/// admin when there is exactly one — which is every installation today — and is refused once there
+/// are two, which is exactly when guessing would start being wrong.
 ///
 /// [`fmt::Debug`] redacts the password and any recovery code, so a logged request cannot leak either.
+/// The email is not redacted: it is the identity, and it is what the log needs to attribute a failed
+/// attempt.
 #[derive(Clone, Deserialize)]
 pub struct LoginRequest {
-    /// The super-admin password.
+    /// Who is signing in. Absent resolves to the single admin; see the type's own note.
+    #[serde(default)]
+    pub email: Option<String>,
+    /// The admin's password.
     pub password: String,
     /// The current 6-digit TOTP code. Ignored when a `recovery_code` is present.
     #[serde(default)]
@@ -657,6 +741,7 @@ impl fmt::Debug for LoginRequest {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("LoginRequest")
+            .field("email", &self.email)
             .field("password", &"<redacted>")
             .field("totp_code", &self.totp_code)
             .field(
@@ -733,14 +818,24 @@ pub struct SessionMint<'a> {
     pub user_agent: Option<&'a str>,
 }
 
-/// Authenticates a super-admin login and, on success, persists a session for `mint.token`.
+/// Authenticates an admin login and, on success, persists a session for `mint.token` bound to the
+/// admin who actually signed in.
 ///
-/// Both factors are checked before any verdict ([`SuperAdminCredential::authenticate`]), the matched
-/// TOTP step is burned *before* the session is written, and the session is stored as
-/// `SHA-256(mint.token)` — never the token itself. `mint.token` is minted from a CSPRNG by the
-/// caller ([`crate::http`]); the same token goes into the [`session`](super::session) cookie so the
-/// browser can present it, and its hash is what this stores. The session carries a sliding idle TTL
-/// (`mint.idle_ttl_secs`) bounded by an absolute cap (`mint.absolute_ttl_secs`).
+/// Each admin authenticates against **their own** row
+/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)): the credential
+/// migration 0018 has stored per admin since it shipped, and which the invite-acceptance route has
+/// written for every invited admin, is now the credential this reads. Before that it read the single
+/// `super_admin` row, so an invited admin could never sign in at all and every session was attributed
+/// to whichever active owner the store returned first.
+///
+/// `request.email` is optional and resolves per [`resolve_login`]. Everything else is unchanged from
+/// ADR-0034: both factors are checked before any verdict
+/// ([`SuperAdminCredential::authenticate`]), the matched TOTP step is burned *before* the session is
+/// written, and the session is stored as `SHA-256(mint.token)` — never the token itself.
+/// `mint.token` is minted from a CSPRNG by the caller ([`crate::http`]); the same token goes into the
+/// [`session`](super::session) cookie so the browser can present it, and its hash is what this
+/// stores. The session carries a sliding idle TTL (`mint.idle_ttl_secs`) bounded by an absolute cap
+/// (`mint.absolute_ttl_secs`).
 ///
 /// # Errors
 ///
@@ -757,23 +852,17 @@ where
     C: ClockSource,
 {
     let now = clock.now();
-    let loaded = store
-        .load_credential()
-        .await
-        .map_err(|_| LoginDenied::StoreUnavailable)?;
-    let Some(admin) = loaded else {
-        // No admin provisioned. There is exactly one super-admin and its existence is not a secret
-        // (a real deployment always has one), so the generic refusal here reveals nothing — there is
-        // nothing to enumerate.
+    let Some(admin) = resolve_login(store, request.email.as_deref()).await? else {
+        // No such admin, no admin at all, or an ambiguous omitted email. All the same generic
+        // refusal: whether an address exists is not a distinction worth handing out, and neither is
+        // how many admins the installation has.
         return Err(LoginDenied::Invalid);
     };
-    // Bind the session to the acting admin. The single-super-admin credential maps to the one `owner`
-    // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)), so during the transition the
-    // session belongs to the first active owner; a store with no owner row yet (the pure-credential
-    // fakes, or a not-yet-seeded install) binds `None`, still a valid session. Email-based per-admin
-    // login replaces this owner lookup in a later slice. Resolved before the factor check so the same
-    // store read happens whatever the outcome.
-    let owner_id = acting_owner_id(store).await?;
+    if admin.user.status != AdminStatus::Active {
+        // Suspended keeps the row and its history but refuses new sessions. Same generic refusal as a
+        // wrong password — "this address is suspended" would confirm the address.
+        return Err(LoginDenied::Invalid);
+    }
     // The second factor: a one-time recovery code stands in for TOTP when the authenticator is lost
     // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6). Either way both factors
     // are weighed before a single generic Invalid — the no-oracle rule (ADR-0034).
@@ -785,33 +874,40 @@ where
     if let Some(code) = presented_recovery {
         // The password must verify before a code is consumed, so a wrong-password attempt can never
         // burn a valid code (a denial of service on recovery); the consume is atomic and single-use.
-        // A missing owner row means no code could ever have been issued.
-        let password_ok = admin.credential.password_matches(&request.password);
-        let recovered = if let (true, Some(id)) = (password_ok, owner_id.as_deref()) {
+        // The codes consumed are this admin's own — before ADR-0119 they were the first owner's,
+        // whoever presented them.
+        let password_ok = admin
+            .credential
+            .credential
+            .password_matches(&request.password);
+        let recovered = if password_ok {
             store
-                .consume_recovery_code(id, hash_recovery_code(code), now)
+                .consume_recovery_code(&admin.user.id, hash_recovery_code(code), now)
                 .await
                 .map_err(|_| LoginDenied::StoreUnavailable)?
         } else {
             false
         };
-        if !(password_ok && recovered) {
+        if !recovered {
             return Err(LoginDenied::Invalid);
         }
     } else {
         // Password + TOTP, both evaluated inside `authenticate`. Burn the matched step before the
-        // session is written, so the same code — and any earlier one — can never mint a second.
+        // session is written, so the same code — and any earlier one — can never mint a second. The
+        // step is recorded against *this* admin: burning it globally would refuse a second admin's
+        // valid code in the same 30-second window as a replay.
         let authenticated = admin
+            .credential
             .credential
             .authenticate(
                 &request.password,
                 &request.totp_code,
                 unix_seconds(now),
-                admin.last_used_totp_step,
+                admin.credential.last_used_totp_step,
             )
             .map_err(|_| LoginDenied::Invalid)?;
         store
-            .record_totp_step(authenticated.totp_step)
+            .record_admin_totp_step(&admin.user.id, authenticated.totp_step)
             .await
             .map_err(|_| LoginDenied::StoreUnavailable)?;
     }
@@ -826,7 +922,7 @@ where
             expires_at,
             absolute_expires_at,
             idle_ttl_ms: millis_from_secs(mint.idle_ttl_secs),
-            admin_id: owner_id,
+            admin_id: Some(admin.user.id),
             ip: mint.ip.map(str::to_owned),
             user_agent: mint.user_agent.map(str::to_owned),
         })
@@ -835,21 +931,47 @@ where
     Ok(())
 }
 
-/// The id of the admin a freshly-authenticated super-admin login belongs to: the first active
-/// `owner`, or `None` if the store holds no admin rows yet. Transitional — a later slice authenticates
-/// each admin by email and no longer infers the owner.
-async fn acting_owner_id<A>(store: &A) -> Result<Option<String>, LoginDenied>
+/// The admin a sign-in request names, or `None` if it names nobody resolvable
+/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §3–4).
+///
+/// A present email is looked up directly. An **absent** one resolves to the single admin when the
+/// store holds exactly one, and to `None` when it holds none or more than one. That is the whole of
+/// the compatibility decision: every installation today has one admin whose address is the synthetic
+/// [`IMPLICIT_OWNER_EMAIL`] nobody has seen, so omitting the field must keep working for them — and
+/// must stop the moment a second admin makes "the one admin" the wrong answer.
+///
+/// It opens no enumeration surface. With one admin, omitting the email is equivalent to naming it,
+/// so there is nothing to learn; with two or more, an absent email is the same generic refusal as a
+/// wrong one. `None` here is never distinguishable from a wrong password at the wire.
+///
+/// # Errors
+///
+/// [`LoginDenied::StoreUnavailable`] if the store could not be read.
+async fn resolve_login<A>(store: &A, email: Option<&str>) -> Result<Option<AdminLogin>, LoginDenied>
 where
     A: AdminStore,
 {
-    let admins = store
-        .list_admin_users()
+    // An empty or whitespace-only field is the same as an absent one: a form that submits `""` for
+    // an untouched input must not be told it named an admin called "".
+    let named = email.map(str::trim).filter(|email| !email.is_empty());
+    let email = if let Some(email) = named {
+        email.to_owned()
+    } else {
+        let admins = store
+            .list_admin_users()
+            .await
+            .map_err(|_| LoginDenied::StoreUnavailable)?;
+        // The `else` covers both zero (nobody enrolled) and two-or-more (ambiguous). Matching on the
+        // slice rather than testing `len() == 1` is what makes that exhaustive at compile time.
+        let [only] = admins.as_slice() else {
+            return Ok(None);
+        };
+        only.email.clone()
+    };
+    store
+        .find_admin_login_by_email(&email)
         .await
-        .map_err(|_| LoginDenied::StoreUnavailable)?;
-    Ok(admins
-        .into_iter()
-        .find(|admin| admin.role == AdminRole::Owner && admin.status == AdminStatus::Active)
-        .map(|admin| admin.id))
+        .map_err(|_| LoginDenied::StoreUnavailable)
 }
 
 /// Verifies the session cookie on an incoming admin request, as of the clock's current instant.
@@ -1097,10 +1219,11 @@ mod tests {
     use pos_proto::time::Timestamp;
 
     use super::{
-        AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError,
-        AdminUser, IMPLICIT_OWNER_ID, LoginDenied, LoginRequest, NewAdminInvite, NewAdminSession,
-        NewAdminUser, NewRecoveryCode, SessionDenied, SessionMint, authenticate_session,
-        authenticated_admin, hash_recovery_code, hash_token, login, logout,
+        AdminCredential, AdminInvite, AdminLogin, AdminRole, AdminStatus, AdminStore,
+        AdminStoreError, AdminUser, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID, LoginDenied,
+        LoginRequest, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode,
+        SessionDenied, SessionMint, authenticate_session, authenticated_admin, hash_recovery_code,
+        hash_token, login, logout,
     };
     use crate::auth::SuperAdminCredential;
     use crate::auth::password::hash_password;
@@ -1133,17 +1256,29 @@ mod tests {
         )
     }
 
+    /// A sign-in request that omits the email — the shape a one-admin installation sends, and the
+    /// one ADR-0119 keeps working so an upgrade locks nobody out.
     fn request(password: &str, totp_code: &str) -> LoginRequest {
         LoginRequest {
+            email: None,
             password: password.to_owned(),
             totp_code: totp_code.to_owned(),
             recovery_code: None,
         }
     }
 
+    /// A sign-in request naming who is signing in — the shape a multi-admin installation sends.
+    fn request_as(email: &str, password: &str, totp_code: &str) -> LoginRequest {
+        LoginRequest {
+            email: Some(email.to_owned()),
+            ..request(password, totp_code)
+        }
+    }
+
     /// A login request presenting a recovery code in place of a TOTP code.
     fn recovery_request(password: &str, recovery_code: &str) -> LoginRequest {
         LoginRequest {
+            email: None,
             password: password.to_owned(),
             totp_code: String::new(),
             recovery_code: Some(recovery_code.to_owned()),
@@ -1223,23 +1358,63 @@ mod tests {
         used: bool,
     }
 
-    /// An in-memory admin store: at most one legacy credential, the multi-admin `admin_users`
-    /// table, an invitations table, a session table, per-admin recovery codes, and a down switch.
+    /// An in-memory admin store: the legacy single credential, the multi-admin `admin_users` table
+    /// **with each admin's own credential** (the columns migration 0018 has always carried, which
+    /// [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) makes login read), an
+    /// invitations table, a session table, per-admin recovery codes, and a down switch.
+    ///
+    /// `credentials` is keyed by admin id and is what sign-in authenticates against;
+    /// `credential`/`last_used_totp_step` are the legacy `super_admin` row, still on the seam and no
+    /// longer read by login.
     #[derive(Default)]
     struct FakeAdmin {
         credential: Mutex<Option<SuperAdminCredential>>,
         last_used_totp_step: Mutex<Option<u64>>,
         sessions: Mutex<SessionRows>,
         admin_users: Mutex<Vec<AdminUser>>,
+        credentials: Mutex<HashMap<String, AdminCredential>>,
         invites: Mutex<Vec<StoredInvite>>,
         recovery_codes: Mutex<HashMap<String, Vec<StoredRecoveryCode>>>,
         down: bool,
     }
 
     impl FakeAdmin {
+        /// An installation with one enrolled admin — the shape every real installation has today:
+        /// the migrated/implicit owner, holding the shared test credential, plus the legacy
+        /// `super_admin` row the migration carried it over from.
         fn provisioned() -> Self {
+            Self::with_admins(&[(IMPLICIT_OWNER_ID, IMPLICIT_OWNER_EMAIL, AdminRole::Owner)])
+        }
+
+        /// An installation with the named admins, each holding the shared test credential — so a
+        /// two-admin store can be built without every test restating the seeding.
+        fn with_admins(admins: &[(&str, &str, AdminRole)]) -> Self {
+            let users = admins
+                .iter()
+                .map(|&(id, email, role)| AdminUser {
+                    id: id.to_owned(),
+                    email: email.to_owned(),
+                    name: "Owner".to_owned(),
+                    role,
+                    status: AdminStatus::Active,
+                })
+                .collect();
+            let credentials = admins
+                .iter()
+                .map(|&(id, _, _)| {
+                    (
+                        id.to_owned(),
+                        AdminCredential {
+                            credential: provisioned_credential(),
+                            last_used_totp_step: None,
+                        },
+                    )
+                })
+                .collect();
             Self {
                 credential: Mutex::new(Some(provisioned_credential())),
+                admin_users: Mutex::new(users),
+                credentials: Mutex::new(credentials),
                 ..Self::default()
             }
         }
@@ -1251,7 +1426,24 @@ mod tests {
             }
         }
 
+        /// The step the implicit owner's sign-in burned — the per-admin column login writes now.
         fn recorded_step(&self) -> Option<u64> {
+            self.recorded_step_for(IMPLICIT_OWNER_ID)
+        }
+
+        /// The step `admin_id`'s sign-in burned, or `None` if they have never signed in (or do not
+        /// exist). Two admins have separate values, which is the point of the per-admin column.
+        fn recorded_step_for(&self, admin_id: &str) -> Option<u64> {
+            self.credentials
+                .lock()
+                .expect("lock")
+                .get(admin_id)
+                .and_then(|credential| credential.last_used_totp_step)
+        }
+
+        /// The step the *legacy* single-row column holds — still on the seam, and no longer written
+        /// by sign-in.
+        fn recorded_legacy_step(&self) -> Option<u64> {
             *self.last_used_totp_step.lock().expect("lock")
         }
     }
@@ -1534,6 +1726,18 @@ mod tests {
             {
                 return Ok(false);
             }
+            // The credential is stored alongside the identity, exactly as the single `admin_users`
+            // INSERT does — which is what makes the invited admin able to sign in (ADR-0119).
+            self.credentials.lock().expect("lock").insert(
+                user.id.clone(),
+                AdminCredential {
+                    credential: SuperAdminCredential::new(
+                        user.password_phc,
+                        TotpSecret::new(user.totp_secret),
+                    ),
+                    last_used_totp_step: None,
+                },
+            );
             users.push(AdminUser {
                 id: user.id,
                 email: user.email,
@@ -1542,6 +1746,64 @@ mod tests {
                 status: AdminStatus::Active,
             });
             Ok(true)
+        }
+
+        async fn find_admin_login_by_email(
+            &self,
+            email: &str,
+        ) -> Result<Option<AdminLogin>, AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            let users = self.admin_users.lock().expect("lock");
+            let Some(user) = users
+                .iter()
+                .find(|user| user.email.eq_ignore_ascii_case(email))
+            else {
+                return Ok(None);
+            };
+            let credentials = self.credentials.lock().expect("lock");
+            Ok(credentials
+                .get(&user.id)
+                .cloned()
+                .map(|credential| AdminLogin {
+                    user: user.clone(),
+                    credential,
+                }))
+        }
+
+        async fn record_admin_totp_step(
+            &self,
+            admin_id: &str,
+            step: u64,
+        ) -> Result<(), AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            if let Some(credential) = self.credentials.lock().expect("lock").get_mut(admin_id) {
+                // Forward only, as the `IS NULL OR < $2` guard makes the real UPDATE.
+                let newest = credential
+                    .last_used_totp_step
+                    .map_or(step, |seen| seen.max(step));
+                credential.last_used_totp_step = Some(newest);
+            }
+            Ok(())
+        }
+
+        async fn rotate_admin_totp_secret(
+            &self,
+            admin_id: &str,
+            secret: Vec<u8>,
+        ) -> Result<(), AdminStoreError> {
+            if self.down {
+                return Err(AdminStoreError::new("down"));
+            }
+            if let Some(stored) = self.credentials.lock().expect("lock").get_mut(admin_id) {
+                stored.credential = stored.credential.clone().with_totp(TotpSecret::new(secret));
+                // A fresh secret starts unused, exactly as the SQL resets `last_used_totp_step`.
+                stored.last_used_totp_step = None;
+            }
+            Ok(())
         }
 
         async fn list_admin_users(&self) -> Result<Vec<AdminUser>, AdminStoreError> {
@@ -2172,6 +2434,298 @@ mod tests {
         assert!(rendered.contains("<redacted>"));
     }
 
+    // ---- Per-admin sign-in ([ADR-0119]) ----
+
+    /// Two admins, each holding the shared test credential: the owner every installation already has
+    /// and an invited admin. The shape the whole record is about.
+    fn two_admins() -> FakeAdmin {
+        FakeAdmin::with_admins(&[
+            (IMPLICIT_OWNER_ID, IMPLICIT_OWNER_EMAIL, AdminRole::Owner),
+            ("id-invited", "invited@example.test", AdminRole::Ops),
+        ])
+    }
+
+    #[tokio::test]
+    async fn an_invited_admin_can_sign_in_at_all() {
+        // The defect ADR-0119 exists for. `admin_users.password_phc` has been written for every
+        // invited admin since the invitation route shipped, and login read the single `super_admin`
+        // row instead — so every screen in `/admins` described a capability that did not exist.
+        let store = two_admins();
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request_as(
+                "invited@example.test",
+                "a-strong-passphrase",
+                &current_code(),
+            ),
+            &mint("invited-token"),
+        )
+        .await
+        .expect("an invited admin signs in with their own credential");
+        let context = authenticated_admin(&store, &clock, &cookie_header("invited-token"))
+            .await
+            .expect("the issued session authorises");
+        assert_eq!(context.admin.id, "id-invited");
+        assert_eq!(context.admin.role, AdminRole::Ops);
+    }
+
+    #[tokio::test]
+    async fn the_session_belongs_to_whoever_authenticated_not_to_the_first_owner() {
+        // The second, worse consequence. `acting_owner_id` returned the *first active owner*
+        // whoever signed in, so on a two-admin installation the audit trail (ADR-0069) attributed
+        // every action to a coin flip. Nothing warned, because the session was perfectly valid.
+        let store = two_admins();
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request_as(
+                "invited@example.test",
+                "a-strong-passphrase",
+                &current_code(),
+            ),
+            &mint("ops-token"),
+        )
+        .await
+        .expect("login");
+        let context = authenticated_admin(&store, &clock, &cookie_header("ops-token"))
+            .await
+            .expect("live session");
+        assert_ne!(
+            context.admin.id, IMPLICIT_OWNER_ID,
+            "the session must not be attributed to the owner who did not sign in"
+        );
+        assert_eq!(context.admin.id, "id-invited");
+    }
+
+    #[tokio::test]
+    async fn one_admins_sign_in_does_not_burn_the_others_totp_step() {
+        // Why the step is per-admin (ADR-0119 §5). Burning it globally would refuse a second
+        // admin's perfectly valid code in the same 30-second window as a replay — an availability
+        // bug that appears exactly when per-admin login starts being used.
+        let store = two_admins();
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &request_as(
+                "invited@example.test",
+                "a-strong-passphrase",
+                &current_code(),
+            ),
+            &mint("ops-token"),
+        )
+        .await
+        .expect("the first admin signs in");
+        assert!(store.recorded_step_for("id-invited").is_some());
+        assert_eq!(
+            store.recorded_step_for(IMPLICIT_OWNER_ID),
+            None,
+            "the other admin's step must be untouched"
+        );
+        // The same instant, the same code, the other admin: valid, not a replay.
+        login(
+            &store,
+            &clock,
+            &request_as(IMPLICIT_OWNER_EMAIL, "a-strong-passphrase", &current_code()),
+            &mint("owner-token"),
+        )
+        .await
+        .expect("the second admin signs in in the same window");
+        assert_eq!(
+            store.recorded_legacy_step(),
+            None,
+            "the legacy single-row column is no longer what sign-in writes"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_omitted_email_signs_the_single_admin_in() {
+        // The compatibility half of the decision. Every installation today has one admin whose
+        // address is the synthetic placeholder nobody has seen and no route can change, so the
+        // request shape they send today must keep working on the day this deploys.
+        let store = FakeAdmin::provisioned();
+        login(
+            &store,
+            &clock(),
+            &request("a-strong-passphrase", &current_code()),
+            &mint("no-email"),
+        )
+        .await
+        .expect("an email-less sign-in resolves to the single admin");
+    }
+
+    #[tokio::test]
+    async fn an_omitted_email_is_refused_once_a_second_admin_exists() {
+        // And the half that makes it retire itself: the fallback stops the moment "the one admin"
+        // becomes the wrong answer. A generic refusal, so it reveals no admin count.
+        let store = two_admins();
+        assert_eq!(
+            login(
+                &store,
+                &clock(),
+                &request("a-strong-passphrase", &current_code()),
+                &mint("ambiguous"),
+            )
+            .await,
+            Err(LoginDenied::Invalid)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_email_is_the_same_as_an_omitted_one() {
+        // A form that submits `""` for an untouched input must not be told it named an admin
+        // called "" — it must take the single-admin path.
+        let store = FakeAdmin::provisioned();
+        login(
+            &store,
+            &clock(),
+            &request_as("   ", "a-strong-passphrase", &current_code()),
+            &mint("blank-email"),
+        )
+        .await
+        .expect("a blank email takes the omitted-email path");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_email_is_the_same_generic_refusal_as_a_wrong_password() {
+        let store = two_admins();
+        assert_eq!(
+            login(
+                &store,
+                &clock(),
+                &request_as(
+                    "nobody@example.test",
+                    "a-strong-passphrase",
+                    &current_code()
+                ),
+                &mint("unknown"),
+            )
+            .await,
+            Err(LoginDenied::Invalid),
+            "whether an address exists is not a distinction worth handing out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_suspended_admin_cannot_sign_in() {
+        // Suspended keeps the row and its history but refuses new sessions — the off-boarding path
+        // that does not destroy the audit trail. Same generic refusal, so it does not confirm the
+        // address either.
+        let store = two_admins();
+        store
+            .set_admin_user_status("id-invited", AdminStatus::Suspended)
+            .await
+            .expect("suspend");
+        assert_eq!(
+            login(
+                &store,
+                &clock(),
+                &request_as(
+                    "invited@example.test",
+                    "a-strong-passphrase",
+                    &current_code()
+                ),
+                &mint("suspended"),
+            )
+            .await,
+            Err(LoginDenied::Invalid)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_email_matches_case_insensitively() {
+        // One account per address regardless of case, exactly as the `lower(email)` unique index
+        // enforces — so an operator typing their address capitalised is not locked out.
+        let store = two_admins();
+        login(
+            &store,
+            &clock(),
+            &request_as(
+                "Invited@Example.TEST",
+                "a-strong-passphrase",
+                &current_code(),
+            ),
+            &mint("cased"),
+        )
+        .await
+        .expect("a capitalised address is the same identity");
+    }
+
+    #[tokio::test]
+    async fn a_store_with_no_admin_at_all_refuses_rather_than_admitting_anyone() {
+        let store = FakeAdmin::default();
+        assert_eq!(
+            login(
+                &store,
+                &clock(),
+                &request("a-strong-passphrase", &current_code()),
+                &mint("nobody"),
+            )
+            .await,
+            Err(LoginDenied::Invalid)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recovery_code_consumes_the_signing_in_admins_own_code() {
+        // Before ADR-0119 the code consumed was the first owner's, whoever presented it — so an
+        // invited admin's recovery codes were unreachable and the owner's were spendable by them.
+        let store = two_admins();
+        store
+            .store_recovery_codes("id-invited", vec![recovery("r1", "let-me-in")])
+            .await
+            .expect("store");
+        let clock = clock();
+        login(
+            &store,
+            &clock,
+            &LoginRequest {
+                email: Some("invited@example.test".to_owned()),
+                ..recovery_request("a-strong-passphrase", "let-me-in")
+            },
+            &mint("recovered"),
+        )
+        .await
+        .expect("recovery sign-in");
+        let context = authenticated_admin(&store, &clock, &cookie_header("recovered"))
+            .await
+            .expect("live session");
+        assert_eq!(context.admin.id, "id-invited");
+        assert_eq!(
+            store
+                .count_recovery_codes("id-invited")
+                .await
+                .expect("count"),
+            0,
+            "the code is burned"
+        );
+        assert_eq!(
+            store
+                .count_recovery_codes(IMPLICIT_OWNER_ID)
+                .await
+                .expect("count"),
+            0,
+            "and the other admin never had one to lose"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_request_debug_still_redacts_the_password_while_naming_the_admin() {
+        let rendered = format!(
+            "{:?}",
+            request_as("someone@example.test", "a-strong-passphrase", "123456")
+        );
+        assert!(
+            !rendered.contains("a-strong-passphrase"),
+            "the password leaked into Debug: {rendered}"
+        );
+        // The email is the identity, and it is what a log needs to attribute a failed attempt.
+        assert!(rendered.contains("someone@example.test"));
+    }
+
     // ---- The role-aware guard ([ADR-0067]) ----
 
     /// A live expiry an hour past `NOW_MS`, so a seeded session is valid at `clock()`.
@@ -2283,8 +2837,9 @@ mod tests {
 
     #[tokio::test]
     async fn login_binds_the_new_session_to_the_owner() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         login(
             &store,
             &clock(),
@@ -2321,8 +2876,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_real_request_slides_the_idle_ttl_up_to_the_absolute_cap() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         let clock = clock();
         // Idle window 60s, absolute cap 150s — close enough that continuous activity reaches the cap.
         login(
@@ -2373,8 +2929,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_idle_session_times_out_and_the_poll_does_not_keep_it_alive() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         let clock = clock();
         login(
             &store,
@@ -2485,8 +3042,9 @@ mod tests {
 
     #[tokio::test]
     async fn login_records_the_client_ip_and_user_agent_for_the_session_list() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         let clock = clock();
         login(
             &store,
@@ -2605,8 +3163,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_recovery_code_signs_in_in_place_of_totp_and_is_burned() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         store
             .store_recovery_codes("id-owner", vec![recovery("r1", "help-me-in")])
             .await
@@ -2641,8 +3200,9 @@ mod tests {
 
     #[tokio::test]
     async fn a_wrong_password_never_burns_a_recovery_code() {
-        let store = FakeAdmin::provisioned();
-        seed_admin(&store, "id-owner", "owner@example.test", AdminRole::Owner).await;
+        // One enrolled admin, holding the shared test credential — so an email-less request
+        // resolves to them (ADR-0119) and the minted session binds to `id-owner`.
+        let store = FakeAdmin::with_admins(&[("id-owner", "owner@example.test", AdminRole::Owner)]);
         store
             .store_recovery_codes("id-owner", vec![recovery("r1", "keep-me-safe")])
             .await
@@ -2687,8 +3247,10 @@ mod tests {
         .expect("login");
         assert!(store.recorded_step().is_some());
 
+        // The *admin's own* secret — the one sign-in reads (ADR-0119 §5). Rotating the legacy
+        // single-row `super_admin` secret no longer touches anybody's ability to sign in.
         store
-            .rotate_totp_secret(b"a-brand-new-totp-secret-value".to_vec())
+            .rotate_admin_totp_secret(IMPLICIT_OWNER_ID, b"a-brand-new-totp-secret-value".to_vec())
             .await
             .expect("rotate");
         assert_eq!(

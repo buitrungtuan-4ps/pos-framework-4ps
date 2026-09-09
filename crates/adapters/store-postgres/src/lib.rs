@@ -50,7 +50,8 @@ mod webhooks;
 
 pub use activation::{ActivationCodeRow, PostgresActivationCodes};
 pub use admin::{
-    AdminCredentialRow, AdminInviteRow, AdminSessionRow, AdminUserRow, NewSessionRow, PostgresAdmin,
+    AdminCredentialRow, AdminInviteRow, AdminLoginRow, AdminSessionRow, AdminUserRow,
+    NewSessionRow, PostgresAdmin,
 };
 pub use alerts::{AlertRow, PostgresAlerts};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};

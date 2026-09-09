@@ -475,8 +475,15 @@ const rollupWindowQuery = (
 export const api = {
   // --- session / enrolment (ADR-0034) ---
   session: () => requestVoid("GET", "/admin/session"),
-  login: (password: string, totpCode: string) =>
-    requestVoid("POST", "/admin/login", { password, totp_code: totpCode }),
+  // `email` is optional on the wire (ADR-0119): a one-admin installation — which is every
+  // installation until a second admin is invited — signs in without it, so the field is omitted
+  // rather than sent empty when the operator leaves it blank.
+  login: (password: string, totpCode: string, email?: string) =>
+    requestVoid("POST", "/admin/login", {
+      ...(email ? { email } : {}),
+      password,
+      totp_code: totpCode,
+    }),
   logout: () => requestVoid("POST", "/admin/logout"),
   setup: (setupToken: string, password: string) =>
     requestJson<Enrolment>("POST", "/admin/setup", {

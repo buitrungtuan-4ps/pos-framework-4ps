@@ -784,6 +784,154 @@ mod admin_store {
         });
     }
 
+    /// Sign-in reads the admin's own credential, and the step and secret are per admin
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// Three statements the PR gate cannot run, against the real database. That is the point of the
+    /// test: the columns have existed since migration 0018 and nothing has ever read them, so the
+    /// first read of `password_phc`, `totp_secret` and `last_used_totp_step` from `admin_users`
+    /// happens here rather than in production.
+    #[test]
+    fn a_login_reads_one_admins_own_credential_step_and_secret() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            admin
+                .insert_admin_user(
+                    "log-1",
+                    "First@Example.test",
+                    "First",
+                    "owner",
+                    "active",
+                    "$argon2id$first",
+                    b"first-secret",
+                )
+                .await
+                .expect("seed the first admin");
+            admin
+                .insert_admin_user(
+                    "log-2",
+                    "second@example.test",
+                    "Second",
+                    "ops",
+                    "suspended",
+                    "$argon2id$second",
+                    b"second-secret",
+                )
+                .await
+                .expect("seed the second admin");
+
+            // Case-insensitive, as the `lower(email)` unique index enforces — an operator typing
+            // their address capitalised must not be refused.
+            let found = admin
+                .fetch_admin_login_by_email("first@EXAMPLE.TEST")
+                .await
+                .expect("fetch")
+                .expect("the admin is present");
+            assert_eq!(found.id, "log-1");
+            assert_eq!(
+                found.email, "First@Example.test",
+                "the stored casing is returned"
+            );
+            assert_eq!(found.role, "owner");
+            assert_eq!(found.status, "active");
+            assert_eq!(found.password_phc, "$argon2id$first");
+            assert_eq!(found.totp_secret, b"first-secret".to_vec());
+            assert_eq!(
+                found.last_used_totp_step, None,
+                "an admin who has never signed in has no step"
+            );
+
+            // A suspended admin still reads — refusing them is the caller's decision, so the read
+            // must report the status rather than hide the row.
+            let suspended = admin
+                .fetch_admin_login_by_email("second@example.test")
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(suspended.status, "suspended");
+            assert_eq!(suspended.password_phc, "$argon2id$second");
+
+            assert!(
+                admin
+                    .fetch_admin_login_by_email("nobody@example.test")
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "an absent address is Ok(None), not an error"
+            );
+
+            // The step is per admin, and monotone. Burning one admin's step must leave the other's
+            // alone: sharing it would refuse a second admin's valid code in the same 30-second
+            // window as a replay.
+            admin
+                .advance_admin_totp_step("log-1", 57_000_000)
+                .await
+                .expect("advance");
+            admin
+                .advance_admin_totp_step("log-1", 56_999_999)
+                .await
+                .expect("a backwards step is a no-op, not an error");
+            let stepped = admin
+                .fetch_admin_login_by_email("first@example.test")
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(
+                stepped.last_used_totp_step,
+                Some(57_000_000),
+                "the step only moves forward"
+            );
+            assert_eq!(
+                admin
+                    .fetch_admin_login_by_email("second@example.test")
+                    .await
+                    .expect("fetch")
+                    .expect("present")
+                    .last_used_totp_step,
+                None,
+                "the other admin's step is untouched"
+            );
+
+            // Re-enrolment replaces that admin's secret and resets their step, and nobody else's.
+            admin
+                .rotate_admin_totp_secret("log-1", b"re-enrolled-secret")
+                .await
+                .expect("rotate");
+            let rotated = admin
+                .fetch_admin_login_by_email("first@example.test")
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(rotated.totp_secret, b"re-enrolled-secret".to_vec());
+            assert_eq!(
+                rotated.last_used_totp_step, None,
+                "a fresh secret verifies from step zero"
+            );
+            assert_eq!(
+                admin
+                    .fetch_admin_login_by_email("second@example.test")
+                    .await
+                    .expect("fetch")
+                    .expect("present")
+                    .totp_secret,
+                b"second-secret".to_vec(),
+                "the other admin's secret is untouched"
+            );
+
+            // Both writes address a row by id, so an unknown id must be a silent no-op rather than
+            // an error — the same posture as every other `WHERE id = $1` write on this seam.
+            admin
+                .advance_admin_totp_step("no-such-admin", 1)
+                .await
+                .expect("an unknown admin is a no-op");
+            admin
+                .rotate_admin_totp_secret("no-such-admin", b"x")
+                .await
+                .expect("an unknown admin is a no-op");
+        });
+    }
+
     /// Recovery codes store, count, burn single-use, and regenerate — scoped to the admin
     /// ([ADR-0067] slice 6).
     #[test]

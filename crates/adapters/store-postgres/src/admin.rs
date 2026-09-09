@@ -31,6 +31,34 @@ pub struct AdminCredentialRow {
     pub last_used_totp_step: Option<i64>,
 }
 
+/// One console admin's identity *and* their own credential — the per-admin sign-in read
+/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+///
+/// [`AdminCredentialRow`] is the single `super_admin` row that login used to authenticate against;
+/// this is the `admin_users` row it authenticates against now, so the session can be bound to the
+/// admin who actually signed in. `role`/`status` are the stored tokens (`owner`/`admin`/`ops`/
+/// `viewer`, `active`/`suspended`); `pos-cloud` maps them to its enums and refuses a `suspended`
+/// admin with the same generic refusal as a wrong password.
+#[derive(Clone, Debug)]
+pub struct AdminLoginRow {
+    /// The admin's ULID id (a string) — what the minted session is bound to.
+    pub id: String,
+    /// The login identity, as stored (the lookup compares case-insensitively).
+    pub email: String,
+    /// The display name.
+    pub name: String,
+    /// The stored role token.
+    pub role: String,
+    /// The stored status token.
+    pub status: String,
+    /// The Argon2id PHC string — the hash, never the password.
+    pub password_phc: String,
+    /// The raw RFC 6238 TOTP shared secret.
+    pub totp_secret: Vec<u8>,
+    /// The newest TOTP step this admin has already spent, or `None` if they have never signed in.
+    pub last_used_totp_step: Option<i64>,
+}
+
 /// The columns of a new admin session, as plain types — the input to
 /// [`insert_session`](PostgresAdmin::insert_session). Bundled into a struct rather than passed as
 /// eight positional arguments. All times are Unix milliseconds; `idle_ttl_ms` is a duration.
@@ -419,6 +447,97 @@ impl PostgresAdmin {
             .await
             .map_err(unavailable)?;
         Ok(row.as_ref().map(row_to_admin_user))
+    }
+
+    /// Fetches one console admin's identity *and* credential by email, compared case-insensitively,
+    /// or `None` — the per-admin sign-in read
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// The same row [`fetch_admin_user_by_email`](Self::fetch_admin_user_by_email) reads, plus the
+    /// three credential columns migration 0018 has always carried and nothing has ever read. Kept a
+    /// separate method rather than widening that one, so a caller that only needs an identity cannot
+    /// accidentally hold a password hash and a TOTP secret.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_admin_login_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminLoginRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT id, email, name, role, status, password_phc, totp_secret, \
+                 last_used_totp_step FROM admin_users WHERE lower(email) = lower($1)",
+                &[&email],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| AdminLoginRow {
+            id: row.get(0),
+            email: row.get(1),
+            name: row.get(2),
+            role: row.get(3),
+            status: row.get(4),
+            password_phc: row.get(5),
+            totp_secret: row.get(6),
+            last_used_totp_step: row.get(7),
+        }))
+    }
+
+    /// Records `step` as the newest TOTP step `admin_id` has spent, advancing only forward — the
+    /// per-admin form of [`advance_totp_step`](Self::advance_totp_step)
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// Scoping the row to one admin is what makes a shared 30-second window safe: the single-row
+    /// version burns a step for *everybody*, so a second admin presenting a valid code in the same
+    /// window would be refused as a replay. The `IS NULL OR < $2` guard keeps it monotonic and
+    /// idempotent, exactly as the single-row version is.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn advance_admin_totp_step(
+        &self,
+        admin_id: &str,
+        step: i64,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "UPDATE admin_users SET last_used_totp_step = $2, updated_at = now() \
+                 WHERE id = $1 AND (last_used_totp_step IS NULL OR last_used_totp_step < $2)",
+                &[&admin_id, &step],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Replaces `admin_id`'s TOTP secret and resets their last-used step to `NULL`, so a freshly
+    /// enrolled authenticator's codes verify from step zero — the per-admin form of
+    /// [`rotate_totp_secret`](Self::rotate_totp_secret)
+    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn rotate_admin_totp_secret(
+        &self,
+        admin_id: &str,
+        secret: &[u8],
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "UPDATE admin_users SET totp_secret = $2, last_used_totp_step = NULL, \
+                 updated_at = now() WHERE id = $1",
+                &[&admin_id, &secret],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
     }
 
     /// Sets an admin's role. Returns whether a row matched `id`.
