@@ -108,6 +108,32 @@ const CASES = [
 ];
 
 /**
+ * The one thing a PowerShell script has to carry before a shop can run it: a byte-order mark.
+ *
+ * Windows PowerShell 5.1 — what a technician gets by typing `powershell` — reads a BOM-less `.ps1`
+ * as ANSI in the machine's code page, not UTF-8. PowerShell 7 reads it as UTF-8 either way, and
+ * that difference is why this shipped: the Windows job parses with `pwsh`, so it read the one
+ * encoding under which the scripts were fine while a store read the other and got a parse error on
+ * the first em dash. See `PS_BOM` in `src/installers.mjs` for the byte-level walk-through.
+ *
+ * Checked here rather than only on the Windows runner because this runs on every pull request, and
+ * because the invariant is about the *bytes the generator emits* — which needs no PowerShell to
+ * assert.
+ *
+ * @param {string} text
+ * @param {string} where
+ */
+function checkPowerShellBom(text, where) {
+  if (!text.startsWith("\ufeff")) {
+    throw new Error(
+      `${where}: no UTF-8 byte-order mark. Windows PowerShell 5.1 will read it as ANSI, and the ` +
+        "first non-ASCII character — an em dash in the prose, or a Vietnamese store name in the " +
+        "help block — becomes a smart quote its parser treats as a string delimiter.",
+    );
+  }
+}
+
+/**
  * The checks a TOML file has to pass here. Not a parser — `cargo test` owns that — but enough to
  * catch the one mistake this generator can actually make: a key emitted *below* the `[nats]` header,
  * which the edge reads as `nats.<key>` and refuses under `deny_unknown_fields`.
@@ -154,6 +180,7 @@ function emit(dir, testCase) {
     written.push(path);
   }
   checkToml(configToml(values), `config.toml (${label})`);
+  checkPowerShellBom(windowsInstaller(values), `install-pos-edge.ps1 (${label})`);
   return written;
 }
 
@@ -188,6 +215,14 @@ for (const template of TEMPLATES) {
     failures += 1;
   } else {
     console.log(`✓ ${template.name} matches its generator`);
+  }
+
+  try {
+    checkPowerShellBom(onDisk, template.name);
+    console.log(`✓ ${template.name} carries its byte-order mark`);
+  } catch (error) {
+    console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
+    failures += 1;
   }
 
   // Written before any failure can exit: a drift failure must not also rob the Windows job of the
