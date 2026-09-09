@@ -18,6 +18,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The nav collapses, and opens as a drawer on a narrow screen.** Six groups and thirty entries
+  used to be expanded all of the time: on a wide screen a column an operator scrolled past to reach
+  the two screens they use, and under `md` thirty wrapped chips stacked above every page, so on a
+  tablet held in portrait — the shape most likely in a shop — the page itself began below the fold.
+  Each group heading is now a toggle, and a group with no remembered answer is open when it holds
+  the screen you are looking at, which keeps the nav short without ever hiding where you are. An
+  answer the operator gives wins in both directions and is remembered per browser. Under `md` the
+  nav is a disclosure behind one button in the header, closing on navigation and on Escape (#261).
+
 - **The console says what to do next.** A **get-started checklist** on the landing screen: the seven
   links of the activation chain — an organisation, a brand, a store, that store's own key, a
   published configuration, the machine installed with a till admitted, and the shop reporting — each
@@ -111,6 +120,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   fixing, not fixed by this change (#252).
 
 ### Fixed
+
+- **The nav's readiness marker said the opposite of what it meant.** Every scoped nav entry drew a
+  dot, filled with the brand colour — which in this palette is red — when the screen's context *was*
+  ready, and left hollow and all but invisible when the screen was blocked. A nav full of red meant
+  everything was fine, the entries an operator could not open looked like ordinary entries, and the
+  one label a screen reader met twenty times was "Context ready". A ready entry now carries no marker
+  at all, and a blocked one is muted and says which piece of context it is waiting on (#261).
 
 - **A store nobody has installed yet no longer opens in alarms.** The store hub read a freshly
   provisioned store as **Not reporting** and **Behind**, both in the danger colour — two true
