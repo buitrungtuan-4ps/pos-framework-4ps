@@ -7,12 +7,13 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Enrolment } from "../api/types";
 import { t } from "../i18n";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { ConfirmDialog } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 export function MySecurity() {
   const [password, setPassword] = createSignal("");
@@ -31,7 +32,7 @@ export function MySecurity() {
       const status = await api.recoveryCodesStatus();
       setRemaining(status.remaining);
     } catch (caught) {
-      setCodesError(caught instanceof ApiError ? caught.message : String(caught));
+      setCodesError(apiMessage(caught));
     }
   };
 
@@ -50,7 +51,7 @@ export function MySecurity() {
       setPassword("");
       toast.ok(t("security.totpRotated"));
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setTotpError(message);
       toast.error(message);
     } finally {
@@ -68,7 +69,7 @@ export function MySecurity() {
       setRemaining(generated.remaining);
       toast.ok(t("security.codesGenerated"));
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setCodesError(message);
       toast.error(message);
     } finally {

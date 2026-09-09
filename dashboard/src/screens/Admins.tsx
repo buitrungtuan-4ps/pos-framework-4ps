@@ -6,7 +6,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { AdminIdentity, AdminInvite, AdminRole } from "../api/types";
 import { ADMIN_ROLES } from "../api/types";
 import { type MessageKey, t } from "../i18n";
@@ -29,6 +29,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 const ROLE_LABEL: Record<AdminRole, MessageKey> = {
   owner: "role.owner",
@@ -61,7 +62,7 @@ export function Admins() {
     canManage() ? ADMIN_ROLES : ADMIN_ROLES.filter((role) => role !== "owner");
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

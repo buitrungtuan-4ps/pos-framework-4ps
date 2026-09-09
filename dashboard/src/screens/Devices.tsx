@@ -9,7 +9,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { DeviceProposalSummary, Station, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -26,6 +26,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
+import { apiMessage } from "../lib/errors";
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
@@ -70,7 +71,7 @@ export function Devices() {
       setNames(new Map(stores.map((store: Store) => [store.store_id, store.name])));
       setRows(proposals);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -83,7 +84,7 @@ export function Devices() {
     try {
       setFleet(await api.listStoreDevices(tenantId(), storeId(), "approved"));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     }
   };
 
@@ -114,7 +115,7 @@ export function Devices() {
       setTerminalName("");
       await loadFleet();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -134,7 +135,7 @@ export function Devices() {
       setPendingAgent(null);
       await loadFleet();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -169,7 +170,7 @@ export function Devices() {
       setPendingApprove(null);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {

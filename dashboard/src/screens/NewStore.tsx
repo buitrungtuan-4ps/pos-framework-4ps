@@ -6,7 +6,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Brand, CreateApiKeyResponse, Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
@@ -23,6 +23,7 @@ import {
   windowsInstaller,
 } from "../installers.mjs";
 import type { InstallerValues } from "../installers.d.mts";
+import { apiMessage } from "../lib/errors";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
 // not be a MessageKey and would defeat the type check).
@@ -106,7 +107,7 @@ export function NewStore() {
   const [bindPort, setBindPort] = createSignal("");
 
   const fail = (caught: unknown) =>
-    setError(caught instanceof ApiError ? caught.message : String(caught));
+    setError(apiMessage(caught));
 
   const loadBrands = async () => {
     try {

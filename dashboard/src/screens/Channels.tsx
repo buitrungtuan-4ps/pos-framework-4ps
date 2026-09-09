@@ -14,7 +14,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   SALES_CHANNELS,
   VENDOR_AVAILABILITIES,
@@ -28,6 +28,7 @@ import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /** Per-channel labels, shared with the tax and campaign editors. */
 const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
@@ -95,7 +96,7 @@ export function Channels() {
   const [origins, setOrigins] = createSignal<string[]>([]);
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

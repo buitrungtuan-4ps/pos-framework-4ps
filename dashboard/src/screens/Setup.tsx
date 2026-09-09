@@ -6,10 +6,11 @@
 import { createSignal, Show } from "solid-js";
 import { A } from "@solidjs/router";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Enrolment } from "../api/types";
 import { t } from "../i18n";
 import { Banner, Button, Card, TextField } from "../components/ui";
+import { apiMessage } from "../lib/errors";
 
 export function Setup() {
   const [token, setToken] = createSignal("");
@@ -25,7 +26,7 @@ export function Setup() {
     try {
       setEnrolment(await api.setup(token(), password()));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }

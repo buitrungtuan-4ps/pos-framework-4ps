@@ -6,12 +6,13 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { MediaSummary } from "../api/types";
 import { t } from "../i18n";
 import { Modal } from "./kit";
 import { toast } from "./Toast";
 import { Button } from "./ui";
+import { apiMessage } from "../lib/errors";
 
 /** A media thumbnail that degrades to a placeholder tile when there is no id or the asset fails to
  *  load — the never-blank posture (ADR-0075). `sizeClass` sets the box (default a 64px square). */
@@ -61,7 +62,7 @@ export function ImagePicker(props: {
   const [busy, setBusy] = createSignal(false);
 
   const fail = (caught: unknown) =>
-    toast.error(caught instanceof ApiError ? caught.message : String(caught));
+    toast.error(apiMessage(caught));
 
   const loadMedia = async () => {
     setBusy(true);

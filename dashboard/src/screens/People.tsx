@@ -10,7 +10,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -28,6 +28,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 export function People() {
   // One page of the roster, not the whole thing (ADR-0098, #299). The table below is the only reader
@@ -87,14 +88,14 @@ export function People() {
   // screen reloads rather than offering a retry: retrying would re-apply the overwrite the refusal
   // exists to prevent, and the operator needs to see what actually changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("people.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

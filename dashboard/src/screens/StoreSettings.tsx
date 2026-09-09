@@ -14,7 +14,7 @@
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Country } from "../api/types";
 import { LOCALES, localeName, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -22,6 +22,7 @@ import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { FormField } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /** A short list of common IANA zones offered as suggestions; any valid zone is accepted server-side. */
 const COMMON_TIMEZONES = [
@@ -119,7 +120,7 @@ export function StoreSettings() {
   const [busy, setBusy] = createSignal(false);
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

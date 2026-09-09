@@ -6,7 +6,7 @@
 
 import { createSignal, For, onMount, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
@@ -21,6 +21,7 @@ import {
 } from "../components/ui";
 import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /**
  * How many entries one page of the table carries.
@@ -98,7 +99,7 @@ export function Audit() {
       setTotal(page.total);
       setOffset(page.offset);
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {

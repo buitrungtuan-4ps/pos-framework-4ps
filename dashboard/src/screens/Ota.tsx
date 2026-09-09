@@ -8,7 +8,7 @@
 
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
@@ -32,6 +32,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /** How often the progress pane re-reads the fleet, so "installed" and "reported" stay current. */
 const POLL_MS = 15_000;
@@ -77,7 +78,7 @@ export function Ota() {
   const [confirmPlace, setConfirmPlace] = createSignal(false);
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

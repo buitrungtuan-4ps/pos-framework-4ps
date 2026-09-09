@@ -31,11 +31,12 @@
 
 import { createSignal, Show, type JSXElement } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatMoney, formatRelativeAge } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
+import { apiMessage } from "../lib/errors";
 import {
   configVerdict,
   neverInstalled,
@@ -199,7 +200,7 @@ export function StoreHub() {
       setReason("");
       await panelOf(api.fleetStore(tenant, id), setFleet);
     } catch (error) {
-      setRefusal(error instanceof ApiError ? error.message : String(error));
+      setRefusal(apiMessage(error));
     } finally {
       setAcknowledging(false);
     }

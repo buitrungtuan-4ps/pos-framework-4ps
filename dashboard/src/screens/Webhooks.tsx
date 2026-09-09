@@ -6,7 +6,7 @@
 
 import { createSignal, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { WebhookSummary } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -20,6 +20,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 export function Webhooks() {
   const [rows, setRows] = createSignal<WebhookSummary[] | null>(null);
@@ -35,7 +36,7 @@ export function Webhooks() {
     try {
       setRows(await api.listWebhooks(tenantId()));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -55,7 +56,7 @@ export function Webhooks() {
       toast.ok(t("webhooks.registered"));
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -75,7 +76,7 @@ export function Webhooks() {
       setPendingDelete(null);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -93,7 +94,7 @@ export function Webhooks() {
       toast.ok(t("webhooks.reenabled"));
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {

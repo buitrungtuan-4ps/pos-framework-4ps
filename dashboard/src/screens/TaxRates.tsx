@@ -14,7 +14,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   SALES_CHANNELS,
   type SalesChannel,
@@ -28,6 +28,7 @@ import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 /** The already-defined per-channel labels (shared with the Catalog price editor). */
 const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
@@ -122,14 +123,14 @@ export function TaxRates() {
   // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
   // the operator needs to see what actually changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("taxRates.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

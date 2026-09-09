@@ -6,7 +6,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   CONFIG_LEVELS,
   type CapabilityCatalogue,
@@ -30,6 +30,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, StatusBadge, TextArea } from "../components/ui";
 import { ConfirmDialog, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 // The three §10 presets the catalogue serves, each to a static i18n label (a template-literal key
 // would not be a MessageKey). An id the map does not cover falls back to its raw server id.
@@ -133,14 +134,14 @@ export function Config() {
   // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
   // the operator needs to read what changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("config.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };
@@ -157,7 +158,7 @@ export function Config() {
       await loadCapabilities();
       await loadVersions();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -169,7 +170,7 @@ export function Config() {
       setViewingDoc(await api.configVersionEffective(tenantId(), storeId(), versionId));
       setViewing(versionId);
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     }
@@ -263,7 +264,7 @@ export function Config() {
       toast.ok(message);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setCapError(message);
       toast.error(message);
     } finally {

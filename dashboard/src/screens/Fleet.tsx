@@ -28,6 +28,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
+import { apiMessage } from "../lib/errors";
 
 /** How often the view re-reads the fleet and health, so "online" and "last seen" stay current. */
 const POLL_MS = 15_000;
@@ -148,7 +149,7 @@ export function Fleet() {
   };
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };
