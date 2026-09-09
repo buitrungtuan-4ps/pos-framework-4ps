@@ -10,7 +10,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   UNITS,
   type CatalogItem,
@@ -25,6 +25,7 @@ import {
   type UnitOfMeasure,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
+import { apiMessage, isStale } from "../lib/errors";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -96,10 +97,19 @@ export function Inventory() {
   const [supName, setSupName] = createSignal("");
   const [pendingSupDelete, setPendingSupDelete] = createSignal<Supplier | null>(null);
 
-  const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+  // A conditional write can be refused because somebody else saved first (ADR-0094's `412`). This
+  // screen sends an `etag` on every edit, so it invites that refusal and owes the reader both a
+  // sentence naming what changed and a reload — retrying without reloading would re-apply the
+  // overwrite the refusal exists to prevent, and the operator needs to see the change before
+  // deciding again. `isStale` is what tells the two failures apart.
+  const fail = async (caught: unknown) => {
+    const stale = isStale(caught);
+    const message = stale ? t("inventory.stale") : apiMessage(caught);
     setError(message);
     toast.error(message);
+    if (stale) {
+      await load();
+    }
   };
 
   const load = async () => {
@@ -117,7 +127,7 @@ export function Inventory() {
       setSuppliers(sup);
       setItems(cat);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -165,7 +175,7 @@ export function Inventory() {
       setIngOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -183,7 +193,7 @@ export function Inventory() {
       toast.ok(t("inventory.ingredientDeleted"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -252,7 +262,7 @@ export function Inventory() {
       setRecOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -270,7 +280,7 @@ export function Inventory() {
       toast.ok(t("inventory.recipeDeleted"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -310,7 +320,7 @@ export function Inventory() {
       setSupOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -328,7 +338,7 @@ export function Inventory() {
       toast.ok(t("inventory.supplierDeleted"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -342,7 +352,7 @@ export function Inventory() {
       const result = await api.publishInventory(tenantId(), storeId());
       toast.ok(t("inventory.published", { store: storeName(), version: result.config_version_id }));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
