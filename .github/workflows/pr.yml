@@ -173,6 +173,11 @@ jobs:
           }
           if ($bad -gt 0) { exit 1 }
 
+      # This step's own script must be pure ASCII, and the first version of it was not — it carried
+      # an em dash and failed under 5.1 with the identical parse error it exists to catch. The
+      # runner writes a `shell: powershell` step to a `.ps1` **without** a byte-order mark, and
+      # nothing here can add one: the fix that works for a file we generate is unavailable for a
+      # file the runner generates for us. So: no non-ASCII below this line.
       - name: the Windows installers parse (Windows PowerShell 5.1, what a shop runs)
         if: matrix.os == 'windows-2022'
         shell: powershell
@@ -183,7 +188,7 @@ jobs:
               [void][System.Management.Automation.Language.Parser]::ParseFile(
                   $file.FullName, [ref]$null, [ref]$errors)
               if ($errors) {
-                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse under Windows PowerShell 5.1 — the edition a technician gets by typing ``powershell``. Check the byte-order mark."
+                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse under Windows PowerShell 5.1, the edition a technician gets by typing ``powershell``. Check the byte-order mark."
                   $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
                   $bad += 1
               } else {
