@@ -64,6 +64,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6). The console half
   ships next; a store on this build simply applies whatever is published.
 
+### Changed
+
+- **The console overhaul plan now carries an assessment made against the running product.**
+  `docs/cloud-admin-ux-plan.md` gains a **Wave 3** section written from `pos_cloud` on a real
+  PostgreSQL with the console driven in a browser, rather than from the code as v2 was: the
+  first-run operator journey walked from an empty database to a store holding an installer file,
+  the first-run state of all thirty screens, five reproduced defects, and measured load figures. It
+  supersedes v2's §1 verdict table, which describes the console as it stood before Tracks F, G, M
+  and O landed, and it re-cuts the remaining work into six stages ordered mandatory-first along the
+  activation path. The defects it names — an invited admin who can never sign in, a top bar that can
+  name the wrong store, a tenant creation that leaves the address bar behind — are recorded there for
+  fixing, not fixed by this change (#252).
+
 ### Fixed
 
 - **A typed-name confirmation could be bypassed by cancelling and reopening the dialog.** Every

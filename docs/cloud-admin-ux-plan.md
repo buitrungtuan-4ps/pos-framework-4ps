@@ -1,6 +1,11 @@
 # Cloud admin console — complete overhaul plan (v2)
 
-**Status** Proposed · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-26
+**Status** Proposed · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-09
+
+Tracks F, G, M and O have since been delivered; §1's verdict table is the state of the console
+as v2 found it, not as it stands. **[Wave 3](#wave-3--measured-on-a-running-console-2026-09-09)**
+at the foot of this document is the current assessment — written from the running product
+rather than from the code — and carries the plan that is live.
 
 Version 2 of the console plan. Version 1 (the A0–A8 roadmap) framed the problem — one context
 contract, everything as master data, one screen pattern — and it survives here intact. What changed:
@@ -299,3 +304,325 @@ is the natural state and no placeholder is needed.
 
 What this delivers is what the plan wanted: a link that opens on the tenant it was read under, and
 two tabs on two tenants — which `localStorage` context could never do, being per-origin.
+
+---
+
+# Wave 3 — measured on a running console (2026-09-09)
+
+Everything above was written from the code. This section was written from the **running product**:
+`pos_cloud` on a real PostgreSQL 16, the console reached in Chromium, and a first-run operator's
+journey walked from an empty database to a store holding an installer file. Twenty-two screenshots
+and a request-by-request log per screen are the evidence; what follows is what they showed and what
+to do about it, in the order the owner asked for — **mandatory before optional, along the path a
+store actually takes to go live**.
+
+## 3w.0 How it was measured, and what the measurement cannot see
+
+One `pos_cloud` process (`bind = 127.0.0.1:8080`) against a local PostgreSQL cluster, all 40-odd
+migrations applied clean. The console was driven two ways: through the `pnpm dev` proxy, which is
+how a developer sees it, and against `pos_cloud`'s own embedded build, which is how an operator sees
+it. Every step recorded a full-page screenshot, the browser's console errors, and every HTTP
+response ≥ 400.
+
+Three honest limits on the evidence:
+
+- **No NATS and no Garage.** Docker Hub is unreachable from the environment this ran in, and both
+  are optional at boot (`if let Some(nats) = config.nats`, `Some(artifacts) =>`). So the ingest
+  cursor, the artifact route and the OTA download path were off. Nothing that depends on them was
+  exercised.
+- **No store box.** No `pos_edge` was installed against the provisioned store, so Fleet, OTA,
+  Reconciliation, Devices and Activation were seen only in their never-reported state.
+- **No volume.** One tenant, two stores, an empty catalogue. Every table was seen empty. Nothing
+  here measures a `DataTable` at ten thousand rows; that needs seeded data and is listed as work,
+  not as a finding.
+
+What the walk *does* cover completely is the mandatory activation path — sign-in, first-run
+enrolment, tenant, brand, store, API key, installer handoff — and the empty/first-run state of all
+thirty screens, which is precisely the state a new country cell or a new franchisee starts in.
+
+## 3w.1 Five defects, each reproduced
+
+These are not design opinions. Each was reproduced against the running system, and each sits on or
+beside the mandatory path.
+
+### D1 · An invited admin can never sign in (blocks the whole multi-admin console)
+
+Reproduced end to end: `POST /admin/invites` returns a single-use token; the invitee opens
+`/invite?token=…`, chooses their own password, and the console answers **"Account created"** and
+issues a TOTP secret. They then go to sign in and get **"The password or code was not accepted."**
+Every time.
+
+The cause is in `crates/pos-cloud/src/auth/admin.rs`. `login` reads `store.load_credential()` — the
+*single* super-admin credential — and checks `admin.credential.password_matches(...)`. It never
+reads `admin_users.password_phc`, which is exactly where `admin_accept_invite` wrote the invitee's
+password (`crates/pos-cloud/src/http.rs`, `create_admin_user`). `LoginRequest` has no email or
+identity field at all, so the server could not tell one admin from another even if it wanted to. The
+code says so itself, at `admin.rs:773-774`: *"Email-based per-admin login replaces this owner lookup
+in a later slice."* That slice was never built.
+
+The consequence is larger than one screen. The Admins roster, the invitation flow, the four console
+roles, the per-permission guards, the session list, the audit trail's actor column — Track G in
+full — all rest on there being more than one admin, and there cannot be. The console has exactly
+one usable account, and the invite flow reports success while leading to a wall.
+
+Two smaller faults ride along on the same path. The enrolment URI handed to the invitee reads
+`otpauth://totp/Pizza4Ps:super-admin?...` — every invitee's authenticator app labels the entry
+`super-admin`, so a person who administers two cells gets two identically-named entries. And the
+sign-in screen has no identity field to fill in, which is the visible symptom of the same gap.
+
+### D2 · The top bar can name the wrong store
+
+Reproduced with two stores in one tenant. Pick *4P's Le Thanh Ton* in the context picker; then open
+a link naming *4P's Ben Thanh* — a shared console URL, a bookmark, a colleague's paste. The screens
+read Ben Thanh (`localStorage pos.dashboard.store` = Ben Thanh's id, and every request carries it),
+and the top bar still reads **"4P's Le Thanh Ton"**.
+
+`dashboard/src/state/session.ts` has two ways in. `selectStore(id, name)` — the picker's path —
+writes both the id and the name. `setStoreId(next)` — the *URL's* path, called from `TenantContext`
+in `App.tsx` — writes the id and neither writes nor clears the name. Nothing else resolves a name
+from an id. So a store arriving by link inherits whatever name the last picker click left behind.
+`setTenantId` has the identical shape, so the same applies one level up.
+
+This is the most consequential defect of the five. Configuration publishes, till retirement, tax
+authoring and revenue reads are all store-scoped, and the label above them can belong to a different
+shop. The feature that makes it reachable — shareable context links — is the one F1 was built for.
+
+### D3 · Creating the first tenant leaves the address bar behind
+
+The picker's `chooseTenant` calls `goToContext(...)`, which is the function whose own comment reads
+*"Moving the context moves the URL: the address bar is what a link is copied from."* The picker's
+`createTenant` does not call it. Reproduced: create the first tenant and the URL stays at `/` while
+the breadcrumb, the nav dots and every screen behave as though a tenant is selected. The state is
+right; the address bar is a lie, and a fresh install's very first action produces it.
+
+### D4 · The Admins screen is a blank page under `pnpm dev`
+
+`vite.config.ts` proxies `"/admin": "http://127.0.0.1:8080"`. Vite matches that as a **prefix**, and
+the console's admin-roster route is `/admins`. So `GET /admins` is forwarded to `pos_cloud`, which
+answers with the *built* `index.html` out of `dist/`, whose hashed asset paths do not exist on the
+dev server. Result: two 404s and a white screen. Verified fine in production shape — `pos_cloud`
+serving its own build resolves `/admins` correctly — so this is a developer-experience defect, but
+it means nobody working in `pnpm dev` can see the screen they are editing.
+
+### D5 · An unknown `/admin` path answers `200 text/html`
+
+While probing, `POST /admin/admins/invites` (a wrong guess at the route) returned **200** with the
+SPA's `index.html` rather than a `404` carrying the AIP-193 envelope the rest of `/admin` is careful
+to emit. The SPA fallback is catching unmatched `/admin/*` paths. Every client typo therefore
+arrives as HTML that fails to parse, instead of a structured `NOT_FOUND`. Small, but it undoes the
+error-envelope work for the one case where the caller has the path wrong.
+
+## 3w.2 Performance — measured, and one clear win
+
+The owner's instruction was that optimisation stays in scope regardless of my argument that no
+problem had been measured. So it was measured, in the real deployment shape (`pos_cloud` serving its
+own embedded build and the API on one origin).
+
+| Measurement | Result |
+|---|---|
+| Cold load to network idle (loopback) | 596 ms |
+| First contentful paint | 76 ms |
+| DOM content loaded | 62 ms |
+| First-visit payload | `ui.js` 270,775 B + `index.js` 48,395 B + `index.css` 25,200 B ≈ **344 kB** |
+| Per-route chunk | 471 B – 46,286 B, fetched on demand (code-splitting works) |
+| Requests per screen | 2 – 9, all `200` except the two config `404`s below |
+| `content-encoding` on every asset | **none** |
+| `cache-control` on hashed assets | `public, max-age=31536000, immutable` ✓ |
+
+The front-end is not the problem: the paint is fast, the split is real, the caching is right. **The
+problem is that `pos_cloud` serves the bundle uncompressed.** 344 kB of highly compressible JS and
+CSS goes over the wire at full size where gzip would send roughly 80 kB. On loopback that costs
+nothing, which is why it has never been noticed; on a store manager's 4G tether or a provincial
+ADSL line it is the difference between a console that opens in under a second and one that takes
+three or four. `docs/cloud-admin-ux-plan.md` §3.6 already flagged "no compression … layers in the
+binary" from the code audit; this confirms it against the running server and quantifies it.
+
+Two secondary observations. `GET /admin/stores/{id}/config` and `.../config/versions` answer `404`
+for a store that has never had a configuration published — which is every newly provisioned store —
+so the Configuration screen's first load always includes two failed requests and two red lines in
+the browser console. An empty tree is a legitimate state and should read as `200` with an empty
+document, not as a not-found. And the Catalog screen fires **nine** requests on open (five chunks,
+four collections); the collections are independent and correctly parallel, but on a real catalogue
+they will each be an unbounded list.
+
+## 3w.3 What the journey looks like, screen by screen
+
+Beyond the defects, the walk surfaced a consistent set of design gaps. These are the "international
+standard" half of the brief, and they cluster into six.
+
+**1. There is no get-started.** This is the gap the owner named directly. A freshly enrolled admin
+lands on a 1440-px canvas holding one card that says *"Choose the store in the top bar to continue."*
+No numbered path, no "create your first tenant", no link to the wizard, no sense of how many steps
+remain. The information needed to build it already exists — the console knows there are zero
+tenants, zero stores, zero published configurations and zero paired devices — it is simply never
+assembled into a checklist. And at the other end of the path, the wizard's final step names the next
+two mandatory actions in a green banner — *"Next: activate the store's devices (Activation) and
+publish its configuration (Configuration)"* — **as plain text, not as links**, leaving the operator
+to find two entries in a thirty-item nav.
+
+**2. The navigation is a thirty-item wall.** Six groups, all expanded, all text, no icons, no
+collapse, no persistence of what is open. On desktop it is 1,609 px tall — which is why *every one
+of the thirty screens reports a page height of 1,609 px regardless of its content*: the sidebar,
+not the content, sets the length of the page. On a phone it degrades into a wrapped word-soup of
+thirty links that the operator scrolls past — about 700 px of it — before reaching content, on every
+screen. No horizontal overflow anywhere (checked at 390 px and 820 px), so it is not broken; it is
+just not usable there.
+
+**3. The nav's readiness dot means the opposite of what it looks like.** `contextReady(scope)`
+renders a filled `bg-accent` dot when a screen's context is satisfied and a hollow one when it is
+not. `bg-accent` is the brand red. So a console that is *working correctly* shows twenty small red
+dots down the left edge, and a screen that is *blocked* shows nothing at all. The logic is right; the
+signal is inverted against every convention a user brings with them, where a red dot in a sidebar
+means unread, attention, or error.
+
+**4. A brand-new store reads as a disaster.** The first screen after provisioning shows three
+headline tiles: **"Not reporting"**, **"Behind"**, **"Nothing yet"** — the first two in large red
+type. All three are accurate and all three are the *expected* state of a store whose box has not
+been installed yet. There is no "provisioned, awaiting installation" posture, so the console's
+opening impression of a successful setup is alarm. The six tiles are also three different visual
+treatments of a number — huge display type, small bold, and an em dash — because there is no
+KPI/metric primitive to be consistent with.
+
+**5. The component kit is bypassed exactly where it matters.** `kit.tsx` exports `EmptyState`,
+`Modal`, `Drawer` and `ConfirmDialog`. The Stores screen — the first master-data screen on the
+mandatory path — uses none of them: its two empty states are bare sentences ("No stores yet. Create
+one below.", "No brands yet"), and its create forms are two more stacked cards *below* the empty
+tables, so the operator scrolls past two "nothing here" messages to reach the thing that fixes it.
+Reports stacks six cards of which five are empty, each with its own differently-worded emptiness.
+Six primitives that a standard admin dashboard has are absent from the kit entirely: **Tooltip,
+Skeleton, KPI/Metric tile, Bulk actions, Kebab/overflow menu, and Tabs** (the wizard's three steps
+and Catalog's sub-navigation are two separate hand-rolled implementations of the same thing).
+
+**6. Small consistency debts that add up.** The language switcher is an unstyled native `<select>`
+in a header of otherwise custom controls. There is no user identity anywhere in the header — no
+name, no email, no role — so an admin cannot see who they are signed in as, which will matter the
+moment D1 is fixed and there is more than one. On the Stores screen a disabled "Save" renders as a
+washed-out red that reads as broken, immediately beside "Archive" — the screen's most destructive
+action — rendered as a solid brand-red primary. Reports' date fields are native `type="date"`, so
+they render `mm/dd/yyyy` to a Vietnamese operator and offer no Today / This week / Last 30 days
+presets. The wizard's handoff step prints the store's live secret as page text with a copy button on
+one file and none on the other, repeats the same red warning banner twice, and puts "Finish" 2,300
+px down the page with no sticky action bar. Raw ULIDs are correctly hidden behind "Technical
+details" on the Stores screen and shown bare in the context picker and on the wizard's final step.
+
+## 3w.4 The plan, ordered mandatory → optional
+
+Ordered the way the owner asked: top to bottom, each stage a precondition of the next, along the
+real path from an empty cloud to a shop that trades. Nothing below is a big-bang redesign; the
+sequence is deliberately "make the mandatory path correct and legible, then raise the whole surface,
+then style it".
+
+### Stage 0 — the harness (one PR, precondition for everything after)
+
+The console has **no test runner and no test dependency of any kind**; `pnpm build` is
+`tsc --noEmit` plus four lint scripts. That is why the four defects above survived F0, F1, F2, F3,
+G1, G2 and every track since, and it is why a redesign that touches 24,000 lines is currently
+un-checkable. Stage 0 adds Vitest plus a browser driver and about a dozen behavioural tests that
+pin the mandatory path: sign in, create a tenant and assert the URL carries it, follow a link naming
+a second store and assert the header names *that* store, open a confirm dialog and assert the typed
+name guard resets. Each of D1–D4 gets the test that would have caught it. See §3w.5 for why this is
+first and not last.
+
+### Stage 1 — the mandatory path is correct (defects)
+
+1. **D1 — per-admin login.** The largest piece of work in the plan and the only one that needs an
+   ADR: `LoginRequest` gains an identity, `login` resolves the admin by email and checks *that*
+   admin's `password_phc` and `totp_secret`, the session binds to them, and the enrolment URI is
+   labelled with the invitee's own email. Until this lands, Track G is decoration.
+2. **D2 — one place resolves a name from an id.** `setStoreId`/`setTenantId` either clear the
+   remembered name or resolve the real one from the registry. Clearing is the safe half and is a
+   two-line change; resolving is the right answer and needs a small lookup the picker already has.
+3. **D3 — `createTenant` calls `goToContext`.** One line.
+4. **D4 — the dev proxy stops swallowing `/admins`.** Match `^/admin/` rather than the `/admin`
+   prefix. One line.
+5. **D5 — unmatched `/admin/*` answers a `404` envelope**, not the SPA.
+6. **The empty config tree answers `200`**, not `404`, so a new store's Configuration screen opens
+   clean.
+
+### Stage 2 — the operator can find their way (the get-started)
+
+7. **A get-started checklist on the landing screen**, assembled from state the console already
+   fetches: tenant → brand → store → API key → installer downloaded → device paired → configuration
+   published, each row showing done/next/blocked and linking straight to the screen that does it.
+   This is the "admin phải có get-start setup theo tenant, brand, store, file cài" the owner asked
+   for, and it is the single highest-value screen in the plan.
+8. **Make the wizard's closing banner into links** — Activation and Configuration, by name, one
+   click.
+9. **Collapse the navigation**: groups that remember their state, icons, a persistent active trail,
+   and a drawer under `md`. Fix the readiness dot's semantics while it is open — a neutral or muted
+   marker for ready, and something visible for blocked, which is the case that actually needs the
+   operator's attention.
+10. **A "provisioned, not yet installed" posture** on the store overview, so a successful setup does
+    not open in three red alarms, with the alarm tiles reserved for a store that *was* reporting and
+    stopped.
+
+### Stage 3 — performance, where it is measured
+
+11. **Compress the served bundle** (`tower-http` `CompressionLayer`, or the compression Caddy is
+    already in front of): ~344 kB → ~80 kB on a first visit. One layer, the largest single win in
+    the whole plan, and the answer to "vẫn phải tiếp tục tối ưu" that is backed by a number.
+12. **Skeletons instead of the bare `common.loading` string** in the sixteen places that show it —
+    perceived performance, and the missing primitive from §3w.3.
+13. **Seed a volume fixture and measure the tables**, then decide on virtualisation. Right now every
+    list has been seen only empty; committing to virtualisation before measuring would be guessing.
+
+### Stage 4 — the missing primitives (raises every screen at once)
+
+14. **Tooltip, Skeleton, KPI tile, Bulk actions, Kebab menu, Tabs** into `kit.tsx`, then adopt them
+    where the hand-rolled version exists — Catalog's tabs and the wizard's steps onto one `Tabs`,
+    the store overview's six tiles onto one `KpiTile`, the two hand-written empty sentences on
+    Stores onto `EmptyState`.
+15. **Create actions move into the page header** as a primary button opening a `Modal`/`Drawer`,
+    instead of a form card below the empty table. Stores first, since it is on the mandatory path.
+
+### Stage 5 — state management
+
+16. The console holds **400+ `createSignal`** against **9** `createStore`/`createResource`: there is
+    effectively no data-fetching abstraction, so every screen hand-rolls load/busy/error/refetch and
+    each one gets to be subtly wrong in its own way. `Menus.tsx` alone has 35 signals. A single
+    resource helper — one place that owns loading, error, refetch-after-mutation and the ETag — is
+    the structural fix, migrated screen by screen behind the Stage 0 tests. This is where the brief's
+    "chuẩn hoá state management" belongs, and it is deliberately *after* the primitives, because a
+    resource helper's shape is easier to get right once the components that consume it are settled.
+
+### Stage 6 — optional: the visual system
+
+17. Typography scale, spacing rhythm, elevation, iconography, motion, dark mode, and the
+    header/identity/avatar work. Real value, no operational risk, and cheapest to do last — once the
+    primitives exist, restyling is a token pass rather than forty screen rewrites.
+
+## 3w.5 Why the harness is Stage 0
+
+The owner asked what a test harness is. The plain answer, in the terms of this console:
+
+Today, the only thing that checks the dashboard before it ships is the TypeScript compiler and four
+lint scripts. They can tell you a name is misspelled or a translation key is missing. They cannot
+tell you that clicking "Create" leaves the address bar behind, that a store link shows the wrong
+shop's name, or that an invited admin can never sign in — because none of those is a type error.
+They are all *behaviour*, and nothing in the repository runs the behaviour.
+
+A harness is two things. First a **test runner** — for this stack, Vitest, which the project can add
+in an afternoon — that runs small programs on every build. Second, the **tests**: each one renders a
+piece of the console, does what an operator does, and asserts what should happen. The test that
+would have caught D2 is roughly this long:
+
+```
+render the console with store A picked
+navigate to a link naming store B
+expect the header to read "store B"
+```
+
+Three lines of intent, maybe fifteen of code. Run in under a second, on every commit, forever.
+
+That is the whole argument for putting it first. Four of the five defects in §3w.1 passed through
+seven completed tracks and dozens of reviewed pull requests without anyone noticing, because the
+only way to notice was for a human to click exactly the right sequence. Stages 1 through 6 will
+touch nearly every one of the forty screens; without a harness, each of those changes is another
+chance to introduce a defect that will again be found only by accident, months later, possibly by a
+franchisee. With one, the mandatory path is checked automatically every time anyone touches
+anything — which is also the only honest way to reach the brief's "hoàn toàn không còn lỗi
+logic/giao diện". A claim of no bugs is not something a redesign can deliver; it is something a
+harness lets you keep checking.
+
+It is not free, and it is not a redesign. It buys nothing visible to an operator on the day it
+lands. It is the difference between the next six stages being safe and being a gamble.
