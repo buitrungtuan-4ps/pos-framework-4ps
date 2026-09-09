@@ -330,7 +330,19 @@ export function screenHref(screen: ScreenId, tenant: string, store: string): str
 
 /** The screen whose path matches `path`, or `undefined` — used to label the breadcrumb. */
 export function screenAtPath(path: string): Screen | undefined {
-  return Object.values(SCREENS).find((screen) => screen.path === path);
+  const id = screenIdAtPath(path);
+  return id === undefined ? undefined : SCREENS[id];
+}
+
+/**
+ * The id of the screen at `path`, or `undefined`.
+ *
+ * The id rather than the spec, for the callers that need to ask a question *about* the screen rather
+ * than render it — the nav asks which group holds the open screen, and a group lists ids.
+ */
+export function screenIdAtPath(path: string): ScreenId | undefined {
+  const ids = Object.keys(SCREENS) as ScreenId[];
+  return ids.find((id) => SCREENS[id].path === path);
 }
 
 /**

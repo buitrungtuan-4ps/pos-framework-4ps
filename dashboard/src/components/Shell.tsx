@@ -3,12 +3,13 @@
 // and a version footer. The context inputs persist per browser (state/session.ts) and are a
 // convenience, not an authorisation — the server's session cookie is what gates every call.
 
-import { For, onMount, type ParentProps, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, type ParentProps, Show } from "solid-js";
 import { A, useLocation, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { AdminRole } from "../api/types";
 import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
+import { groupOpen, loadRemembered, remember, type Remembered } from "../lib/nav-groups";
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
 import {
@@ -25,6 +26,7 @@ import {
   type ScreenId,
   screenAtPath,
   screenHref,
+  screenIdAtPath,
   screenPathOf,
   specOf,
 } from "../state/screens";
@@ -52,17 +54,40 @@ function navItemVisible(id: ScreenId): boolean {
   return role !== undefined && (roles as readonly AdminRole[]).includes(role);
 }
 
-// The nav dot's tooltip/aria: whether the item's context is ready, or which piece it is waiting on.
+// Which piece of context a nav entry is waiting on.
+//
+// Called only for an entry whose context is *not* ready, which is the change. The marker used to be
+// drawn for every scoped entry and filled with `bg-accent` — the brand colour, which in this palette
+// is red — when the context *was* ready, leaving it hollow and all but invisible when the screen was
+// blocked. So a nav full of red meant everything was fine, the entries an operator could not use
+// looked like ordinary entries, and the one label a screen reader announced twenty times was
+// "Context ready". Every dashboard convention reads a coloured dot as a thing needing attention.
+//
+// Now a ready entry carries no marker at all — that is the unremarkable state, and marking it is
+// noise — and a blocked one is muted and says what it needs. `nav.scopeReady` went with the
+// inversion: a label nobody needs on twenty entries.
 function scopeHint(scope: Scope): string {
-  if (contextReady(scope)) {
-    return t("nav.scopeReady");
-  }
   return scope === "store" ? t("nav.scopeNeedsStore") : t("nav.scopeNeedsTenant");
 }
 
 export function Shell(props: ParentProps) {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // The nav under `md`. A disclosure rather than a modal overlay: it stays in the document flow and
+  // pushes the page down, so there is no focus trap to get wrong and no scroll to lock. Navigating
+  // closes it — an operator who has picked a screen is done with the menu — and so does Escape.
+  const [navOpen, setNavOpen] = createSignal(false);
+  createEffect(() => {
+    // Read the path so this re-runs on every navigation, including one from the command palette.
+    void location.pathname;
+    setNavOpen(false);
+  });
+
+  // Which groups the operator has explicitly opened or closed. A group not in here follows the
+  // containment rule in `lib/nav-groups.ts`.
+  const [remembered, setRemembered] = createSignal<Remembered>(loadRemembered());
+  const openScreen = () => screenIdAtPath(screenPathOf(location.pathname));
 
   // Learn who is signed in once the authenticated frame mounts, so the nav can gate the roster to
   // the roles that may reach it and the screens can greet the operator. A failure here is not fatal:
@@ -97,8 +122,26 @@ export function Shell(props: ParentProps) {
   };
 
   return (
-    <div class="flex min-h-full flex-col">
+    <div
+      class="flex min-h-full flex-col"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && navOpen()) {
+          setNavOpen(false);
+        }
+      }}
+    >
       <header class="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3">
+        <button
+          type="button"
+          aria-label={t("nav.menu")}
+          title={t("nav.menu")}
+          aria-expanded={navOpen()}
+          aria-controls="console-nav"
+          onClick={() => setNavOpen(!navOpen())}
+          class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink md:hidden"
+        >
+          <span aria-hidden="true">☰</span>
+        </button>
         <span class="text-lg font-semibold text-ink">{t("app.title")}</span>
         <div class="flex flex-1 flex-wrap items-center gap-2">
           <ContextPicker />
@@ -132,46 +175,78 @@ export function Shell(props: ParentProps) {
         </button>
       </header>
       <div class="flex flex-1 flex-col md:flex-row">
-        <nav class="border-b border-line bg-surface md:w-60 md:border-b-0 md:border-r">
-          <div class="flex flex-col gap-4 p-2">
+        <nav
+          id="console-nav"
+          aria-label={t("nav.menu")}
+          class={`${navOpen() ? "block" : "hidden"} border-b border-line bg-surface md:block md:w-60 md:border-b-0 md:border-r`}
+        >
+          <div class="flex flex-col gap-2 p-2">
             <For each={NAV_GROUPS}>
               {(group) => {
                 const items = () => group.items.filter(navItemVisible);
+                const open = () =>
+                  groupOpen({
+                    items: group.items,
+                    remembered: remembered()[group.key],
+                    current: openScreen(),
+                  });
                 return (
                   <Show when={items().length > 0}>
                     <div>
-                      <p class="px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted">
-                        {t(group.key)}
-                      </p>
-                      <ul class="flex flex-wrap gap-1 md:flex-col">
+                      {/* The heading is the toggle, and its accessible name is the group's own name:
+                          `aria-expanded` carries the state, so a second label saying "collapse"
+                          would be the state announced twice and wrong half the time. */}
+                      <button
+                        type="button"
+                        aria-expanded={open()}
+                        aria-controls={`nav-group-${group.key}`}
+                        onClick={() => setRemembered(remember(remembered(), group.key, !open()))}
+                        class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted hover:bg-surface-raised"
+                      >
+                        <span>{t(group.key)}</span>
+                        <span aria-hidden="true">{open() ? "▾" : "▸"}</span>
+                      </button>
+                      <ul
+                        id={`nav-group-${group.key}`}
+                        class="flex flex-col gap-1"
+                        hidden={!open()}
+                      >
                         <For each={items()}>
-                          {(id) => (
-                            <li>
-                              <A
-                                // The link carries the working context, so copying it out of the
-                                // address bar gives somebody else the same screen on the same tenant.
-                                href={screenHref(id, tenantId(), storeId())}
-                                end={specOf(id).path === "/"}
-                                class="flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base text-ink hover:bg-surface-raised"
-                                activeClass="bg-surface-raised font-semibold"
-                              >
-                                <span>{t(specOf(id).key)}</span>
-                                <Show when={specOf(id).scope}>
-                                  {(scope) => (
-                                    <span
-                                      aria-label={scopeHint(scope())}
-                                      title={scopeHint(scope())}
-                                      class={`h-2 w-2 shrink-0 rounded-full border ${
-                                        contextReady(scope())
-                                          ? "border-accent bg-accent"
-                                          : "border-line bg-transparent"
-                                      }`}
-                                    />
-                                  )}
-                                </Show>
-                              </A>
-                            </li>
-                          )}
+                          {(id) => {
+                            const scope = () => specOf(id).scope;
+                            const blocked = () => {
+                              const need = scope();
+                              return need !== undefined && !contextReady(need);
+                            };
+                            return (
+                              <li>
+                                <A
+                                  // The link carries the working context, so copying it out of the
+                                  // address bar gives somebody else the same screen on the same
+                                  // tenant.
+                                  href={screenHref(id, tenantId(), storeId())}
+                                  end={specOf(id).path === "/"}
+                                  class={`flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base hover:bg-surface-raised ${
+                                    blocked() ? "text-ink-muted" : "text-ink"
+                                  }`}
+                                  activeClass="bg-surface-raised font-semibold"
+                                >
+                                  <span>{t(specOf(id).key)}</span>
+                                  {/* Only a screen that cannot be opened yet is marked. A screen
+                                      that is ready is the unremarkable case and carries nothing. */}
+                                  <Show when={blocked() ? scope() : undefined}>
+                                    {(need) => (
+                                      <span
+                                        aria-label={scopeHint(need())}
+                                        title={scopeHint(need())}
+                                        class="h-2 w-2 shrink-0 rounded-full border border-ink-muted bg-transparent"
+                                      />
+                                    )}
+                                  </Show>
+                                </A>
+                              </li>
+                            );
+                          }}
                         </For>
                       </ul>
                     </div>
