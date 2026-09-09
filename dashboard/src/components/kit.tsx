@@ -11,13 +11,12 @@ import {
   createSignal,
   For,
   type JSX,
-  onCleanup,
-  onMount,
   type ParentProps,
   Show,
 } from "solid-js";
 
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 import { Button, TextField } from "./ui";
 
 // --- Pager --------------------------------------------------------------------------------------
@@ -388,16 +387,6 @@ export function DataTable<T>(props: {
 
 // --- Overlays: Modal, Drawer --------------------------------------------------------------------
 
-function useEscape(isOpen: () => boolean, close: () => void): void {
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && isOpen()) {
-      close();
-    }
-  };
-  onMount(() => window.addEventListener("keydown", onKey));
-  onCleanup(() => window.removeEventListener("keydown", onKey));
-}
-
 /** A centred modal dialog. Backdrop click and Escape both close it. */
 export function Modal(
   props: ParentProps<{
@@ -564,35 +553,6 @@ export function ConfirmDialog(props: {
 }
 
 // --- Small display primitives ---------------------------------------------------------------------
-
-/** A coloured status pill. `label` is already-translated text. `danger` is for an active fault
- *  (a firing alert, a critical severity): `text-danger` clears AA on the card surface, and the label
- *  always rides with the hue, so meaning is never carried by colour alone. */
-export function StatusBadge(props: {
-  label: string;
-  tone: "active" | "archived" | "disabled" | "neutral" | "danger";
-}) {
-  const palette = () => {
-    switch (props.tone) {
-      case "active":
-        return "border-ok text-ok";
-      case "danger":
-        return "border-danger text-danger";
-      case "archived":
-      case "disabled":
-        return "border-ink-muted text-ink-muted";
-      default:
-        return "border-line text-ink-muted";
-    }
-  };
-  return (
-    <span
-      class={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${palette()}`}
-    >
-      {props.label}
-    </span>
-  );
-}
 
 /** The friendly empty-list panel: a headline, an optional line of guidance, and an optional action. */
 export function EmptyState(props: { title: string; description?: string; action?: JSX.Element }) {

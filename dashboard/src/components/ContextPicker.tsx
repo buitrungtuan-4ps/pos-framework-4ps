@@ -10,6 +10,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 import {
   selectStore,
   selectTenant,
@@ -34,6 +35,7 @@ export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
+  useEscape(open, () => setOpen(false));
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);

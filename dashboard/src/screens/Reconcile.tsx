@@ -14,8 +14,8 @@ import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
-import { type Column, ConfirmDialog, DataTable, EmptyState, StatusBadge } from "../components/kit";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
+import { type Column, ConfirmDialog, DataTable, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 
 /** How often the history re-reads, so a fresh reconciliation shows without a manual refresh. */

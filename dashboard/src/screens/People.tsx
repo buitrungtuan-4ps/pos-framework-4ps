@@ -15,7 +15,7 @@ import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from ".
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -25,7 +25,6 @@ import {
   EmptyState,
   FormField,
   Modal,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

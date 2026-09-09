@@ -9,8 +9,7 @@ import { api } from "../api/client";
 import type { AuditEntry } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
-import { StatusBadge } from "./kit";
-import { Skeleton } from "./ui";
+import { Skeleton, StatusBadge } from "./ui";
 
 /** How many entries one panel pulls; a Detail view's history is short, so this is generous. */
 const AUDIT_PANEL_LIMIT = 50;

@@ -7,6 +7,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 
 type Tone = "ok" | "danger";
 type Note = { id: number; tone: Tone; message: string };
@@ -69,6 +70,7 @@ export function ToastHost() {
 /** The top-bar bell: a count of recent notifications and a dropdown of their history. */
 export function NotificationBell() {
   const [open, setOpen] = createSignal(false);
+  useEscape(open, () => setOpen(false));
   return (
     <div class="relative">
       <button

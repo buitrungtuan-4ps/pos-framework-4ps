@@ -853,3 +853,95 @@ Iconography (the nav icons deferred from #261), the theme choice the console can
 `data-theme` attribute is honoured by the CSS and nothing in the console ever sets it, while the
 till has a toggle for it — and the header identity block, which is the "header/identity/avatar" half
 of item 17. All three are additive.
+
+## Stage 6, part two: two things the console knew and never said (2026-09-09)
+
+Item 17 lists "dark mode" and "the header/identity/avatar work" among Stage 6's subjects. Both turned
+out to be the same shape of gap as the motion token: the capability was already there and nothing
+reached it.
+
+### The theme the stylesheet supported and the console never chose
+
+`tokens.css` has matched `[data-theme="dark"]` and `:not([data-theme="light"])` since P6. Nothing in
+the console ever set the attribute. The till (`ui/`), reading the byte-identical copy of that same
+file, has had a toggle in its status bar all along. So the operator watching a kitchen screen could
+pick a palette and the operator running the business could not.
+
+Three states rather than a toggle, and this is the part with a test. "System" is a real answer — an
+operator whose laptop switches at sunset wants the console to switch with it — and it is the only
+correct default, because choosing light or dark on a first run overrides a preference the viewer has
+already expressed to their operating system. That makes "system" the state that *removes* the
+attribute rather than setting a third value: the stylesheet's dark rule is
+`:root:not([data-theme="light"])`, so `data-theme="system"` would still match it and an operator on a
+light machine asking to follow their system would be handed dark. The till's toggle has the mirror of
+this gap — it flips between dark and light and can never get back to following the system.
+
+Applied from `main.tsx` before `render`, not in a `createEffect`. `App` sets `<html lang>` in an
+effect and that is fine, because a late `lang` is invisible; a late `data-theme` is a flash of the
+palette the operator did not choose, on every single load.
+
+### The identity it fetched on every load and used for one thing
+
+`GET /admin/whoami` has been called on mount since Track G1. Its answer fed exactly one decision:
+which nav entries to hide. So the console knew who you were and never told you — on a product where
+four roles see four different navs, an operator who could not find a screen had no way to tell
+whether that was the role or the screen, and an operator with two accounts had nothing at all to say
+which one a tab was signed in as.
+
+### Why one menu instead of two more buttons
+
+The header had eight controls and wrapped to a second row under `md`. Identity, appearance, language
+and sign-out are one subject — "this is me, and this is how I want the console" — and the convention
+everywhere is to put them behind the avatar. Folding in the locale switch and the sign-out button
+makes this a net *reduction* of one header control while adding two capabilities. Both folded
+controls are set-once preferences that persist per browser, which is what makes a click acceptable;
+a control used during a task would not belong there.
+
+The identity block is absent rather than skeletal when `whoami` has not answered or has failed. The
+signal cannot tell those apart, and widening it to a three-state panel would be modelling with no
+consequence, because both render the same thing. What matters is that everything else in the menu
+works without an identity: the theme, the language and the way out do not depend on knowing who you
+are, and the moment an operator most needs to sign out is the moment something has gone wrong.
+
+### Escape, and a helper that was private for no reason
+
+`useEscape` lived inside `kit.tsx`, where the modal and the drawer could see it and nothing else
+could — so the three dropdowns in the header had no way out but tabbing back to the trigger. Same
+shape as `lib/errors.ts` in Stage 5: a helper visible to a few files, so everyone else went without.
+It moved to `lib/escape.ts` and all three dropdowns have it.
+
+It went to `lib/` rather than being exported from `kit.tsx` for a mundane reason with a measured
+cost, which is the next section.
+
+### The 14 kB regression, and the guard that now catches it
+
+The account menu wanted one status pill and imported `StatusBadge` from `components/kit.tsx`. That
+is a correct import; it typechecks; every test passed; every screen worked. It also moved the entire
+CRUD kit — every table, modal, drawer, pager and confirm dialog — out of its lazy chunk and into the
+bundle every first visit downloads.
+
+| | before | after the import | after the fix |
+| --- | --- | --- | --- |
+| shell chunk | 50.6 kB (16.0 gzip) | **64.9 kB (19.6 gzip)** | 55.0 kB (17.1 gzip) |
+| `kit` chunk | 10.2 kB, lazy | **gone — merged in** | 9.7 kB, lazy |
+
+The only evidence was a chunk name disappearing from a build log nobody diffs. `StatusBadge` moved
+to `components/ui.tsx`, where a dependency-free pill belongs, and its twenty-one importers were
+repointed.
+
+The fix is not the interesting part, because the next component to want one thing from the kit will
+do this again. `dashboard/tests/shell-bundle.test.ts` walks the module graph from `main.tsx` through
+static imports only — the set that lands in the first paint — and fails if anything in it imports a
+module meant to load lazily. It is derived rather than listed, because a hand-maintained list of
+"the shell's modules" goes stale on the first new component and then passes forever. It also pins
+that the eager graph reaches exactly three screens: `Login`, `Setup` and `AcceptInvite`, the ones an
+unauthenticated visitor can reach, which `App.tsx` imports eagerly on purpose so that signing in
+does not wait for a round trip.
+
+Verified by reinstating the bad import and watching it fail with
+`components/AccountMenu imports components/kit`.
+
+### What Stage 6 has left
+
+Iconography — the nav icons deferred from #261 — and nothing else. Typography, colour, spacing,
+elevation, motion, dark mode and the header work are done.

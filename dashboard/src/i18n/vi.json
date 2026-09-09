@@ -1,4 +1,11 @@
 {
+  "account.appearance": "Hiển thị",
+  "account.open": "Tài khoản của bạn",
+  "account.signedInAs": "Đang đăng nhập với",
+  "account.theme.dark": "Tối",
+  "account.theme.light": "Sáng",
+  "account.theme.system": "Theo hệ thống",
+  "account.themeLabel": "Chủ đề",
   "action.add": "Thêm",
   "action.approve": "Duyệt",
   "action.cancel": "Huỷ",

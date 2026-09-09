@@ -1,6 +1,7 @@
 // The frame every authenticated screen sits in (ADR-0060, Track F1): a top bar with the working
-// tenant/store, the locale switch and logout; a grouped, scope-aware left nav; a breadcrumb strip;
-// and a version footer. The context inputs persist per browser (state/session.ts) and are a
+// tenant/store and the account menu; a grouped, scope-aware left nav; a breadcrumb strip; and a
+// version footer. The locale switch and sign-out live in the account menu (Stage 6) — see
+// `AccountMenu.tsx` for why they were folded in rather than standing beside it. The context inputs persist per browser (state/session.ts) and are a
 // convenience, not an authorisation — the server's session cookie is what gates every call.
 
 import { createEffect, createSignal, For, onMount, type ParentProps, Show } from "solid-js";
@@ -8,7 +9,7 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { AdminRole } from "../api/types";
-import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
+import { t } from "../i18n";
 import { groupOpen, loadRemembered, remember, type Remembered } from "../lib/nav-groups";
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
@@ -30,6 +31,7 @@ import {
   screenPathOf,
   specOf,
 } from "../state/screens";
+import { AccountMenu } from "./AccountMenu";
 import { CommandPalette, openPalette } from "./CommandPalette";
 import { ContextPicker } from "./ContextPicker";
 import { NotificationBell, ToastHost } from "./Toast";
@@ -156,23 +158,7 @@ export function Shell(props: ParentProps) {
           <span aria-hidden="true">🔎</span>
         </button>
         <NotificationBell />
-        <label class="text-sm text-ink-muted">
-          <span class="sr-only">{t("locale.label")}</span>
-          <select
-            class="min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-            value={locale()}
-            onChange={(event) => setLocale(event.currentTarget.value as Locale)}
-          >
-            <For each={LOCALES}>{(code) => <option value={code}>{localeName(code)}</option>}</For>
-          </select>
-        </label>
-        <button
-          type="button"
-          class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-          onClick={() => void logout()}
-        >
-          {t("action.logout")}
-        </button>
+        <AccountMenu onSignOut={() => void logout()} />
       </header>
       <div class="flex flex-1 flex-col md:flex-row">
         <nav

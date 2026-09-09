@@ -9,13 +9,12 @@ import type { ApiKeySummary, Store } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, PageHeader, StatusBadge } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

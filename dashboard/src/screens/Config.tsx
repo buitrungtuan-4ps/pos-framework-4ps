@@ -27,8 +27,8 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
 };
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextArea } from "../components/ui";
-import { ConfirmDialog, EmptyState, StatusBadge } from "../components/kit";
+import { Banner, Button, Card, PageHeader, StatusBadge, TextArea } from "../components/ui";
+import { ConfirmDialog, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 
 // The three §10 presets the catalogue serves, each to a static i18n label (a template-literal key

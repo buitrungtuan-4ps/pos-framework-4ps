@@ -16,6 +16,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The console can be set to light or dark, or told to follow the operating system.** The
+  stylesheet has honoured a theme choice since P6 and nothing in the console ever made one, so an
+  operator got whichever palette their machine was in — while the till, reading the same token file,
+  has had a toggle all along. Three states, not two: "system" is a real answer for anyone whose
+  laptop switches at sunset, and it is the default, because picking light or dark on a first run
+  would override a preference the viewer has already given their operating system. The choice is
+  remembered per browser and applied before the first paint, so a reload does not flash the other
+  palette (#264).
+
+- **The console says who is signed in.** It has fetched the admin's identity on every load since
+  Track G1 and used it for one thing: hiding the nav entries a role cannot reach. So on a console
+  where four roles see four different navs, an operator who could not find a screen had no way to
+  tell whether that was the role or the screen, and an operator with two accounts had nothing to say
+  which one a tab was. The header now carries an account menu with the name, the address the server
+  knows the session by, and the role — alongside the theme choice, the language switch and sign-out,
+  which were standing loose in a header that had grown to eight controls and wrapped to two rows on
+  a narrow screen. Folding them in is a net reduction of one control (#264).
+
+- **Escape closes the three dropdowns in the header.** The modal and the drawer have always closed
+  on Escape; the org switcher and the notification bell never did, because the helper was private to
+  the file the modals live in. So the only way to dismiss one was to tab back through whatever it
+  contained and press the trigger again (#264).
+
 ### Fixed
 
 - **Every floating surface was invisibly flat in dark mode.** Both modal shapes, the command

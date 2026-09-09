@@ -12,15 +12,8 @@ import type { Alert, AlertSeverity } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { actingAdmin } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
-import {
-  type Column,
-  DataTable,
-  Drawer,
-  EmptyState,
-  StatusBadge,
-  TechnicalDetails,
-} from "../components/kit";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
+import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
 
 /** The most rows one recent-history read returns; the server caps it too. */
