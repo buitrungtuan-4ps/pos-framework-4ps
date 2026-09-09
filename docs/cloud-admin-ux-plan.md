@@ -626,3 +626,38 @@ harness lets you keep checking.
 
 It is not free, and it is not a redesign. It buys nothing visible to an operator on the day it
 lands. It is the difference between the next six stages being safe and being a gamble.
+
+## Correction — the compression finding was measured on the wrong path (2026-09-09)
+
+§3w.2 above reports that `pos_cloud` serves the SPA bundle with no `content-encoding`, calls that
+the largest measured performance win in the plan, and §3w.4 item 11 schedules a compression layer to
+take it. **The measurement is real and the conclusion is wrong.** The correction, on picking the work
+up:
+
+`deploy/Caddyfile.d/site.caddy` line 8 is `encode zstd gzip`, and that file is imported from inside
+the site block of **all four** TLS postures — `acme-dns01`, `acme-http01`, `byo-cert` and `external`
+(ADR-0090). Every deployed `pos_cloud` sits behind a Caddy that already compresses, and with zstd
+preferred over gzip, which is better than what item 11 proposed.
+
+What §3w.2 actually measured was `pos_cloud` on `127.0.0.1:8080` — the loopback address of the
+process *behind* the ingress, which no operator's browser ever talks to. The bytes on the wire in
+production were already ~80 kB, not 344 kB. There was no win to take.
+
+So item 11 is withdrawn rather than built. Adding `tower-http`'s compression feature would pull new
+transitive crates in to duplicate what the ingress does, and AGENTS.md §"never" requires an ADR
+merged first for a dependency change — an ADR whose Consequences section would have to admit the
+feature is redundant in every supported deployment.
+
+Two things this leaves behind. First, the honest state of the performance question: after
+measurement, **the console has no demonstrated performance problem in the path an operator uses** —
+76 ms to first contentful paint, real per-route code-splitting, correct immutable caching, and
+compression at the ingress. What survives of Stage 3 is item 12 (skeletons, which are *perceived*
+performance and a missing primitive) and item 13 (seed a volume fixture and measure the tables,
+which is still unmeasured and still the one place a real problem could be hiding). Second, a lesson
+worth writing down because it cost a wrong headline in a plan that had just been merged: a
+measurement taken against a process is not a measurement of the product when the deployment puts
+something in front of it. The topology is part of the system under test.
+
+The one deployment this would matter for is `pos_cloud` run bare with no proxy in front. `deploy/`
+does not describe that posture and `docs/deploy-runbook.md` does not support it, so it is not a case
+the plan needs to serve.
