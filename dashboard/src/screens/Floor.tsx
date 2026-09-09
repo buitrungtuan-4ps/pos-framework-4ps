@@ -27,6 +27,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 export function Floor() {
   const [areas, setAreas] = createSignal<Area[] | null>(null);
@@ -67,14 +68,14 @@ export function Floor() {
   // reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists
   // to prevent, and the operator needs to see what actually changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("floor.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

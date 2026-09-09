@@ -9,7 +9,7 @@
 // Extracted from `screens/StoreHub.tsx`, which shaped it and still uses it, when the get-started
 // checklist needed the same three states over seven reads.
 
-import { ApiError } from "../api/client";
+import { apiMessage } from "../lib/errors";
 
 export type Panel<T> = { readonly state: "loading" } | { readonly state: "ready"; readonly value: T } | {
   readonly state: "failed";
@@ -25,7 +25,7 @@ export function panelOf<T>(promise: Promise<T>, set: (panel: Panel<T>) => void):
     (caught: unknown) =>
       set({
         state: "failed",
-        message: caught instanceof ApiError ? caught.message : String(caught),
+        message: apiMessage(caught),
       }),
   );
 }

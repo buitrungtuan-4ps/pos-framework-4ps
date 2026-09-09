@@ -65,10 +65,10 @@ const sendsEtag = ([, text]: [string, string]) => /\betag\b/i.test(text);
 /**
  * A screen that tells the two failures apart.
  *
- * Two spellings count, because the console has both: `isStale(caught)` through `lib/errors.ts`, and
- * the inline `caught instanceof ApiError && caught.isStale` that six screens wrote before the helper
- * had a shared home. Both are the code telling the two failures apart, which is the property; which
- * spelling is the mechanical follow-up. What must not happen is neither.
+ * One spelling now: `isStale(caught)` through `lib/errors.ts`. Six screens used to write the inline
+ * `caught instanceof ApiError && caught.isStale`, from before the helper had a shared home; the
+ * sweep replaced all six, and the check below happens to accept either because it matches the bare
+ * word. What must not happen is neither.
  *
  * Matching the bare word is only safe because `code()` has removed the comments *and* the imports.
  * Two earlier versions of this suite passed a deliberately broken screen: the first because the
@@ -105,18 +105,30 @@ describe("conditional writes", () => {
 });
 
 describe("the shared error helpers", () => {
-  it("own the ApiError ternary, so screens stop rewriting it", () => {
-    // Forty-three copies at the time of writing. The four screens this slice touched are the
-    // beachhead; the rest are a mechanical follow-up, and this records the direction rather than
-    // failing on the copies that remain.
-    const copies = entries.filter(([, text]) =>
-      text.includes("caught instanceof ApiError ? caught.message : String(caught)"),
-    );
-    // `raw`, not `entries`: importing the helper is exactly the line `code()` strips.
-    const adopters = raw.filter(([, text]) => text.includes('from "../lib/errors"'));
-    expect(adopters.length).toBeGreaterThanOrEqual(4);
-    // None of the adopters kept a hand-written copy alongside the helper they now import.
-    const both = adopters.filter(([path]) => copies.some(([other]) => other === path));
-    expect(both.map(([path]) => path)).toEqual([]);
+  it("own the ApiError ternary, and no screen writes its own copy", () => {
+    // Forty-three copies when `lib/errors.ts` was introduced; four screens adopted it then, and this
+    // check recorded the direction rather than failing on the rest. The sweep is done, so the
+    // assertion is now absolute: zero copies, in any screen, under any variable name.
+    //
+    // Two `instanceof ApiError` uses survive and are not copies of this expression: `Login.tsx`
+    // deliberately shows a *generic* message rather than the server's (naming what was wrong about a
+    // sign-in tells a guesser which half to vary), and `Fleet.tsx` falls back to a screen-specific
+    // sentence. The pattern below is the ternary itself, so neither matches.
+    const copies = entries
+      .filter(([, text]) => /\b(\w+) instanceof ApiError \? \1\.message : String\(\1\)/.test(text))
+      .map(([path]) => path);
+    expect(copies).toEqual([]);
+  });
+
+  it("are the only definition, so a second one cannot drift from the first", () => {
+    // `catalog/shared.tsx` defined `isStale` before `lib/errors.ts` existed — which is *why* the
+    // screens outside `catalog/` wrote the ternary by hand. It re-exports the one definition now.
+    // A blind sweep is what makes this worth pinning: rewriting the ternary everywhere turned that
+    // second definition into `isStale = (caught) => isStale(caught)` — infinite recursion, which
+    // TypeScript compiles without complaint.
+    const definitions = raw
+      .filter(([, text]) => /const isStale\s*=/.test(text))
+      .map(([path]) => path);
+    expect(definitions).toEqual([]);
   });
 });

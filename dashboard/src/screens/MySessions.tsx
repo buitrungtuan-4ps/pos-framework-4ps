@@ -6,7 +6,7 @@
 
 import { createSignal, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { AdminSessionView } from "../api/types";
 import { locale, t } from "../i18n";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
@@ -19,6 +19,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 // A Unix-ms instant as a locale-aware date-time; an unparseable value falls back to its raw number
 // rather than throwing, so a malformed row never blanks the table.
@@ -40,7 +41,7 @@ export function MySessions() {
   const [pendingOthers, setPendingOthers] = createSignal(false);
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

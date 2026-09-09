@@ -8,7 +8,7 @@
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { TranslationGrid, TranslationImportReport } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -16,6 +16,7 @@ import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { EmptyState, Modal } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 /** The enforced fallback locale (ADR-0020) — always a column, even if the catalogue omits it. */
 const FALLBACK_LOCALE = "en";
@@ -41,14 +42,14 @@ export function Translations() {
   // than offering a retry: retrying would re-apply the overwrite the refusal exists to prevent, and
   // the operator needs to see what actually changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("translations.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

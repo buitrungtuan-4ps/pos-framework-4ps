@@ -6,11 +6,11 @@
 
 import type { JSX } from "solid-js";
 
-import { ApiError } from "../../api/client";
 import type { EntityStatus, SalesChannel } from "../../api/types";
 import { SALES_CHANNELS } from "../../api/types";
 import { t, type MessageKey } from "../../i18n";
 import { StatusBadge } from "../../components/ui";
+import { apiMessage, isStale } from "../../lib/errors";
 
 /** The i18n key for each sales channel's short label (used by the Menus placement editor). */
 export const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
@@ -55,16 +55,15 @@ export const errorMessage = (caught: unknown): string => {
   if (isStale(caught)) {
     return t("catalog.stale");
   }
-  return caught instanceof ApiError ? caught.message : String(caught);
+  return apiMessage(caught);
 };
 
-/**
- * Whether a caught failure is "somebody else saved this first" (ADR-0094).
- *
- * The recovery is always a reload, never a retry: retrying would re-apply the overwrite the refusal
- * exists to prevent.
- */
-export const isStale = (caught: unknown): boolean => caught instanceof ApiError && caught.isStale;
+// `isStale` is re-exported, not redefined. It was *first* defined here, which is precisely why the
+// thirty-one screens outside `catalog/` wrote the ApiError ternary by hand instead — a helper inside
+// `catalog/` is a helper only the catalog can see (`lib/errors.ts`). The definition moved there in
+// #263; this line stays so the five catalog sub-screens keep importing their shared vocabulary from
+// one module. What must not survive is a second *definition*, which can drift from the first.
+export { isStale } from "../../lib/errors";
 
 /** The already-translated active/archived label. */
 export const statusLabel = (status: EntityStatus): string =>

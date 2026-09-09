@@ -6,13 +6,14 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { DailyRevenue, DailyRollup, Store, XzReport } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatMoney } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { apiMessage } from "../lib/errors";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {
@@ -79,7 +80,7 @@ export function Reports() {
   const win = () => ({ from: from() || undefined, to: to() || undefined });
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
   };
 

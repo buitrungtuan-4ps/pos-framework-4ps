@@ -8,7 +8,7 @@
 
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { ReconcileRun, Store } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
@@ -17,6 +17,7 @@ import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import { type Column, ConfirmDialog, DataTable, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /** How often the history re-reads, so a fresh reconciliation shows without a manual refresh. */
 const POLL_MS = 30_000;
@@ -34,7 +35,7 @@ export function Reconcile() {
   const [confirmReset, setConfirmReset] = createSignal(false);
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

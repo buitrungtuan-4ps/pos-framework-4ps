@@ -7,7 +7,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { MediaSummary } from "../api/types";
 import { locale, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -16,6 +16,7 @@ import { ConfirmDialog, EmptyState, Pager, TechnicalDetails } from "../component
 import { MediaThumbnail } from "../components/ImagePicker";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /**
  * How many assets one page of the grid carries.
@@ -42,7 +43,7 @@ export function Media() {
   };
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

@@ -5,7 +5,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Brand, Store, Tenant } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -20,6 +20,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage, isStale } from "../lib/errors";
 
 export function Stores() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
@@ -49,14 +50,14 @@ export function Stores() {
   // reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists
   // to prevent, and the operator needs to see what actually changed before deciding again.
   const fail = async (caught: unknown) => {
-    if (caught instanceof ApiError && caught.isStale) {
+    if (isStale(caught)) {
       const message = t("stores.stale");
       setError(message);
       toast.error(message);
       await load();
       return;
     }
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

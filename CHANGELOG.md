@@ -16,6 +16,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **One expression for "what went wrong", instead of forty-eight copies.** Every console screen used
+  to write `caught instanceof ApiError ? caught.message : String(caught)` by hand — the four fixed
+  in #263 adopted the shared helper, and this sweeps the remaining forty-four across twenty-nine
+  files, plus the seven screens that spelled the stale check inline. Behaviour is unchanged; what
+  changes is that the next screen to need either gets the one that already exists.
+
+  The second `isStale` definition went too. It lived in `screens/catalog/shared.tsx` — which is
+  *why* the screens outside `catalog/` wrote the ternary by hand, since a helper inside `catalog/` is
+  a helper only the catalog can see — and that file now re-exports the single definition rather than
+  holding a rival one (#265).
+
 ### Added
 
 - **Every nav entry and every nav group carries an icon**, and the command palette shows them too.

@@ -8,10 +8,11 @@
 import { createSignal, Show } from "solid-js";
 import { A, useSearchParams } from "@solidjs/router";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Enrolment } from "../api/types";
 import { t } from "../i18n";
 import { Banner, Button, Card, TextField } from "../components/ui";
+import { apiMessage } from "../lib/errors";
 
 export function AcceptInvite() {
   const [searchParams] = useSearchParams();
@@ -29,7 +30,7 @@ export function AcceptInvite() {
     try {
       setEnrolment(await api.acceptInvite(token().trim(), password()));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }

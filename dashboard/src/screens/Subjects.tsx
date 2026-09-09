@@ -18,6 +18,7 @@ import { actingAdmin, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { ConfirmDialog } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 export function Subjects() {
   const [subjectId, setSubjectId] = createSignal("");
@@ -32,7 +33,7 @@ export function Subjects() {
   const canManage = () => actingAdmin()?.role === "owner";
 
   const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+    const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };

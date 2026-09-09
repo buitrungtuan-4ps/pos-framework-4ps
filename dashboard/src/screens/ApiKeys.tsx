@@ -4,7 +4,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { ApiKeySummary, Store } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -18,6 +18,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 // The scopes that gate a live route. `relay_orders` belongs here because a store key without it
 // leaves the order relay answering 403 on every poll while config-pull works fine — a half-connected
@@ -58,7 +59,7 @@ export function ApiKeys() {
       setStores(registered);
       setRows(keys);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : String(caught));
+      setError(apiMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -89,7 +90,7 @@ export function ApiKeys() {
       toast.ok(t("apiKeys.created"));
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -109,7 +110,7 @@ export function ApiKeys() {
       setPendingRevoke(null);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {

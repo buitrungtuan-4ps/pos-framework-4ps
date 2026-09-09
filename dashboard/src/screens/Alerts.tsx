@@ -7,7 +7,7 @@
 
 import { createSignal, onMount, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Alert, AlertSeverity } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
@@ -15,6 +15,7 @@ import { actingAdmin } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
+import { apiMessage } from "../lib/errors";
 
 /** The most rows one recent-history read returns; the server caps it too. */
 const ALERT_LIMIT = 200;
@@ -95,7 +96,7 @@ export function Alerts() {
       const loaded = await api.listAlerts(recent(), recent() ? ALERT_LIMIT : undefined);
       setAlerts(loaded);
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -122,7 +123,7 @@ export function Alerts() {
       setSelected(null);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
@@ -138,7 +139,7 @@ export function Alerts() {
       setSelected(null);
       await load();
     } catch (caught) {
-      const message = caught instanceof ApiError ? caught.message : String(caught);
+      const message = apiMessage(caught);
       setError(message);
       toast.error(message);
     } finally {
