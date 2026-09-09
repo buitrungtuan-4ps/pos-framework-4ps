@@ -784,42 +784,49 @@ mod admin_store {
         });
     }
 
-    /// Sign-in reads the admin's own credential, and the step and secret are per admin
+    /// Seeds the two admins the [ADR-0119] tests read: an active owner whose address is
+    /// deliberately mixed-case, and a suspended ops admin with a different credential.
+    ///
+    /// [ADR-0119]: ../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md
+    async fn seed_two_logins(admin: &store_postgres::PostgresAdmin) {
+        admin
+            .insert_admin_user(
+                "log-1",
+                "First@Example.test",
+                "First",
+                "owner",
+                "active",
+                "$argon2id$first",
+                b"first-secret",
+            )
+            .await
+            .expect("seed the first admin");
+        admin
+            .insert_admin_user(
+                "log-2",
+                "second@example.test",
+                "Second",
+                "ops",
+                "suspended",
+                "$argon2id$second",
+                b"second-secret",
+            )
+            .await
+            .expect("seed the second admin");
+    }
+
+    /// Sign-in reads *this* admin's own credential, by email
     /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
-    /// Three statements the PR gate cannot run, against the real database. That is the point of the
-    /// test: the columns have existed since migration 0018 and nothing has ever read them, so the
-    /// first read of `password_phc`, `totp_secret` and `last_used_totp_step` from `admin_users`
-    /// happens here rather than in production.
+    /// Against the real database deliberately: `password_phc`, `totp_secret` and
+    /// `last_used_totp_step` have existed on `admin_users` since migration 0018 and nothing has
+    /// ever read them, so the first read of those columns happens here rather than in production.
     #[test]
-    fn a_login_reads_one_admins_own_credential_step_and_secret() {
+    fn a_login_reads_one_admins_own_credential_by_email() {
         block_on(async {
             let (store, _admin) = prepared().await.expect("prepare the database");
             let admin = store.admin();
-            admin
-                .insert_admin_user(
-                    "log-1",
-                    "First@Example.test",
-                    "First",
-                    "owner",
-                    "active",
-                    "$argon2id$first",
-                    b"first-secret",
-                )
-                .await
-                .expect("seed the first admin");
-            admin
-                .insert_admin_user(
-                    "log-2",
-                    "second@example.test",
-                    "Second",
-                    "ops",
-                    "suspended",
-                    "$argon2id$second",
-                    b"second-secret",
-                )
-                .await
-                .expect("seed the second admin");
+            seed_two_logins(&admin).await;
 
             // Case-insensitive, as the `lower(email)` unique index enforces — an operator typing
             // their address capitalised must not be refused.
@@ -843,7 +850,7 @@ mod admin_store {
             );
 
             // A suspended admin still reads — refusing them is the caller's decision, so the read
-            // must report the status rather than hide the row.
+            // reports the status rather than hiding the row.
             let suspended = admin
                 .fetch_admin_login_by_email("second@example.test")
                 .await
@@ -860,10 +867,21 @@ mod admin_store {
                     .is_none(),
                 "an absent address is Ok(None), not an error"
             );
+        });
+    }
 
-            // The step is per admin, and monotone. Burning one admin's step must leave the other's
-            // alone: sharing it would refuse a second admin's valid code in the same 30-second
-            // window as a replay.
+    /// The TOTP step is per admin and moves only forward
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §5).
+    ///
+    /// Burning it globally — which is what the single-row `super_admin` column did — would refuse a
+    /// second admin's perfectly valid code in the same 30-second window as a replay.
+    #[test]
+    fn the_totp_step_is_per_admin_and_moves_only_forward() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            seed_two_logins(&admin).await;
+
             admin
                 .advance_admin_totp_step("log-1", 57_000_000)
                 .await
@@ -872,13 +890,13 @@ mod admin_store {
                 .advance_admin_totp_step("log-1", 56_999_999)
                 .await
                 .expect("a backwards step is a no-op, not an error");
-            let stepped = admin
-                .fetch_admin_login_by_email("first@example.test")
-                .await
-                .expect("fetch")
-                .expect("present");
             assert_eq!(
-                stepped.last_used_totp_step,
+                admin
+                    .fetch_admin_login_by_email("first@example.test")
+                    .await
+                    .expect("fetch")
+                    .expect("present")
+                    .last_used_totp_step,
                 Some(57_000_000),
                 "the step only moves forward"
             );
@@ -892,8 +910,28 @@ mod admin_store {
                 None,
                 "the other admin's step is untouched"
             );
+            // The write addresses a row by id, so an unknown id is a silent no-op rather than an
+            // error — the same posture as every other `WHERE id = $1` write on this seam.
+            admin
+                .advance_admin_totp_step("no-such-admin", 1)
+                .await
+                .expect("an unknown admin is a no-op");
+        });
+    }
 
-            // Re-enrolment replaces that admin's secret and resets their step, and nobody else's.
+    /// Re-enrolment replaces one admin's secret and resets their step, and nobody else's
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) §6).
+    #[test]
+    fn re_enrolment_replaces_one_admins_secret_and_nobody_elses() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let admin = store.admin();
+            seed_two_logins(&admin).await;
+            admin
+                .advance_admin_totp_step("log-1", 57_000_000)
+                .await
+                .expect("advance");
+
             admin
                 .rotate_admin_totp_secret("log-1", b"re-enrolled-secret")
                 .await
@@ -918,13 +956,6 @@ mod admin_store {
                 b"second-secret".to_vec(),
                 "the other admin's secret is untouched"
             );
-
-            // Both writes address a row by id, so an unknown id must be a silent no-op rather than
-            // an error — the same posture as every other `WHERE id = $1` write on this seam.
-            admin
-                .advance_admin_totp_step("no-such-admin", 1)
-                .await
-                .expect("an unknown admin is a no-op");
             admin
                 .rotate_admin_totp_secret("no-such-admin", b"x")
                 .await
