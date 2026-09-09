@@ -28,7 +28,15 @@ import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -609,18 +617,12 @@ export function Inventory() {
               onInput={setIngName}
               placeholder={t("inventory.ingredientNamePlaceholder")}
             />
-            <label class="block">
-              <span class="mb-1 block text-sm font-medium text-ink">{t("inventory.unit")}</span>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                value={ingUnit()}
-                onChange={(event) => setIngUnit(event.currentTarget.value as UnitOfMeasure)}
-              >
-                <For each={UNITS}>
-                  {(unit) => <option value={unit}>{t(UNIT_LABEL[unit])}</option>}
-                </For>
-              </select>
-            </label>
+            <SelectField
+              label={t("inventory.unit")}
+              value={ingUnit()}
+              options={UNITS.map((unit) => ({ value: unit, label: t(UNIT_LABEL[unit]) }))}
+              onChange={(value) => setIngUnit(value as UnitOfMeasure)}
+            />
           </div>
         </Drawer>
 
@@ -642,22 +644,16 @@ export function Inventory() {
           }
         >
           <div class="flex flex-col gap-4">
-            <label class="block">
-              <span class="mb-1 block text-sm font-medium text-ink">{t("inventory.item")}</span>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-60"
-                value={recItem()}
-                disabled={recEditing() !== null}
-                onChange={(event) => setRecItem(event.currentTarget.value)}
-              >
-                <For each={items()}>
-                  {(item) => <option value={item.menu_item_id}>{item.name}</option>}
-                </For>
-              </select>
-              <Show when={recEditing() !== null}>
-                <span class="mt-1 block text-sm text-ink-muted">{t("inventory.itemFixed")}</span>
-              </Show>
-            </label>
+            <SelectField
+              label={t("inventory.item")}
+              value={recItem()}
+              options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+              onChange={setRecItem}
+              // Which item a recipe is for is fixed once it exists; the hint says so rather than
+              // leaving a disabled control with no explanation.
+              disabled={recEditing() !== null}
+              hint={recEditing() !== null ? t("inventory.itemFixed") : undefined}
+            />
 
             <TextField
               label={t("inventory.threshold")}
@@ -678,52 +674,34 @@ export function Inventory() {
                   <For each={recLines()}>
                     {(line, index) => (
                       <div class="flex flex-wrap items-end gap-2">
-                        <label class="block grow">
-                          <span class="mb-1 block text-sm font-medium text-ink">
-                            {t("inventory.lineIngredient")}
-                          </span>
-                          <select
-                            class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                        <div class="grow">
+                          <SelectField
+                            label={t("inventory.lineIngredient")}
                             value={line.ingredient}
-                            onChange={(event) =>
+                            options={(ingredients() ?? []).map((ing) => ({
+                              value: ing.id,
+                              label: `${ing.name} (${t(UNIT_LABEL[ing.unit])})`,
+                            }))}
+                            onChange={(value) =>
                               setRecLines((prev) =>
-                                prev.map((l, i) =>
-                                  i === index()
-                                    ? { ...l, ingredient: event.currentTarget.value }
-                                    : l,
-                                ),
+                                prev.map((l, i) => (i === index() ? { ...l, ingredient: value } : l)),
                               )
                             }
-                          >
-                            <option value="">{t("inventory.lineIngredientPick")}</option>
-                            <For each={ingredients() ?? []}>
-                              {(ing) => (
-                                <option value={ing.id}>
-                                  {ing.name} ({t(UNIT_LABEL[ing.unit])})
-                                </option>
-                              )}
-                            </For>
-                          </select>
-                        </label>
-                        <label class="block w-28">
-                          <span class="mb-1 block text-sm font-medium text-ink">
-                            {t("inventory.linePerUnit")}
-                          </span>
-                          <input
+                            placeholder={t("inventory.lineIngredientPick")}
+                          />
+                        </div>
+                        <div class="w-28">
+                          <TextField
+                            label={t("inventory.linePerUnit")}
                             type="number"
-                            step="0.001"
-                            class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                            aria-label={t("inventory.linePerUnit")}
                             value={line.amount}
-                            onInput={(event) =>
+                            onInput={(value) =>
                               setRecLines((prev) =>
-                                prev.map((l, i) =>
-                                  i === index() ? { ...l, amount: event.currentTarget.value } : l,
-                                ),
+                                prev.map((l, i) => (i === index() ? { ...l, amount: value } : l)),
                               )
                             }
                           />
-                        </label>
+                        </div>
                         <Button
                           variant="secondary"
                           disabled={busy()}

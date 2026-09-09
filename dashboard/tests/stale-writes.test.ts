@@ -65,17 +65,26 @@ const sendsEtag = ([, text]: [string, string]) => /\betag\b/i.test(text);
 /**
  * A screen that tells the two failures apart.
  *
- * One spelling now: `isStale(caught)` through `lib/errors.ts`. Six screens used to write the inline
- * `caught instanceof ApiError && caught.isStale`, from before the helper had a shared home; the
- * sweep replaced all six, and the check below happens to accept either because it matches the bare
- * word. What must not happen is neither.
+ * Two spellings, both through `lib/errors.ts`, and the second is the one to prefer:
  *
- * Matching the bare word is only safe because `code()` has removed the comments *and* the imports.
- * Two earlier versions of this suite passed a deliberately broken screen: the first because the
- * comment explaining the failure path contained the word, the second because the now-unused import
- * still did. A check that prose or a leftover import can satisfy checks nothing.
+ *   * `isStale(caught)` in the screen's own `catch` — how the fourteen original screens do it;
+ *   * `withStaleReload(write, load, prose)` wrapping the write — which does the whole pattern
+ *     (reload, then re-throw the refusal in the screen's own words) in the one place that knows it.
+ *
+ * The second exists because the first is only half of the obligation. Moving a screen onto
+ * `EntityCrud` (ADR-0121) moves the `catch` out of the screen and into `run`, and the first screen
+ * migrated that way kept the reload and silently dropped the prose: `stores.stale` was still in the
+ * catalogue and no longer reachable. `withStaleReload` is what makes both halves travel together, so
+ * a screen that uses it is handling the refusal even though the word `isStale` never appears in it.
+ *
+ * What must not happen is neither. Matching bare words is only safe because `code()` has removed the
+ * comments *and* the imports: two earlier versions of this suite passed a deliberately broken
+ * screen, the first because the comment explaining the failure path contained the word, the second
+ * because the now-unused import still did. A check that prose or a leftover import can satisfy
+ * checks nothing.
  */
-const handlesStale = ([, text]: [string, string]) => text.includes("isStale");
+const handlesStale = ([, text]: [string, string]) =>
+  text.includes("isStale") || text.includes("withStaleReload");
 
 describe("conditional writes", () => {
   it("finds the screens, so this suite cannot pass by looking at nothing", () => {
@@ -97,10 +106,21 @@ describe("conditional writes", () => {
     // smaller catalogue, so the four screens fixed here got their own keys in that house style.
     // This pins the convention: a stale branch cites a key of its own screen's namespace.
     const generic = entries
-      .filter(([, text]) => text.includes("isStale"))
+      .filter(handlesStale)
       .filter(([, text]) => text.includes('t("common.stale")'))
       .map(([path]) => path);
     expect(generic).toEqual([]);
+  });
+
+  it("keep their own prose when the reload moves into the shared helper", () => {
+    // `withStaleReload` takes the sentence as its third argument, which makes the omission the
+    // Stores migration actually committed — reload kept, prose dropped — a thing a test can see.
+    // Anything that delegates must name a `*.stale` key of its own namespace in the same call.
+    const silent = entries
+      .filter(([, text]) => text.includes("withStaleReload"))
+      .filter(([, text]) => !/withStaleReload\([\s\S]{0,200}?t\("[A-Za-z]+\.stale"\)/.test(text))
+      .map(([path]) => path);
+    expect(silent).toEqual([]);
   });
 });
 

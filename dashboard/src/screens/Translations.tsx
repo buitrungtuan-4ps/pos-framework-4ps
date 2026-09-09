@@ -13,7 +13,16 @@ import type { TranslationGrid, TranslationImportReport } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CellField,
+  CheckboxField,
+  FileButton,
+  PageHeader,
+  TextField,
+} from "../components/ui";
 import { EmptyState, Modal } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
@@ -207,22 +216,12 @@ export function Translations() {
               <Button variant="secondary" disabled={busy()} onClick={() => void exportGrid()}>
                 {t("translations.exportCsv")}
               </Button>
-              <label class="inline-flex min-h-touch cursor-pointer items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink transition-[filter] hover:brightness-95">
-                {t("translations.importCsv")}
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  class="hidden"
-                  disabled={busy()}
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    if (file) {
-                      void onImportFile(file);
-                    }
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
+              <FileButton
+                label={t("translations.importCsv")}
+                accept=".csv,text/csv"
+                disabled={busy()}
+                onPick={(file) => void onImportFile(file)}
+              />
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
                 {t("action.refresh")}
               </Button>
@@ -231,14 +230,13 @@ export function Translations() {
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={loaded()}>
-            <label class="mb-3 flex items-center gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
+            <div class="mb-3">
+              <CheckboxField
+                label={t("translations.missingOnly")}
                 checked={missingOnly()}
-                onChange={(event) => setMissingOnly(event.currentTarget.checked)}
+                onChange={setMissingOnly}
               />
-              {t("translations.missingOnly")}
-            </label>
+            </div>
             <div class="mb-4 overflow-x-auto">
               <Show when={keys().length > 0} fallback={<EmptyState title={t("translations.empty")} />}>
                 <table class="w-full text-left text-sm">
@@ -262,11 +260,10 @@ export function Translations() {
                           <For each={locales()}>
                             {(code) => (
                               <td class="py-2 pr-4">
-                                <input
-                                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                                  aria-label={`${key} ${code}`}
+                                <CellField
+                                  label={`${key} ${code}`}
                                   value={cell(key, code)}
-                                  onInput={(event) => setCell(key, code, event.currentTarget.value)}
+                                  onInput={(value) => setCell(key, code, value)}
                                 />
                               </td>
                             )}

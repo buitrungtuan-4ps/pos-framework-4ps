@@ -27,7 +27,16 @@ import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -605,18 +614,12 @@ export function Campaigns() {
                   </span>
                   <p class="mb-2 text-sm text-ink-muted">{t("campaigns.scheduleHint")}</p>
                   <div class="flex flex-wrap items-end gap-2">
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("campaigns.scheduleWhen")}
-                      </span>
-                      <input
-                        type="datetime-local"
-                        class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                        aria-label={t("campaigns.scheduleWhen")}
-                        value={scheduleAt()}
-                        onInput={(event) => setScheduleAt(event.currentTarget.value)}
-                      />
-                    </label>
+                    <TextField
+                      label={t("campaigns.scheduleWhen")}
+                      type="datetime-local"
+                      value={scheduleAt()}
+                      onInput={setScheduleAt}
+                    />
                     <Button variant="secondary" disabled={busy()} onClick={() => void schedule()}>
                       {t("campaigns.schedule")}
                     </Button>
@@ -687,18 +690,12 @@ export function Campaigns() {
               onInput={setFName}
               placeholder={t("campaigns.namePlaceholder")}
             />
-            <label class="block">
-              <span class="mb-1 block text-sm font-medium text-ink">{t("campaigns.kind")}</span>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                value={fKind()}
-                onChange={(event) => setFKind(event.currentTarget.value as CampaignKind)}
-              >
-                <For each={CAMPAIGN_KINDS}>
-                  {(kind) => <option value={kind}>{t(KIND_LABEL[kind])}</option>}
-                </For>
-              </select>
-            </label>
+            <SelectField
+              label={t("campaigns.kind")}
+              value={fKind()}
+              options={CAMPAIGN_KINDS.map((kind) => ({ value: kind, label: t(KIND_LABEL[kind]) }))}
+              onChange={(value) => setFKind(value as CampaignKind)}
+            />
             <div class="grid gap-4 sm:grid-cols-2">
               <TextField
                 label={t("campaigns.priority")}
@@ -716,19 +713,15 @@ export function Campaigns() {
             </div>
 
             <div class="border-t border-line pt-4">
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-ink">{t("campaigns.action")}</span>
-                <select
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                  value={fActionType()}
-                  onChange={(event) =>
-                    setFActionType(event.currentTarget.value as "percentage" | "amount_off")
-                  }
-                >
-                  <option value="percentage">{t("campaigns.actionPercentage")}</option>
-                  <option value="amount_off">{t("campaigns.actionAmountOff")}</option>
-                </select>
-              </label>
+              <SelectField
+                label={t("campaigns.action")}
+                value={fActionType()}
+                options={[
+                  { value: "percentage", label: t("campaigns.actionPercentage") },
+                  { value: "amount_off", label: t("campaigns.actionAmountOff") },
+                ]}
+                onChange={(value) => setFActionType(value as "percentage" | "amount_off")}
+              />
               <div class="mt-3">
                 <Show
                   when={fActionType() === "percentage"}
@@ -775,81 +768,55 @@ export function Campaigns() {
                 <div class="flex flex-wrap gap-3">
                   <For each={SALES_CHANNELS}>
                     {(channel) => (
-                      <label class="flex items-center gap-2 text-sm text-ink">
-                        <input
-                          type="checkbox"
-                          class="h-4 w-4"
-                          checked={fChannels().includes(channel)}
-                          onChange={() =>
-                            setFChannels((prev) =>
-                              prev.includes(channel)
-                                ? prev.filter((c) => c !== channel)
-                                : [...prev, channel],
-                            )
-                          }
-                        />
-                        {t(CHANNEL_LABEL[channel])}
-                      </label>
+                      <CheckboxField
+                        label={t(CHANNEL_LABEL[channel])}
+                        checked={fChannels().includes(channel)}
+                        onChange={() =>
+                          setFChannels((prev) =>
+                            prev.includes(channel)
+                              ? prev.filter((c) => c !== channel)
+                              : [...prev, channel],
+                          )
+                        }
+                      />
                     )}
                   </For>
                 </div>
               </fieldset>
               <div class="mt-3">
-                <label class="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="h-4 w-4"
-                    checked={fScheduleOn()}
-                    onChange={(event) => setFScheduleOn(event.currentTarget.checked)}
-                  />
-                  {t("campaigns.scheduleWindow")}
-                </label>
+                <CheckboxField
+                  label={t("campaigns.scheduleWindow")}
+                  checked={fScheduleOn()}
+                  onChange={setFScheduleOn}
+                />
                 <Show when={fScheduleOn()}>
                   <div class="mt-2 flex flex-col gap-3">
                     <div class="flex flex-wrap gap-3">
                       <For each={WEEKDAYS}>
                         {(dayKey, index) => (
-                          <label class="flex items-center gap-2 text-sm text-ink">
-                            <input
-                              type="checkbox"
-                              class="h-4 w-4"
-                              checked={fDays()[index()] ?? false}
-                              onChange={() =>
-                                setFDays((prev) =>
-                                  prev.map((on, i) => (i === index() ? !on : on)),
-                                )
-                              }
-                            />
-                            {t(dayKey)}
-                          </label>
+                          <CheckboxField
+                            label={t(dayKey)}
+                            checked={fDays()[index()] ?? false}
+                            onChange={() =>
+                              setFDays((prev) => prev.map((on, i) => (i === index() ? !on : on)))
+                            }
+                          />
                         )}
                       </For>
                     </div>
                     <div class="grid gap-4 sm:grid-cols-2">
-                      <label class="block">
-                        <span class="mb-1 block text-sm font-medium text-ink">
-                          {t("campaigns.startTime")}
-                        </span>
-                        <input
-                          type="time"
-                          class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                          aria-label={t("campaigns.startTime")}
-                          value={fStart()}
-                          onInput={(event) => setFStart(event.currentTarget.value)}
-                        />
-                      </label>
-                      <label class="block">
-                        <span class="mb-1 block text-sm font-medium text-ink">
-                          {t("campaigns.endTime")}
-                        </span>
-                        <input
-                          type="time"
-                          class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                          aria-label={t("campaigns.endTime")}
-                          value={fEnd()}
-                          onInput={(event) => setFEnd(event.currentTarget.value)}
-                        />
-                      </label>
+                      <TextField
+                        label={t("campaigns.startTime")}
+                        type="time"
+                        value={fStart()}
+                        onInput={setFStart}
+                      />
+                      <TextField
+                        label={t("campaigns.endTime")}
+                        type="time"
+                        value={fEnd()}
+                        onInput={setFEnd}
+                      />
                     </div>
                   </div>
                 </Show>

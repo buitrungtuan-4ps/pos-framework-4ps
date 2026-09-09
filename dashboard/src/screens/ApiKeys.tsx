@@ -1,6 +1,15 @@
-// Per-tenant API-key provisioning (ADR-0037), on the F2 CRUD kit: list a tenant's keys in a sortable
-// table, issue a new scoped key (the token is shown exactly once — only its hash is stored), and
-// revoke one behind a confirmation. Deny-by-default: a key grants only the scopes ticked here.
+// Per-tenant API-key provisioning (ADR-0037), on the authoring kit
+// ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md)): list a tenant's keys in a
+// sortable table, issue a new scoped key, and revoke one behind a confirmation. Deny-by-default: a
+// key grants only the scopes ticked here.
+//
+// The token is shown **exactly once** — only its hash is stored — and that is the one thing on this
+// screen the panel could not carry. `FormPanel` closes on success, which is right for a form and
+// wrong for a result an operator has to copy before it is gone forever. So the token is a second,
+// separate `Modal`, opened as the panel closes: "here is your key, copy it now" is a different
+// sentence from "fill this in", and giving it its own dialog says so. The alternative — a
+// `keepOpen` flag on `FormPanel` for this one screen — is how a kit starts collecting special
+// cases, which is what ADR-0121 exists to stop.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -9,14 +18,25 @@ import type { ApiKeySummary, Store } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
+  FormPanel,
+  Modal,
   TechnicalDetails,
 } from "../components/kit";
+import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -43,14 +63,18 @@ export function ApiKeys() {
   // must name its store, because `/sync/stores/{id}/…` refuses a key that does not (S1).
   const [forStore, setForStore] = createSignal("");
   const [chosen, setChosen] = createSignal<Set<string>>(new Set());
+  // The issued token, held only until the operator dismisses it. Nothing persists it, here or
+  // anywhere: the cloud stored the hash and cannot show this again.
   const [token, setToken] = createSignal("");
   const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  const [pendingRevoke, setPendingRevoke] = createSignal<ApiKeySummary | null>(null);
+  const [loading, setLoading] = createSignal(false);
+  // Two lifecycles, so revoking one key does not disable the issue form (ADR-0121 §3).
+  const issue = useEntityCrud<ApiKeySummary>();
+  const revocation = useEntityCrud<ApiKeySummary>();
 
   const load = async () => {
     setError("");
-    setBusy(true);
+    setLoading(true);
     try {
       const [keys, registered] = await Promise.all([
         api.listApiKeys(tenantId()),
@@ -61,7 +85,7 @@ export function ApiKeys() {
     } catch (caught) {
       setError(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
   };
 
@@ -78,44 +102,47 @@ export function ApiKeys() {
     setChosen(next);
   };
 
-  const create = async () => {
-    setError("");
-    setToken("");
-    setBusy(true);
-    try {
-      const created = await api.createApiKey(tenantId(), [...chosen()], forStore() || undefined);
-      setToken(created.token);
-      setChosen(new Set<string>());
-      setForStore("");
-      toast.ok(t("apiKeys.created"));
-      await load();
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setBusy(false);
-    }
+  const openIssue = () => {
+    setForStore("");
+    setChosen(new Set<string>());
+    issue.create();
   };
 
-  const revoke = async () => {
-    const key = pendingRevoke();
+  const submitIssue = () => {
+    if (chosen().size === 0) {
+      issue.refuse(t("apiKeys.scopeRequired"));
+      return;
+    }
+    void issue
+      .run(async () => {
+        const created = await api.createApiKey(tenantId(), [...chosen()], forStore() || undefined);
+        // Set inside the write, so the token exists before `run` closes the panel and the second
+        // dialog can open in the same tick. It is the only copy that will ever be shown.
+        setToken(created.token);
+      })
+      .then((issued) => {
+        if (issued) {
+          toast.ok(t("apiKeys.created"));
+          void load();
+        }
+      });
+  };
+
+  const revoke = () => {
+    const key = revocation.subject();
     if (!key) {
       return;
     }
-    setBusy(true);
-    try {
-      await api.revokeApiKey(key.id);
-      toast.ok(t("apiKeys.revokeDone"));
-      setPendingRevoke(null);
-      await load();
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setBusy(false);
-    }
+    void revocation.run(() => api.revokeApiKey(key.id)).then((revoked) => {
+      if (revoked) {
+        toast.ok(t("apiKeys.revokeDone"));
+        void load();
+      } else {
+        // The confirm closed itself only on success; a refusal leaves it open with the message, and
+        // the page banner would duplicate it.
+        toast.error(revocation.error());
+      }
+    });
   };
 
   // A key's registered store name, the raw ULID if the registry has no row for it, or the
@@ -191,15 +218,19 @@ export function ApiKeys() {
     <div>
       <PageHeader title={t("apiKeys.title")} description={t("apiKeys.description")} />
       <RequireContext need="tenant">
-        <div class="grid gap-6 lg:grid-cols-2">
+        <div class="flex flex-col gap-6">
           <Card
             title={t("apiKeys.list")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <div class="flex gap-2">
+                <Button onClick={openIssue}>{t("apiKeys.create")}</Button>
+                <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
+                  {t("action.refresh")}
+                </Button>
+              </div>
             }
           >
+            <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
             <Show when={rows()}>
               {(loaded) => (
                 <DataTable
@@ -213,8 +244,8 @@ export function ApiKeys() {
                     <Show when={!row.revoked}>
                       <Button
                         variant="danger"
-                        disabled={busy()}
-                        onClick={() => setPendingRevoke(row)}
+                        disabled={revocation.saving()}
+                        onClick={() => revocation.confirm(row)}
                       >
                         {t("action.revoke")}
                       </Button>
@@ -225,65 +256,65 @@ export function ApiKeys() {
             </Show>
           </Card>
 
-          <Card title={t("apiKeys.create")}>
-            <label class="mb-4 block">
-              <span class="mb-1 block text-sm font-medium text-ink">{t("apiKeys.storeLabel")}</span>
-              <select
-                class="w-full rounded-token border border-line bg-surface px-2 py-1.5 text-sm text-ink"
-                value={forStore()}
-                onChange={(event) => setForStore(event.currentTarget.value)}
-              >
-                <option value="">{t("apiKeys.tenantWide")}</option>
-                <For each={stores()}>
-                  {(store) => <option value={store.store_id}>{store.name}</option>}
-                </For>
-              </select>
-              <span class="mt-1 block text-xs text-ink-muted">{t("apiKeys.storeHint")}</span>
-            </label>
-            <fieldset class="mb-4 flex flex-col gap-2">
-              <legend class="mb-1 text-sm font-medium text-ink">{t("apiKeys.scopesLabel")}</legend>
-              <For each={SCOPES}>
-                {(scope) => (
-                  <label class="flex items-center gap-2 text-sm text-ink">
-                    <input
-                      type="checkbox"
-                      class="size-4"
-                      checked={chosen().has(scope.wire)}
-                      onChange={() => toggle(scope.wire)}
-                    />
-                    {t(scope.key)}
-                  </label>
-                )}
-              </For>
-            </fieldset>
-            <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-            <Show when={token()}>
-              {(value) => (
-                <div class="my-2">
-                  <Banner tone="ok" message={t("apiKeys.tokenOnce")} />
-                  <code class="mt-2 block break-all rounded-token border border-line bg-surface-raised p-2 text-xs text-ink">
-                    {value()}
-                  </code>
-                </div>
-              )}
-            </Show>
-            <Button disabled={busy() || chosen().size === 0} onClick={() => void create()}>
-              {t("action.create")}
-            </Button>
-          </Card>
         </div>
 
+        <FormPanel
+          crud={issue}
+          createTitle={t("apiKeys.create")}
+          editTitle={t("apiKeys.create")}
+          submitLabel={t("action.create")}
+          onSubmit={submitIssue}
+          dirty={() => chosen().size > 0 || forStore() !== ""}
+        >
+          <SelectField
+            label={t("apiKeys.storeLabel")}
+            value={forStore()}
+            options={stores().map((store) => ({ value: store.store_id, label: store.name }))}
+            onChange={setForStore}
+            placeholder={t("apiKeys.tenantWide")}
+            hint={t("apiKeys.storeHint")}
+          />
+          <fieldset class="flex flex-col gap-2">
+            <legend class="mb-1 text-sm font-medium text-ink">{t("apiKeys.scopesLabel")}</legend>
+            <For each={SCOPES}>
+              {(scope) => (
+                <CheckboxField
+                  label={t(scope.key)}
+                  checked={chosen().has(scope.wire)}
+                  onChange={() => toggle(scope.wire)}
+                />
+              )}
+            </For>
+          </fieldset>
+        </FormPanel>
+
+        {/* The token, once. A separate dialog from the form that made it, because it says a
+            different thing: the form asked for input, this hands back something that cannot be
+            recovered. Dismissing it drops the only copy the console will ever hold. */}
+        <Modal
+          open={token() !== ""}
+          title={t("apiKeys.tokenTitle")}
+          closeLabel={t("action.close")}
+          onClose={() => setToken("")}
+          footer={<Button onClick={() => setToken("")}>{t("action.close")}</Button>}
+        >
+          <Banner tone="ok" message={t("apiKeys.tokenOnce")} />
+          <code class="mt-3 block break-all rounded-token border border-line bg-surface-raised p-2 text-xs text-ink">
+            {token()}
+          </code>
+        </Modal>
+
         <ConfirmDialog
-          open={pendingRevoke() !== null}
+          open={revocation.mode() === "confirming"}
           title={t("apiKeys.revokeTitle")}
           message={t("apiKeys.revokeMessage")}
           confirmLabel={t("action.revoke")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}
           danger
-          busy={busy()}
-          onConfirm={() => void revoke()}
-          onCancel={() => setPendingRevoke(null)}
+          busy={revocation.saving()}
+          onConfirm={revoke}
+          onCancel={revocation.close}
         />
       </RequireContext>
     </div>

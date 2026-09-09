@@ -9,14 +9,23 @@
 // supported at the wire level; the console offers item routing (the item is picked from the catalog),
 // so no course ULID is ever typed. Publishing here compiles the same floor plan the Floor screen does.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { CatalogItem, RoutingRule, Station } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -24,7 +33,6 @@ import {
   DataTable,
   Drawer,
   EmptyState,
-  FormField,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -388,52 +396,33 @@ export function Stations() {
               >
                 <Show when={canManage()}>
                   <div class="flex flex-wrap items-end gap-3">
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("stations.station")}
-                      </span>
-                      <select
-                        class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                        aria-label={t("stations.station")}
-                        value={ruleStation()}
-                        onChange={(event) => setRuleStation(event.currentTarget.value)}
-                      >
-                        <option value="">{t("stations.chooseStation")}</option>
-                        <For each={activeStations()}>
-                          {(station) => (
-                            <option value={station.station_id}>{station.name}</option>
-                          )}
-                        </For>
-                      </select>
-                    </label>
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("stations.matchItem")}
-                      </span>
-                      <select
-                        class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                        aria-label={t("stations.matchItem")}
-                        value={ruleItem()}
-                        onChange={(event) => setRuleItem(event.currentTarget.value)}
-                      >
-                        <option value="">{t("stations.chooseItem")}</option>
-                        <For each={items().filter((item) => item.status === "active")}>
-                          {(item) => <option value={item.menu_item_id}>{item.name}</option>}
-                        </For>
-                      </select>
-                    </label>
-                    <label class="block w-24">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("stations.sort")}
-                      </span>
-                      <input
-                        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+                    <SelectField
+                      label={t("stations.station")}
+                      value={ruleStation()}
+                      options={activeStations().map((station) => ({
+                        value: station.station_id,
+                        label: station.name,
+                      }))}
+                      onChange={setRuleStation}
+                      placeholder={t("stations.chooseStation")}
+                    />
+                    <SelectField
+                      label={t("stations.matchItem")}
+                      value={ruleItem()}
+                      options={items()
+                        .filter((item) => item.status === "active")
+                        .map((item) => ({ value: item.menu_item_id, label: item.name }))}
+                      onChange={setRuleItem}
+                      placeholder={t("stations.chooseItem")}
+                    />
+                    <div class="w-24">
+                      <TextField
+                        label={t("stations.sort")}
                         type="number"
-                        aria-label={t("stations.sort")}
                         value={ruleSort()}
-                        onInput={(event) => setRuleSort(event.currentTarget.value)}
+                        onInput={setRuleSort}
                       />
-                    </label>
+                    </div>
                     <Button disabled={busy()} onClick={() => void createRule()}>
                       {t("stations.addRule")}
                     </Button>
@@ -517,36 +506,27 @@ export function Stations() {
               onInput={setStationName}
               placeholder={t("stations.namePlaceholder")}
             />
-            <FormField label={t("stations.backup")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                aria-label={t("stations.backup")}
-                value={stationBackup()}
-                onChange={(event) => setStationBackup(event.currentTarget.value)}
-              >
-                <option value="">{t("stations.noBackup")}</option>
-                <For
-                  each={activeStations().filter(
-                    (station) => station.station_id !== stationDraftId(),
-                  )}
-                >
-                  {(station) => <option value={station.station_id}>{station.name}</option>}
-                </For>
-              </select>
-            </FormField>
-            <label class="flex items-start gap-2 text-sm text-ink">
-              <input
-                type="checkbox"
-                class="mt-1"
-                aria-label={t("stations.default")}
-                checked={stationDefault()}
-                onChange={(event) => setStationDefault(event.currentTarget.checked)}
-              />
-              <span>
-                <span class="font-medium">{t("stations.default")}</span>
-                <span class="block text-xs text-ink-muted">{t("stations.defaultHint")}</span>
-              </span>
-            </label>
+            <SelectField
+              label={t("stations.backup")}
+              value={stationBackup()}
+              // A station cannot be its own backup, so the one being edited is not on offer.
+              options={activeStations()
+                .filter((station) => station.station_id !== stationDraftId())
+                .map((station) => ({ value: station.station_id, label: station.name }))}
+              onChange={setStationBackup}
+              placeholder={t("stations.noBackup")}
+            />
+            <CheckboxField
+              label={t("stations.default")}
+              checked={stationDefault()}
+              onChange={setStationDefault}
+              caption={
+                <span>
+                  <span class="text-sm font-medium text-ink">{t("stations.default")}</span>
+                  <span class="block text-xs text-ink-muted">{t("stations.defaultHint")}</span>
+                </span>
+              }
+            />
           </div>
         </Drawer>
 

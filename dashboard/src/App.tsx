@@ -204,24 +204,32 @@ const CONSOLE_LEVEL = (Object.keys(SCREENS) as ScreenId[]).filter(
 
 // Reads the working context out of the URL and into the signals every screen already reads.
 //
-// The URL is the source of truth while a tenant-scoped screen is mounted: that is what makes a
-// console link shareable and lets two tabs sit on different tenants, which localStorage alone could
-// never do (it is per-origin, so a second tab would fight the first). localStorage stays as the
-// *memory* of the last context, for the redirect that turns a bare `/people` back into a real URL.
-function TenantContext(props: ParentProps) {
+// The URL is what makes a console link shareable and lets two tabs sit on different tenants, which
+// localStorage alone could never do (it is per-origin, so a second tab would fight the first).
+// localStorage is the *memory* of the last context, for the redirect that turns a bare `/people`
+// back into a real URL — and, since ADR-0120, for every navigation that does not name a store.
+// Exported for `tests/context-route.test.tsx`. A test that re-creates this effect would be
+// asserting a copy of the rule rather than the rule, and the copy is free to drift; ADR-0120's
+// distinction is subtle enough that the real component is what wants pinning.
+export function TenantContext(props: ParentProps) {
   const params = useParams<{ tenant: string }>();
   const [search] = useSearchParams<{ store?: string }>();
   createEffect(() => {
     const fromUrl = params.tenant ?? "";
     if (fromUrl && fromUrl !== tenantId()) {
+      // Clears the remembered store as well, a store belonging to a tenant — see `setTenantId`.
       setTenantId(fromUrl);
     }
-    // An absent `?store=` clears the store rather than leaving the previous one in place: the URL
-    // says what the context is, and a link without a store means "no store", not "whatever was
-    // there before".
-    const store = search.store ?? "";
-    if (store !== storeId()) {
-      setStoreId(store);
+    // An absent `?store=` is **silence, not a denial**
+    // ([ADR-0120](../../docs/adr/0120-navigation-preserves-the-working-context.md)). Only 7 of 26
+    // screens are store-scoped, so `screenHref` gives the other 19 a link with no `?store=` — and
+    // while this read treated that as "clear it", walking from Devices to Translations and back
+    // destroyed the store the operator had chosen two clicks earlier, in the signal and in
+    // localStorage both. A URL that names a store still wins; one that says nothing now leaves the
+    // memory alone.
+    const asserted = search.store;
+    if (asserted !== undefined && asserted !== storeId()) {
+      setStoreId(asserted);
     }
   });
   return <>{props.children}</>;

@@ -26,7 +26,15 @@ import {
 import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  TextField,
+} from "../components/ui";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -315,15 +323,11 @@ export function Channels() {
                 <div class="flex flex-wrap gap-3">
                   <For each={SALES_CHANNELS}>
                     {(channel) => (
-                      <label class="flex items-center gap-2 text-sm text-ink">
-                        <input
-                          type="checkbox"
-                          class="h-4 w-4"
-                          checked={channels().includes(channel)}
-                          onChange={() => toggleChannel(channel)}
-                        />
-                        {t(CHANNEL_LABEL[channel])}
-                      </label>
+                      <CheckboxField
+                        label={t(CHANNEL_LABEL[channel])}
+                        checked={channels().includes(channel)}
+                        onChange={() => toggleChannel(channel)}
+                      />
                     )}
                   </For>
                 </div>
@@ -344,15 +348,11 @@ export function Channels() {
                 <div class="flex flex-wrap gap-3">
                   <For each={PAYMENT_METHODS}>
                     {(method) => (
-                      <label class="flex items-center gap-2 text-sm text-ink">
-                        <input
-                          type="checkbox"
-                          class="h-4 w-4"
-                          checked={tender().includes(method)}
-                          onChange={() => toggleTender(method)}
-                        />
-                        {t(TENDER_LABEL[method] ?? "channels.tender.other")}
-                      </label>
+                      <CheckboxField
+                        label={t(TENDER_LABEL[method] ?? "channels.tender.other")}
+                        checked={tender().includes(method)}
+                        onChange={() => toggleTender(method)}
+                      />
                     )}
                   </For>
                 </div>
@@ -370,26 +370,16 @@ export function Channels() {
             <p class="mb-3 text-sm text-ink-muted">{t("channels.qrHint")}</p>
             {storeGate(() => (
               <div class="flex flex-col gap-3">
-                <label class="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="h-4 w-4"
-                    checked={qr().enabled}
-                    onChange={(event) => setQr({ ...qr(), enabled: event.currentTarget.checked })}
-                  />
-                  {t("channels.qrEnabled")}
-                </label>
-                <label class="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="h-4 w-4"
-                    checked={qr().staff_confirmation_required}
-                    onChange={(event) =>
-                      setQr({ ...qr(), staff_confirmation_required: event.currentTarget.checked })
-                    }
-                  />
-                  {t("channels.qrStaffConfirm")}
-                </label>
+                <CheckboxField
+                  label={t("channels.qrEnabled")}
+                  checked={qr().enabled}
+                  onChange={(on) => setQr({ ...qr(), enabled: on })}
+                />
+                <CheckboxField
+                  label={t("channels.qrStaffConfirm")}
+                  checked={qr().staff_confirmation_required}
+                  onChange={(on) => setQr({ ...qr(), staff_confirmation_required: on })}
+                />
                 <div class="grid gap-4 sm:grid-cols-2">
                   <TextField
                     label={t("channels.qrPerTableLimit")}
@@ -404,15 +394,11 @@ export function Channels() {
                     onInput={(value) => setQr({ ...qr(), rate_window_secs: Number(value) })}
                   />
                 </div>
-                <label class="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="h-4 w-4"
-                    checked={qrHoursOn()}
-                    onChange={(event) => setQrHoursOn(event.currentTarget.checked)}
-                  />
-                  {t("channels.qrHoursOn")}
-                </label>
+                <CheckboxField
+                  label={t("channels.qrHoursOn")}
+                  checked={qrHoursOn()}
+                  onChange={setQrHoursOn}
+                />
                 <Show when={qrHoursOn()}>
                   <div class="grid gap-4 sm:grid-cols-3">
                     <TextField
@@ -468,41 +454,30 @@ export function Channels() {
                           value={policy.vendor}
                           onInput={(value) => updateVendor(index(), { vendor: value })}
                         />
-                        <label class="block">
-                          <span class="mb-1 block text-sm font-medium text-ink">
-                            {t("channels.vendorAvailability")}
-                          </span>
-                          <select
-                            class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                            value={policy.availability}
-                            onChange={(event) =>
-                              updateVendor(index(), {
-                                availability: event.currentTarget.value as VendorAvailability,
-                              })
-                            }
-                          >
-                            <For each={VENDOR_AVAILABILITIES}>
-                              {(value) => <option value={value}>{t(AVAILABILITY_LABEL[value])}</option>}
-                            </For>
-                          </select>
-                        </label>
+                        <SelectField
+                          label={t("channels.vendorAvailability")}
+                          value={policy.availability}
+                          options={VENDOR_AVAILABILITIES.map((value) => ({
+                            value,
+                            label: t(AVAILABILITY_LABEL[value]),
+                          }))}
+                          onChange={(value) =>
+                            updateVendor(index(), {
+                              availability: value as VendorAvailability,
+                            })
+                          }
+                        />
                         <TextField
                           label={t("channels.vendorPrepMinutes")}
                           type="number"
                           value={String(policy.prep_minutes)}
                           onInput={(value) => updateVendor(index(), { prep_minutes: Number(value) })}
                         />
-                        <label class="flex items-center gap-2 text-sm text-ink">
-                          <input
-                            type="checkbox"
-                            class="h-4 w-4"
-                            checked={policy.enabled}
-                            onChange={(event) =>
-                              updateVendor(index(), { enabled: event.currentTarget.checked })
-                            }
-                          />
-                          {t("channels.vendorEnabled")}
-                        </label>
+                        <CheckboxField
+                          label={t("channels.vendorEnabled")}
+                          checked={policy.enabled}
+                          onChange={(on) => updateVendor(index(), { enabled: on })}
+                        />
                         <Button
                           variant="secondary"
                           disabled={busy()}

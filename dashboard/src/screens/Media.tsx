@@ -14,7 +14,7 @@ import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, tenantId } from "../state/session";
 import { ConfirmDialog, EmptyState, Pager, TechnicalDetails } from "../components/kit";
 import { MediaThumbnail } from "../components/ImagePicker";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, FileButton, PageHeader } from "../components/ui";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -121,34 +121,26 @@ export function Media() {
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
-          <Show when={canManage()}>
-            <Card title={t("media.upload")}>
-              <label class="flex flex-col gap-1 text-sm">
-                <span class="font-medium text-ink">{t("media.chooseFile")}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  disabled={busy()}
-                  class="text-sm text-ink"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    if (file) {
-                      void upload(file);
-                    }
-                    event.currentTarget.value = "";
-                  }}
-                />
-                <span class="text-xs text-ink-muted">{t("media.uploadHint")}</span>
-              </label>
-            </Card>
-          </Show>
-
           <Card
             title={t("media.library")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <div class="flex gap-2">
+                {/* Uploading is not a form — there is no field to fill in, only a file to choose —
+                    so it is a button in the header rather than a `FormPanel`, and the picker it
+                    opens is the operating system's (ADR-0121 §5). */}
+                <Show when={canManage()}>
+                  <FileButton
+                    label={t("media.upload")}
+                    accept="image/*"
+                    variant="primary"
+                    disabled={busy()}
+                    onPick={(file) => void upload(file)}
+                  />
+                </Show>
+                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
+                  {t("action.refresh")}
+                </Button>
+              </div>
             }
           >
             <Show
@@ -160,6 +152,9 @@ export function Media() {
                   when={loaded().length > 0}
                   fallback={<EmptyState title={t("media.empty")} description={t("media.emptyHint")} />}
                 >
+                  <Show when={canManage()}>
+                    <p class="mb-3 text-sm text-ink-muted">{t("media.uploadHint")}</p>
+                  </Show>
                   <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
                     <For each={loaded()}>
                       {(asset) => (

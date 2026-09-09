@@ -15,7 +15,16 @@ import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from ".
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -695,20 +704,15 @@ export function People() {
                       with no way to tell "no such person" from "that person is archived".
                     */}
                     <div class="block w-72">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("people.employee")}
-                      </span>
                       <Show
                         when={assignChoice()}
                         fallback={
                           <div>
-                            <input
-                              type="text"
-                              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                              aria-label={t("people.findEmployee")}
+                            <TextField
+                              label={t("people.employee")}
                               placeholder={t("people.findEmployee")}
                               value={assignSearch()}
-                              onInput={(event) => searchForAssignee(event.currentTarget.value)}
+                              onInput={searchForAssignee}
                             />
                             <Show when={assignSearch().trim()}>
                               <ul class="mt-1 max-h-48 overflow-y-auto rounded-token border border-line bg-surface-raised">
@@ -756,22 +760,15 @@ export function People() {
                         )}
                       </Show>
                     </div>
-                    <label class="block">
-                      <span class="mb-1 block text-sm font-medium text-ink">
-                        {t("people.role")}
-                      </span>
-                      <select
-                        class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                        aria-label={t("people.role")}
-                        value={assignRole()}
-                        onChange={(event) => setAssignRole(event.currentTarget.value)}
-                      >
-                        <option value="">{t("people.choose")}</option>
-                        <For each={roles().filter((r) => r.status === "active")}>
-                          {(role) => <option value={role.role_template_id}>{role.name}</option>}
-                        </For>
-                      </select>
-                    </label>
+                    <SelectField
+                      label={t("people.role")}
+                      value={assignRole()}
+                      options={roles()
+                        .filter((role) => role.status === "active")
+                        .map((role) => ({ value: role.role_template_id, label: role.name }))}
+                      onChange={setAssignRole}
+                      placeholder={t("people.choose")}
+                    />
                     <Button disabled={busy()} onClick={() => void createAssignment()}>
                       {t("people.assign")}
                     </Button>
@@ -875,21 +872,19 @@ export function People() {
                       <div class="flex flex-col gap-1">
                         <For each={bucket.items}>
                           {(info) => (
-                            <label class="flex items-start gap-2 text-sm text-ink">
-                              <input
-                                type="checkbox"
-                                class="mt-1"
-                                aria-label={info.id}
-                                checked={rolePermissions().includes(info.id)}
-                                onChange={(event) =>
-                                  togglePermission(info.id, event.currentTarget.checked)
-                                }
-                              />
-                              <span>
-                                <span class="font-medium">{info.id}</span>
-                                <span class="block text-xs text-ink-muted">{info.description}</span>
-                              </span>
-                            </label>
+                            <CheckboxField
+                              label={info.id}
+                              checked={rolePermissions().includes(info.id)}
+                              onChange={(on) => togglePermission(info.id, on)}
+                              caption={
+                                <span>
+                                  <span class="text-sm font-medium text-ink">{info.id}</span>
+                                  <span class="block text-xs text-ink-muted">
+                                    {info.description}
+                                  </span>
+                                </span>
+                              }
+                            />
                           )}
                         </For>
                       </div>

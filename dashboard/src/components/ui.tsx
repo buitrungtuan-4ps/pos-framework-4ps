@@ -109,9 +109,25 @@ export function TextField(
     value: string;
     onInput: (value: string) => void;
     hint?: string;
+    /**
+     * Values to offer as a native `<datalist>`, for a field that accepts anything but usually holds
+     * one of a known set — a currency code, an IANA timezone, a locale tag.
+     *
+     * Deliberately not a {@link SelectField}: the store-settings fields this replaces are free text
+     * on the wire, and a picker would refuse a timezone the console's list has not heard of. Four
+     * screens each built the `<datalist>` by hand with a hard-coded `id`, which is how two of them
+     * came to share one: `id="currency-options"` appeared twice on the same page, and a duplicate
+     * id means the second list is unreachable. The id is generated here.
+     *
+     * Shaped like {@link SelectField}'s `options` so a caller moving between the two does not have
+     * to reshape its data. `label` is optional because a currency code or an IANA zone is already
+     * the thing an operator recognises; a locale tag is not, which is why it can carry one.
+     */
+    suggestions?: readonly { readonly value: string; readonly label?: string }[];
   } & Pick<JSX.InputHTMLAttributes<HTMLInputElement>, "type" | "placeholder" | "autocomplete">,
 ) {
   const hintId = createUniqueId();
+  const listId = createUniqueId();
   return (
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
@@ -120,10 +136,129 @@ export function TextField(
         type={props.type ?? "text"}
         placeholder={props.placeholder}
         autocomplete={props.autocomplete}
+        list={props.suggestions ? listId : undefined}
         aria-describedby={props.hint ? hintId : undefined}
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
+      <Show when={props.suggestions}>
+        {(values) => (
+          <datalist id={listId}>
+            <For each={values()}>
+              {(entry) => <option value={entry.value}>{entry.label}</option>}
+            </For>
+          </datalist>
+        )}
+      </Show>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A labelled `<select>`, the sibling `TextField` never had
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Its absence is why there are 53 raw `<select>` across 22 screens. That is not a styling
+ * complaint: each hand-rolled one re-invents the label association — most wrap the control in a
+ * bare `<label>` with a `<span>`, which works, but nothing checks it — and none can be reached by
+ * `FormField`'s error slot, so a refused choice has nowhere to say so.
+ *
+ * `options` carries already-translated labels; the empty-value option is `placeholder`, present only
+ * when given, so "no brand" is an explicit choice a caller opts into rather than a blank row every
+ * select inherits.
+ */
+export function SelectField(props: {
+  label: string;
+  value: string;
+  options: readonly { readonly value: string; readonly label: string }[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <select
+        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        value={props.value}
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+      >
+        <Show when={props.placeholder}>
+          {(placeholder) => <option value="">{placeholder()}</option>}
+        </Show>
+        <For each={props.options}>
+          {(option) => <option value={option.value}>{option.label}</option>}
+        </For>
+      </select>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A labelled multi-choice list — a `<select multiple>`, with the label association and the value
+ * plumbing done once ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Separate from {@link SelectField} rather than a flag on it, because the two have different value
+ * types and a caller must not be able to get that wrong: one choice is a `string`, several are a
+ * `readonly string[]`. A boolean `multiple` prop would make `value` mean two things.
+ *
+ * The plumbing this owns is the part every hand-rolled copy re-derived: a `<select multiple>` does
+ * not report its selection through `event.currentTarget.value`, so each caller wrote its own
+ * `Array.from(select.selectedOptions).map(o => o.value)`. There were four copies across the catalog
+ * screens, two of them in the same file.
+ *
+ * `rows` is how tall the list stands (the native `size`), defaulting to six — enough to see a
+ * handful without the box swallowing the form.
+ */
+export function MultiSelectField(props: {
+  label: string;
+  values: readonly string[];
+  options: readonly { readonly value: string; readonly label: string }[];
+  onChange: (values: string[]) => void;
+  hint?: string;
+  rows?: number;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <select
+        multiple
+        size={props.rows ?? 6}
+        class="w-full rounded-token border border-line bg-surface-raised p-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) =>
+          props.onChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))
+        }
+      >
+        <For each={props.options}>
+          {(option) => (
+            <option value={option.value} selected={props.values.includes(option.value)}>
+              {option.label}
+            </option>
+          )}
+        </For>
+      </select>
       <Show when={props.hint}>
         {(hint) => (
           <span id={hintId} class="mt-1 block text-sm text-ink-muted">
@@ -169,6 +304,216 @@ export function MoneyField(props: {
         <span class="shrink-0 text-sm text-ink-muted">{props.currencyCode}</span>
       </div>
     </label>
+  );
+}
+
+/**
+ * A labelled checkbox with its caption, the sibling `TextField` and `SelectField` never had
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Its absence is why there are twenty raw `type="checkbox"` inputs across eleven screens. They are
+ * not merely unstyled: the hand-rolled ones split three ways on hit area — a bare 16px box, a box
+ * inside a `<label>`, and a box beside a `<span>` that is not a label at all and so is not
+ * clickable. On a touch till the difference between those is whether the control can be hit.
+ *
+ * `hint` is standing guidance, as on `TextField`. The whole row is the label, so the caption is a
+ * hit target too, which is what gets this to the touch minimum without a 48px box.
+ *
+ * `caption` is the escape hatch, and it earns its keep on exactly one screen: the Config capability
+ * editor captions each flag with its wire key in `<code>`, a "default on" badge, and a description —
+ * a caption a `label: string` cannot express. Without it that screen would keep its hand-rolled
+ * checkbox and the whole point of having one control would be lost for the sake of the rule. When
+ * `caption` is given, `label` is still required and becomes the input's `aria-label`, so a rich
+ * caption never costs the control its accessible name. `class` lets a caller that lays these out as
+ * cards (again, Config) put the border on the row rather than wrapping it in another element.
+ */
+export function CheckboxField(props: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  hint?: string;
+  disabled?: boolean;
+  caption?: JSX.Element;
+  class?: string;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label
+      class={`flex min-h-touch cursor-pointer gap-2 py-1 ${
+        props.caption ? "items-start" : "items-center"
+      } ${props.class ?? ""}`}
+    >
+      <input
+        type="checkbox"
+        class={`size-5 shrink-0 accent-accent disabled:cursor-not-allowed disabled:opacity-50 ${
+          props.caption ? "mt-1" : ""
+        }`}
+        checked={props.checked}
+        disabled={props.disabled}
+        aria-label={props.caption ? props.label : undefined}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) => props.onChange(event.currentTarget.checked)}
+      />
+      <Show when={props.caption} fallback={<span class="text-sm text-ink">{props.label}</span>}>
+        {props.caption}
+      </Show>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A labelled whole-number input that emits a number, not a string
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * The twenty-two hand-rolled `type="number"` inputs this replaces all had the same shape: a string
+ * in the signal, `Number(...)` at the write, and `NaN` for anything in between. `NaN` is the
+ * problem — it is not caught by an `if (!value)` guard the way `""` is, it survives `JSON.stringify`
+ * as `null`, and a browser's number input hands back `""` for "12e" and for empty alike. So this
+ * emits `null` for "no value given" and a real number otherwise, and the caller's `null` check is
+ * the only check it needs.
+ *
+ * `min`/`max` are advisory (the browser's spinner respects them; typing past them does not refuse) —
+ * a server refusal is still the authority, which is what `FormField`'s error slot is for.
+ */
+export function NumberField(props: {
+  label: string;
+  value: number | null;
+  onChange: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <input
+        type="number"
+        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        inputmode="numeric"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        placeholder={props.placeholder}
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        value={props.value === null ? "" : String(props.value)}
+        onInput={(event) => {
+          const raw = event.currentTarget.value.trim();
+          if (raw === "") {
+            props.onChange(null);
+            return;
+          }
+          const parsed = Number(raw);
+          props.onChange(Number.isFinite(parsed) ? parsed : null);
+        }}
+      />
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A `Button` that opens the file picker — the one control a form cannot express as a value
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * There were three hand-rolled versions of this and all three were wrong in a different way. The
+ * media library and the item picker exposed the raw `<input type="file">`, which every browser
+ * styles for itself, so those two screens carry a control that matches nothing else in the console
+ * and whose label ("Choose File") no locale catalogue can reach. The translation grid instead
+ * styled a `<label>` to look like a button — which reads as a button, sits in a row of real ones,
+ * and is not one: it takes no focus ring of its own and `disabled` on the inner input silently makes
+ * the whole thing inert rather than looking it.
+ *
+ * So the input is hidden and a real `Button` clicks it. The value is cleared after each pick,
+ * because choosing the same file twice in a row must fire twice — an operator who re-exports a
+ * corrected CSV and re-imports it under the same name is the ordinary case, not the odd one.
+ */
+export function FileButton(props: {
+  label: string;
+  accept: string;
+  onPick: (file: File) => void;
+  variant?: "primary" | "secondary";
+  disabled?: boolean;
+}) {
+  let input!: HTMLInputElement;
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept={props.accept}
+        class="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            props.onPick(file);
+          }
+        }}
+      />
+      <Button
+        variant={props.variant ?? "secondary"}
+        disabled={props.disabled}
+        onClick={() => input.click()}
+      >
+        {props.label}
+      </Button>
+    </>
+  );
+}
+
+/**
+ * One editable cell of a grid — a `<td>`'s input, named by `aria-label` because its visible label is
+ * the column header ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §2).
+ *
+ * This is the escape hatch §2 anticipated when it declined a declarative field schema: the tax-rate
+ * grid is class × channel and the translation grid is key × locale, and in both the label an
+ * operator reads is printed once at the top of the column, not once per row. A {@link TextField} in
+ * each cell would stack forty copies of the same word down the page.
+ *
+ * So the *presentation* differs and the plumbing does not: the accessible name is still required
+ * (there is no way to omit it), the token styling is still in one place, and a screen reader still
+ * announces which cell it is in — which the three hand-rolled versions did get right, and which is
+ * exactly the kind of thing that survives four screens and then does not survive the fifth.
+ */
+export function CellField(props: {
+  /** The accessible name — usually "<row> <column>", since the visible label is the header. */
+  label: string;
+  value: string;
+  onInput: (value: string) => void;
+  placeholder?: string;
+  /** A Tailwind width class, because a grid's columns are sized by the grid, not by the cell. */
+  class?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input
+      class={`min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50 ${
+        props.class ?? "w-full"
+      }`}
+      aria-label={props.label}
+      placeholder={props.placeholder}
+      disabled={props.disabled}
+      value={props.value}
+      onInput={(event) => props.onInput(event.currentTarget.value)}
+    />
   );
 }
 

@@ -12,15 +12,24 @@
 // whole country-pack idea exists for. Each stays editable afterwards, because a store in an airport
 // may round differently from the country it is in.
 
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { Country } from "../api/types";
 import { LOCALES, localeName, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
-import { FormField } from "../components/kit";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  NumberField,
+  PageHeader,
+  SelectField,
+  TextArea,
+  TextField,
+} from "../components/ui";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -106,6 +115,9 @@ export function StoreSettings() {
   // Who this store legally is (ADR-0106). Held as raw text, published as a whole; the multi-line
   // fields are one printed line per input line, which is how an address is actually written.
   const [country, setCountry] = createSignal("");
+  // Which country's defaults were last applied by the filler below. Display only — the publish
+  // sends `country`, which is a separate fact (ADR-0114).
+  const [filledFrom, setFilledFrom] = createSignal("");
   const [legalName, setLegalName] = createSignal("");
   const [tradingName, setTradingName] = createSignal("");
   const [addressText, setAddressText] = createSignal("");
@@ -257,122 +269,94 @@ export function StoreSettings() {
                   console rather than silently as agreeing. Distinct from the filler below, which
                   overwrites six other fields; this one records a fact and touches nothing else, so
                   an airport store can keep rounding its own way. */}
-              <FormField label={t("storeSettings.country")}>
-                <select
-                  class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                  value={country()}
-                  onChange={(event) => setCountry(event.currentTarget.value)}
-                >
-                  <option value="">{t("storeSettings.countryNone")}</option>
-                  <For each={countries()}>
-                    {(option) => <option value={option.code}>{option.display_name}</option>}
-                  </For>
-                </select>
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.countryHint")}</p>
-              </FormField>
+              <SelectField
+                label={t("storeSettings.country")}
+                value={country()}
+                options={countries().map((option) => ({
+                  value: option.code,
+                  label: option.display_name,
+                }))}
+                onChange={setCountry}
+                placeholder={t("storeSettings.countryNone")}
+                hint={t("storeSettings.countryHint")}
+              />
 
-              <FormField label={t("storeSettings.fromCountry")}>
-                <select
-                  class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                  value=""
-                  onChange={(event) => {
-                    applyCountry(event.currentTarget.value);
-                    event.currentTarget.value = "";
-                  }}
-                >
-                  <option value="">{t("storeSettings.fromCountryNone")}</option>
-                  <For each={countries()}>
-                    {(country) => <option value={country.code}>{country.display_name}</option>}
-                  </For>
-                </select>
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.fromCountryHint")}</p>
-              </FormField>
+              {/* This picker keeps what was last applied rather than snapping back to blank. The
+                  hand-rolled version reset itself in the change handler — `currentTarget.value = ""`
+                  — which a controlled component cannot do: the bound value never changed, so no
+                  re-render would put it back. Showing the applied country is also the more useful
+                  answer to "where did these six values come from". */}
+              <SelectField
+                label={t("storeSettings.fromCountry")}
+                value={filledFrom()}
+                options={countries().map((option) => ({
+                  value: option.code,
+                  label: option.display_name,
+                }))}
+                onChange={(code) => {
+                  setFilledFrom(code);
+                  applyCountry(code);
+                }}
+                placeholder={t("storeSettings.fromCountryNone")}
+                hint={t("storeSettings.fromCountryHint")}
+              />
 
-              <FormField label={t("storeSettings.currency")}>
-                <input
-                  class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink uppercase"
-                  list="currency-options"
-                  maxLength={3}
-                  value={currency()}
-                  onInput={(event) => setCurrency(event.currentTarget.value)}
-                />
-                <datalist id="currency-options">
-                  <For each={currencyOptions()}>{(code) => <option value={code} />}</For>
-                </datalist>
-              </FormField>
+              {/* Upper-cased on the way in, not by CSS. The hand-rolled field had `class="uppercase"`,
+                  which changes what an operator sees and not what gets sent: a typed `vnd` looked
+                  right and published lower-case. */}
+              <TextField
+                label={t("storeSettings.currency")}
+                value={currency()}
+                onInput={(value) => setCurrency(value.toUpperCase())}
+                suggestions={currencyOptions().map((code) => ({ value: code }))}
+              />
 
-              <FormField label={t("storeSettings.timezone")}>
-                <input
-                  class="min-h-touch w-72 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                  list="timezone-options"
-                  value={timezone()}
-                  onInput={(event) => setTimezone(event.currentTarget.value)}
-                />
-                <datalist id="timezone-options">
-                  <For each={COMMON_TIMEZONES}>{(zone) => <option value={zone} />}</For>
-                </datalist>
-              </FormField>
+              <TextField
+                label={t("storeSettings.timezone")}
+                value={timezone()}
+                onInput={setTimezone}
+                suggestions={COMMON_TIMEZONES.map((zone) => ({ value: zone }))}
+              />
 
-              <FormField label={t("storeSettings.cutoff")}>
-                <input
-                  type="number"
-                  min={0}
-                  max={23}
-                  class="min-h-touch w-24 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                  value={cutoffHour()}
-                  onInput={(event) =>
-                    setCutoffHour(Math.max(0, Math.min(23, Number(event.currentTarget.value) || 0)))
-                  }
-                />
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cutoffHint")}</p>
-              </FormField>
+              <NumberField
+                label={t("storeSettings.cutoff")}
+                value={cutoffHour()}
+                // Clamped here as well as advertised on the control: `min`/`max` bound the spinner
+                // and not what can be typed, and an hour of 47 is a business date nobody can read.
+                onChange={(hour) => setCutoffHour(Math.max(0, Math.min(23, hour ?? 0)))}
+                min={0}
+                max={23}
+                hint={t("storeSettings.cutoffHint")}
+              />
 
-              <FormField label={t("storeSettings.language")}>
-                <input
-                  class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                  list="language-options"
-                  value={displayLanguage()}
-                  onInput={(event) => setDisplayLanguage(event.currentTarget.value)}
-                />
-                <datalist id="language-options">
-                  <For each={LOCALES}>
-                    {(code) => <option value={code}>{localeName(code)}</option>}
-                  </For>
-                </datalist>
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.languageHint")}</p>
-              </FormField>
+              <TextField
+                label={t("storeSettings.language")}
+                value={displayLanguage()}
+                onInput={setDisplayLanguage}
+                suggestions={LOCALES.map((code) => ({ value: code, label: localeName(code) }))}
+                hint={t("storeSettings.languageHint")}
+              />
 
-              <FormField label={t("storeSettings.pricesIncludeTax")}>
-                <label class="flex min-h-touch items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="size-4"
-                    checked={pricesIncludeTax()}
-                    onChange={(event) => setPricesIncludeTax(event.currentTarget.checked)}
-                  />
-                  {t("storeSettings.pricesIncludeTaxLabel")}
-                </label>
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.pricesIncludeTaxHint")}</p>
-              </FormField>
+              <CheckboxField
+                label={t("storeSettings.pricesIncludeTaxLabel")}
+                checked={pricesIncludeTax()}
+                onChange={setPricesIncludeTax}
+                hint={t("storeSettings.pricesIncludeTaxHint")}
+              />
 
-              <FormField label={t("storeSettings.cashRounding")}>
-                <input
-                  inputMode="numeric"
-                  class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink tabular-nums"
-                  value={roundingText()}
-                  onInput={(event) => setRoundingText(event.currentTarget.value)}
-                />
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cashRoundingHint")}</p>
-              </FormField>
+              <TextField
+                label={t("storeSettings.cashRounding")}
+                value={roundingText()}
+                onInput={setRoundingText}
+                hint={t("storeSettings.cashRoundingHint")}
+              />
 
-              <FormField label={t("storeSettings.cashNotes")}>
-                <input
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink tabular-nums"
-                  value={notesText()}
-                  onInput={(event) => setNotesText(event.currentTarget.value)}
-                />
-                <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.cashNotesHint")}</p>
-              </FormField>
+              <TextField
+                label={t("storeSettings.cashNotes")}
+                value={notesText()}
+                onInput={setNotesText}
+                hint={t("storeSettings.cashNotesHint")}
+              />
 
               <Show when={tillMoneyRejected()}>
                 <Banner tone="danger" message={t("storeSettings.tillMoneyRejected")} />
@@ -398,67 +382,55 @@ export function StoreSettings() {
             {t("storeSettings.identityHint")}
           </p>
           <div class="grid max-w-xl gap-4">
-            <FormField label={t("storeSettings.legalName")}>
-              <input
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                value={legalName()}
-                onInput={(event) => setLegalName(event.currentTarget.value)}
-              />
-            </FormField>
+            <TextField
+              label={t("storeSettings.legalName")}
+              value={legalName()}
+              onInput={setLegalName}
+            />
 
-            <FormField label={t("storeSettings.tradingName")}>
-              <input
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                value={tradingName()}
-                onInput={(event) => setTradingName(event.currentTarget.value)}
-              />
-              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.tradingNameHint")}</p>
-            </FormField>
+            <TextField
+              label={t("storeSettings.tradingName")}
+              value={tradingName()}
+              onInput={setTradingName}
+              hint={t("storeSettings.tradingNameHint")}
+            />
 
-            <FormField label={t("storeSettings.address")}>
-              <textarea
-                rows={3}
-                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+            <div>
+              <TextArea
+                label={t("storeSettings.address")}
                 value={addressText()}
-                onInput={(event) => setAddressText(event.currentTarget.value)}
+                onInput={setAddressText}
+                rows={3}
               />
               <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.linesHint")}</p>
-            </FormField>
+            </div>
 
-            <FormField label={t("storeSettings.registrationLabel")}>
-              <input
-                class="min-h-touch w-40 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                value={registrationLabel()}
-                onInput={(event) => setRegistrationLabel(event.currentTarget.value)}
-              />
-            </FormField>
+            <TextField
+              label={t("storeSettings.registrationLabel")}
+              value={registrationLabel()}
+              onInput={setRegistrationLabel}
+            />
 
-            <FormField label={t("storeSettings.registrationNumber")}>
-              <input
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
-                value={registrationNumber()}
-                onInput={(event) => setRegistrationNumber(event.currentTarget.value)}
-              />
-              <p class="mt-1 text-xs text-ink-muted">{t("storeSettings.registrationHint")}</p>
-            </FormField>
+            <TextField
+              label={t("storeSettings.registrationNumber")}
+              value={registrationNumber()}
+              onInput={setRegistrationNumber}
+              hint={t("storeSettings.registrationHint")}
+            />
 
-            <FormField label={t("storeSettings.contact")}>
-              <textarea
-                rows={2}
-                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
-                value={contactText()}
-                onInput={(event) => setContactText(event.currentTarget.value)}
-              />
-            </FormField>
+            <TextArea
+              label={t("storeSettings.contact")}
+              value={contactText()}
+              onInput={setContactText}
+              rows={2}
+            />
 
-            <FormField label={t("storeSettings.footer")}>
-              <textarea
-                rows={2}
-                class="w-full rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
-                value={footerText()}
-                onInput={(event) => setFooterText(event.currentTarget.value)}
-              />
-            </FormField>
+            <TextArea
+              label={t("storeSettings.footer")}
+              value={footerText()}
+              onInput={setFooterText}
+              rows={2}
+            />
 
             <div>
               <Button disabled={busy()} onClick={() => void publishProfile()}>

@@ -27,7 +27,16 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
 };
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextArea } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextArea,
+} from "../components/ui";
 import { ConfirmDialog, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
@@ -334,23 +343,26 @@ export function Config() {
                   <div class="grid gap-3 sm:grid-cols-2">
                     <For each={cat().flags}>
                       {(flag) => (
-                        <label class="flex items-start gap-3 rounded-token border border-line px-3 py-2">
-                          <input
-                            type="checkbox"
-                            class="mt-1"
-                            checked={flags()[flag.key] ?? flag.default_on}
-                            onChange={(event) => toggleFlag(flag.key, event.currentTarget.checked)}
-                          />
-                          <span class="flex flex-col gap-1">
-                            <span class="flex flex-wrap items-center gap-2">
-                              <code class="text-sm font-medium text-ink">{flag.key}</code>
-                              <Show when={flag.default_on}>
-                                <StatusBadge tone="active" label={t("config.capabilities.default")} />
-                              </Show>
+                        <CheckboxField
+                          label={flag.key}
+                          checked={flags()[flag.key] ?? flag.default_on}
+                          onChange={(on) => toggleFlag(flag.key, on)}
+                          class="rounded-token border border-line px-3 py-2"
+                          caption={
+                            <span class="flex flex-col gap-1">
+                              <span class="flex flex-wrap items-center gap-2">
+                                <code class="text-sm font-medium text-ink">{flag.key}</code>
+                                <Show when={flag.default_on}>
+                                  <StatusBadge
+                                    tone="active"
+                                    label={t("config.capabilities.default")}
+                                  />
+                                </Show>
+                              </span>
+                              <span class="text-xs text-ink-muted">{flag.description}</span>
                             </span>
-                            <span class="text-xs text-ink-muted">{flag.description}</span>
-                          </span>
-                        </label>
+                          }
+                        />
                       )}
                     </For>
                   </div>
@@ -443,18 +455,12 @@ export function Config() {
 
           <Card title={t("config.publish")}>
             <div class="flex flex-col gap-4">
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-ink">{t("config.level")}</span>
-                <select
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                  value={level()}
-                  onChange={(event) => setLevel(event.currentTarget.value as ConfigLevel)}
-                >
-                  <For each={CONFIG_LEVELS}>
-                    {(name) => <option value={name}>{t(LEVEL_KEY[name])}</option>}
-                  </For>
-                </select>
-              </label>
+              <SelectField
+                label={t("config.level")}
+                value={level()}
+                options={CONFIG_LEVELS.map((name) => ({ value: name, label: t(LEVEL_KEY[name]) }))}
+                onChange={(value) => setLevel(value as ConfigLevel)}
+              />
               <TextArea
                 label={t("config.document")}
                 value={document()}
@@ -518,14 +524,11 @@ export function Config() {
                       <span class="text-sm font-medium text-ink">
                         {t("config.viewingVersion", { version: versionId() })}
                       </span>
-                      <label class="flex items-center gap-2 text-sm text-ink-muted">
-                        <input
-                          type="checkbox"
-                          checked={compare()}
-                          onChange={(event) => setCompare(event.currentTarget.checked)}
-                        />
-                        {t("config.compareCurrent")}
-                      </label>
+                      <CheckboxField
+                        label={t("config.compareCurrent")}
+                        checked={compare()}
+                        onChange={setCompare}
+                      />
                     </div>
                     <Show
                       when={compare()}

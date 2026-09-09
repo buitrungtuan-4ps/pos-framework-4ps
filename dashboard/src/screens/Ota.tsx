@@ -6,7 +6,7 @@
 // levers are store-scoped and behind console.ota.publish (the server enforces it — a viewer sees the
 // progress but a publish returns 403).
 
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
@@ -19,6 +19,7 @@ import {
   Button,
   Card,
   PageHeader,
+  SelectField,
   Skeleton,
   StatusBadge,
   TextArea,
@@ -366,23 +367,12 @@ export function Ota() {
                     )}
                   </Show>
                 </Show>
-                <label class="block">
-                  <span class="mb-1 block text-sm font-medium text-ink">
-                    {t("ota.placementRing")}
-                  </span>
-                  <select
-                    class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                    aria-label={t("ota.placementRing")}
-                    value={placementRing()}
-                    onChange={(event) =>
-                      setPlacementRing(event.currentTarget.value as RingWire)
-                    }
-                  >
-                    <For each={RINGS}>
-                      {(ring) => <option value={ring}>{t(RING_LABEL[ring])}</option>}
-                    </For>
-                  </select>
-                </label>
+                <SelectField
+                  label={t("ota.placementRing")}
+                  value={placementRing()}
+                  options={RINGS.map((ring) => ({ value: ring, label: t(RING_LABEL[ring]) }))}
+                  onChange={(value) => setPlacementRing(value as RingWire)}
+                />
                 <TextField
                   label={t("ota.canaryBucket")}
                   type="number"
@@ -469,19 +459,12 @@ export function Ota() {
                     onInput={setTargetVersion}
                     placeholder="1.4.0"
                   />
-                  <label class="block">
-                    <span class="mb-1 block text-sm font-medium text-ink">{t("ota.minRing")}</span>
-                    <select
-                      class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                      aria-label={t("ota.minRing")}
-                      value={minRing()}
-                      onChange={(event) => setMinRing(event.currentTarget.value as RingWire)}
-                    >
-                      <For each={RINGS}>
-                        {(ring) => <option value={ring}>{t(RING_LABEL[ring])}</option>}
-                      </For>
-                    </select>
-                  </label>
+                  <SelectField
+                    label={t("ota.minRing")}
+                    value={minRing()}
+                    options={RINGS.map((ring) => ({ value: ring, label: t(RING_LABEL[ring]) }))}
+                    onChange={(value) => setMinRing(value as RingWire)}
+                  />
                   <TextField
                     label={t("ota.rolloutPercent")}
                     type="number"

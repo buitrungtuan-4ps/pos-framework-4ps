@@ -11,7 +11,15 @@ import type { Brand, CreateApiKeyResponse, Store } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
 import { screenHref } from "../state/screens";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  TextField,
+} from "../components/ui";
 // The four generated artifacts live in one module because a CI gate renders and parses them; see
 // `installers.mjs` and `scripts/installer-syntax.mjs`. This screen supplies the values and nothing
 // else, which is also what lets a Windows installer exist at all (issue #182).
@@ -307,19 +315,13 @@ export function NewStore() {
                 onInput={setName}
                 placeholder={t("stores.namePlaceholder")}
               />
-              <label class="block">
-                <span class="mb-1 block text-sm font-medium text-ink">{t("stores.brand")}</span>
-                <select
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                  value={brandId()}
-                  onChange={(event) => setBrandId(event.currentTarget.value)}
-                >
-                  <option value="">{t("stores.noBrand")}</option>
-                  <For each={brands()}>
-                    {(brand) => <option value={brand.brand_id}>{brand.name}</option>}
-                  </For>
-                </select>
-              </label>
+              <SelectField
+                label={t("stores.brand")}
+                value={brandId()}
+                options={brands().map((brand) => ({ value: brand.brand_id, label: brand.name }))}
+                onChange={setBrandId}
+                placeholder={t("stores.noBrand")}
+              />
               <div>
                 <Button disabled={busy()} onClick={() => void createStore()}>
                   {t("wizard.next")}
@@ -343,14 +345,11 @@ export function NewStore() {
                       <legend class="mb-1 text-sm font-medium text-ink">{t("wizard.scopes")}</legend>
                       <For each={SCOPES}>
                         {(scope) => (
-                          <label class="flex items-center gap-2 text-sm text-ink">
-                            <input
-                              type="checkbox"
-                              checked={scopes().includes(scope.wire)}
-                              onChange={() => toggleScope(scope.wire)}
-                            />
-                            {t(scope.key)}
-                          </label>
+                          <CheckboxField
+                            label={t(scope.key)}
+                            checked={scopes().includes(scope.wire)}
+                            onChange={() => toggleScope(scope.wire)}
+                          />
                         )}
                       </For>
                     </fieldset>

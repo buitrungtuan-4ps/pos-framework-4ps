@@ -48,7 +48,7 @@ import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
 import { GetStarted } from "../components/GetStarted";
-import { Card, PageHeader, Skeleton } from "../components/ui";
+import { Button, Card, PageHeader, Skeleton, TextArea } from "../components/ui";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {
@@ -269,29 +269,25 @@ export function StoreHub() {
                     when={store.region_acknowledgement}
                     fallback={
                       <div class="mt-3 space-y-2 border-t border-line pt-3">
-                        <label class="block text-sm" for="region-reason">
-                          {t("hub.region.acknowledgeLabel")}
-                        </label>
-                        <textarea
-                          id="region-reason"
-                          class="w-full rounded border border-line bg-surface p-2 text-sm"
+                        <TextArea
+                          label={t("hub.region.acknowledgeLabel")}
                           rows={2}
-                          maxlength={280}
                           value={reason()}
-                          onInput={(event) => setReason(event.currentTarget.value)}
+                          onInput={setReason}
                         />
                         <p class="text-xs text-ink-muted">{t("hub.region.acknowledgeHint")}</p>
                         <Show when={refusal()}>
                           {(message) => <p class="text-xs text-danger">{message()}</p>}
                         </Show>
-                        <button
-                          type="button"
-                          class="rounded bg-accent px-3 py-1 text-sm text-on-accent disabled:opacity-50"
+                        {/* Was a hand-rolled `<button>` carrying `text-on-accent`, which is not a
+                            token — the label colour resolved to nothing and inherited whatever the
+                            card had, on a red fill. `Button` has the real pairing. */}
+                        <Button
                           disabled={acknowledging() || reason().trim() === ""}
                           onClick={() => void acknowledge(store)}
                         >
                           {t("hub.region.acknowledgeAction")}
-                        </button>
+                        </Button>
                       </div>
                     }
                   >
