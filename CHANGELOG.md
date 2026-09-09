@@ -91,6 +91,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A mistyped API path answered `200 text/html`.** `pos_cloud` serves the console and the API on one
+  origin, and the SPA fallback caught everything the router did not match — including
+  `/admin/typo`, which came back as a `200` carrying the dashboard's HTML document. A typed client
+  asking for the wrong path got "the response is corrupt" instead of "the path is wrong", which
+  undid the AIP-193 envelope for the one case where the caller has the path wrong. A path on any of
+  the six API prefixes (`/admin`, `/v1`, `/sync`, `/internal`, `/activate`, `/health`) now answers a
+  `404` in the envelope. The match is by path segment, not string prefix, so the console's own
+  `/admins` screen still loads — the same collision that blanked that screen in the dev server,
+  guarded from the other side (#259).
+- **A missing build asset answered the HTML document too**, so a browser holding a stale
+  `index.html` across a deploy — `index.html` is `no-cache` while the hashed chunks are `immutable`,
+  so the window is real — parsed a page as JavaScript and reported a syntax error at line 1 of a
+  file that exists. An absent file under `assets/` is now a `404`, which reads as "failed to load
+  resource" and points at the deploy (#259).
 - **The top bar could name the wrong store.** Opening a console link for one shop while another was
   remembered left the previous shop's name in the header over the new shop's data — and the store is
   what scopes a configuration publish, a till retirement, tax authoring and every revenue read, so

@@ -27,17 +27,61 @@ use crate::http::api_error;
 #[folder = "../../dashboard/dist"]
 struct Assets;
 
+/// The API prefixes this binary serves. A path on one of these is never a client route, so an
+/// unmatched one is a caller's mistake and must say so rather than silently receiving the SPA.
+///
+/// Kept as a list rather than derived from the router because axum offers no way to enumerate a
+/// composed `Router`'s routes; `tests::the_api_prefixes_match_the_routers` holds it against the
+/// registrations instead.
+const API_PREFIXES: [&str; 6] = [
+    "/admin",
+    "/v1",
+    "/sync",
+    "/internal",
+    "/activate",
+    "/health",
+];
+
+/// Whether `path` addresses the API rather than the dashboard.
+///
+/// A **segment** match, deliberately, not a string prefix: the console has a screen at `/admins`,
+/// and treating `/admin` as a bare prefix would make that screen — and any future screen whose path
+/// begins with an API prefix — answer a `404` instead of loading. This is the same collision that
+/// made the Admins screen a blank page under `pnpm dev`, in the other direction (Wave 3 · D4/D5).
+fn is_api_path(path: &str) -> bool {
+    API_PREFIXES.iter().any(|prefix| {
+        path == *prefix
+            || path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
 /// Serves a dashboard asset, falling back to `index.html`.
 ///
-/// An unknown path is not a 404: it is a client-routed path the single-page app will resolve, so it
-/// receives `index.html`. A `404` is reserved for the genuinely empty case — no dashboard is embedded
-/// at all, which only happens if the build is misconfigured.
+/// An unknown path is generally not a 404: it is a client-routed path the single-page app will
+/// resolve, so it receives `index.html`. Three cases are not that, and each answers the error
+/// envelope instead, because handing them an HTML document turns a clear failure into a confusing
+/// one (Wave 3 · D5):
+///
+/// - a path on an API prefix ([`is_api_path`]) — the caller has the route wrong, and a typed client
+///   cannot parse HTML;
+/// - a missing file under `assets/` — the browser would parse a page as JavaScript;
+/// - no dashboard embedded at all, which only happens if the build is misconfigured.
 #[expect(
     clippy::unused_async,
     reason = "an axum fallback handler must be async even when the body does no I/O; serving \
               embedded bytes is synchronous"
 )]
 pub async fn serve(uri: Uri) -> Response {
+    // An API path that reached the fallback matched no route: a typo, a stale client, a probe. It is
+    // not a client route, so it gets the error envelope every other refusal on this surface uses
+    // rather than `index.html` — which is what it received before, as a `200` with an HTML body that
+    // no typed client can parse, turning "you have the path wrong" into "the response is corrupt"
+    // (Wave 3 · D5).
+    if is_api_path(uri.path()) {
+        return api_error(ErrorStatus::NotFound, "no route matches this path");
+    }
     let mut requested = uri.path().trim_start_matches('/');
     // A path escaping the dashboard root can only be a probe; treat it as a client route.
     if requested.is_empty() || requested.contains("..") {
@@ -45,6 +89,17 @@ pub async fn serve(uri: Uri) -> Response {
     }
     if let Some(bytes) = bytes_of(requested) {
         return respond(requested, bytes);
+    }
+    // A **missing** build asset is not a client route either, and this one is worth its own branch
+    // because the failure it produced was so misleading. `assets/` is what Vite emits under; nothing
+    // there is ever a screen. When one was absent — a browser holding a stale `index.html` across a
+    // deploy asks for the previous build's hashed chunk, and `index.html` is served `no-cache` while
+    // the chunks are `immutable`, so that window is real — the fallback answered `200` with the HTML
+    // document. The browser then parsed a page as JavaScript and reported a syntax error at line 1
+    // of a file that exists, which says nothing about the cause. A `404` makes it "failed to load
+    // resource", which is the truth and points at the deploy.
+    if requested.starts_with("assets/") {
+        return api_error(ErrorStatus::NotFound, "no such dashboard asset");
     }
     if let Some(bytes) = bytes_of("index.html") {
         return respond("index.html", bytes);
@@ -125,7 +180,9 @@ fn mime_for(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_control_for, mime_for};
+    use axum::http::{StatusCode, Uri, header};
+
+    use super::{API_PREFIXES, cache_control_for, is_api_path, mime_for, serve};
 
     #[test]
     fn known_extensions_map_to_web_mime_types() {
@@ -155,5 +212,126 @@ mod tests {
         // The SPA entry document and root files must revalidate so a new deploy is seen at once.
         assert_eq!(cache_control_for("index.html"), "no-cache");
         assert_eq!(cache_control_for("favicon.ico"), "no-cache");
+    }
+
+    #[test]
+    fn an_api_path_is_recognised_whole_or_with_a_child() {
+        for prefix in API_PREFIXES {
+            assert!(is_api_path(prefix), "{prefix} is an API path on its own");
+            assert!(
+                is_api_path(&format!("{prefix}/anything")),
+                "{prefix}/anything is an API path"
+            );
+        }
+        assert!(is_api_path("/admin/stores/01J9/config"));
+        assert!(is_api_path("/sync/stores/01J9/heartbeat"));
+    }
+
+    /// The reason `is_api_path` matches segments rather than string prefixes. `/admins` is the
+    /// console's admin-roster screen; a bare-prefix test would answer it `404` and blank the screen,
+    /// which is precisely the collision this file is here to stop making in the other direction.
+    #[test]
+    fn a_console_screen_whose_path_starts_with_an_api_prefix_is_not_an_api_path() {
+        assert!(!is_api_path("/admins"));
+        assert!(!is_api_path("/v1beta-screen"));
+        assert!(!is_api_path("/healthy-stores"));
+        assert!(!is_api_path("/synchronise"));
+    }
+
+    #[test]
+    fn a_client_route_is_not_an_api_path() {
+        assert!(!is_api_path("/"));
+        assert!(!is_api_path("/login"));
+        assert!(!is_api_path("/t/01J9/stores"));
+        assert!(!is_api_path("/assets/index-a1b2c3.js"));
+    }
+
+    /// Builds the `Uri` axum hands the fallback, so these read like a request.
+    fn get(path: &str) -> Uri {
+        path.parse().expect("a literal path parses as a Uri")
+    }
+
+    #[tokio::test]
+    async fn a_client_route_receives_the_spa_document() {
+        // What makes the SPA's own routing work: a path the server knows nothing about is the
+        // client's to resolve, so it gets `index.html` and a `200`.
+        for path in ["/", "/login", "/admins", "/t/01J9/stores"] {
+            let response = serve(get(path)).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{path} should load the SPA"
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok()),
+                Some("text/html; charset=utf-8"),
+                "{path} should be served the HTML document"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unmatched_api_path_is_refused_rather_than_handed_the_spa() {
+        let response = serve(get("/admin/no-such-endpoint")).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json"),
+            "an API refusal is the error envelope, not an HTML page a typed client cannot parse"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_build_asset_is_refused_rather_than_handed_the_spa() {
+        // The stale-`index.html`-across-a-deploy case: answering `200 text/html` here makes the
+        // browser parse a page as JavaScript and report a syntax error in a file that exists.
+        let response = serve(get("/assets/index-nosuchhash.js")).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Holds [`API_PREFIXES`] against the routers, since axum cannot enumerate a composed `Router`.
+    /// A new top-level surface added to `main.rs` or `http.rs` without a line here would resolve to
+    /// the SPA again, so this reads the sources and fails when they disagree.
+    #[test]
+    fn the_api_prefixes_match_the_routers() {
+        let sources = [
+            include_str!("main.rs"),
+            include_str!("http.rs"),
+            include_str!("relay.rs"),
+        ];
+        let mut found: Vec<&str> = Vec::new();
+        for source in sources {
+            for (index, _) in source.match_indices("\"/") {
+                // The segment after the opening quote, up to the next `/` or the closing quote.
+                let rest = source.get(index + 2..).unwrap_or_default();
+                let end = rest.find(['/', '"']).unwrap_or(0);
+                let Some(segment) = rest.get(..end) else {
+                    continue;
+                };
+                if segment.is_empty()
+                    || !segment.chars().all(|character| {
+                        character.is_ascii_lowercase() || character.is_ascii_digit()
+                    })
+                {
+                    continue;
+                }
+                if !found.contains(&segment) {
+                    found.push(segment);
+                }
+            }
+        }
+        for prefix in API_PREFIXES {
+            let segment = prefix.trim_start_matches('/');
+            assert!(
+                found.contains(&segment),
+                "API_PREFIXES lists {prefix} but no source registers a path under it — stale entry"
+            );
+        }
     }
 }
