@@ -293,42 +293,83 @@ export function specOf(screen: ScreenId): Screen {
   return SCREENS[screen];
 }
 
-/** The nav's grouping, referring to screens by id so a rename cannot silently orphan an entry. */
+/**
+ * The nav's grouping, referring to screens by id so a rename cannot silently orphan an entry.
+ *
+ * # Why these eight, and not the six that were here
+ *
+ * The six were sized by how the console was built rather than by what an operator does with it, and
+ * two of them had become dumping grounds. "Master data" held eleven entries — the menu, the floor
+ * plan, the kitchen stations, the staff roster, the reason codes, the stores — which is not a
+ * category, it is everything that is not a report. And a category nobody can predict the contents
+ * of is worse than no category: you cannot guess where a screen lives, so you read all thirty names
+ * every time.
+ *
+ * Two of the six also filed screens under headings that invited the wrong conclusion, which is the
+ * more expensive failure:
+ *
+ *   - **Subject requests** sat under Settings. It is the instrument that erases or exports a named
+ *     customer's data under Decree 13 — nobody looks for that beside the store's opening hours, and
+ *     a setting is exactly what it must not read as. It now sits under Compliance with the audit
+ *     trail, which is the other thing an inspector asks for.
+ *   - **People** sat beside **Admins** under a heading about access. People are shop staff with
+ *     PINs on a till; admins are console users with a password and a role over the whole tenant.
+ *     Filing them together invites the belief that adding a person grants console access. They are
+ *     now two groups apart: People is operations, Admins is Access.
+ *
+ * The rest follows the same test — can somebody who has never seen this console guess the heading
+ * from the task? The menu, the till layout, its pictures, the channels it is sold through, the
+ * promotions on it and the tax on it are all one job (Menu & pricing). The floor, the stations, the
+ * stock, the reason codes and the roster are the shift (Operations). Stores, their boxes, their
+ * devices and the updates and reconciliation those boxes need are the estate.
+ *
+ * Six entries is the ceiling, so a group is always readable at a glance — the largest is now six,
+ * where it was eleven.
+ *
+ * # Why a group has no icon
+ *
+ * It used to have one. With the accordion (`lib/nav-groups.ts`) the headings are the surface an
+ * operator scans — eight of them, always visible — and the entries are the transient half, so an
+ * icon on the heading put a second glyph column above and inset from the entries' own. Two columns
+ * of glyphs at two indents is what the eye has to sort through before it can read anything, and the
+ * entry icons are the ones earning their place. There is also no honest set of eight: the vendored
+ * geometry (`components/icons.tsx`) holds one glyph per screen, so five of eight headings would
+ * have had to wear a glyph already worn by one of their own entries.
+ */
 export const NAV_GROUPS: readonly {
   key: MessageKey;
-  icon: IconName;
   items: readonly ScreenId[];
 }[] = [
+  // Is the shop all right, what did it make, and what is on fire.
+  { key: "nav.group.overview", items: ["storeHub", "reports", "alerts"] },
+  // What is sold and for how much: the menu, how it is laid out on a till, its pictures, the
+  // channels it is sold through, the promotions on it and the tax on it.
   {
-    key: "nav.group.overview",
-    icon: "layout-dashboard",
-    items: ["storeHub", "reports", "fleet", "ota", "reconcile", "alerts", "audit"],
+    key: "nav.group.menu",
+    items: ["catalog", "layout", "media", "channels", "campaigns", "taxRates"],
   },
+  // Running the shift: the room, the kitchen, the stock behind it, the reasons a till may be
+  // overridden and the people who do the overriding.
   {
-    key: "nav.group.masterData",
-    icon: "database",
-    items: [
-      "stores",
-      "catalog",
-      "campaigns",
-      "inventory",
-      "reasonCodes",
-      "channels",
-      "media",
-      "layout",
-      "floor",
-      "stations",
-      "people",
-    ],
+    key: "nav.group.operations",
+    items: ["floor", "stations", "inventory", "reasonCodes", "people"],
   },
+  // The estate: the shops, the boxes running them, the terminals in them, and the two jobs those
+  // boxes need done to them (an update, and a check that nothing was lost).
   {
-    key: "nav.group.settings",
-    icon: "sliders-horizontal",
-    items: ["config", "storeSettings", "taxRates", "translations", "subjects"],
+    key: "nav.group.estate",
+    items: ["stores", "fleet", "devices", "activation", "ota", "reconcile"],
   },
-  { key: "nav.group.access", icon: "key-round", items: ["apiKeys", "devices", "activation", "admins"] },
-  { key: "nav.group.integrations", icon: "webhook", items: ["webhooks"] },
-  { key: "nav.group.account", icon: "circle-user", items: ["mySessions", "mySecurity"] },
+  // How one store behaves, in its own words rather than in JSON.
+  { key: "nav.group.settings", items: ["config", "storeSettings", "translations"] },
+  // Who and what may reach this console: console users, machine keys, and the endpoints it calls
+  // out to. All three answer "who is allowed in, or out".
+  { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks"] },
+  // What an auditor or a regulator asks for: what was done, by whom, and what a named person's
+  // data may be made to do (ADR-0076, Decree 13).
+  { key: "nav.group.compliance", items: ["audit", "subjects"] },
+  // The signed-in admin's own account, which belongs to no tenant.
+  { key: "nav.group.account", items: ["mySessions", "mySecurity"] },
 ];
 
 /** The tenant path prefix. One constant so the router and the link builder cannot drift apart. */

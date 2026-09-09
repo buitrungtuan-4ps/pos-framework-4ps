@@ -2,10 +2,10 @@
 //
 // # What is already guaranteed, and therefore not tested here
 //
-// That every screen and every nav group has an icon, and that the name resolves to a glyph, are both
-// compile-time facts: `Screen.icon` is a required `IconName`, and `GLYPHS` is a
-// `Record<IconName, …>`. A runtime test of either would assert what `tsc` already refuses to build
-// without, which is a test that can only ever pass.
+// That every screen has an icon, and that the name resolves to a glyph, are both compile-time
+// facts: `Screen.icon` is a required `IconName`, and `GLYPHS` is a `Record<IconName, …>`. A runtime
+// test of either would assert what `tsc` already refuses to build without, which is a test that can
+// only ever pass.
 //
 // # What is not guaranteed
 //
@@ -15,9 +15,11 @@
 //    accessible name and the icon is decoration. Give a glyph a `<title>` — the obvious "helpful"
 //    change — and every nav entry announces its name twice. That is a regression a sighted reviewer
 //    cannot see.
-// 2. **No glyph is orphaned.** The geometry is vendored source in the shell bundle: 36 glyphs cost
-//    12.5 kB raw (3.8 kB gzipped) on every first visit. A glyph nobody draws is that cost with no
-//    benefit, and deleting a screen would leave one behind silently.
+// 2. **No glyph is orphaned.** The geometry is vendored source in the shell bundle, around 350
+//    bytes raw per glyph on every first visit. A glyph nobody draws is that cost with no benefit,
+//    and deleting a screen — or, as when the nav group headings gave up their icons, a whole class
+//    of caller — would leave one behind silently. This check is what turned that into five
+//    deletions rather than five orphans.
 // 3. **No two glyphs share geometry.** Two names pointing at identical paths means a transcription
 //    error — a copy-paste that took the wrong source — which reads as a plausible icon in the wrong
 //    place rather than as a broken one.
@@ -26,7 +28,7 @@ import { render, screen } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
 import { Icon, ICON_NAMES, type IconName } from "../src/components/icons";
-import { NAV_GROUPS, SCREENS, type ScreenId } from "../src/state/screens";
+import { SCREENS, type ScreenId } from "../src/state/screens";
 
 const source: string = Object.values(
   import.meta.glob("../src/components/icons.tsx", {
@@ -66,19 +68,19 @@ describe("an icon", () => {
 });
 
 describe("every vendored glyph", () => {
-  const used = new Set<IconName>([
-    ...(Object.keys(SCREENS) as ScreenId[]).map((id) => SCREENS[id].icon),
-    ...NAV_GROUPS.map((group) => group.icon),
-  ]);
+  const used = new Set<IconName>(
+    (Object.keys(SCREENS) as ScreenId[]).map((id) => SCREENS[id].icon),
+  );
 
-  it("is drawn by a screen or a group, so none is dead weight in the first paint", () => {
+  it("is drawn by a screen, so none is dead weight in the first paint", () => {
     const orphans = ICON_NAMES.filter((name) => !used.has(name));
     expect(orphans).toEqual([]);
   });
 
   it("accounts for every icon the console asks for", () => {
-    // The other direction. Both hold today because the set was chosen from the nav, and the point of
-    // checking both is that adding a glyph "for later" and forgetting to use it costs bundle bytes.
+    // The other direction. Both hold today because the set is exactly one glyph per screen, and the
+    // point of checking both is that adding a glyph "for later" and forgetting to use it costs
+    // bundle bytes.
     expect(used.size).toBe(ICON_NAMES.length);
   });
 });

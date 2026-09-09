@@ -48,6 +48,14 @@
   --color-line: var(--line);
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
+  /* Selection: the ground under the thing you are looking at, and the ink that sits on it. A
+     separate role from `accent`, because the accent is the brand at full strength — used for a
+     primary button and a focus ring — and a whole nav row painted in it would shout. `selected` is
+     that hue taken down to a tint a row can wear all day, and `selected-ink` is the one foreground
+     proven against it (scripts/wcag-contrast.mjs gates the pair). Kept apart from
+     `surface-raised`, which is elevation: a card is raised whether or not you chose it. */
+  --color-selected: var(--selected);
+  --color-selected-ink: var(--selected-ink);
   --color-danger: var(--danger);
   --color-danger-ink: var(--danger-ink);
   --color-ok: var(--ok);
@@ -77,6 +85,8 @@
   --line: oklch(0.9 0.01 260);
   --accent: oklch(0.55 0.16 25); /* the brand red, muted for long shifts */
   --accent-ink: oklch(0.99 0 0);
+  --selected: oklch(0.93 0.04 25);
+  --selected-ink: oklch(0.42 0.16 25);
   --danger: oklch(0.55 0.19 25);
   --danger-ink: oklch(0.99 0 0);
   --ok: oklch(0.52 0.13 155); /* darkened from 0.6 so `text-ok` clears AA 4.5:1 on surface/canvas (see docs/wcag-contrast-audit.md) */
@@ -105,6 +115,8 @@
     --line: oklch(0.32 0.014 260);
     --accent: oklch(0.62 0.15 25);
     --accent-ink: oklch(0.15 0.01 260);
+    --selected: oklch(0.31 0.05 25);
+    --selected-ink: oklch(0.88 0.07 25);
     --danger: oklch(0.64 0.18 25);
     --danger-ink: oklch(0.15 0.01 260);
     --ok: oklch(0.68 0.13 155);
@@ -135,6 +147,8 @@
   --line: oklch(0.32 0.014 260);
   --accent: oklch(0.62 0.15 25);
   --accent-ink: oklch(0.15 0.01 260);
+  --selected: oklch(0.31 0.05 25);
+  --selected-ink: oklch(0.88 0.07 25);
   --danger: oklch(0.64 0.18 25);
   --danger-ink: oklch(0.15 0.01 260);
   --ok: oklch(0.68 0.13 155);
