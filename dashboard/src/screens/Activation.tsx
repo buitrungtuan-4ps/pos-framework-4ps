@@ -4,9 +4,10 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import type { Device } from "../api/types";
 import { type MessageKey, t } from "../i18n";
+import { apiMessage, isStale } from "../lib/errors";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -45,8 +46,18 @@ export function Activation() {
   const [draftName, setDraftName] = createSignal("");
   const [pendingArchive, setPendingArchive] = createSignal<Device | null>(null);
 
-  const fail = (caught: unknown) =>
-    setError(caught instanceof ApiError ? caught.message : String(caught));
+  // A conditional write can be refused because somebody else saved first (ADR-0094's `412`). This
+  // screen sends an `etag` on every edit, so it invites that refusal and owes the reader both a
+  // sentence naming what changed and a reload — retrying without reloading would re-apply the
+  // overwrite the refusal exists to prevent, and the operator needs to see the change before
+  // deciding again. `isStale` is what tells the two failures apart.
+  const fail = async (caught: unknown) => {
+    const stale = isStale(caught);
+    setError(stale ? t("activation.stale") : apiMessage(caught));
+    if (stale) {
+      await load();
+    }
+  };
 
   const load = async () => {
     setError("");
@@ -54,7 +65,7 @@ export function Activation() {
     try {
       setDevices(await api.listDevices(tenantId(), storeId()));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -77,7 +88,7 @@ export function Activation() {
       setSelected(device.device_id);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -104,7 +115,7 @@ export function Activation() {
       toast.ok(t("activation.deviceRenamed"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -124,7 +135,7 @@ export function Activation() {
       toast.ok(t("activation.deviceKindChanged"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -152,7 +163,7 @@ export function Activation() {
       toast.ok(status === "archived" ? t("activation.deviceArchived") : t("activation.deviceRestored"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -239,7 +250,7 @@ export function Activation() {
       const issued = await api.issueActivation(tenantId(), storeId(), selected());
       setCode(issued.activation_code);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }

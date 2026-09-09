@@ -133,6 +133,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Four screens sent a conditional write and ignored the refusal it invites.** ADR-0094 makes an
+  `/admin` edit conditional: the console sends the version it read, and the server answers `412` when
+  somebody else saved first. Fourteen screens explain that and reload. **Activation, Campaigns,
+  Inventory and ReasonCodes** sent the version and never looked at the answer, so a concurrent-edit
+  conflict reached the operator as the raw server message while the screen kept showing the record
+  they had just failed to overwrite. Nobody chose that: the helper that tells the two failures apart
+  lived in `screens/catalog/shared.tsx`, reachable from five catalog screens and invisible to the
+  rest — which is also why thirty-one screens each wrote the same "server message, or stringify it"
+  expression, forty-three times. Both helpers now live in `lib/errors.ts`, and a test fails when a
+  screen sends a version without handling the refusal (#263).
+
 - **The nav's readiness marker said the opposite of what it meant.** Every scoped nav entry drew a
   dot, filled with the brand colour — which in this palette is red — when the screen's context *was*
   ready, and left hollow and all but invisible when the screen was blocked. A nav full of red meant

@@ -8,7 +8,7 @@
 
 import { createSignal, For, Show } from "solid-js";
 
-import { api, ApiError } from "../api/client";
+import { api } from "../api/client";
 import {
   CAMPAIGN_KINDS,
   SALES_CHANNELS,
@@ -24,6 +24,7 @@ import {
   type Voucher,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
+import { apiMessage, isStale } from "../lib/errors";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -152,10 +153,19 @@ export function Campaigns() {
   const [pendingCancel, setPendingCancel] = createSignal<ScheduledPublish | null>(null);
 
   // Errors surface on the page (Banner) and as a transient toast (F1).
-  const fail = (caught: unknown) => {
-    const message = caught instanceof ApiError ? caught.message : String(caught);
+  // A conditional write can be refused because somebody else saved first (ADR-0094's `412`). This
+  // screen sends an `etag` on every edit, so it invites that refusal and owes the reader both a
+  // sentence naming what changed and a reload — retrying without reloading would re-apply the
+  // overwrite the refusal exists to prevent, and the operator needs to see the change before
+  // deciding again. `isStale` is what tells the two failures apart.
+  const fail = async (caught: unknown) => {
+    const stale = isStale(caught);
+    const message = stale ? t("campaigns.stale") : apiMessage(caught);
     setError(message);
     toast.error(message);
+    if (stale) {
+      await load();
+    }
   };
 
   const load = async () => {
@@ -165,7 +175,7 @@ export function Campaigns() {
       setCampaigns(await api.listCampaigns(tenantId()));
       setScheduled(storeId() ? await api.listScheduled(tenantId(), storeId()) : []);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -347,7 +357,7 @@ export function Campaigns() {
       setFormOpen(false);
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -365,7 +375,7 @@ export function Campaigns() {
       toast.ok(t("campaigns.deleted"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -379,7 +389,7 @@ export function Campaigns() {
     try {
       setVoucherTotal((await api.listVouchersPage(tenantId(), campaign.id, { limit: 1 })).total);
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     }
   };
 
@@ -400,7 +410,7 @@ export function Campaigns() {
       setVoucherTotal((await api.listVouchersPage(tenantId(), campaign.id, { limit: 1 })).total);
       toast.ok(t("campaigns.vouchersMinted", { count: String(minted.length) }));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -411,7 +421,7 @@ export function Campaigns() {
     try {
       setPreview(await api.previewCampaigns(tenantId(), storeId()));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -424,7 +434,7 @@ export function Campaigns() {
       setPreview(null);
       toast.ok(t("campaigns.published", { store: storeName(), version: result.config_version_id }));
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -448,7 +458,7 @@ export function Campaigns() {
       toast.ok(t("campaigns.scheduled", { store: storeName() }));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
@@ -466,7 +476,7 @@ export function Campaigns() {
       toast.ok(t("campaigns.scheduleCancelled"));
       await load();
     } catch (caught) {
-      fail(caught);
+      await fail(caught);
     } finally {
       setBusy(false);
     }
