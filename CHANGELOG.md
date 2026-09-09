@@ -32,6 +32,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   different tenant therefore left the previous tenant's shop in scope. The invariant now lives in
   `setTenantId`, so both paths honour it.
 
+- **Five smaller defects the kit sweep turned up**, none of them what it was looking for (#267):
+
+  `stores.stale` had become unreachable. Moving Stores onto `useEntityCrud` moved its `catch` into
+  `run()`, which kept the reload and dropped the sentence, so a concurrent-edit refusal showed the
+  server's message instead of the one written for an operator. `withStaleReload` in `lib/errors.ts`
+  now carries the reload and the prose together, and `tests/stale-writes.test.ts` fails when a
+  screen delegating to it omits the sentence.
+
+  Devices' print-agent binding sent the version it read and never handled the `412` it invites — the
+  stale-writes gate missed it because that screen calls the field `version`, not `etag`.
+
+  StoreSettings' currency field was upper-cased in CSS, which changes what an operator sees and not
+  what gets sent: a typed `vnd` looked right and published lower-case. Its "fill from country"
+  picker tried to reset itself with `event.currentTarget.value = ""`, which a controlled component
+  cannot do — the bound value never changed, so nothing put it back; it keeps the applied country
+  now, which also answers "where did these six values come from".
+
+  StoreHub's region-acknowledgement button carried `text-on-accent`, which is not a token: the label
+  colour resolved to nothing and inherited whatever the card had, on a red fill.
+
 ### Added
 
 - **One way to author an entity, and it is not a card at the bottom of the page.** Three additions
@@ -55,7 +75,48 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   each of those re-invented its own label association and could not be reached by `FormField`'s
   error slot.
 
-  Nothing is restyled and no screen has moved onto them yet; U2 does that, screen by screen.
+- **Six more controls, because a hand-rolled control usually means the kit had no answer.** Moving
+  the screens across (below) found five shapes nothing covered, so the kit covers them now (#267):
+
+  `CheckboxField` replaces 20 raw checkboxes that split three ways on hit area — a bare 16px box, a
+  box inside a `<label>`, and a box beside a `<span>` that is not a label and so is not clickable.
+  On a touch till that difference decides whether the control can be hit. Its `caption` slot is for
+  the three screens whose caption is richer than a string (a permission id and its description; a
+  capability's wire key, badge and description); `label` stays required and becomes the `aria-label`,
+  so a rich caption never costs the control its accessible name.
+
+  `NumberField` replaces 22 raw `type="number"` inputs that all had the same shape — a string in the
+  signal, `Number(...)` at the write, `NaN` for anything between. It emits `null` or a real number,
+  so a caller's null check is the only check it needs.
+
+  `MultiSelectField` replaces four copies of `Array.from(select.selectedOptions).map(...)`, two of
+  them in one file: a `<select multiple>` does not report its selection through
+  `event.currentTarget.value`, so every caller re-derived that. It is a separate component rather
+  than a `multiple` flag because one choice is a `string` and several are a `readonly string[]`.
+
+  `FileButton` replaces three hand-rolled file pickers, each wrong differently: two exposed the raw
+  input, which every browser styles for itself and no locale catalogue can label, and the third
+  styled a `<label>` to look like a button — which reads as one, sits in a row of real ones, and is
+  not one.
+
+  `CellField` is one editable cell of a grid, named by `aria-label` because its visible label is the
+  column header. The tax-rate grid is class × channel and the translation grid is key × locale; a
+  labelled field per cell would stack the same word forty times down the page. This is the escape
+  hatch ADR-0121 §2 anticipated when it declined a declarative field schema.
+
+  `TextField` gains `suggestions`, a generated-id `<datalist>` for a field that accepts anything but
+  usually holds one of a known set — a currency code, an IANA zone, a locale tag. Four screens built
+  one by hand with a hard-coded id, which is how two came to share `currency-options`: a duplicate
+  id makes the second list unreachable.
+
+- **A gate, so this does not drift back.** `dashboard/tests/authoring-controls.test.ts` fails the
+  build on a raw `<select>`, `<input>` or `<textarea>` anywhere under `src/screens/`, and on a list
+  screen whose fields stand open under its table (#267). The console already had a kit — `ui.tsx`
+  since P6, `kit.tsx` since F2 — and accumulated 91 hand-rolled controls anyway, because nothing
+  said they had to be used and each one on its own was easier than looking; [ADR-0121](docs/adr/0121-one-way-to-author-an-entity.md)
+  §7 is why this is not optional. The second check is scoped to list screens deliberately: a
+  sign-in form, a wizard step, a settings page and a report's date range are all fields on a page by
+  design, and a gate that fails on those is a gate somebody switches off.
 
 ### Changed
 
@@ -71,6 +132,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `change`, so one mis-click silently moved a shop to another brand, with no confirmation and no
   undo. And stores and brands hold separate lifecycles, so saving a brand no longer disables the
   stores table — that was one `busy()` shared by every button on the screen.
+
+- **Every other screen followed, and two of them were writing on a mis-click.** All forty screens
+  now author through the kit; `src/screens/` holds no hand-written form control at all, down from 45
+  raw `<select>` and 46 raw `<input>` (#267).
+
+  The two worth naming: Activation's device kind and Admins' role were both a `<select>` in a table
+  cell that saved as soon as the value moved. On Admins that is a security defect — one mis-click
+  demoted an owner to a viewer, with no confirmation, no undo, and no way back except another
+  owner. Both are explicit forms now: pick, then confirm. Confirming a role form without moving the
+  pick closes it without writing, since checking what a role currently is is the ordinary reason to
+  open one.
+
+  Activation's code, the API key token, the webhook signing secret and the admin invite link are
+  each shown exactly once — the cloud keeps only a hash — and each now has its own dialog rather
+  than sitting in the card that produced it until something else replaced it. Uploading media is a
+  header button that opens the operating system's picker, because there is no field to fill in.
+
+  Per-row busy replaces the shared flag throughout: restoring one device, re-enabling one webhook or
+  reactivating one admin no longer disables every other row's buttons.
 
 - **`docs/cloud-admin-ux-plan.md` no longer claims work the tree does not contain.** Stage 4's six
   primitives, its "create moves into the page header" item and Stage 5's resource helper were

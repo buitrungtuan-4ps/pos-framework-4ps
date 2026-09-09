@@ -627,12 +627,47 @@ lifecycle, retiring the 20 differently-named `pending*` signals). Deliberately *
 field schema: the outlier screens — the visual floor editor, the layout grid, the translation grid —
 would fight one, and a kit that the unusual screens escape is a kit that drifts again.
 
-**U2 · The screens move onto it**, in activation order, several PRs. Create becomes a primary button
-in `PageHeader` opening a `FormPanel`; the permanently-visible create cards go.
+**U2 · The screens move onto it**, in activation order. Create is a button in the list card's header
+opening a `FormPanel`; the permanently-visible create cards are gone.
 
-**U3 · The gates.** Two checks in the dashboard lint chain: no raw `<select>`/`<input>` under
-`screens/`, and no create/edit form inside an inline `Card`. This is the part that makes U1 and U2
-stick, and its absence is why Stage 4 did not.
+**U3 · The gate.** `dashboard/tests/authoring-controls.test.ts`, in the suite `pnpm build` runs. This
+is the part that makes U1 and U2 stick, and its absence is why Stage 4 did not.
+
+### Delivered (2026-09-09)
+
+All four parts shipped on one branch. What is worth recording beyond "done":
+
+**Six primitives were added, not one.** U1 planned `SelectField`; the sweep found five more shapes
+that screens were hand-rolling because nothing existed for them — `CheckboxField` (20 raw
+checkboxes, split three ways on hit area), `NumberField` (22 raw number inputs, all with a string in
+the signal and `NaN` in between), `FileButton` (three file pickers, each wrong differently),
+`MultiSelectField` (four copies of the same `selectedOptions` walk), `CellField` (grid cells whose
+label is their column header), and `TextField.suggestions` (four hand-built `<datalist>`s, two
+sharing an id). That is the pattern to expect: the reason a screen hand-rolls a control is usually
+that the kit has no answer for it, so a sweep of this kind is half migration and half completing the
+kit. `CheckboxField` also grew a `caption` escape hatch, which three screens need and which is the
+concrete form of ADR-0121 §2's refusal to build a field schema.
+
+**Two mis-click hazards were the real find.** Activation's device kind and Admins' role were both
+`<select>` in a table cell that wrote on `change`. On Admins that is a security defect: one
+mis-click demoted an owner to a viewer, with no confirmation, no undo, and no way back except
+another owner. Both are explicit forms now. This is the same shape as the Stores brand column
+ADR-0121 §6 already named — which suggests the pattern, not the three instances, is what to look
+for next time.
+
+**Five defects fell out of the sweep**, none of them what it was for: `stores.stale` had become
+unreachable when Stores moved onto `EntityCrud` (the reload survived, the prose did not — now
+`withStaleReload` carries both, and the stale gate checks it); Devices' print-agent binding sent a
+version and never handled the `412`, which the stale gate missed because that field is called
+`version` there; StoreSettings' currency field was `uppercase` in CSS, so a typed `vnd` looked right
+and published lower-case; its "fill from country" picker reset itself in a way a controlled
+component cannot; StoreHub's acknowledgement button carried `text-on-accent`, which is not a token.
+
+**The gate's second check needed narrowing to be usable.** "No fields in a `Card`" fails on eight
+screens that are fields on a page by design — a sign-in form, a wizard step, a settings page, a
+report's date range. It checks "a screen with a `DataTable`, fields, and no panel" instead: the
+report's shape, and nothing else. A gate that fails on legitimate code is a gate somebody switches
+off, which is worse than no gate, because it also carries the belief that something is protected.
 
 ## 3w.5 Why the harness is Stage 0
 
