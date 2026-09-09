@@ -11,7 +11,7 @@ import type { MediaSummary } from "../api/types";
 import { t } from "../i18n";
 import { Modal } from "./kit";
 import { toast } from "./Toast";
-import { Button } from "./ui";
+import { Button, FileButton } from "./ui";
 import { apiMessage } from "../lib/errors";
 
 /** A media thumbnail that degrades to a placeholder tile when there is no id or the asset fails to
@@ -121,23 +121,15 @@ export function ImagePicker(props: {
         onClose={() => setOpen(false)}
       >
         <div class="flex flex-col gap-4">
-          <label class="flex flex-col gap-1 text-sm">
-            <span class="font-medium text-ink">{t("media.uploadNew")}</span>
-            <input
-              type="file"
+          <div class="flex flex-col gap-1 text-sm">
+            <FileButton
+              label={t("media.uploadNew")}
               accept="image/*"
               disabled={busy()}
-              class="text-sm text-ink"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                if (file) {
-                  void upload(file);
-                }
-                event.currentTarget.value = "";
-              }}
+              onPick={(file) => void upload(file)}
             />
             <span class="text-xs text-ink-muted">{t("media.uploadHint")}</span>
-          </label>
+          </div>
 
           <Show
             when={media()}

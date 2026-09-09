@@ -42,3 +42,36 @@ export function apiMessage(caught: unknown): string {
 export function isStale(caught: unknown): boolean {
   return caught instanceof ApiError && caught.isStale;
 }
+
+/**
+ * Runs a conditional write so that a stale refusal reloads the screen and comes back in the
+ * screen's own words, and every other failure passes through untouched.
+ *
+ * Both halves matter and each was missing somewhere. The **reload** is ADR-0094's own reasoning:
+ * retrying a `412` without reloading would re-apply the overwrite the refusal exists to prevent, so
+ * the operator has to see what changed before deciding again. The **rewording** is why this returns
+ * a fresh `ApiError` rather than re-throwing: the server's message for a `412` names a version, and
+ * the twelve `*.stale` catalogue entries are the sentences written for an operator ("Someone else
+ * changed this store while you were editing…"). Re-throwing loses them — which is exactly what
+ * happened when the first screen was moved onto `EntityCrud`, because the reload was the visible
+ * half and the prose was not.
+ *
+ * The replacement stays a stale `ApiError` — same status, same canonical token — so anything
+ * downstream that asks `isStale` still gets a yes. Composes inside `EntityCrud.run`, which keeps
+ * the form open carrying whatever message this ends up with.
+ */
+export async function withStaleReload<T>(
+  write: () => Promise<T>,
+  reload: () => Promise<unknown>,
+  prose: string,
+): Promise<T> {
+  try {
+    return await write();
+  } catch (caught) {
+    if (!isStale(caught)) {
+      throw caught;
+    }
+    await reload();
+    throw new ApiError(412, prose, "FAILED_PRECONDITION");
+  }
+}

@@ -13,7 +13,7 @@ import type { TranslationGrid, TranslationImportReport } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, FileButton, PageHeader, TextField } from "../components/ui";
 import { EmptyState, Modal } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
@@ -207,22 +207,12 @@ export function Translations() {
               <Button variant="secondary" disabled={busy()} onClick={() => void exportGrid()}>
                 {t("translations.exportCsv")}
               </Button>
-              <label class="inline-flex min-h-touch cursor-pointer items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink transition-[filter] hover:brightness-95">
-                {t("translations.importCsv")}
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  class="hidden"
-                  disabled={busy()}
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    if (file) {
-                      void onImportFile(file);
-                    }
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
+              <FileButton
+                label={t("translations.importCsv")}
+                accept=".csv,text/csv"
+                disabled={busy()}
+                onPick={(file) => void onImportFile(file)}
+              />
               <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
                 {t("action.refresh")}
               </Button>

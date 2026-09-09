@@ -48,7 +48,7 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
-import { apiMessage, isStale } from "../lib/errors";
+import { apiMessage, withStaleReload } from "../lib/errors";
 
 export function Stores() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
@@ -102,24 +102,14 @@ export function Stores() {
   onScopedContext("tenant", () => void load());
 
   /**
-   * Wraps a write so a stale refusal reloads before the message is shown.
+   * Wraps a write so a stale refusal reloads the table and comes back saying so.
    *
-   * A `412` means somebody else saved this row while the form was open (ADR-0094). The screen
-   * reloads rather than offering a retry: retrying would re-apply the overwrite the refusal exists to
-   * prevent, and the operator needs to see what actually changed before deciding again. The error is
-   * re-thrown so `crud.run` still keeps the form open with the refusal's own message beside the
+   * A `412` means somebody else saved this row while the form was open (ADR-0094). The refusal is
+   * re-thrown (reworded) so `crud.run` still keeps the form open with the message beside the
    * refreshed table — which is the whole reason `run` does not close on failure.
    */
-  const withStaleReload = async (write: () => Promise<unknown>) => {
-    try {
-      return await write();
-    } catch (caught) {
-      if (isStale(caught)) {
-        await load();
-      }
-      throw caught;
-    }
-  };
+  const conditional = <T,>(write: () => Promise<T>) =>
+    withStaleReload(write, load, t("stores.stale"));
 
   /** Reloads and says so, after a write that changed something. */
   const settled = async (message: string) => {
@@ -150,7 +140,7 @@ export function Stores() {
     const editingRow = storeCrud.subject();
     void storeCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           editingRow
             ? api.updateStore(
                 editingRow.store_id,
@@ -171,7 +161,7 @@ export function Stores() {
   const setStoreStatus = (row: Store, status: "active" | "archived") =>
     storeCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           api.updateStore(
             row.store_id,
             tenantId(),
@@ -209,7 +199,7 @@ export function Stores() {
     const editingRow = brandCrud.subject();
     void brandCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           editingRow
             ? api.updateBrand(
                 editingRow.brand_id,
@@ -230,7 +220,7 @@ export function Stores() {
   const setBrandStatus = (row: Brand, status: "active" | "archived") =>
     brandCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           api.updateBrand(row.brand_id, tenantId(), { name: row.name, status }, row.etag),
         ),
       )
@@ -257,7 +247,7 @@ export function Stores() {
     }
     void tenantCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           api.updateTenant(current.tenant_id, { name, status: current.status }, current.etag),
         ),
       )
@@ -275,7 +265,7 @@ export function Stores() {
     }
     void tenantCrud
       .run(() =>
-        withStaleReload(() =>
+        conditional(() =>
           api.updateTenant(current.tenant_id, { name: current.name, status }, current.etag),
         ),
       )

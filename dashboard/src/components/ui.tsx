@@ -223,6 +223,159 @@ export function MoneyField(props: {
   );
 }
 
+/**
+ * A labelled checkbox with its caption, the sibling `TextField` and `SelectField` never had
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Its absence is why there are twenty raw `type="checkbox"` inputs across eleven screens. They are
+ * not merely unstyled: the hand-rolled ones split three ways on hit area — a bare 16px box, a box
+ * inside a `<label>`, and a box beside a `<span>` that is not a label at all and so is not
+ * clickable. On a touch till the difference between those is whether the control can be hit.
+ *
+ * `hint` is standing guidance, as on `TextField`. The whole row is the label, so the caption is a
+ * hit target too, which is what gets this to the touch minimum without a 48px box.
+ */
+export function CheckboxField(props: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="flex min-h-touch cursor-pointer items-center gap-2 py-1">
+      <input
+        type="checkbox"
+        class="size-5 shrink-0 accent-accent disabled:cursor-not-allowed disabled:opacity-50"
+        checked={props.checked}
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) => props.onChange(event.currentTarget.checked)}
+      />
+      <span class="text-sm text-ink">{props.label}</span>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A labelled whole-number input that emits a number, not a string
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * The twenty-two hand-rolled `type="number"` inputs this replaces all had the same shape: a string
+ * in the signal, `Number(...)` at the write, and `NaN` for anything in between. `NaN` is the
+ * problem — it is not caught by an `if (!value)` guard the way `""` is, it survives `JSON.stringify`
+ * as `null`, and a browser's number input hands back `""` for "12e" and for empty alike. So this
+ * emits `null` for "no value given" and a real number otherwise, and the caller's `null` check is
+ * the only check it needs.
+ *
+ * `min`/`max` are advisory (the browser's spinner respects them; typing past them does not refuse) —
+ * a server refusal is still the authority, which is what `FormField`'s error slot is for.
+ */
+export function NumberField(props: {
+  label: string;
+  value: number | null;
+  onChange: (value: number | null) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <input
+        type="number"
+        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        inputmode="numeric"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        placeholder={props.placeholder}
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        value={props.value === null ? "" : String(props.value)}
+        onInput={(event) => {
+          const raw = event.currentTarget.value.trim();
+          if (raw === "") {
+            props.onChange(null);
+            return;
+          }
+          const parsed = Number(raw);
+          props.onChange(Number.isFinite(parsed) ? parsed : null);
+        }}
+      />
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A `Button` that opens the file picker — the one control a form cannot express as a value
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * There were three hand-rolled versions of this and all three were wrong in a different way. The
+ * media library and the item picker exposed the raw `<input type="file">`, which every browser
+ * styles for itself, so those two screens carry a control that matches nothing else in the console
+ * and whose label ("Choose File") no locale catalogue can reach. The translation grid instead
+ * styled a `<label>` to look like a button — which reads as a button, sits in a row of real ones,
+ * and is not one: it takes no focus ring of its own and `disabled` on the inner input silently makes
+ * the whole thing inert rather than looking it.
+ *
+ * So the input is hidden and a real `Button` clicks it. The value is cleared after each pick,
+ * because choosing the same file twice in a row must fire twice — an operator who re-exports a
+ * corrected CSV and re-imports it under the same name is the ordinary case, not the odd one.
+ */
+export function FileButton(props: {
+  label: string;
+  accept: string;
+  onPick: (file: File) => void;
+  variant?: "primary" | "secondary";
+  disabled?: boolean;
+}) {
+  let input!: HTMLInputElement;
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        accept={props.accept}
+        class="hidden"
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) {
+            props.onPick(file);
+          }
+        }}
+      />
+      <Button
+        variant={props.variant ?? "secondary"}
+        disabled={props.disabled}
+        onClick={() => input.click()}
+      >
+        {props.label}
+      </Button>
+    </>
+  );
+}
+
 /** A labelled multi-line input, for JSON documents and translation values. */
 export function TextArea(props: {
   label: string;
