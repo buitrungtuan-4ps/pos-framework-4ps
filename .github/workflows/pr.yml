@@ -138,18 +138,57 @@ jobs:
       # wizard hands a technician; these run with administrator rights on a shop's only till, so
       # a parse error is a store that does not open. Bare `node` is enough — the generator is
       # plain ESM with no dependencies, so there is no pnpm install here.
-      - name: the Windows installers parse
+      # Emit once, then parse with BOTH PowerShell editions. `pwsh` is 7, which decodes a script as
+      # UTF-8 whether or not it carries a byte-order mark; `powershell` is Windows PowerShell 5.1,
+      # which decodes a BOM-less script as ANSI in the machine's code page. A shop types
+      # `powershell`, so 5.1 is the reader that decides whether a store opens.
+      #
+      # That gap shipped a defect. The scripts carried em dashes and no BOM: 5.1 read `E2 80 94` as
+      # `â`, `€` and `”` — U+201D, which the parser accepts as a double-quote delimiter — so the
+      # first `Write-Host` containing one opened a string that swallowed the rest of the line and
+      # the script died at parse time. This job passed the whole time, because it only ever asked
+      # the edition that cannot see it. The BOM is the fix (`PS_BOM` in `src/installers.mjs`);
+      # asking 5.1 is what proves it, and what stops the next one.
+      - name: emit the Windows installers
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: node dashboard/scripts/installer-syntax.mjs --emit "$env:RUNNER_TEMP/installers"
+
+      - name: the Windows installers parse (PowerShell 7)
         if: matrix.os == 'windows-2022'
         shell: pwsh
         run: |
-          node dashboard/scripts/installer-syntax.mjs --emit "$env:RUNNER_TEMP/installers"
           $bad = 0
           foreach ($file in Get-ChildItem "$env:RUNNER_TEMP/installers" -Filter *.ps1) {
               $errors = $null
               [void][System.Management.Automation.Language.Parser]::ParseFile(
                   $file.FullName, [ref]$null, [ref]$errors)
               if ($errors) {
-                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse"
+                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse under pwsh 7"
+                  $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
+                  $bad += 1
+              } else {
+                  Write-Host "ok $($file.Name)"
+              }
+          }
+          if ($bad -gt 0) { exit 1 }
+
+      # This step's own script must be pure ASCII, and the first version of it was not — it carried
+      # an em dash and failed under 5.1 with the identical parse error it exists to catch. The
+      # runner writes a `shell: powershell` step to a `.ps1` **without** a byte-order mark, and
+      # nothing here can add one: the fix that works for a file we generate is unavailable for a
+      # file the runner generates for us. So: no non-ASCII below this line.
+      - name: the Windows installers parse (Windows PowerShell 5.1, what a shop runs)
+        if: matrix.os == 'windows-2022'
+        shell: powershell
+        run: |
+          $bad = 0
+          foreach ($file in Get-ChildItem "$env:RUNNER_TEMP/installers" -Filter *.ps1) {
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $file.FullName, [ref]$null, [ref]$errors)
+              if ($errors) {
+                  Write-Host "::error file=deploy/edge/install-pos-edge.ps1::$($file.Name) does not parse under Windows PowerShell 5.1, the edition a technician gets by typing ``powershell``. Check the byte-order mark."
                   $errors | ForEach-Object { Write-Host "  $($_.Extent.StartLineNumber): $($_.Message)" }
                   $bad += 1
               } else {

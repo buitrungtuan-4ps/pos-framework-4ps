@@ -114,6 +114,42 @@ sc.exe start pos-edge
 `POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
 variable — the next section says why.
 
+### The byte-order mark is not decoration
+
+Both `.ps1` files here start with a UTF-8 BOM, and the generator puts it there deliberately
+(`PS_BOM` in `dashboard/src/installers.mjs`). Do not strip it, and if you copy the script through
+something that might — Notepad's "ANSI" save, a paste into a new file, a text-mode transfer — check
+that it survived.
+
+**Why.** Windows PowerShell 5.1, the edition a technician gets by typing `powershell`, reads a
+script **without** a BOM as ANSI in the machine's code page rather than as UTF-8. PowerShell 7
+(`pwsh`) reads it as UTF-8 either way. An em dash is `E2 80 94` in UTF-8; read as CP1252 — or
+CP1258, on a Vietnamese install — those bytes become `â`, `€`, and `”`, and that last one is
+U+201D, which PowerShell's parser accepts as a **double-quote string delimiter**. So one em dash
+inside a single-quoted `Write-Host` opens a string that eats the rest of the line, and the script
+dies before it runs a single statement:
+
+```
+Write-Host 'Now DELETE this installer â€” it contains the store key.'
+                                                                     ~
+The string is missing the terminator: '.
+```
+
+A store's own name is why writing ASCII-only prose is not the fix: the wizard bakes the name into
+the script's help block, and `Bến Thành` mangles the same way.
+
+**If you are holding a script downloaded before this was fixed**, re-save it with the mark rather
+than editing it:
+
+```powershell
+$p = '.\install-pos-edge.ps1'
+$text = [System.IO.File]::ReadAllText($p, (New-Object System.Text.UTF8Encoding $false))
+[System.IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding $true))
+```
+
+Running it under `pwsh` instead also works and needs no edit, but a shop that has only Windows
+PowerShell is the case this exists for.
+
 ### The two secrets Windows has no `env` file for
 
 The Linux unit reads `POS_EDGE_SYNC_KEY` and `POS_EDGE_NATS_URL` from `/etc/pos-edge/env`,

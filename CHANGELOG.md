@@ -16,6 +16,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Windows installer could not run on Windows.** Reported from a real bring-up: the script the
+  new-store wizard hands out died at parse time, before a single statement, with *"The string is
+  missing the terminator: '."*
+
+  The generated `.ps1` carried em dashes in its prose and no byte-order mark. Windows PowerShell
+  5.1 — the edition a technician gets by typing `powershell` — reads a BOM-less script as ANSI in
+  the machine's code page, not as UTF-8. An em dash is `E2 80 94`; read as CP1252, or CP1258 on a
+  Vietnamese install, those bytes become `â`, `€` and `”`, and that last one is U+201D, which
+  PowerShell's parser accepts as a **double-quote string delimiter**. So the first `Write-Host`
+  containing one opened a string that swallowed the rest of the line.
+
+  The three PowerShell generators now emit the mark, so every consumer gets it — the wizard's
+  download, the two checked-in templates, and the syntax gate — without having to remember. Writing
+  ASCII-only prose instead would not have been enough: the wizard bakes the store's own name into
+  the script's help block, and a Vietnamese store name mangles identically.
+
+  **Why CI passed the whole time.** The `build (windows-2022)` job parsed the scripts with `pwsh`,
+  which decodes UTF-8 with or without a mark. It asked the one edition that cannot see the defect.
+  It now parses with **both** editions, and `installer-syntax.mjs` asserts the mark on every
+  generated `.ps1` on every pull request — verified failing with the mark removed, so the check is
+  not vacuous. `deploy/edge/README.md` records the byte-level walk-through and the one-liner that
+  repairs a script downloaded before this fix.
+
 ### Changed
 
 - **The left nav says which screen you are on, and stays short.** Three faults, reported together.
