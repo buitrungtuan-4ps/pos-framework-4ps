@@ -4,7 +4,7 @@
 // translated by the caller — so the no-hardcoded-strings lint (ADR-0020) has nothing to flag here.
 
 import type { JSX, ParentProps } from "solid-js";
-import { For, Show, splitProps } from "solid-js";
+import { createUniqueId, For, Show, splitProps } from "solid-js";
 
 import { locale } from "../i18n";
 
@@ -94,14 +94,24 @@ export function Button(props: ButtonProps) {
   );
 }
 
-/** A labelled single-line input. `label`/`placeholder` are already-translated text. */
+/**
+ * A labelled single-line input. `label`/`placeholder`/`hint` are already-translated text.
+ *
+ * `hint` is standing guidance about the field — what it accepts, or that it may be left blank — not
+ * a validation error, which is `FormField`'s job. It renders below the input and is wired with
+ * `aria-describedby`, so a screen reader announces it *after* the label rather than instead of it;
+ * a `placeholder` cannot do that (it disappears on the first keystroke, which is exactly when a
+ * "you can leave this blank" hint still matters).
+ */
 export function TextField(
   props: {
     label: string;
     value: string;
     onInput: (value: string) => void;
+    hint?: string;
   } & Pick<JSX.InputHTMLAttributes<HTMLInputElement>, "type" | "placeholder" | "autocomplete">,
 ) {
+  const hintId = createUniqueId();
   return (
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
@@ -110,9 +120,17 @@ export function TextField(
         type={props.type ?? "text"}
         placeholder={props.placeholder}
         autocomplete={props.autocomplete}
+        aria-describedby={props.hint ? hintId : undefined}
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
     </label>
   );
 }

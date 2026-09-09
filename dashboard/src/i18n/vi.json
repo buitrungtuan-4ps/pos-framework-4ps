@@ -169,6 +169,8 @@
   "audit.title": "Nhật ký thay đổi",
   "audit.updated": "Thay đổi gần nhất",
   "audit.when": "Thời điểm",
+  "auth.email": "Email",
+  "auth.email.hint": "Để trống nếu bạn là quản trị viên duy nhất.",
   "auth.login.failed": "Mật khẩu hoặc mã không đúng.",
   "auth.login.title": "Đăng nhập",
   "auth.password": "Mật khẩu",

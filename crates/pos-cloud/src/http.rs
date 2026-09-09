@@ -19274,30 +19274,31 @@ where
         tracing::error!("could not mint a super-admin credential (entropy or hashing failed)");
         return service_unavailable("setup");
     };
-    match app
-        .admin
-        .provision_credential(phc.clone(), secret.to_vec())
-        .await
-    {
+    // `admin_users` first, because since
+    // [ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md) that row *is* the
+    // credential sign-in reads. It was written second and best-effort while `super_admin` was the
+    // authority; leaving that order would have made a store blip here enrol an operator who could
+    // then never sign in. `create_admin_user` is first-writer-wins on the `lower(email)` unique
+    // index, so it is also the "already enrolled" gate `provision_credential` used to be — and it
+    // answers the same way on an upgraded install, whose owner the migration already backfilled.
+    let owner = NewAdminUser {
+        id: IMPLICIT_OWNER_ID.to_owned(),
+        email: IMPLICIT_OWNER_EMAIL.to_owned(),
+        name: "Owner".to_owned(),
+        role: AdminRole::Owner,
+        password_phc: phc.clone(),
+        totp_secret: secret.to_vec(),
+    };
+    match app.admin.create_admin_user(owner).await {
         Ok(true) => {
-            // Mirror the freshly-enrolled super-admin into `admin_users` as the first `owner`
-            // ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)) — the same identity the
-            // migration seeds on an upgraded install. Best-effort: the session guard falls back to an
-            // implicit owner when this row is absent, so a store blip here never locks the operator
-            // out; it only means the owner is missing from the admins list until reconciled.
-            let owner = NewAdminUser {
-                id: IMPLICIT_OWNER_ID.to_owned(),
-                email: IMPLICIT_OWNER_EMAIL.to_owned(),
-                name: "Owner".to_owned(),
-                role: AdminRole::Owner,
-                password_phc: phc,
-                totp_secret: secret.to_vec(),
-            };
-            if let Err(error) = app.admin.create_admin_user(owner).await {
+            // The legacy `super_admin` row, now written second and best-effort: nothing reads it
+            // (ADR-0119 §8 keeps it in the schema and stops reading it), so a failure here costs
+            // only the ability to downgrade to a build that did read it.
+            if let Err(error) = app.admin.provision_credential(phc, secret.to_vec()).await {
                 tracing::warn!(
                     %error,
-                    "super-admin enrolled but mirroring it into admin_users failed; the guard's \
-                     implicit-owner fallback keeps sign-in working"
+                    "the first admin is enrolled and can sign in, but mirroring the credential into \
+                     the legacy super_admin row failed"
                 );
             }
             (StatusCode::CREATED, Json(build_enrolment(&secret))).into_response()
@@ -20311,11 +20312,19 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = authenticated_admin(&app.admin, &app.clock, &headers).await {
-        return denied.into_response();
-    }
-    let credential = match app.admin.load_credential().await {
-        Ok(Some(credential)) => credential,
+    let context = match authenticated_admin(&app.admin, &app.clock, &headers).await {
+        Ok(context) => context,
+        Err(denied) => return denied.into_response(),
+    };
+    // The acting admin's *own* credential, re-read by their own address — before ADR-0119 this read
+    // the single `super_admin` row, so an invited admin re-proving their password was checked
+    // against the owner's hash and then rotated the owner's secret.
+    let credential = match app
+        .admin
+        .find_admin_login_by_email(&context.admin.email)
+        .await
+    {
+        Ok(Some(login)) => login.credential,
         Ok(None) => {
             return api_error(
                 ErrorStatus::FailedPrecondition,
@@ -20335,7 +20344,11 @@ where
         tracing::error!("could not read OS entropy to mint a TOTP secret");
         return admin_service_unavailable();
     };
-    match app.admin.rotate_totp_secret(secret.to_vec()).await {
+    match app
+        .admin
+        .rotate_admin_totp_secret(&context.admin.id, secret.to_vec())
+        .await
+    {
         Ok(()) => (StatusCode::OK, Json(build_enrolment(&secret))).into_response(),
         Err(error) => {
             tracing::error!(%error, "rotating the TOTP secret failed");

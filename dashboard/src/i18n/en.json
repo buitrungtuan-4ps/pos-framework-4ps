@@ -169,6 +169,8 @@
   "audit.title": "Audit trail",
   "audit.updated": "Last changed",
   "audit.when": "When",
+  "auth.email": "Email",
+  "auth.email.hint": "Leave blank if you are the only administrator.",
   "auth.login.failed": "The password or code was not accepted.",
   "auth.login.title": "Sign in",
   "auth.password": "Password",

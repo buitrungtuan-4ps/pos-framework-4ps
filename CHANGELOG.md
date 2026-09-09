@@ -16,7 +16,50 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **An invited administrator can sign in.** `admin_users.password_phc` and `.totp_secret` have been
+  written for every invited admin since the invitation route shipped, and sign-in read the single
+  `super_admin` row instead — so the whole `/admins` roster, its invitations, its roles and its
+  per-role permission gate were reachable only by the one person holding the original super-admin
+  password. Sign-in now authenticates against the admin's own row
+  ([ADR-0119](docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+
+- **The audit trail names the administrator who acted.** A session used to be bound to *the first
+  active owner the store returned*, whoever authenticated. With one owner that was accidentally
+  right; with two, every entry either of them wrote was attributed by a coin flip, and nothing
+  warned, because the session was perfectly valid. The session now belongs to the admin who signed
+  in, which is a correction to what ADR-0069 recorded on any two-owner installation (#266).
+
+- **The break-glass still recovers.** `deploy/reset-admin.sh` cleared `super_admin` and the sessions
+  only. Since the credential sign-in reads moved to `admin_users`, that would have deleted a
+  credential nothing reads and left the one that matters — locking the operator out with the last
+  resort already spent. It now clears every admin, their invitations and their sessions, returning
+  the installation to first-boot enrolment (#266).
+
 ### Changed
+
+- **Sign-in asks who you are, and lets you not say.** `POST /admin/login` takes an optional `email`,
+  and the console login screen has the field with a hint that it may be left blank. Omitted, it
+  resolves to the single admin — which is every installation until a second is invited, and is why
+  the field is optional: migration 0018 gave the only admin every existing installation has a
+  synthetic placeholder address nobody has seen and no route can change, so requiring it would have
+  locked all of them out on deploy. Once two admins exist an omitted email is refused, with the same
+  generic message as a wrong password. The fallback therefore retires itself exactly when it would
+  start being wrong (#266).
+
+  **Upgrade note.** No migration and no `PROTOCOL_VERSION` change: every column this reads has
+  existed since migration 0018. On a single-admin installation sign-in is byte-for-byte what it was.
+  The backfilled owner's address is `owner@super-admin.invalid` until a route to change it is built;
+  the account menu displays it, so it is visible rather than secret. First-boot enrolment now writes
+  `admin_users` before `super_admin`, so the row sign-in depends on is the one whose failure is
+  reported; `super_admin` stays in the schema and stops being read.
+
+- **The TOTP second factor is per administrator.** Re-enrolment rotates the acting admin's own
+  secret, and a sign-in burns only their own last-used step. The step was global, so admin A signing
+  in at step *N* would have made admin B's valid code in the same 30-second window look like a
+  replay — an availability bug that only appears once a second admin exists, which is exactly when
+  per-admin sign-in starts being used (#266).
 
 - **One expression for "what went wrong", instead of forty-eight copies.** Every console screen used
   to write `caught instanceof ApiError ? caught.message : String(caught)` by hand — the four fixed

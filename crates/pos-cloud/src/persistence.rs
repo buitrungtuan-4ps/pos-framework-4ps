@@ -23,13 +23,13 @@
 use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
-    AdminInviteRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow, AuditLogRow,
-    AuditOrder, BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
-    CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
-    CatalogTaxonomyRow, DeviceRow, EmployeeOrder, EmployeeRow, FleetStoreRow, InventoryRow,
-    ItemOrder, MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow, OrderQueueRow,
-    PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts, PostgresApiKeys,
-    PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
+    AdminInviteRow, AdminLoginRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow,
+    AuditLogRow, AuditOrder, BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow,
+    CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow,
+    CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, EmployeeOrder, EmployeeRow, FleetStoreRow,
+    InventoryRow, ItemOrder, MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow,
+    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts,
+    PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
     PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
     PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile, PostgresRegistry,
     PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
@@ -65,8 +65,9 @@ use crate::audit::{
 };
 use crate::auth::SuperAdminCredential;
 use crate::auth::admin::{
-    AdminCredential, AdminInvite, AdminRole, AdminStatus, AdminStore, AdminStoreError, AdminUser,
-    LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode, SessionSummary,
+    AdminCredential, AdminInvite, AdminLogin, AdminRole, AdminStatus, AdminStore, AdminStoreError,
+    AdminUser, LiveSession, NewAdminInvite, NewAdminSession, NewAdminUser, NewRecoveryCode,
+    SessionSummary,
 };
 use crate::auth::apikey::{
     ApiKeyAdminStore, ApiKeyId, ApiKeyStore, ApiKeyStoreError, ApiKeySummary, StoredApiKey,
@@ -941,6 +942,40 @@ impl AdminStore for PostgresAdmin {
         row.map(admin_user_from_row).transpose()
     }
 
+    async fn find_admin_login_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<AdminLogin>, AdminStoreError> {
+        let row = self
+            .fetch_admin_login_by_email(email)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))?;
+        row.map(admin_login_from_row).transpose()
+    }
+
+    async fn record_admin_totp_step(
+        &self,
+        admin_id: &str,
+        step: u64,
+    ) -> Result<(), AdminStoreError> {
+        // Saturating rather than failing: a step past `i64::MAX` is 292 billion years away, and a
+        // clamp keeps the column monotone either way. Matches `record_totp_step` exactly.
+        let step = i64::try_from(step).unwrap_or(i64::MAX);
+        self.advance_admin_totp_step(admin_id, step)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
+    async fn rotate_admin_totp_secret(
+        &self,
+        admin_id: &str,
+        secret: Vec<u8>,
+    ) -> Result<(), AdminStoreError> {
+        PostgresAdmin::rotate_admin_totp_secret(self, admin_id, &secret)
+            .await
+            .map_err(|error| AdminStoreError::new(error.to_string()))
+    }
+
     async fn set_admin_user_role(
         &self,
         id: &str,
@@ -1037,6 +1072,32 @@ fn admin_user_from_row(row: AdminUserRow) -> Result<AdminUser, AdminStoreError> 
         role,
         status,
     })
+}
+
+/// Converts a stored `admin_users` row *with its credential* into the domain [`AdminLogin`] — the
+/// per-admin sign-in read
+/// ([ADR-0119](../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+///
+/// Delegates the identity half to [`admin_user_from_row`], so an unknown role or status token fails
+/// here exactly as it does on a listing read rather than silently authenticating someone whose role
+/// this build cannot name.
+fn admin_login_from_row(row: AdminLoginRow) -> Result<AdminLogin, AdminStoreError> {
+    let credential = AdminCredential {
+        credential: SuperAdminCredential::new(row.password_phc, TotpSecret::new(row.totp_secret)),
+        // A stored step is always a value this adapter itself wrote, so it fits u64; a stray negative
+        // reads as "never used" rather than failing the load, as `load_credential` does.
+        last_used_totp_step: row
+            .last_used_totp_step
+            .and_then(|step| u64::try_from(step).ok()),
+    };
+    let user = admin_user_from_row(AdminUserRow {
+        id: row.id,
+        email: row.email,
+        name: row.name,
+        role: row.role,
+        status: row.status,
+    })?;
+    Ok(AdminLogin { user, credential })
 }
 
 /// Converts a stored `admin_sessions` row into the domain [`SessionSummary`], failing loudly if the

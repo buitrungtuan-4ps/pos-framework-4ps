@@ -125,5 +125,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0116](0116-the-qr-hold-is-derived-and-it-gates-firing.md) | The staff-confirmation hold is derived state, and it gates firing | Accepted |
 | [0117](0117-a-headless-store-keeps-a-log.md) | A headless store keeps a log, and hands over its pairing code without logging it | Accepted |
 | [0118](0118-one-credential-per-box-and-the-cloud-learns.md) | One credential per box, and the cloud learns what a store admitted | Accepted |
+| [0119](0119-each-admin-signs-in-as-themselves.md) | Each admin signs in as themselves | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
