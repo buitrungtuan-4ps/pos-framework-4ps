@@ -8,14 +8,23 @@
 // editor is deliberately deferred to F3; placement is set here by numeric grid column/row (or left
 // unplaced), which is enough for the plan the edge and the QR sheet consume.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { Area, FloorTable, TableQrToken } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CellField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -23,7 +32,6 @@ import {
   DataTable,
   Drawer,
   EmptyState,
-  FormField,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -324,11 +332,11 @@ export function Floor() {
       cell: (row) => (
         <Show when={editingArea() === row.area_id} fallback={<span>{row.name}</span>}>
           <div class="flex flex-wrap items-center gap-2">
-            <input
-              class="min-h-touch w-44 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-              aria-label={t("floor.areaName")}
+            <CellField
+              label={t("floor.areaName")}
+              class="w-44"
               value={areaDraft()}
-              onInput={(event) => setAreaDraft(event.currentTarget.value)}
+              onInput={setAreaDraft}
             />
             <Button disabled={busy()} onClick={() => void saveAreaName(row)}>
               {t("action.save")}
@@ -635,19 +643,13 @@ export function Floor() {
           }
         >
           <div class="flex flex-col gap-4">
-            <FormField label={t("floor.area")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                aria-label={t("floor.area")}
-                value={tableArea()}
-                onChange={(event) => setTableArea(event.currentTarget.value)}
-              >
-                <option value="">{t("floor.chooseArea")}</option>
-                <For each={activeAreas()}>
-                  {(area) => <option value={area.area_id}>{area.name}</option>}
-                </For>
-              </select>
-            </FormField>
+            <SelectField
+              label={t("floor.area")}
+              value={tableArea()}
+              options={activeAreas().map((area) => ({ value: area.area_id, label: area.name }))}
+              onChange={setTableArea}
+              placeholder={t("floor.chooseArea")}
+            />
             <TextField
               label={t("floor.label")}
               value={tableLabel()}

@@ -109,9 +109,25 @@ export function TextField(
     value: string;
     onInput: (value: string) => void;
     hint?: string;
+    /**
+     * Values to offer as a native `<datalist>`, for a field that accepts anything but usually holds
+     * one of a known set — a currency code, an IANA timezone, a locale tag.
+     *
+     * Deliberately not a {@link SelectField}: the store-settings fields this replaces are free text
+     * on the wire, and a picker would refuse a timezone the console's list has not heard of. Four
+     * screens each built the `<datalist>` by hand with a hard-coded `id`, which is how two of them
+     * came to share one: `id="currency-options"` appeared twice on the same page, and a duplicate
+     * id means the second list is unreachable. The id is generated here.
+     *
+     * Shaped like {@link SelectField}'s `options` so a caller moving between the two does not have
+     * to reshape its data. `label` is optional because a currency code or an IANA zone is already
+     * the thing an operator recognises; a locale tag is not, which is why it can carry one.
+     */
+    suggestions?: readonly { readonly value: string; readonly label?: string }[];
   } & Pick<JSX.InputHTMLAttributes<HTMLInputElement>, "type" | "placeholder" | "autocomplete">,
 ) {
   const hintId = createUniqueId();
+  const listId = createUniqueId();
   return (
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
@@ -120,10 +136,20 @@ export function TextField(
         type={props.type ?? "text"}
         placeholder={props.placeholder}
         autocomplete={props.autocomplete}
+        list={props.suggestions ? listId : undefined}
         aria-describedby={props.hint ? hintId : undefined}
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
+      <Show when={props.suggestions}>
+        {(values) => (
+          <datalist id={listId}>
+            <For each={values()}>
+              {(entry) => <option value={entry.value}>{entry.label}</option>}
+            </For>
+          </datalist>
+        )}
+      </Show>
       <Show when={props.hint}>
         {(hint) => (
           <span id={hintId} class="mt-1 block text-sm text-ink-muted">
@@ -450,6 +476,44 @@ export function FileButton(props: {
         {props.label}
       </Button>
     </>
+  );
+}
+
+/**
+ * One editable cell of a grid — a `<td>`'s input, named by `aria-label` because its visible label is
+ * the column header ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §2).
+ *
+ * This is the escape hatch §2 anticipated when it declined a declarative field schema: the tax-rate
+ * grid is class × channel and the translation grid is key × locale, and in both the label an
+ * operator reads is printed once at the top of the column, not once per row. A {@link TextField} in
+ * each cell would stack forty copies of the same word down the page.
+ *
+ * So the *presentation* differs and the plumbing does not: the accessible name is still required
+ * (there is no way to omit it), the token styling is still in one place, and a screen reader still
+ * announces which cell it is in — which the three hand-rolled versions did get right, and which is
+ * exactly the kind of thing that survives four screens and then does not survive the fifth.
+ */
+export function CellField(props: {
+  /** The accessible name — usually "<row> <column>", since the visible label is the header. */
+  label: string;
+  value: string;
+  onInput: (value: string) => void;
+  placeholder?: string;
+  /** A Tailwind width class, because a grid's columns are sized by the grid, not by the cell. */
+  class?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <input
+      class={`min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50 ${
+        props.class ?? "w-full"
+      }`}
+      aria-label={props.label}
+      placeholder={props.placeholder}
+      disabled={props.disabled}
+      value={props.value}
+      onInput={(event) => props.onInput(event.currentTarget.value)}
+    />
   );
 }
 

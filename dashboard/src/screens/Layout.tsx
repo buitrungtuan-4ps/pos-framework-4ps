@@ -24,7 +24,14 @@ import { SALES_CHANNELS } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  PageHeader,
+  SelectField,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -32,7 +39,6 @@ import {
   DataTable,
   Drawer,
   EmptyState,
-  FormField,
   ReorderList,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -576,18 +582,18 @@ export function Layout() {
             title={t("layout.buttons")}
             actions={
               <div class="flex flex-wrap items-center gap-2">
-                <label class="text-sm text-ink-muted">
-                  <span class="sr-only">{t("layout.channel")}</span>
-                  <select
-                    class="min-h-touch rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                    value={channel()}
-                    onChange={(event) => setChannel(event.currentTarget.value as SalesChannel)}
-                  >
-                    <For each={SALES_CHANNELS}>
-                      {(row) => <option value={row}>{t(CHANNEL_LABEL[row])}</option>}
-                    </For>
-                  </select>
-                </label>
+                {/* The label was `sr-only` here to keep the card header tight. It reads now:
+                    a picker in a header whose only cue is its current value is a picker an
+                    operator has to change to find out what it changes. */}
+                <SelectField
+                  label={t("layout.channel")}
+                  value={channel()}
+                  options={SALES_CHANNELS.map((row) => ({
+                    value: row,
+                    label: t(CHANNEL_LABEL[row]),
+                  }))}
+                  onChange={(value) => setChannel(value as SalesChannel)}
+                />
                 <Button disabled={busy()} onClick={openAddButton}>
                   {t("layout.addButton")}
                 </Button>
@@ -611,23 +617,17 @@ export function Layout() {
 
                 {/* Copy this channel's buttons to another channel. */}
                 <div class="flex flex-wrap items-end gap-2">
-                  <label class="block">
-                    <span class="mb-1 block text-sm font-medium text-ink">
-                      {t("layout.copyTarget")}
-                    </span>
-                    <select
-                      class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                      value={copyTarget()}
-                      onChange={(event) =>
-                        setCopyTarget(event.currentTarget.value as SalesChannel | "")
-                      }
-                    >
-                      <option value="">{t("layout.copyChooseTarget")}</option>
-                      <For each={SALES_CHANNELS.filter((row) => row !== channel())}>
-                        {(row) => <option value={row}>{t(CHANNEL_LABEL[row])}</option>}
-                      </For>
-                    </select>
-                  </label>
+                  <SelectField
+                    label={t("layout.copyTarget")}
+                    value={copyTarget()}
+                    // Copying a channel onto itself is a no-op, so it is not on offer.
+                    options={SALES_CHANNELS.filter((row) => row !== channel()).map((row) => ({
+                      value: row,
+                      label: t(CHANNEL_LABEL[row]),
+                    }))}
+                    onChange={(value) => setCopyTarget(value as SalesChannel | "")}
+                    placeholder={t("layout.copyChooseTarget")}
+                  />
                   <Button
                     variant="secondary"
                     disabled={busy() || !copyTarget() || channelButtons().length === 0}
@@ -859,73 +859,62 @@ export function Layout() {
           }
         >
           <div class="flex flex-col gap-4">
-            <FormField label={t("layout.item")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
-                value={buttonItem()}
-                disabled={buttonEditing() !== null}
-                onChange={(event) => setButtonItem(event.currentTarget.value)}
-              >
-                <option value="">{t("layout.chooseItem")}</option>
-                <For each={items().filter((item) => item.status === "active")}>
-                  {(item) => <option value={item.menu_item_id}>{item.name}</option>}
-                </For>
-              </select>
-            </FormField>
+            <SelectField
+              label={t("layout.item")}
+              value={buttonItem()}
+              options={items()
+                .filter((item) => item.status === "active")
+                .map((item) => ({ value: item.menu_item_id, label: item.name }))}
+              onChange={setButtonItem}
+              placeholder={t("layout.chooseItem")}
+              // Which item a button fires is fixed once it exists.
+              disabled={buttonEditing() !== null}
+            />
             <TextField
               label={t("layout.label")}
               value={buttonLabel()}
               onInput={setButtonLabel}
               placeholder={t("layout.labelPlaceholder")}
             />
-            <FormField label={t("layout.category")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                value={buttonCategory()}
-                onChange={(event) => {
-                  setButtonCategory(event.currentTarget.value);
-                  setButtonSubcategory("");
-                }}
-              >
-                <option value="">{t("layout.chooseCategory")}</option>
-                <For each={activeCategories()}>
-                  {(row) => <option value={row.display_category_id}>{row.name}</option>}
-                </For>
-              </select>
-            </FormField>
-            <FormField label={t("layout.subcategory")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
-                value={buttonSubcategory()}
-                disabled={!buttonCategory()}
-                onChange={(event) => setButtonSubcategory(event.currentTarget.value)}
-              >
-                <option value="">{t("layout.noSubcategory")}</option>
-                <For each={activeSubcategories(buttonCategory())}>
-                  {(row) => <option value={row.display_subcategory_id}>{row.name}</option>}
-                </For>
-              </select>
-            </FormField>
+            <SelectField
+              label={t("layout.category")}
+              value={buttonCategory()}
+              options={activeCategories().map((row) => ({
+                value: row.display_category_id,
+                label: row.name,
+              }))}
+              onChange={(value) => {
+                setButtonCategory(value);
+                // A subcategory belongs to one category; the old pick cannot survive the change.
+                setButtonSubcategory("");
+              }}
+              placeholder={t("layout.chooseCategory")}
+            />
+            <SelectField
+              label={t("layout.subcategory")}
+              value={buttonSubcategory()}
+              options={activeSubcategories(buttonCategory()).map((row) => ({
+                value: row.display_subcategory_id,
+                label: row.name,
+              }))}
+              onChange={setButtonSubcategory}
+              placeholder={t("layout.noSubcategory")}
+              disabled={!buttonCategory()}
+            />
             <p class="text-xs text-ink-muted">{t("layout.gridHint")}</p>
             <div class="grid grid-cols-2 gap-3">
-              <FormField label={t("layout.gridColumn")}>
-                <input
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                  inputmode="numeric"
-                  aria-label={t("layout.gridColumn")}
-                  value={buttonColumn()}
-                  onInput={(event) => setButtonColumn(event.currentTarget.value)}
-                />
-              </FormField>
-              <FormField label={t("layout.gridRow")}>
-                <input
-                  class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                  inputmode="numeric"
-                  aria-label={t("layout.gridRow")}
-                  value={buttonRow()}
-                  onInput={(event) => setButtonRow(event.currentTarget.value)}
-                />
-              </FormField>
+              <TextField
+                label={t("layout.gridColumn")}
+                type="number"
+                value={buttonColumn()}
+                onInput={setButtonColumn}
+              />
+              <TextField
+                label={t("layout.gridRow")}
+                type="number"
+                value={buttonRow()}
+                onInput={setButtonRow}
+              />
             </div>
           </div>
         </Drawer>
@@ -992,18 +981,16 @@ export function Layout() {
           }
         >
           <div class="flex flex-col gap-4">
-            <FormField label={t("layout.parentCategory")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                value={newSubcategoryParent()}
-                onChange={(event) => setNewSubcategoryParent(event.currentTarget.value)}
-              >
-                <option value="">{t("layout.chooseCategory")}</option>
-                <For each={activeCategories()}>
-                  {(row) => <option value={row.display_category_id}>{row.name}</option>}
-                </For>
-              </select>
-            </FormField>
+            <SelectField
+              label={t("layout.parentCategory")}
+              value={newSubcategoryParent()}
+              options={activeCategories().map((row) => ({
+                value: row.display_category_id,
+                label: row.name,
+              }))}
+              onChange={setNewSubcategoryParent}
+              placeholder={t("layout.chooseCategory")}
+            />
             <TextField
               label={t("layout.subcategoryName")}
               value={newSubcategoryName()}

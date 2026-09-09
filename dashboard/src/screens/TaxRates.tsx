@@ -25,7 +25,7 @@ import {
 import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, CellField, PageHeader } from "../components/ui";
 import { EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
@@ -301,32 +301,25 @@ export function TaxRates() {
                             {(channel) => (
                               <td class="py-2 pr-4">
                                 <div class="flex items-center gap-1">
-                                  <input
-                                    type="text"
-                                    inputmode="decimal"
-                                    class="min-h-touch w-20 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                                    aria-label={`${taxClass.name} ${t(CHANNEL_LABEL[channel])}`}
+                                  <CellField
+                                    label={`${taxClass.name} ${t(CHANNEL_LABEL[channel])}`}
+                                    class="w-20"
                                     value={cells()[cellKey(taxClass.tax_class_id, channel)] ?? ""}
-                                    onInput={(event) =>
-                                      setCell(taxClass.tax_class_id, channel, event.currentTarget.value)
+                                    onInput={(value) =>
+                                      setCell(taxClass.tax_class_id, channel, value)
                                     }
                                   />
                                   <span aria-hidden="true" class="text-ink-muted">
                                     %
                                   </span>
                                 </div>
-                                <input
-                                  type="text"
-                                  class="mt-1 min-h-touch w-40 rounded-token border border-line bg-surface-raised px-2 text-xs text-ink"
+                                <CellField
+                                  label={`${taxClass.name} ${t(CHANNEL_LABEL[channel])} ${t("taxRates.breakdown")}`}
+                                  class="mt-1 w-40"
                                   placeholder={t("taxRates.breakdownPlaceholder")}
-                                  aria-label={`${taxClass.name} ${t(CHANNEL_LABEL[channel])} ${t("taxRates.breakdown")}`}
                                   value={breakdowns()[cellKey(taxClass.tax_class_id, channel)] ?? ""}
-                                  onInput={(event) =>
-                                    setBreakdown(
-                                      taxClass.tax_class_id,
-                                      channel,
-                                      event.currentTarget.value,
-                                    )
+                                  onInput={(value) =>
+                                    setBreakdown(taxClass.tax_class_id, channel, value)
                                   }
                                 />
                                 <Show when={breakdownProblem(taxClass.tax_class_id, channel)}>
