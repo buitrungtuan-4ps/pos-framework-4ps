@@ -18,7 +18,15 @@ import type { ApiKeySummary, Store } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, SelectField, StatusBadge } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  StatusBadge,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -270,15 +278,11 @@ export function ApiKeys() {
             <legend class="mb-1 text-sm font-medium text-ink">{t("apiKeys.scopesLabel")}</legend>
             <For each={SCOPES}>
               {(scope) => (
-                <label class="flex items-center gap-2 text-sm text-ink">
-                  <input
-                    type="checkbox"
-                    class="size-4"
-                    checked={chosen().has(scope.wire)}
-                    onChange={() => toggle(scope.wire)}
-                  />
-                  {t(scope.key)}
-                </label>
+                <CheckboxField
+                  label={t(scope.key)}
+                  checked={chosen().has(scope.wire)}
+                  onChange={() => toggle(scope.wire)}
+                />
               )}
             </For>
           </fieldset>

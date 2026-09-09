@@ -24,7 +24,15 @@ import { t } from "../../i18n";
 import { formatMoney } from "../../lib/format";
 import { onScopedContext } from "../../lib/scoped";
 import { storeId, storeName, tenantId } from "../../state/session";
-import { Banner, Button, Card, MoneyField, TextField } from "../../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  MoneyField,
+  SelectField,
+  TextField,
+} from "../../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
@@ -32,7 +40,6 @@ import {
   DataTable,
   Drawer,
   EmptyState,
-  FormField,
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
@@ -743,18 +750,15 @@ export function CatalogMenus() {
         <div class="flex flex-col gap-4">
           <p class="text-sm text-ink-muted">{t("catalog.publishHint")}</p>
           <div class="grid gap-4 md:grid-cols-2 md:items-end">
-            <FormField label={t("catalog.publishMenu")}>
-              <select
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                value={publishMenu()}
-                onChange={(event) => setPublishMenu(event.currentTarget.value)}
-              >
-                <option value="">{t("catalog.chooseMenu")}</option>
-                <For each={(menus() ?? []).filter((menu) => menu.status === "active")}>
-                  {(menu) => <option value={menu.menu_id}>{menu.name}</option>}
-                </For>
-              </select>
-            </FormField>
+            <SelectField
+              label={t("catalog.publishMenu")}
+              value={publishMenu()}
+              options={(menus() ?? [])
+                .filter((menu) => menu.status === "active")
+                .map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+              onChange={setPublishMenu}
+              placeholder={t("catalog.chooseMenu")}
+            />
             <div>
               <span class="mb-1 block text-sm font-medium text-ink">{t("catalog.publishStore")}</span>
               <p class="min-h-touch rounded-token border border-line bg-surface-raised px-3 py-2 text-base text-ink">
@@ -794,18 +798,13 @@ export function CatalogMenus() {
             onInput={setNewMenuName}
             placeholder={t("catalog.menuNamePlaceholder")}
           />
-          <FormField label={t("catalog.parent")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={newMenuParent()}
-              onChange={(event) => setNewMenuParent(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.noParent")}</option>
-              <For each={menus() ?? []}>
-                {(menu) => <option value={menu.menu_id}>{menu.name}</option>}
-              </For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.parent")}
+            value={newMenuParent()}
+            options={(menus() ?? []).map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+            onChange={setNewMenuParent}
+            placeholder={t("catalog.noParent")}
+          />
         </div>
       </Drawer>
 
@@ -827,18 +826,16 @@ export function CatalogMenus() {
       >
         <div class="flex flex-col gap-4">
           <TextField label={t("catalog.name")} value={draftMenuName()} onInput={setDraftMenuName} />
-          <FormField label={t("catalog.parent")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={draftMenuParent()}
-              onChange={(event) => setDraftMenuParent(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.noParent")}</option>
-              <For each={(menus() ?? []).filter((menu) => menu.menu_id !== editingMenu()?.menu_id)}>
-                {(menu) => <option value={menu.menu_id}>{menu.name}</option>}
-              </For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.parent")}
+            value={draftMenuParent()}
+            // A menu cannot be its own parent, so the one being edited is not on offer.
+            options={(menus() ?? [])
+              .filter((menu) => menu.menu_id !== editingMenu()?.menu_id)
+              .map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+            onChange={setDraftMenuParent}
+            placeholder={t("catalog.noParent")}
+          />
         </div>
       </Drawer>
 
@@ -918,40 +915,35 @@ export function CatalogMenus() {
         }
       >
         <div class="flex flex-col gap-4">
-          <FormField label={t("catalog.item")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
-              value={placementItem()}
-              disabled={placementEditing() !== null}
-              onChange={(event) => setPlacementItem(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.chooseItem")}</option>
-              <For each={activeItems()}>
-                {(item) => <option value={item.menu_item_id}>{item.name}</option>}
-              </For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.currency")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={placementCurrency()}
-              onChange={(event) => setPlacementCurrency(event.currentTarget.value)}
-            >
-              <For each={currencyOptions()}>{(code) => <option value={code}>{code}</option>}</For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.section")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={placementSection()}
-              onChange={(event) => setPlacementSection(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.sectionNone")}</option>
-              <For each={activeSections()}>
-                {(row) => <option value={row.menu_section_id}>{row.name}</option>}
-              </For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.item")}
+            value={placementItem()}
+            options={activeItems().map((item) => ({
+              value: item.menu_item_id,
+              label: item.name,
+            }))}
+            onChange={setPlacementItem}
+            placeholder={t("catalog.chooseItem")}
+            // Which item a placement is for is fixed once it exists: changing it would be a
+            // different placement, so an edit offers everything else and not this.
+            disabled={placementEditing() !== null}
+          />
+          <SelectField
+            label={t("catalog.currency")}
+            value={placementCurrency()}
+            options={currencyOptions().map((code) => ({ value: code, label: code }))}
+            onChange={setPlacementCurrency}
+          />
+          <SelectField
+            label={t("catalog.section")}
+            value={placementSection()}
+            options={activeSections().map((row) => ({
+              value: row.menu_section_id,
+              label: row.name,
+            }))}
+            onChange={setPlacementSection}
+            placeholder={t("catalog.sectionNone")}
+          />
           <div>
             <p class="mb-1 text-sm font-medium text-ink">{t("catalog.prices")}</p>
             <p class="mb-3 text-xs text-ink-muted">{t("catalog.pricesHint")}</p>
@@ -968,15 +960,11 @@ export function CatalogMenus() {
               </For>
             </div>
           </div>
-          <label class="flex items-center gap-2 text-sm text-ink">
-            <input
-              type="checkbox"
-              class="size-5"
-              checked={placementAvailable()}
-              onChange={(event) => setPlacementAvailable(event.currentTarget.checked)}
-            />
-            {t("catalog.availableLabel")}
-          </label>
+          <CheckboxField
+            label={t("catalog.availableLabel")}
+            checked={placementAvailable()}
+            onChange={setPlacementAvailable}
+          />
         </div>
       </Drawer>
 
@@ -999,38 +987,31 @@ export function CatalogMenus() {
       >
         <div class="flex flex-col gap-4">
           <p class="text-sm text-ink-muted">{t("catalog.bulkPriceHint")}</p>
-          <FormField label={t("catalog.section")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={bulkSection()}
-              onChange={(event) => setBulkSection(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.bulkAllSections")}</option>
-              <For each={activeSections()}>
-                {(row) => <option value={row.menu_section_id}>{row.name}</option>}
-              </For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.bulkChannel")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={bulkChannel()}
-              onChange={(event) => setBulkChannel(event.currentTarget.value as SalesChannel)}
-            >
-              <For each={SALES_CHANNELS}>
-                {(channel) => <option value={channel}>{t(CHANNEL_LABEL[channel])}</option>}
-              </For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.currency")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={bulkCurrency()}
-              onChange={(event) => setBulkCurrency(event.currentTarget.value)}
-            >
-              <For each={currencyOptions()}>{(code) => <option value={code}>{code}</option>}</For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.section")}
+            value={bulkSection()}
+            options={activeSections().map((row) => ({
+              value: row.menu_section_id,
+              label: row.name,
+            }))}
+            onChange={setBulkSection}
+            placeholder={t("catalog.bulkAllSections")}
+          />
+          <SelectField
+            label={t("catalog.bulkChannel")}
+            value={bulkChannel()}
+            options={SALES_CHANNELS.map((channel) => ({
+              value: channel,
+              label: t(CHANNEL_LABEL[channel]),
+            }))}
+            onChange={(value) => setBulkChannel(value as SalesChannel)}
+          />
+          <SelectField
+            label={t("catalog.currency")}
+            value={bulkCurrency()}
+            options={currencyOptions().map((code) => ({ value: code, label: code }))}
+            onChange={setBulkCurrency}
+          />
           <MoneyField
             label={t("catalog.amount")}
             currencyCode={bulkCurrency()}

@@ -5,15 +5,22 @@
 // untouched on those edits, exactly as the monolith's `setGroupFields` did. Rendered as a searchable
 // `DataTable` (rule and counts as columns) with create and rename in a `Drawer`.
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
 import type { CatalogItem, ModifierGroup } from "../../api/types";
 import { t } from "../../i18n";
 import { onScopedContext } from "../../lib/scoped";
 import { tenantId } from "../../state/session";
-import { Banner, Button, Card, TextField } from "../../components/ui";
-import { type Column, DataTable, Drawer, EmptyState, FormField } from "../../components/kit";
+import {
+  Banner,
+  Button,
+  Card,
+  MultiSelectField,
+  NumberField,
+  TextField,
+} from "../../components/ui";
+import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
 
@@ -26,17 +33,14 @@ export function CatalogModifiers() {
   // Create drawer — a group's full shape is authored here.
   const [creating, setCreating] = createSignal(false);
   const [newName, setNewName] = createSignal("");
-  const [newMin, setNewMin] = createSignal("0");
-  const [newMax, setNewMax] = createSignal("1");
+  const [newMin, setNewMin] = createSignal<number | null>(0);
+  const [newMax, setNewMax] = createSignal<number | null>(1);
   const [newMembers, setNewMembers] = createSignal<string[]>([]);
   const [newAttached, setNewAttached] = createSignal<string[]>([]);
 
   // Edit drawer — rename only; the rule, members and attachments re-ship unchanged (monolith parity).
   const [editing, setEditing] = createSignal<ModifierGroup | null>(null);
   const [draftName, setDraftName] = createSignal("");
-
-  const selectedValues = (select: HTMLSelectElement): string[] =>
-    Array.from(select.selectedOptions, (option) => option.value);
 
   const load = async () => {
     setError("");
@@ -60,8 +64,8 @@ export function CatalogModifiers() {
 
   const openCreate = () => {
     setNewName("");
-    setNewMin("0");
-    setNewMax("1");
+    setNewMin(0);
+    setNewMax(1);
     setNewMembers([]);
     setNewAttached([]);
     setCreating(true);
@@ -73,8 +77,8 @@ export function CatalogModifiers() {
       toast.error(t("catalog.nameRequired"));
       return;
     }
-    const min = Number(newMin().trim() || "0");
-    const max = Number(newMax().trim() || "0");
+    const min = newMin() ?? 0;
+    const max = newMax() ?? 0;
     if (!Number.isInteger(min) || min < 0 || !Number.isInteger(max) || max < min) {
       toast.error(t("catalog.groupRuleInvalid"));
       return;
@@ -261,60 +265,31 @@ export function CatalogModifiers() {
             placeholder={t("catalog.groupNamePlaceholder")}
           />
           <div class="grid grid-cols-2 gap-4">
-            <FormField label={t("catalog.groupMin")}>
-              <input
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                inputmode="numeric"
-                aria-label={t("catalog.groupMin")}
-                value={newMin()}
-                onInput={(event) => setNewMin(event.currentTarget.value)}
-              />
-            </FormField>
-            <FormField label={t("catalog.groupMax")}>
-              <input
-                class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-                inputmode="numeric"
-                aria-label={t("catalog.groupMax")}
-                value={newMax()}
-                onInput={(event) => setNewMax(event.currentTarget.value)}
-              />
-            </FormField>
+            <NumberField
+              label={t("catalog.groupMin")}
+              value={newMin()}
+              onChange={setNewMin}
+              min={0}
+            />
+            <NumberField
+              label={t("catalog.groupMax")}
+              value={newMax()}
+              onChange={setNewMax}
+              min={0}
+            />
           </div>
-          <FormField label={t("catalog.groupMembers")}>
-            <select
-              multiple
-              class="w-full rounded-token border border-line bg-surface-raised p-2 text-sm text-ink"
-              size="6"
-              onChange={(event) => setNewMembers(selectedValues(event.currentTarget))}
-            >
-              <For each={items()}>
-                {(item) => (
-                  <option value={item.menu_item_id} selected={newMembers().includes(item.menu_item_id)}>
-                    {item.name}
-                  </option>
-                )}
-              </For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.groupAttached")}>
-            <select
-              multiple
-              class="w-full rounded-token border border-line bg-surface-raised p-2 text-sm text-ink"
-              size="6"
-              onChange={(event) => setNewAttached(selectedValues(event.currentTarget))}
-            >
-              <For each={items()}>
-                {(item) => (
-                  <option
-                    value={item.menu_item_id}
-                    selected={newAttached().includes(item.menu_item_id)}
-                  >
-                    {item.name}
-                  </option>
-                )}
-              </For>
-            </select>
-          </FormField>
+          <MultiSelectField
+            label={t("catalog.groupMembers")}
+            values={newMembers()}
+            options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+            onChange={setNewMembers}
+          />
+          <MultiSelectField
+            label={t("catalog.groupAttached")}
+            values={newAttached()}
+            options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+            onChange={setNewAttached}
+          />
         </div>
       </Drawer>
 

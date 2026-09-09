@@ -19,8 +19,14 @@ import type {
 import { LOCALES, localeName, t } from "../../i18n";
 import { onScopedContext } from "../../lib/scoped";
 import { actingAdmin, tenantId } from "../../state/session";
-import { Banner, Button, Card, TextField } from "../../components/ui";
-import { type Column, DataTable, Drawer, EmptyState, FormField, TechnicalDetails } from "../../components/kit";
+import { Banner, Button, Card, SelectField, TextField } from "../../components/ui";
+import {
+  type Column,
+  DataTable,
+  Drawer,
+  EmptyState,
+  TechnicalDetails,
+} from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
 import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
@@ -417,49 +423,44 @@ export function CatalogItems() {
             onInput={setNewName}
             placeholder={t("catalog.namePlaceholder")}
           />
-          <FormField label={t("catalog.taxClass")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={newTaxClass()}
-              onChange={(event) => setNewTaxClass(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.chooseTaxClass")}</option>
-              <For each={activeTaxClasses()}>
-                {(row) => <option value={row.tax_class_id}>{row.name}</option>}
-              </For>
-            </select>
-            <Show when={activeTaxClasses().length === 0}>
-              <p class="mt-1 text-xs text-ink-muted">{t("catalog.taxClassEmpty")}</p>
-            </Show>
-          </FormField>
-          <FormField label={t("catalog.category")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={newCategory()}
-              onChange={(event) => {
-                setNewCategory(event.currentTarget.value);
-                setNewSubcategory("");
-              }}
-            >
-              <option value="">{t("catalog.noCategory")}</option>
-              <For each={activeCategories()}>
-                {(row) => <option value={row.item_category_id}>{row.name}</option>}
-              </For>
-            </select>
-          </FormField>
-          <FormField label={t("catalog.subcategory")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:opacity-50"
-              value={newSubcategory()}
-              disabled={!newCategory()}
-              onChange={(event) => setNewSubcategory(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.noSubcategory")}</option>
-              <For each={activeSubcategories()}>
-                {(row) => <option value={row.item_subcategory_id}>{row.name}</option>}
-              </For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.taxClass")}
+            value={newTaxClass()}
+            options={activeTaxClasses().map((row) => ({
+              value: row.tax_class_id,
+              label: row.name,
+            }))}
+            onChange={setNewTaxClass}
+            placeholder={t("catalog.chooseTaxClass")}
+            // The hint is only true when the list is empty, and it is the whole reason an operator
+            // would be stuck here: nothing to pick and nothing saying why.
+            hint={activeTaxClasses().length === 0 ? t("catalog.taxClassEmpty") : undefined}
+          />
+          <SelectField
+            label={t("catalog.category")}
+            value={newCategory()}
+            options={activeCategories().map((row) => ({
+              value: row.item_category_id,
+              label: row.name,
+            }))}
+            onChange={(value) => {
+              setNewCategory(value);
+              // A subcategory belongs to one category, so the old pick cannot survive the change.
+              setNewSubcategory("");
+            }}
+            placeholder={t("catalog.noCategory")}
+          />
+          <SelectField
+            label={t("catalog.subcategory")}
+            value={newSubcategory()}
+            options={activeSubcategories().map((row) => ({
+              value: row.item_subcategory_id,
+              label: row.name,
+            }))}
+            onChange={setNewSubcategory}
+            placeholder={t("catalog.noSubcategory")}
+            disabled={!newCategory()}
+          />
         </div>
       </Drawer>
 
@@ -487,20 +488,13 @@ export function CatalogItems() {
               <div class="flex flex-col gap-2">
                 <For each={LOCALES}>
                   {(code) => (
-                    <label class="flex items-center gap-2 text-sm">
-                      <span class="w-24 shrink-0 text-ink-muted">{localeName(code)}</span>
-                      <input
-                        class="min-h-touch flex-1 rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
-                        aria-label={localeName(code)}
-                        value={draftTranslations()[code] ?? ""}
-                        onInput={(event) =>
-                          setDraftTranslations({
-                            ...draftTranslations(),
-                            [code]: event.currentTarget.value,
-                          })
-                        }
-                      />
-                    </label>
+                    <TextField
+                      label={localeName(code)}
+                      value={draftTranslations()[code] ?? ""}
+                      onInput={(value) =>
+                        setDraftTranslations({ ...draftTranslations(), [code]: value })
+                      }
+                    />
                   )}
                 </For>
               </div>

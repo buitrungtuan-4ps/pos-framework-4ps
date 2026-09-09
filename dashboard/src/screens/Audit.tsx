@@ -4,7 +4,7 @@
 // opens in a detail drawer. Read-only, behind console.data.read; global by design, so no tenant is
 // required to open it.
 
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createSignal, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
@@ -15,6 +15,7 @@ import {
   Button,
   Card,
   PageHeader,
+  SelectField,
   Skeleton,
   StatusBadge,
   TextField,
@@ -212,26 +213,16 @@ export function Audit() {
             onInput={setAction}
             placeholder={t("audit.filter.actionHint")}
           />
-          <label class="block">
-            <span class="mb-1 block text-sm font-medium text-ink">
-              {t("audit.filter.actor")}
-            </span>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              aria-label={t("audit.filter.actor")}
-              value={actor()}
-              onChange={(event) => setActor(event.currentTarget.value)}
-            >
-              <option value="">{t("audit.filter.anyActor")}</option>
-              <For each={admins()}>
-                {(admin) => (
-                  <option value={admin.id}>
-                    {admin.name} ({admin.email})
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
+          <SelectField
+            label={t("audit.filter.actor")}
+            value={actor()}
+            options={admins().map((admin) => ({
+              value: admin.id,
+              label: `${admin.name} (${admin.email})`,
+            }))}
+            onChange={setActor}
+            placeholder={t("audit.filter.anyActor")}
+          />
         </div>
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={entries()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>

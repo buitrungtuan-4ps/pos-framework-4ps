@@ -5,15 +5,15 @@
 // and rename in a `Drawer` and status through the shared `StatusCell`. A sub-category's parent is
 // chosen at create and carried through on edit, exactly as the monolith did (rename does not move it).
 
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
 import type { ItemCategory, ItemSubcategory } from "../../api/types";
 import { t } from "../../i18n";
 import { onScopedContext } from "../../lib/scoped";
 import { tenantId } from "../../state/session";
-import { Banner, Button, Card, TextField } from "../../components/ui";
-import { type Column, DataTable, Drawer, EmptyState, FormField } from "../../components/kit";
+import { Banner, Button, Card, SelectField, TextField } from "../../components/ui";
+import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
 
@@ -414,18 +414,16 @@ export function CatalogTaxonomy() {
         }
       >
         <div class="flex flex-col gap-4">
-          <FormField label={t("catalog.parentCategory")}>
-            <select
-              class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-              value={newSubcategoryParent()}
-              onChange={(event) => setNewSubcategoryParent(event.currentTarget.value)}
-            >
-              <option value="">{t("catalog.chooseCategory")}</option>
-              <For each={activeCategories()}>
-                {(row) => <option value={row.item_category_id}>{row.name}</option>}
-              </For>
-            </select>
-          </FormField>
+          <SelectField
+            label={t("catalog.parentCategory")}
+            value={newSubcategoryParent()}
+            options={activeCategories().map((row) => ({
+              value: row.item_category_id,
+              label: row.name,
+            }))}
+            onChange={setNewSubcategoryParent}
+            placeholder={t("catalog.chooseCategory")}
+          />
           <TextField
             label={t("catalog.subcategoryName")}
             value={newSubcategoryName()}

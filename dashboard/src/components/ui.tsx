@@ -187,6 +187,64 @@ export function SelectField(props: {
 }
 
 /**
+ * A labelled multi-choice list — a `<select multiple>`, with the label association and the value
+ * plumbing done once ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Separate from {@link SelectField} rather than a flag on it, because the two have different value
+ * types and a caller must not be able to get that wrong: one choice is a `string`, several are a
+ * `readonly string[]`. A boolean `multiple` prop would make `value` mean two things.
+ *
+ * The plumbing this owns is the part every hand-rolled copy re-derived: a `<select multiple>` does
+ * not report its selection through `event.currentTarget.value`, so each caller wrote its own
+ * `Array.from(select.selectedOptions).map(o => o.value)`. There were four copies across the catalog
+ * screens, two of them in the same file.
+ *
+ * `rows` is how tall the list stands (the native `size`), defaulting to six — enough to see a
+ * handful without the box swallowing the form.
+ */
+export function MultiSelectField(props: {
+  label: string;
+  values: readonly string[];
+  options: readonly { readonly value: string; readonly label: string }[];
+  onChange: (values: string[]) => void;
+  hint?: string;
+  rows?: number;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <select
+        multiple
+        size={props.rows ?? 6}
+        class="w-full rounded-token border border-line bg-surface-raised p-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) =>
+          props.onChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))
+        }
+      >
+        <For each={props.options}>
+          {(option) => (
+            <option value={option.value} selected={props.values.includes(option.value)}>
+              {option.label}
+            </option>
+          )}
+        </For>
+      </select>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
  * A money input (ADR-0082) that edits an integer amount in a currency's smallest unit — the exact
  * `amount_minor` it stores — grouping the digits for the active locale as the operator types and
  * showing the (separately chosen) currency code as a static adornment. Only digits are accepted; an
@@ -234,6 +292,14 @@ export function MoneyField(props: {
  *
  * `hint` is standing guidance, as on `TextField`. The whole row is the label, so the caption is a
  * hit target too, which is what gets this to the touch minimum without a 48px box.
+ *
+ * `caption` is the escape hatch, and it earns its keep on exactly one screen: the Config capability
+ * editor captions each flag with its wire key in `<code>`, a "default on" badge, and a description —
+ * a caption a `label: string` cannot express. Without it that screen would keep its hand-rolled
+ * checkbox and the whole point of having one control would be lost for the sake of the rule. When
+ * `caption` is given, `label` is still required and becomes the input's `aria-label`, so a rich
+ * caption never costs the control its accessible name. `class` lets a caller that lays these out as
+ * cards (again, Config) put the border on the row rather than wrapping it in another element.
  */
 export function CheckboxField(props: {
   label: string;
@@ -241,19 +307,30 @@ export function CheckboxField(props: {
   onChange: (checked: boolean) => void;
   hint?: string;
   disabled?: boolean;
+  caption?: JSX.Element;
+  class?: string;
 }) {
   const hintId = createUniqueId();
   return (
-    <label class="flex min-h-touch cursor-pointer items-center gap-2 py-1">
+    <label
+      class={`flex min-h-touch cursor-pointer gap-2 py-1 ${
+        props.caption ? "items-start" : "items-center"
+      } ${props.class ?? ""}`}
+    >
       <input
         type="checkbox"
-        class="size-5 shrink-0 accent-accent disabled:cursor-not-allowed disabled:opacity-50"
+        class={`size-5 shrink-0 accent-accent disabled:cursor-not-allowed disabled:opacity-50 ${
+          props.caption ? "mt-1" : ""
+        }`}
         checked={props.checked}
         disabled={props.disabled}
+        aria-label={props.caption ? props.label : undefined}
         aria-describedby={props.hint ? hintId : undefined}
         onChange={(event) => props.onChange(event.currentTarget.checked)}
       />
-      <span class="text-sm text-ink">{props.label}</span>
+      <Show when={props.caption} fallback={<span class="text-sm text-ink">{props.label}</span>}>
+        {props.caption}
+      </Show>
       <Show when={props.hint}>
         {(hint) => (
           <span id={hintId} class="text-sm text-ink-muted">
