@@ -37,6 +37,7 @@ import {
 
 import { api } from "./api/client";
 import { Shell } from "./components/Shell";
+import { Skeleton } from "./components/ui";
 import { locale, t } from "./i18n";
 import {
   authed,
@@ -254,7 +255,7 @@ export function App() {
   return (
     <Show
       when={ready()}
-      fallback={<p class="p-6 text-sm text-ink-muted">{t("common.loading")}</p>}
+      fallback={<Skeleton label={t("common.loading")} rows={4} class="p-6" />}
     >
       <Router>
         <Route path="/login" component={Login} />

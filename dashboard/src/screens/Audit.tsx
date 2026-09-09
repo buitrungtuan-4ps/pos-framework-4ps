@@ -10,7 +10,7 @@ import { api, ApiError } from "../api/client";
 import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, TextField } from "../components/ui";
 import {
   type Column,
   DataTable,
@@ -232,7 +232,7 @@ export function Audit() {
           </label>
         </div>
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-        <Show when={entries()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
+        <Show when={entries()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
           {(loaded) => (
             // No `searchText`: a client-side box would filter this page rather than the log, which
             // is the lie the DataTable doc warns about. The three fields above already search the

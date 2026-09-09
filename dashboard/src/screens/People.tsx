@@ -18,6 +18,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -792,6 +793,7 @@ export function People() {
                     },
                   ]}
                   rows={assignments()}
+                  pageSize={CLIENT_PAGE_SIZE}
                   empty={<EmptyState title={t("people.assignmentsEmpty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (

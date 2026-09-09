@@ -130,6 +130,22 @@ export type Column<T> = {
  * Its own generic controls — the search box and pager — read their labels from `t()` (every caller
  * would pass the identical strings); the columns' headers and cells are still supplied by the caller.
  */
+/**
+ * The page size a client-side table takes when its row count has no other ceiling.
+ *
+ * Measured, not guessed (`bench/measure.mjs`, Chromium, this machine): an unpaged five-column table
+ * paints 1,000 rows in 161 ms, 2,000 in 322 ms, 5,000 in 1.6 s and 10,000 in 4.0 s — and 10,000
+ * rows behind a page size of 25 in 37 ms, the same as 100 rows unpaged. So a page size is a
+ * complete answer to volume here, and virtualising this component would be a large change to the
+ * one table every list screen renders in order to solve a problem this constant already solves at a
+ * hundred times the expected load.
+ *
+ * 25 matches the size the server-paged screens already ask for. It is invisible at the volumes these
+ * lists actually hold: the pager renders only when the set exceeds the page, so a table of three
+ * routing rules looks exactly as it did — this is a ceiling, not a redesign.
+ */
+export const CLIENT_PAGE_SIZE = 25;
+
 export function DataTable<T>(props: {
   columns: readonly Column<T>[];
   rows: readonly T[];

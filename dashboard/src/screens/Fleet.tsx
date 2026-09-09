@@ -17,7 +17,7 @@ import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -436,7 +436,7 @@ export function Fleet() {
           >
             <Show
               when={health()}
-              fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}
+              fallback={<Skeleton label={t("common.loading")} rows={4} />}
             >
               {(report) => (
                 <Show
@@ -478,7 +478,7 @@ export function Fleet() {
             <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
             <Show
               when={stores()}
-              fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}
+              fallback={<Skeleton label={t("common.loading")} rows={4} />}
             >
               {(loaded) => (
                 <DataTable
@@ -640,7 +640,7 @@ export function Fleet() {
                     when={admitted()}
                     fallback={
                       <Show when={!admittedError()}>
-                        <p class="text-sm text-ink-muted">{t("common.loading")}</p>
+                        <Skeleton label={t("common.loading")} rows={4} />
                       </Show>
                     }
                   >

@@ -12,7 +12,7 @@ import type { Alert, AlertSeverity } from "../api/types";
 import { locale, type MessageKey, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { actingAdmin } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
 import {
   type Column,
   DataTable,
@@ -266,7 +266,7 @@ export function Alerts() {
         }
       >
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-        <Show when={alerts()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
+        <Show when={alerts()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
           {(loaded) => (
             <DataTable
               columns={columns()}
