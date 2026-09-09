@@ -15,10 +15,17 @@ export default defineConfig({
     target: "es2022",
   },
   server: {
+    // Anchored regular expressions, not bare prefixes. Vite matches a plain key as a *prefix*, and
+    // the console has a screen at `/admins` — so `"/admin"` forwarded that SPA route to pos_cloud,
+    // which answered with the built `index.html` out of `dist/`, whose hashed asset paths do not
+    // exist on the dev server. The Admins screen was a white page with two 404s for everyone working
+    // in `pnpm dev` (Wave 3 · D4). Every real call is `/admin/<something>`, so requiring the slash
+    // costs nothing and stops the next screen path from colliding with the next proxy prefix;
+    // `tests/dev-proxy.test.ts` holds that line for all of them, not just this one.
     proxy: {
-      "/admin": "http://127.0.0.1:8080",
-      "/v1": "http://127.0.0.1:8080",
-      "/health": "http://127.0.0.1:8080",
+      "^/admin/": { target: "http://127.0.0.1:8080", changeOrigin: false },
+      "^/v1/": { target: "http://127.0.0.1:8080", changeOrigin: false },
+      "^/health$": { target: "http://127.0.0.1:8080", changeOrigin: false },
     },
   },
 });
