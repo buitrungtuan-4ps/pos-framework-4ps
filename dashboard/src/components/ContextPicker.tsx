@@ -4,13 +4,22 @@
 // is no longer reachable. The chosen ids are what every screen reads (state/session); the names are
 // shown, and the ULID sits underneath, muted, for reference only.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
 import { t } from "../i18n";
-import { selectStore, selectTenant, storeId, storeName, tenantId, tenantName } from "../state/session";
+import {
+  selectStore,
+  selectTenant,
+  setStoreName,
+  setTenantName,
+  storeId,
+  storeName,
+  tenantId,
+  tenantName,
+} from "../state/session";
 import {
   SCREENS,
   type ScreenId,
@@ -44,6 +53,40 @@ export function ContextPicker() {
       setBusy(false);
     }
   };
+
+  // Names for a context that arrived by URL rather than by click (Wave 3 · D2).
+  //
+  // `selectTenant`/`selectStore` are handed a name because the operator picked a row that had one.
+  // A shared link, a bookmark, or a second tab carries only ids, so `setTenantId`/`setStoreId` clear
+  // the remembered name — correct, but it leaves the top bar reading its placeholder over real data.
+  // This asks the registry for the missing name and fills it, so the header names the tenant and
+  // store the screens are actually reading.
+  //
+  // It runs on the registry the picker already fetches and caches, so an operator who opens the
+  // picker pays nothing extra; the untracked reads are the caches themselves, because this effect
+  // must re-run when the *context* changes, not when a fetch lands.
+  createEffect(() => {
+    const tenant = tenantId();
+    if (tenant && !tenantName()) {
+      const known = tenants();
+      const match = known?.find((candidate) => candidate.tenant_id === tenant);
+      if (match) {
+        setTenantName(match.name);
+      } else if (known === null && !busy()) {
+        void loadTenants();
+      }
+    }
+    const store = storeId();
+    if (tenant && store && !storeName()) {
+      const known = stores();
+      const match = known?.find((candidate) => candidate.store_id === store);
+      if (match) {
+        setStoreName(match.name);
+      } else if (known === null && !busy()) {
+        void loadStores(tenant);
+      }
+    }
+  });
 
   const loadStores = async (forTenant: string) => {
     setFailed(false);
@@ -121,6 +164,11 @@ export function ContextPicker() {
       setNewTenant("");
       await loadTenants();
       selectTenant(created.tenant_id, created.name);
+      // The same `goToContext` `chooseTenant` calls. Without it the very first action on a fresh
+      // install — creating the tenant — left the address bar on the pre-context landing while every
+      // screen behaved as though a tenant was chosen: a URL that cannot be copied, bookmarked or
+      // shared, which is the whole reason the tenant is a path segment (Wave 3 · D3).
+      goToContext(created.tenant_id, "");
       void loadStores(created.tenant_id);
     } catch (caught) {
       setFailed(caught instanceof ApiError || caught instanceof Error);

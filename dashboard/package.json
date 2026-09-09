@@ -6,14 +6,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && pnpm steps && vite build",
+    "build": "tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && pnpm steps && pnpm test && vite build",
     "typecheck": "tsc --noEmit",
     "i18n:lint": "node scripts/i18n-lint.mjs",
     "installers": "node scripts/installer-syntax.mjs",
     "contrast": "node scripts/wcag-contrast.mjs",
     "steps": "node scripts/step-budget.mjs",
     "preview": "vite preview",
-    "i18n:parity": "node scripts/i18n-parity.mjs"
+    "i18n:parity": "node scripts/i18n-parity.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
@@ -21,11 +23,14 @@
     "solid-js": "^1.9.5"
   },
   "devDependencies": {
+    "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.0.9",
+    "jsdom": "^30.0.1",
     "tailwindcss": "^4.0.9",
     "typescript": "^5.9.3",
     "vite": "^8.2.2",
-    "vite-plugin-solid": "^2.11.2"
+    "vite-plugin-solid": "^2.11.2",
+    "vitest": "^5.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

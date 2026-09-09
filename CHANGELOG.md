@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console has a test harness.** Vitest plus a Solid testing library, and fifteen behavioural
+  tests that render a piece of the console, do what an operator does, and assert what happens.
+  `pnpm test` runs in the `pnpm build` chain, so the `dashboard` CI job that already runs on every
+  pull request now runs them too — no new pipeline. Until this, the only thing checking the
+  dashboard before it shipped was `tsc --noEmit` and four lint scripts: they catch a misspelled name
+  or a missing translation key and cannot catch a button that stays enabled or a header that names
+  the wrong shop, because neither is a type error. Three of the four defects fixed below had passed
+  through seven completed tracks unnoticed for exactly that reason, and each now ships with the test
+  that would have caught it. Tests live in `dashboard/tests/`, deliberately outside `src/`, because
+  all four shipped front-end gates walk `src/` and a test file legitimately contains bare English
+  (#258).
+
 - **A manager can add a till without restarting the store.** `POST /api/pair/codes` mints the pairing
   code for the next device, and the **Devices** screen on any paired till shows it — six digits and
   the URL to open on the new tablet. Before this, a code was minted once per process start and
@@ -79,6 +91,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The top bar could name the wrong store.** Opening a console link for one shop while another was
+  remembered left the previous shop's name in the header over the new shop's data — and the store is
+  what scopes a configuration publish, a till retirement, tax authoring and every revenue read, so
+  an operator could act on one restaurant believing they were in another. There are two ways a
+  context enters the console and they were not symmetrical: the picker hands over an id *and* a
+  name, while a URL hands over an id alone, and that second path wrote the id and left the
+  remembered name untouched. It now clears a name that no longer belongs to the id, and the picker
+  fills the real one in from the registry it already reads, so a shared link names the shop its
+  screens are actually reading (#258).
+- **Creating the first tenant left the address bar behind.** On a fresh install the very first
+  action — naming the tenant — selected it everywhere except the URL, which stayed on the
+  pre-context landing: a link that could not be copied, bookmarked or shared, which is the whole
+  reason the tenant is a path segment. The create path now moves the URL the same way choosing an
+  existing tenant always has (#258).
+- **The Admins screen was a blank page under `pnpm dev`.** The dev server forwards the API surface
+  to a locally running `pos_cloud`, and Vite matches a proxy key as a *prefix* — so the key
+  `/admin` swallowed the console's own `/admins` route and answered it with the built `index.html`,
+  whose hashed asset paths do not exist on the dev server. Nobody working in `pnpm dev` could see
+  the screen they were editing. The keys are anchored now, and a test checks every route the router
+  serves against every key the proxy has, so the next such collision fails in CI rather than on
+  someone's afternoon. Production, where `pos_cloud` serves its own build, was never affected
+  (#258).
 - **A typed-name confirmation could be bypassed by cancelling and reopening the dialog.** Every
   destructive console action that asks you to type a name — retiring a till, bumping a store's lease,
   deleting a webhook or a reason code, erasing a subject's data — kept whatever you had typed after
