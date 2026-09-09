@@ -808,10 +808,26 @@ failure anywhere.
 checks the blocks against each other: the same token names in all three — the invariant the file
 states in prose and nothing enforced — and identical values in the two dark blocks, which is what
 makes duplicating them safe. The till's copy of the gate had the identical hole and got the identical
-fix; the two scripts remain byte-identical, which is how they are maintained.
+fix; the two scripts remain byte-identical.
 
-The till needed nothing else: it uses no shadows and no motion, so it has neither component-side
-defect. It was not given elevation tokens it has no use for.
+### And a rule that overruled a judgement call
+
+The two scripts are byte-identical because I kept them so by instinct. It turns out the tree requires
+it: `xtask mirrored-files` declares four pairs that must match byte for byte across the two front-end
+build roots — both `tokens.css`, both contrast gates, and the two i18n gates — because the packages
+have separate Vite builds and cannot share a module, so the substitute for a shared module is a gate
+that fails the moment a copy drifts.
+
+Which means the reasoning above, that the till "was not given elevation tokens it has no use for",
+was wrong, and CI said so: the token set is one file with two homes, not two files that happen to
+agree. So `ui/src/styles/tokens.css` carries the elevation and motion tokens too. The till draws no
+shadow and runs no transition today, so nothing about it changes except 1.1 kB of unused custom
+properties in its stylesheet — and when a kitchen screen does need to lift a panel off a near-black
+background, the token is already there and already correct for that palette.
+
+Worth recording as a lesson rather than a footnote: "the till doesn't need this" was a reasonable
+judgement about the till and the wrong judgement about the token set, and the thing that knew better
+was a gate written by whoever last got this wrong.
 
 ### Where the checks live, and why they are split
 
