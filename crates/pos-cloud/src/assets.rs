@@ -57,6 +57,23 @@ fn is_api_path(path: &str) -> bool {
     })
 }
 
+/// The axum fallback handler. Async because axum requires it of a handler; the work is not.
+///
+/// The decision lives in [`respond_to`], which is synchronous and is what the tests call. Splitting
+/// them is not ceremony: it keeps a runtime out of the tests for logic that never touches one, and
+/// it keeps `#[expect(clippy::unused_async)]` truthful — clippy stops emitting `unused_async` for a
+/// function some caller awaits, so a test awaiting `serve` made the expectation unfulfilled in the
+/// test target while it still held in the library. One or the other had to give, and the honest
+/// answer is that the async-ness is an interface obligation and the logic should not be behind it.
+#[expect(
+    clippy::unused_async,
+    reason = "an axum fallback handler must be async even when the body does no I/O; serving \
+              embedded bytes is synchronous"
+)]
+pub async fn serve(uri: Uri) -> Response {
+    respond_to(&uri)
+}
+
 /// Serves a dashboard asset, falling back to `index.html`.
 ///
 /// An unknown path is generally not a 404: it is a client-routed path the single-page app will
@@ -68,12 +85,7 @@ fn is_api_path(path: &str) -> bool {
 ///   cannot parse HTML;
 /// - a missing file under `assets/` — the browser would parse a page as JavaScript;
 /// - no dashboard embedded at all, which only happens if the build is misconfigured.
-#[expect(
-    clippy::unused_async,
-    reason = "an axum fallback handler must be async even when the body does no I/O; serving \
-              embedded bytes is synchronous"
-)]
-pub async fn serve(uri: Uri) -> Response {
+fn respond_to(uri: &Uri) -> Response {
     // An API path that reached the fallback matched no route: a typo, a stale client, a probe. It is
     // not a client route, so it gets the error envelope every other refusal on this surface uses
     // rather than `index.html` — which is what it received before, as a `200` with an HTML body that
@@ -182,7 +194,7 @@ fn mime_for(path: &str) -> &'static str {
 mod tests {
     use axum::http::{StatusCode, Uri, header};
 
-    use super::{API_PREFIXES, cache_control_for, is_api_path, mime_for, serve};
+    use super::{API_PREFIXES, cache_control_for, is_api_path, mime_for, respond_to};
 
     #[test]
     fn known_extensions_map_to_web_mime_types() {
@@ -251,12 +263,12 @@ mod tests {
         path.parse().expect("a literal path parses as a Uri")
     }
 
-    #[tokio::test]
-    async fn a_client_route_receives_the_spa_document() {
+    #[test]
+    fn a_client_route_receives_the_spa_document() {
         // What makes the SPA's own routing work: a path the server knows nothing about is the
         // client's to resolve, so it gets `index.html` and a `200`.
         for path in ["/", "/login", "/admins", "/t/01J9/stores"] {
-            let response = serve(get(path)).await;
+            let response = respond_to(&get(path));
             assert_eq!(
                 response.status(),
                 StatusCode::OK,
@@ -273,9 +285,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn an_unmatched_api_path_is_refused_rather_than_handed_the_spa() {
-        let response = serve(get("/admin/no-such-endpoint")).await;
+    #[test]
+    fn an_unmatched_api_path_is_refused_rather_than_handed_the_spa() {
+        let response = respond_to(&get("/admin/no-such-endpoint"));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             response
@@ -287,11 +299,11 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_missing_build_asset_is_refused_rather_than_handed_the_spa() {
+    #[test]
+    fn a_missing_build_asset_is_refused_rather_than_handed_the_spa() {
         // The stale-`index.html`-across-a-deploy case: answering `200 text/html` here makes the
         // browser parse a page as JavaScript and report a syntax error in a file that exists.
-        let response = serve(get("/assets/index-nosuchhash.js")).await;
+        let response = respond_to(&get("/assets/index-nosuchhash.js"));
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
