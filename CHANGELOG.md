@@ -18,6 +18,64 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Every nav entry and every nav group carries an icon**, and the command palette shows them too.
+  Thirty entries in six groups were text alone, so the two screens an operator opens every day were
+  found by reading rather than by shape. The glyphs are transcribed from Lucide's published SVGs and
+  checked in as source with the notice its ISC licence requires — no package, no lockfile entry,
+  nothing in `node_modules`, and only the thirty-six actually used ship. A hand-drawn set of thirty
+  would have been thirty stroke weights, which is noise that makes the recognisable ones harder to
+  find; that is why #261 collapsed the nav and left the icons for this stage (#264).
+
+- **The console can be set to light or dark, or told to follow the operating system.** The
+  stylesheet has honoured a theme choice since P6 and nothing in the console ever made one, so an
+  operator got whichever palette their machine was in — while the till, reading the same token file,
+  has had a toggle all along. Three states, not two: "system" is a real answer for anyone whose
+  laptop switches at sunset, and it is the default, because picking light or dark on a first run
+  would override a preference the viewer has already given their operating system. The choice is
+  remembered per browser and applied before the first paint, so a reload does not flash the other
+  palette (#264).
+
+- **The console says who is signed in.** It has fetched the admin's identity on every load since
+  Track G1 and used it for one thing: hiding the nav entries a role cannot reach. So on a console
+  where four roles see four different navs, an operator who could not find a screen had no way to
+  tell whether that was the role or the screen, and an operator with two accounts had nothing to say
+  which one a tab was. The header now carries an account menu with the name, the address the server
+  knows the session by, and the role — alongside the theme choice, the language switch and sign-out,
+  which were standing loose in a header that had grown to eight controls and wrapped to two rows on
+  a narrow screen. Folding them in is a net reduction of one control (#264).
+
+- **Escape closes the three dropdowns in the header.** The modal and the drawer have always closed
+  on Escape; the org switcher and the notification bell never did, because the helper was private to
+  the file the modals live in. So the only way to dismiss one was to tab back through whatever it
+  contained and press the trigger again (#264).
+
+### Fixed
+
+- **Every floating surface was invisibly flat in dark mode.** Both modal shapes, the command
+  palette, the org-switcher dropdown, the notification dropdown and the toast all used Tailwind's
+  default `shadow-lg` — a ten-percent black shadow. Over a white page that is a shadow; over the
+  dark palette's near-black canvas it is nothing, so in dark mode every overlay in the console lost
+  its depth and read as a flat patch of slightly different grey. Elevation is now a design token
+  with a value per theme, like every colour: two steps, `raised` for a surface sitting on the page
+  and `overlay` for one floating above it. Cards gained the first, which they never had — until now
+  a card was separated from the page by its border alone (#264).
+
+- **The console's motion token had no consumers.** `--ease-token` had been declared since P6 and was
+  used nowhere: the one button that animated wrote the token's exact value out longhand as an
+  arbitrary class, beside a hardcoded duration. Both now come from the tokens, which is what lets
+  the sixteen hover states that changed colour instantly — the nav, the tabs, the dropdown rows, the
+  dialog close buttons — transition without any of them naming a number (#264).
+
+- **The contrast gate audited a palette nobody sees and skipped the one most people do.** Both
+  front-ends check every text pair against WCAG AA on every build, but only in the light palette and
+  the *explicitly chosen* dark one. The palette a viewer whose system is dark and who has never
+  picked a theme actually gets — the `prefers-color-scheme` block — was never audited. It passed
+  only because it duplicates the chosen-dark block verbatim, and nothing checked that it still did.
+  All three are now audited, and the gate first checks that they declare the same tokens and that
+  the two dark blocks still agree, so the duplication cannot drift unnoticed (#264).
+
+### Added
+
 - **A loading screen shows the shape of what is coming.** Thirteen places answered a pending read
   with the word "Loading…", so a page jumped twice: once when the sentence appeared and again when
   the real table replaced it and pushed everything below it down. They now show a block the size of

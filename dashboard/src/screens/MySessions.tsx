@@ -9,14 +9,13 @@ import { createSignal, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { AdminSessionView } from "../api/types";
 import { locale, t } from "../i18n";
-import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import {
   type Column,
   CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   EmptyState,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

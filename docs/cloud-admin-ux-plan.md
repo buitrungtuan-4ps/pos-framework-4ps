@@ -726,3 +726,331 @@ was a count of `grep` hits, which included the two entries in `en.json` and `vi.
 fourteen, thirteen became skeletons and one stayed as words on purpose — the context picker's create
 button, whose own label reads "Loading…" while a request is in flight. A button is not a placeholder
 for content that is arriving, so a skeleton there would have been wrong rather than missing.
+
+## Stage 6 — the visual system, part one: what the tokens said and what the code did (2026-09-09)
+
+§3w.4 item 17 lists Stage 6 as "typography scale, spacing rhythm, elevation, iconography, motion,
+dark mode, and the header/identity/avatar work", and calls it optional, no operational risk, and
+cheapest to do last. That framing was right about the ordering and wrong about the risk: measuring
+the six subjects before restyling anything found that two of them were not missing polish but
+**broken**, and one of the two only in dark mode, which is why nobody had reported it.
+
+### What was measured, and what it found
+
+Six greps, before any change:
+
+| subject | state found |
+| --- | --- |
+| typography | **clean.** 502 size classes, every one on the six-step token scale, no arbitrary values |
+| colour | **clean.** No hex, `rgb()` or raw `oklch()` anywhere in `src/` — every colour goes through a token |
+| spacing | **clean.** No arbitrary spacing values |
+| elevation | **no token at all.** 6 sites on Tailwind's default `shadow-lg` |
+| motion | **1 site in the whole console**, and it bypassed the token it was built from |
+| iconography | absent from the nav (still Stage 6, still outstanding) |
+
+So four of the six subjects the plan lists as Stage 6 work were already done, which is the answer to
+whether a "token pass" was needed: the tokens were being honoured everywhere they existed. The two
+findings are the two places a token did *not* exist, and both had produced a real defect.
+
+### Elevation: the same class name was correct in one theme and inert in the other
+
+`shadow-lg` is `0 10px 15px -3px rgb(0 0 0 / 0.1)`. Over the light palette, that is a shadow. Over
+the dark palette — `--canvas` at `oklch(0.17 0.01 260)` — a ten-percent black shadow on a near-black
+ground is nothing at all. Every floating surface in the console (both modal shapes, the command
+palette, the org-switcher dropdown, the notification dropdown, the toast) therefore had depth in
+light mode and none in dark, reading as a flat patch of slightly different grey held apart from the
+page by its 1px border alone.
+
+This is precisely the failure the colour tokens exist to prevent, and elevation was the one visual
+property still outside them — because a drop shadow does not look like a colour. It is one:
+`--elevation-raised` and `--elevation-overlay` are now runtime variables with a value per theme,
+forwarded as the `shadow-raised` and `shadow-overlay` utilities. Dark does not merely deepen the
+alpha (though it does, from 10% to 50–60%, which is where a shadow starts to register on that
+ground); the overlay step also carries a hairline light ring, because on a dark background the eye
+reads the *lit top edge* of a floating surface as "above", and a shadow cannot draw an edge that
+faces the light.
+
+`Card` gained `shadow-raised`, which it never had. In the light palette `--surface` and `--canvas`
+differ by two percent of lightness, so until now every card in the console was separated from the
+page by its border and nothing else.
+
+### Motion: a token with zero consumers
+
+`--ease-token` had been declared in `@theme` since P6. Nothing used it. The one component in the
+console that animated anything — `Button` — wrote `ease-[cubic-bezier(0.2,0,0,1)]`, the token's
+exact value, longhand as an arbitrary Tailwind class, next to a bare `duration-150`. The token
+existed, its value was duplicated in a class string, and `tokens.css`'s own opening promise that "a
+utility resolves to a token, never a magic number" was not true of the only motion in the product.
+
+The fix is not to write `ease-token` at that one site. It is to set Tailwind's two
+`--default-transition-*` variables from the tokens, so that a **bare** `transition-colors` picks up
+the house easing and duration and a site that wants the house motion writes no number at all. That
+is the only version of a motion token a screen cannot drift away from. Sixteen hover states that
+changed colour instantly — the nav entries, the group headings, the catalog tabs, the dropdown rows,
+the dialog close buttons, the pager arrows — now transition, and not one of them names a duration.
+
+One hover was deliberately left alone: `Layout.tsx` hovers to an underline, and a text-decoration
+appearing has nothing to interpolate, so a transition class there would read as motion and produce
+none.
+
+### A third finding, in the gate rather than the product
+
+`tokens.css` holds three blocks that carry runtime values: light, system-dark
+(`@media (prefers-color-scheme: dark)`) and chosen-dark (`:root[data-theme="dark"]`). The WCAG-AA
+contrast gate — which runs on every build in both front-ends — read **two** of them: light and
+chosen-dark. The one it skipped is the palette a viewer whose system is dark and who has never
+picked a theme actually gets, which is to say the default dark experience was the only palette never
+audited. It passed only because it duplicates the chosen-dark block verbatim, and nothing checked
+that it still did; editing one and not the other would have shipped an unaudited palette with no
+failure anywhere.
+
+`scripts/wcag-contrast.mjs` now audits all three (36 gated pairs, up from 24) and, before that,
+checks the blocks against each other: the same token names in all three — the invariant the file
+states in prose and nothing enforced — and identical values in the two dark blocks, which is what
+makes duplicating them safe. The till's copy of the gate had the identical hole and got the identical
+fix; the two scripts remain byte-identical.
+
+### And a rule that overruled a judgement call
+
+The two scripts are byte-identical because I kept them so by instinct. It turns out the tree requires
+it: `xtask mirrored-files` declares four pairs that must match byte for byte across the two front-end
+build roots — both `tokens.css`, both contrast gates, and the two i18n gates — because the packages
+have separate Vite builds and cannot share a module, so the substitute for a shared module is a gate
+that fails the moment a copy drifts.
+
+Which means the reasoning above, that the till "was not given elevation tokens it has no use for",
+was wrong, and CI said so: the token set is one file with two homes, not two files that happen to
+agree. So `ui/src/styles/tokens.css` carries the elevation and motion tokens too. The till draws no
+shadow and runs no transition today, so nothing about it changes except 1.1 kB of unused custom
+properties in its stylesheet — and when a kitchen screen does need to lift a panel off a near-black
+background, the token is already there and already correct for that palette.
+
+Worth recording as a lesson rather than a footnote: "the till doesn't need this" was a reasonable
+judgement about the till and the wrong judgement about the token set, and the thing that knew better
+was a gate written by whoever last got this wrong.
+
+### Where the checks live, and why they are split
+
+`dashboard/tests/visual-tokens.test.ts` owns the component half — no `.tsx` reaches past the tokens
+to Tailwind's default shadow scale, none writes its own easing or duration, every colour hover
+transitions (checked per class value, not per file: a file-level check passes a file whose *second*
+hover site was missed, which is the shape this defect actually had), and both elevation steps have
+consumers, so the suite cannot pass by there being no shadows left to draw.
+
+The CSS half is in the contrast gate rather than beside it, and not by preference. Vitest stubs CSS
+imports (`css: false`), so a `?raw` import of a stylesheet resolves to an **empty string** under the
+test runner and every assertion about its contents passes vacuously — which the first version of
+this suite did, silently, until the probe that caught it. A check that cannot see its subject is
+worse than no check. The gate already parses `tokens.css` and already exits non-zero, so the
+invariant went where the file can actually be read.
+
+Each of the five component checks and both new gate checks was verified by breaking it and watching
+it fail while naming the offending file, then restoring the file byte-identically.
+
+### Still outstanding in Stage 6
+
+Iconography (the nav icons deferred from #261), the theme choice the console cannot offer — the
+`data-theme` attribute is honoured by the CSS and nothing in the console ever sets it, while the
+till has a toggle for it — and the header identity block, which is the "header/identity/avatar" half
+of item 17. All three are additive.
+
+## Stage 6, part two: two things the console knew and never said (2026-09-09)
+
+Item 17 lists "dark mode" and "the header/identity/avatar work" among Stage 6's subjects. Both turned
+out to be the same shape of gap as the motion token: the capability was already there and nothing
+reached it.
+
+### The theme the stylesheet supported and the console never chose
+
+`tokens.css` has matched `[data-theme="dark"]` and `:not([data-theme="light"])` since P6. Nothing in
+the console ever set the attribute. The till (`ui/`), reading the byte-identical copy of that same
+file, has had a toggle in its status bar all along. So the operator watching a kitchen screen could
+pick a palette and the operator running the business could not.
+
+Three states rather than a toggle, and this is the part with a test. "System" is a real answer — an
+operator whose laptop switches at sunset wants the console to switch with it — and it is the only
+correct default, because choosing light or dark on a first run overrides a preference the viewer has
+already expressed to their operating system. That makes "system" the state that *removes* the
+attribute rather than setting a third value: the stylesheet's dark rule is
+`:root:not([data-theme="light"])`, so `data-theme="system"` would still match it and an operator on a
+light machine asking to follow their system would be handed dark. The till's toggle has the mirror of
+this gap — it flips between dark and light and can never get back to following the system.
+
+Applied from `main.tsx` before `render`, not in a `createEffect`. `App` sets `<html lang>` in an
+effect and that is fine, because a late `lang` is invisible; a late `data-theme` is a flash of the
+palette the operator did not choose, on every single load.
+
+### The identity it fetched on every load and used for one thing
+
+`GET /admin/whoami` has been called on mount since Track G1. Its answer fed exactly one decision:
+which nav entries to hide. So the console knew who you were and never told you — on a product where
+four roles see four different navs, an operator who could not find a screen had no way to tell
+whether that was the role or the screen, and an operator with two accounts had nothing at all to say
+which one a tab was signed in as.
+
+### Why one menu instead of two more buttons
+
+The header had eight controls and wrapped to a second row under `md`. Identity, appearance, language
+and sign-out are one subject — "this is me, and this is how I want the console" — and the convention
+everywhere is to put them behind the avatar. Folding in the locale switch and the sign-out button
+makes this a net *reduction* of one header control while adding two capabilities. Both folded
+controls are set-once preferences that persist per browser, which is what makes a click acceptable;
+a control used during a task would not belong there.
+
+The identity block is absent rather than skeletal when `whoami` has not answered or has failed. The
+signal cannot tell those apart, and widening it to a three-state panel would be modelling with no
+consequence, because both render the same thing. What matters is that everything else in the menu
+works without an identity: the theme, the language and the way out do not depend on knowing who you
+are, and the moment an operator most needs to sign out is the moment something has gone wrong.
+
+### Escape, and a helper that was private for no reason
+
+`useEscape` lived inside `kit.tsx`, where the modal and the drawer could see it and nothing else
+could — so the three dropdowns in the header had no way out but tabbing back to the trigger. Same
+shape as `lib/errors.ts` in Stage 5: a helper visible to a few files, so everyone else went without.
+It moved to `lib/escape.ts` and all three dropdowns have it.
+
+It went to `lib/` rather than being exported from `kit.tsx` for a mundane reason with a measured
+cost, which is the next section.
+
+### The 14 kB regression, and the guard that now catches it
+
+The account menu wanted one status pill and imported `StatusBadge` from `components/kit.tsx`. That
+is a correct import; it typechecks; every test passed; every screen worked. It also moved the entire
+CRUD kit — every table, modal, drawer, pager and confirm dialog — out of its lazy chunk and into the
+bundle every first visit downloads.
+
+| | before | after the import | after the fix |
+| --- | --- | --- | --- |
+| shell chunk | 50.6 kB (16.0 gzip) | **64.9 kB (19.6 gzip)** | 55.0 kB (17.1 gzip) |
+| `kit` chunk | 10.2 kB, lazy | **gone — merged in** | 9.7 kB, lazy |
+
+The only evidence was a chunk name disappearing from a build log nobody diffs. `StatusBadge` moved
+to `components/ui.tsx`, where a dependency-free pill belongs, and its twenty-one importers were
+repointed.
+
+The fix is not the interesting part, because the next component to want one thing from the kit will
+do this again. `dashboard/tests/shell-bundle.test.ts` walks the module graph from `main.tsx` through
+static imports only — the set that lands in the first paint — and fails if anything in it imports a
+module meant to load lazily. It is derived rather than listed, because a hand-maintained list of
+"the shell's modules" goes stale on the first new component and then passes forever. It also pins
+that the eager graph reaches exactly three screens: `Login`, `Setup` and `AcceptInvite`, the ones an
+unauthenticated visitor can reach, which `App.tsx` imports eagerly on purpose so that signing in
+does not wait for a round trip.
+
+Verified by reinstating the bad import and watching it fail with
+`components/AccountMenu imports components/kit`.
+
+### What Stage 6 has left
+
+Iconography — the nav icons deferred from #261 — and nothing else. Typography, colour, spacing,
+elevation, motion, dark mode and the header work are done.
+
+## Stage 6, part three: the icons, and how they got here (2026-09-09)
+
+The last item. #261 collapsed the nav and deliberately left the icons out, with the reason recorded
+at the time: "thirty emoji chosen by me would be decoration the visual system pass would redo".
+That still holds, and it is worth spelling out why, because the tempting shortcut is the bad one.
+
+### Why not simply draw them
+
+An icon earns its place by letting an operator stop reading the word — they learn the shape and go
+straight to it. That only works if the set is *consistent*. Thirty glyphs at thirty different stroke
+weights and optical sizes are visual noise, and noise does not merely fail to help: it makes the two
+or three genuinely recognisable icons harder to pick out, because the eye has more shapes to reject.
+Hand-drawing a coherent set of thirty is a designer's job. Hand-drawing an incoherent one would have
+been worse than the plain text it replaced.
+
+### Why not import an icon package
+
+That is the ordinary answer, and `AGENTS.md` §2 forbids it without an ADR merged first — correctly,
+because a runtime dependency is a supply chain, and this one would have been added for decoration.
+
+### What was done instead
+
+The geometry is **transcribed** from Lucide's published SVGs (ISC, 2077 icons) by a generator, and
+the thirty-six glyphs the console uses are checked in as source in
+`dashboard/src/components/icons.tsx` with the licence notice retained. No entry in `package.json`,
+nothing in the lockfile, nothing in `node_modules`, nothing for Dependabot or `deny.toml` to
+consider — and only what is drawn ships. The one thing not to do is hand-edit a `d` attribute: the
+value is a transcription, and a transcription that has been touched is a drawing with a false
+provenance.
+
+The generator is a fifty-line Python script; the reproducible part is the two commands and the
+mapping. To regenerate against a newer Lucide, outside the repository:
+
+```
+npm pack lucide-static@<version>
+tar xzf lucide-static-<version>.tgz
+```
+
+then, for each name in `ICON_NAMES`, take the child elements of `package/icons/<name>.svg` verbatim
+— every `<path>`, `<line>`, `<circle>`, `<rect>` — and emit them as the JSX body of that glyph. The
+wrapper `<svg>` in `Icon` carries every shared attribute (the viewBox, `fill: none`,
+`stroke: currentColor`, the 2px weight, the round joins), so a glyph in the file is only geometry.
+Every one of the thirty-six was checked back against its source element-by-element and
+attribute-by-attribute before the tarball was deleted; that check is what makes "transcribed" a
+claim rather than a hope.
+
+Real elements rather than `innerHTML`: the generated JSX typechecks, renders through Solid's
+compiler like any other markup, and is reviewable in a diff.
+
+### Where the icon lives in the model
+
+On the screen, in `state/screens.ts` — the table the router, the nav, the breadcrumb and the palette
+all read. `Screen.icon` is a required `IconName`, so a screen added without one is a compile error
+rather than the single gap in a column of thirty. `IconName` reaches `screens.ts` as an
+`import type`, so the union is checked without the state layer taking a runtime dependency on a
+component.
+
+`NAV_GROUPS` entries carry one too. `webhook` appears twice on purpose: the Integrations group holds
+exactly one entry, so the group and the entry are the same thing, and giving them different glyphs
+would imply a distinction that is not there.
+
+### The cost, measured
+
+| | shell chunk |
+| --- | --- |
+| before the icons | 55.0 kB (17.1 gzip) |
+| after 36 glyphs | 67.5 kB (20.9 gzip) |
+
+3.8 kB gzipped on a first visit, and it belongs in the shell rather than a lazy chunk because the nav
+renders on every authenticated screen — deferring it would mean the nav paints without icons and
+then reflows. The CSS did not change at all: the icons use `h-4 w-4 shrink-0`, utilities the tree
+already had.
+
+### What is tested, and what is not
+
+Not tested: that every screen and group has an icon, and that the name resolves to a glyph. Both are
+compile-time facts (`Screen.icon` is a required `IconName`; `GLYPHS` is a `Record<IconName, …>`), and
+a runtime assertion of either could only ever pass.
+
+Tested, because each has a failure nothing else would catch:
+
+- **The icons stay silent.** Every glyph rides beside a visible label, so the label is the accessible
+  name and `aria-hidden` is on the wrapper. Add a `<title>` to a glyph — the obvious "helpful"
+  change — and every nav entry announces its name twice, which a sighted reviewer cannot see.
+- **No glyph is orphaned**, in either direction. A vendored glyph nobody draws is bundle cost with no
+  benefit, and deleting a screen would leave one behind silently.
+- **No two glyphs share geometry**, which would mean a transcription took the wrong source — an icon
+  that looks plausible in the wrong place rather than one that looks broken.
+
+One imprecision found while writing this: `shell-bundle.test.ts` counted `import type` as a runtime
+edge, and `state/screens.ts` type-imports `IconName` from a component. `verbatimModuleSyntax` erases
+those entirely, so the guard would have reported a bundle cost that does not exist — and worse, would
+have fired on a future type-only import from `kit.tsx`. It now excludes them, verified both ways: a
+type-only import of `kit` passes, a value import of it fails.
+
+## Stage 6 is done
+
+All seven subjects of item 17: typography (already clean), spacing (already clean), colour (already
+clean), elevation, motion, dark mode, iconography, and the header/identity work. Two were broken
+rather than missing, one gate was auditing the wrong palette, one repo rule overruled a judgement
+call of mine, and one 14 kB regression was caused and caught inside the stage.
+
+That closes the plan's six stages. What remains outside them is recorded in the roadmap rather than
+here: Stage 1c (D1 per-admin login, which changes an authentication boundary and needs an ADR first),
+the twenty-seven remaining copies of the `ApiError` ternary (mechanical, not a defect), and bulk
+actions — which are on the owner's checklist but which no screen has row selection for today, so
+they are new capability rather than cleanup, and they are where an admin console does damage at
+scale. That one is a question for the owner, not a default to pick.

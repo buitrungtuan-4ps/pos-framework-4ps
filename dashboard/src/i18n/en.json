@@ -1,4 +1,11 @@
 {
+  "account.appearance": "Appearance",
+  "account.open": "Your account",
+  "account.signedInAs": "Signed in as",
+  "account.theme.dark": "Dark",
+  "account.theme.light": "Light",
+  "account.theme.system": "System",
+  "account.themeLabel": "Theme",
   "action.add": "Add",
   "action.approve": "Approve",
   "action.cancel": "Cancel",

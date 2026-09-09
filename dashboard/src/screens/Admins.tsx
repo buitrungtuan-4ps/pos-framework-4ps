@@ -11,14 +11,21 @@ import type { AdminIdentity, AdminInvite, AdminRole } from "../api/types";
 import { ADMIN_ROLES } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { actingAdmin } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
   FormField,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

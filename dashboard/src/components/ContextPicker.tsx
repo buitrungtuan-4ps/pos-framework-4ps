@@ -10,6 +10,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 import {
   selectStore,
   selectTenant,
@@ -34,6 +35,7 @@ export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
+  useEscape(open, () => setOpen(false));
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -202,7 +204,7 @@ export function ContextPicker() {
       </button>
 
       <Show when={open()}>
-        <div class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-lg">
+        <div class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay">
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("context.workingIn")}</span>
             <Button variant="secondary" onClick={() => setOpen(false)}>
@@ -246,7 +248,7 @@ export function ContextPicker() {
                           <button
                             type="button"
                             onClick={() => chooseTenant(tenant)}
-                            class={`flex w-full flex-col rounded-token px-2 py-1 text-left hover:bg-surface-raised ${
+                            class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised ${
                               tenant.tenant_id === tenantId() ? "bg-surface-raised" : ""
                             }`}
                           >
@@ -321,7 +323,7 @@ export function ContextPicker() {
                             <button
                               type="button"
                               onClick={() => chooseStore(store)}
-                              class={`flex w-full flex-col rounded-token px-2 py-1 text-left hover:bg-surface-raised ${
+                              class={`flex w-full flex-col rounded-token px-2 py-1 text-left transition-colors hover:bg-surface-raised ${
                                 store.store_id === storeId() ? "bg-surface-raised" : ""
                               }`}
                             >

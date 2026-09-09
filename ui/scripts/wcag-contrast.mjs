@@ -1,12 +1,26 @@
 // The WCAG-AA contrast gate for the design tokens (P6 exit criterion, docs/wcag-contrast-audit.md).
 //
-// Parses `src/styles/tokens.css` for the oklch colour tokens in the light (`:root`) and explicit-dark
-// (`:root[data-theme="dark"]`) palettes, converts each to sRGB (the standard Oklab matrix), and
+// Parses `src/styles/tokens.css` for the oklch colour tokens in all three palettes — light
+// (`:root`), system-dark (the `prefers-color-scheme` block) and explicit-dark
+// (`:root[data-theme="dark"]`) — converts each to sRGB (the standard Oklab matrix), and
 // computes the WCAG 2.1 contrast ratio for every meaningful foreground/background pair. Text pairs
 // must clear AA 4.5:1; a failure exits non-zero so the build fails. Non-text pairs (a 1px separator,
 // the redundant aria-hidden state dots that always ride with a text label) are reported but never
 // gate — they are exempt under WCAG 1.4.11, as the audit doc records. Run by `pnpm contrast`, which
 // the `build` script and the `ui` CI job invoke.
+//
+// # Why all three blocks, and why they are checked against each other
+//
+// This gate used to read two of the three. The one it skipped is the `prefers-color-scheme: dark`
+// block — which is the palette a viewer who has *not* chosen a theme actually gets, so the default
+// dark experience was the one palette never audited. It passed only because it duplicates the
+// explicit-dark block verbatim, and nothing checked that it still did. Editing one of the two and
+// not the other would have shipped an unaudited palette with no failure anywhere.
+//
+// So: every block is audited, and before that the three are checked against each other. The names
+// must match in all three — `tokens.css` states that invariant in prose ("Every colour token is
+// defined here so none has its only value in a media query") and nothing enforced it — and the two
+// dark blocks must agree on values, which is what makes duplicating them safe.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -60,6 +74,19 @@ function ruleBody(css, selector) {
   return css.slice(open + 1, close);
 }
 
+// Every custom property a rule body declares, in name order. Unlike `palette` below this does not
+// care what the value is, so it sees any non-colour runtime token too — a shadow, say, which is
+// re-pointed per theme for exactly the same reason a colour is.
+function declaredNames(body) {
+  return [...body.matchAll(/(--[\w-]+)\s*:/g)].map((match) => match[1]).sort();
+}
+
+// A rule body with its comments stripped and its whitespace flattened — the form in which two blocks
+// that say the same thing compare equal regardless of indentation or the prose around them.
+function normalised(body) {
+  return body.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/\s+/g, " ").trim();
+}
+
 // Extracts `--name: oklch(L C H)` (and `oklch(1 0 0)` shorthands) from a rule body.
 function palette(body) {
   const tokens = {};
@@ -72,10 +99,52 @@ function palette(body) {
 }
 
 const css = readFileSync(TOKENS, "utf8");
-const themes = {
-  Light: palette(ruleBody(css, ":root {")),
-  Dark: palette(ruleBody(css, ':root[data-theme="dark"] {')),
+
+// Named rather than discovered, so deleting or renaming a block fails here instead of quietly
+// shrinking what this gate audits.
+const BLOCKS = {
+  Light: ":root {",
+  "Dark (system)": ':root:not([data-theme="light"]) {',
+  "Dark (chosen)": ':root[data-theme="dark"] {',
 };
+const bodies = Object.fromEntries(
+  Object.entries(BLOCKS).map(([name, selector]) => [name, ruleBody(css, selector)]),
+);
+
+// --- the three blocks agree with each other ------------------------------------------------------
+
+const [reference, ...others] = Object.keys(bodies);
+for (const name of others) {
+  const expected = declaredNames(bodies[reference]);
+  const found = declaredNames(bodies[name]);
+  const missing = expected.filter((token) => !found.includes(token));
+  const extra = found.filter((token) => !expected.includes(token));
+  if (missing.length > 0 || extra.length > 0) {
+    console.error(`\nwcag-contrast: \`${name}\` does not declare the same tokens as \`${reference}\``);
+    if (missing.length > 0) {
+      console.error(`  missing: ${missing.join(", ")}`);
+    }
+    if (extra.length > 0) {
+      console.error(`  only here: ${extra.join(", ")}`);
+    }
+    process.exit(1);
+  }
+}
+
+// The two dark blocks are a deliberate duplication — CSS gives no way to point one at the other
+// without a third indirection per token — so what keeps it honest is checking it.
+if (normalised(bodies["Dark (system)"]) !== normalised(bodies["Dark (chosen)"])) {
+  console.error(
+    "\nwcag-contrast: the system-dark and chosen-dark blocks have drifted apart.\n" +
+      "  They must hold identical values: a viewer who has chosen dark and one whose system is dark\n" +
+      "  see the same product, and this gate audits the pair as one palette.",
+  );
+  process.exit(1);
+}
+
+const themes = Object.fromEntries(
+  Object.entries(bodies).map(([name, body]) => [name, palette(body)]),
+);
 
 // --- the pairs the interface actually renders ----------------------------------------------------
 // kind "text": normal-size text, AA 4.5:1 (gates). "ui": non-text, exempt here (reported only).
@@ -125,4 +194,4 @@ if (failures > 0) {
   console.error(`\nwcag-contrast: ${failures} text pair(s) below AA 4.5:1`);
   process.exit(1);
 }
-console.log("\nwcag-contrast: ok — every text pair clears AA 4.5:1 in both themes.");
+console.log("\nwcag-contrast: ok — every text pair clears AA 4.5:1 in all three palettes.");

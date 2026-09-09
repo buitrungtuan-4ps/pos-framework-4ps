@@ -206,7 +206,7 @@ export function Translations() {
               <Button variant="secondary" disabled={busy()} onClick={() => void exportGrid()}>
                 {t("translations.exportCsv")}
               </Button>
-              <label class="inline-flex min-h-touch cursor-pointer items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink hover:brightness-95">
+              <label class="inline-flex min-h-touch cursor-pointer items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink transition-[filter] hover:brightness-95">
                 {t("translations.importCsv")}
                 <input
                   type="file"

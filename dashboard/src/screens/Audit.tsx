@@ -10,15 +10,16 @@ import { api, ApiError } from "../api/client";
 import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
-import { Banner, Button, Card, PageHeader, Skeleton, TextField } from "../components/ui";
 import {
-  type Column,
-  DataTable,
-  Drawer,
-  EmptyState,
+  Banner,
+  Button,
+  Card,
+  PageHeader,
+  Skeleton,
   StatusBadge,
-  TechnicalDetails,
-} from "../components/kit";
+  TextField,
+} from "../components/ui";
+import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
 
 /**

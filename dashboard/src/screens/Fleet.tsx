@@ -17,14 +17,13 @@ import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   Drawer,
   EmptyState,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

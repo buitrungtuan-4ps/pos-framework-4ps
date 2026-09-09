@@ -11,13 +11,12 @@ import {
   createSignal,
   For,
   type JSX,
-  onCleanup,
-  onMount,
   type ParentProps,
   Show,
 } from "solid-js";
 
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 import { Button, TextField } from "./ui";
 
 // --- Pager --------------------------------------------------------------------------------------
@@ -338,7 +337,7 @@ export function DataTable<T>(props: {
                         <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                           <button
                             type="button"
-                            class="inline-flex items-center gap-1 font-medium hover:text-ink"
+                            class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
                             onClick={() => toggleSort(column)}
                           >
                             <span>{column.header}</span>
@@ -388,16 +387,6 @@ export function DataTable<T>(props: {
 
 // --- Overlays: Modal, Drawer --------------------------------------------------------------------
 
-function useEscape(isOpen: () => boolean, close: () => void): void {
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key === "Escape" && isOpen()) {
-      close();
-    }
-  };
-  onMount(() => window.addEventListener("keydown", onKey));
-  onCleanup(() => window.removeEventListener("keydown", onKey));
-}
-
 /** A centred modal dialog. Backdrop click and Escape both close it. */
 export function Modal(
   props: ParentProps<{
@@ -421,7 +410,7 @@ export function Modal(
         <div
           role="dialog"
           aria-modal="true"
-          class="w-full max-w-lg rounded-token border border-line bg-surface shadow-lg"
+          class="w-full max-w-lg rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
@@ -429,7 +418,7 @@ export function Modal(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted hover:text-ink"
+              class="text-ink-muted transition-colors hover:text-ink"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
@@ -467,7 +456,7 @@ export function Drawer(
         <div
           role="dialog"
           aria-modal="true"
-          class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-lg"
+          class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
@@ -475,7 +464,7 @@ export function Drawer(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted hover:text-ink"
+              class="text-ink-muted transition-colors hover:text-ink"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
@@ -564,35 +553,6 @@ export function ConfirmDialog(props: {
 }
 
 // --- Small display primitives ---------------------------------------------------------------------
-
-/** A coloured status pill. `label` is already-translated text. `danger` is for an active fault
- *  (a firing alert, a critical severity): `text-danger` clears AA on the card surface, and the label
- *  always rides with the hue, so meaning is never carried by colour alone. */
-export function StatusBadge(props: {
-  label: string;
-  tone: "active" | "archived" | "disabled" | "neutral" | "danger";
-}) {
-  const palette = () => {
-    switch (props.tone) {
-      case "active":
-        return "border-ok text-ok";
-      case "danger":
-        return "border-danger text-danger";
-      case "archived":
-      case "disabled":
-        return "border-ink-muted text-ink-muted";
-      default:
-        return "border-line text-ink-muted";
-    }
-  };
-  return (
-    <span
-      class={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${palette()}`}
-    >
-      {props.label}
-    </span>
-  );
-}
 
 /** The friendly empty-list panel: a headline, an optional line of guidance, and an optional action. */
 export function EmptyState(props: { title: string; description?: string; action?: JSX.Element }) {
@@ -694,7 +654,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.upLabel}
                 disabled={index() === 0}
-                class="text-ink-muted hover:text-ink disabled:opacity-30"
+                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() - 1)}
               >
                 <span aria-hidden="true">▲</span>
@@ -703,7 +663,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.downLabel}
                 disabled={index() === props.items.length - 1}
-                class="text-ink-muted hover:text-ink disabled:opacity-30"
+                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() + 1)}
               >
                 <span aria-hidden="true">▼</span>

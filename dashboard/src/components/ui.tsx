@@ -11,13 +11,47 @@ import { locale } from "../i18n";
 /** A titled panel. `title` is already-translated text; `actions` sits on the header's right. */
 export function Card(props: ParentProps<{ title: string; actions?: JSX.Element }>) {
   return (
-    <section class="rounded-token border border-line bg-surface">
+    <section class="rounded-token border border-line bg-surface shadow-raised">
       <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
         <h2 class="text-lg font-semibold text-ink">{props.title}</h2>
         <Show when={props.actions}>{props.actions}</Show>
       </header>
       <div class="p-4">{props.children}</div>
     </section>
+  );
+}
+
+/** A coloured status pill. `label` is already-translated text. `danger` is for an active fault
+ *  (a firing alert, a critical severity): `text-danger` clears AA on the card surface, and the label
+ *  always rides with the hue, so meaning is never carried by colour alone.
+ *
+ *  A primitive rather than part of the CRUD kit, and moved here on a measurement: the account
+ *  menu in the header wanted one badge, and importing it from `kit.tsx` merged that whole lazy
+ *  chunk into the shell bundle — 14 kB added to every first visit for a coloured pill. It has no
+ *  dependencies and no state, which is what makes `ui.tsx` its home. */
+export function StatusBadge(props: {
+  label: string;
+  tone: "active" | "archived" | "disabled" | "neutral" | "danger";
+}) {
+  const palette = () => {
+    switch (props.tone) {
+      case "active":
+        return "border-ok text-ok";
+      case "danger":
+        return "border-danger text-danger";
+      case "archived":
+      case "disabled":
+        return "border-ink-muted text-ink-muted";
+      default:
+        return "border-line text-ink-muted";
+    }
+  };
+  return (
+    <span
+      class={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${palette()}`}
+    >
+      {props.label}
+    </span>
   );
 }
 
@@ -53,7 +87,7 @@ export function Button(props: ButtonProps) {
   return (
     <button
       {...rest}
-      class={`inline-flex min-h-touch items-center justify-center rounded-token px-4 text-base font-medium transition-[filter] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${palette()} ${local.class ?? ""}`}
+      class={`inline-flex min-h-touch items-center justify-center rounded-token px-4 text-base font-medium transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${palette()} ${local.class ?? ""}`}
     >
       {local.children}
     </button>

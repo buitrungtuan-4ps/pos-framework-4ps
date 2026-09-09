@@ -14,13 +14,21 @@ import { t, type MessageKey } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton, TextArea, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  PageHeader,
+  Skeleton,
+  StatusBadge,
+  TextArea,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

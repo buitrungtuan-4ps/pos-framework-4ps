@@ -7,6 +7,7 @@ import { useNavigate } from "@solidjs/router";
 
 import { t } from "../i18n";
 import { SCREENS, type ScreenId, screenHref, specOf } from "../state/screens";
+import { Icon } from "./icons";
 import { storeId, tenantId } from "../state/session";
 
 // The palette's entries come from the one screen table, filtered to those worth a quick jump — so a
@@ -38,6 +39,7 @@ export function CommandPalette() {
     const all = TARGETS.map((id) => ({
       href: screenHref(id, tenantId(), storeId()),
       label: t(specOf(id).key),
+      icon: specOf(id).icon,
     }));
     return needle ? all.filter((item) => item.label.toLowerCase().includes(needle)) : all;
   };
@@ -97,7 +99,7 @@ export function CommandPalette() {
         onClick={close}
       >
         <div
-          class="w-full max-w-lg overflow-hidden rounded-token border border-line bg-surface shadow-lg"
+          class="w-full max-w-lg overflow-hidden rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <input
@@ -125,10 +127,11 @@ export function CommandPalette() {
                       type="button"
                       onMouseEnter={() => setActive(index())}
                       onClick={() => go(item.href)}
-                      class={`flex w-full items-center rounded-token px-3 py-2 text-left text-base text-ink ${
+                      class={`flex w-full items-center gap-2 rounded-token px-3 py-2 text-left text-base text-ink transition-colors ${
                         index() === active() ? "bg-surface-raised" : ""
                       }`}
                     >
+                      <Icon name={item.icon} />
                       {item.label}
                     </button>
                   </li>

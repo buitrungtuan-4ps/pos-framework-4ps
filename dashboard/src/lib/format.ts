@@ -41,3 +41,32 @@ export function formatRelativeAge(seconds: number): string {
 export function formatMoney(money: Money): string {
   return `${new Intl.NumberFormat(locale()).format(money.amount_minor)} ${money.currency_code}`;
 }
+
+/**
+ * A person's initials, for the account avatar (Wave 3 · Stage 6).
+ *
+ * The first character of the first and last word, so "Nguyễn Thị Hương" reads NH rather than NT. A
+ * single word gives one letter — two letters from one word would be inventing an initial the person
+ * does not have, and a Vietnamese given name is often the one word here.
+ *
+ * `Array.from` rather than indexing, because a name may begin with a character outside the basic
+ * plane, where `name[0]` is half a surrogate pair and renders as a replacement glyph. `toLocaleUpperCase`
+ * rather than `toUpperCase`, because case is locale-dependent (Turkish dotless ı is the standard
+ * example) and this is the operator's own name.
+ *
+ * A name with no letters at all — empty, or whitespace — gives an empty string. The caller decides
+ * what to draw instead; an avatar is not the place to guess.
+ */
+export function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter((word) => word.length > 0);
+  const first = words[0];
+  if (first === undefined) {
+    return "";
+  }
+  const last = words[words.length - 1] as string;
+  const letters = words.length === 1 ? [first] : [first, last];
+  return letters
+    .map((word) => Array.from(word)[0] ?? "")
+    .join("")
+    .toLocaleUpperCase(locale());
+}

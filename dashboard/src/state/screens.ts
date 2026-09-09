@@ -25,6 +25,7 @@
 
 import type { MessageKey } from "../i18n";
 import type { AdminRole } from "../api/types";
+import type { IconName } from "../components/icons";
 
 /** The working context a screen needs before it can do anything useful. */
 export type Scope = "tenant" | "store";
@@ -49,6 +50,14 @@ export type Screen = {
   readonly tenantScoped: boolean;
   /** When `true`, the command palette offers it. Not every screen is worth a quick-switch entry. */
   readonly inPalette?: boolean;
+  /**
+   * The glyph the nav and the palette draw beside its name.
+   *
+   * Required, so a screen added without one is a compile error rather than the single gap in a
+   * column of thirty icons. `IconName` is a type-only import: the union is checked here and the
+   * geometry stays in the component that draws it.
+   */
+  readonly icon: IconName;
 };
 
 /** The roles that may reach the admin roster: owner and admin (the server gates *changes* to owner). */
@@ -65,6 +74,7 @@ export const SCREENS = {
     scope: "store",
     tenantScoped: true,
     inPalette: true,
+    icon: "gauge",
   },
   reports: {
     path: "/reports",
@@ -72,25 +82,28 @@ export const SCREENS = {
     scope: "store",
     tenantScoped: true,
     inPalette: true,
+    icon: "chart-column",
   },
-  fleet: { path: "/fleet", key: "nav.fleet", scope: "tenant", tenantScoped: true },
+  fleet: { path: "/fleet", key: "nav.fleet", scope: "tenant", tenantScoped: true, icon: "server" },
   ota: {
     path: "/ota",
     key: "nav.ota",
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "arrow-down-to-line",
   },
   reconcile: {
     path: "/reconcile",
     key: "nav.reconcile",
     scope: "tenant",
     tenantScoped: true,
+    icon: "refresh-cw",
   },
   // Console-level: alerts and the audit trail span every tenant, including server-wide conditions
   // that belong to none (ADR-0073), so neither takes a tenant in its URL.
-  alerts: { path: "/alerts", key: "nav.alerts", tenantScoped: false },
-  audit: { path: "/audit", key: "nav.audit", tenantScoped: false },
+  alerts: { path: "/alerts", key: "nav.alerts", tenantScoped: false, icon: "triangle-alert" },
+  audit: { path: "/audit", key: "nav.audit", tenantScoped: false, icon: "history" },
 
   stores: {
     path: "/stores",
@@ -98,6 +111,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "store",
   },
   newStore: {
     path: "/stores/new",
@@ -105,6 +119,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "plus-circle",
   },
   catalog: {
     path: "/catalog",
@@ -112,6 +127,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "book-open",
   },
   campaigns: {
     path: "/campaigns",
@@ -119,6 +135,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "megaphone",
   },
   inventory: {
     path: "/inventory",
@@ -126,6 +143,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "package",
   },
   // Reason codes (ADR-0115): the managed list a void, discount, comp, refund, drawer opening, staff
   // rejection, cash movement or stock correction must cite. Owner/admin only, matching the server's
@@ -136,6 +154,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "clipboard-list",
   },
   channels: {
     path: "/channels",
@@ -143,6 +162,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "credit-card",
   },
   media: {
     path: "/media",
@@ -150,6 +170,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "image",
   },
   layout: {
     path: "/layout",
@@ -157,6 +178,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "layout-grid",
   },
   floor: {
     path: "/floor",
@@ -164,6 +186,7 @@ export const SCREENS = {
     scope: "store",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "armchair",
   },
   stations: {
     path: "/stations",
@@ -171,6 +194,7 @@ export const SCREENS = {
     scope: "store",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "chef-hat",
   },
   people: {
     path: "/people",
@@ -178,6 +202,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ADMIN_MANAGERS,
     tenantScoped: true,
+    icon: "users",
   },
 
   config: {
@@ -186,20 +211,23 @@ export const SCREENS = {
     scope: "store",
     tenantScoped: true,
     inPalette: true,
+    icon: "file-cog",
   },
   storeSettings: {
     path: "/store-settings",
     key: "nav.storeSettings",
     scope: "store",
     tenantScoped: true,
+    icon: "settings",
   },
-  taxRates: { path: "/tax-rates", key: "nav.taxRates", scope: "tenant", tenantScoped: true },
+  taxRates: { path: "/tax-rates", key: "nav.taxRates", scope: "tenant", tenantScoped: true, icon: "percent" },
   translations: {
     path: "/translations",
     key: "nav.translations",
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "languages",
   },
   subjects: {
     path: "/subjects",
@@ -207,6 +235,7 @@ export const SCREENS = {
     scope: "tenant",
     roles: ["owner"],
     tenantScoped: true,
+    icon: "shield-user",
   },
 
   apiKeys: {
@@ -215,6 +244,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "key",
   },
   devices: {
     path: "/devices",
@@ -222,6 +252,7 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "monitor-smartphone",
   },
   activation: {
     path: "/activation",
@@ -229,9 +260,10 @@ export const SCREENS = {
     scope: "store",
     tenantScoped: true,
     inPalette: true,
+    icon: "plug-zap",
   },
   // Console-level: the admin roster is the console's own users, not a tenant's.
-  admins: { path: "/admins", key: "nav.admins", roles: ADMIN_MANAGERS, tenantScoped: false },
+  admins: { path: "/admins", key: "nav.admins", roles: ADMIN_MANAGERS, tenantScoped: false, icon: "user-cog" },
 
   webhooks: {
     path: "/webhooks",
@@ -239,11 +271,12 @@ export const SCREENS = {
     scope: "tenant",
     tenantScoped: true,
     inPalette: true,
+    icon: "webhook",
   },
 
   // Console-level: the signed-in admin's own sessions and security, which no tenant owns.
-  mySessions: { path: "/my-sessions", key: "nav.mySessions", tenantScoped: false },
-  mySecurity: { path: "/my-security", key: "nav.mySecurity", tenantScoped: false },
+  mySessions: { path: "/my-sessions", key: "nav.mySessions", tenantScoped: false, icon: "monitor-check" },
+  mySecurity: { path: "/my-security", key: "nav.mySecurity", tenantScoped: false, icon: "shield-check" },
 } as const satisfies Record<string, Screen>;
 
 /** Every screen's id. A `ScreenId` that is not in [`SCREENS`] does not compile. */
@@ -261,13 +294,19 @@ export function specOf(screen: ScreenId): Screen {
 }
 
 /** The nav's grouping, referring to screens by id so a rename cannot silently orphan an entry. */
-export const NAV_GROUPS: readonly { key: MessageKey; items: readonly ScreenId[] }[] = [
+export const NAV_GROUPS: readonly {
+  key: MessageKey;
+  icon: IconName;
+  items: readonly ScreenId[];
+}[] = [
   {
     key: "nav.group.overview",
+    icon: "layout-dashboard",
     items: ["storeHub", "reports", "fleet", "ota", "reconcile", "alerts", "audit"],
   },
   {
     key: "nav.group.masterData",
+    icon: "database",
     items: [
       "stores",
       "catalog",
@@ -284,11 +323,12 @@ export const NAV_GROUPS: readonly { key: MessageKey; items: readonly ScreenId[] 
   },
   {
     key: "nav.group.settings",
+    icon: "sliders-horizontal",
     items: ["config", "storeSettings", "taxRates", "translations", "subjects"],
   },
-  { key: "nav.group.access", items: ["apiKeys", "devices", "activation", "admins"] },
-  { key: "nav.group.integrations", items: ["webhooks"] },
-  { key: "nav.group.account", items: ["mySessions", "mySecurity"] },
+  { key: "nav.group.access", icon: "key-round", items: ["apiKeys", "devices", "activation", "admins"] },
+  { key: "nav.group.integrations", icon: "webhook", items: ["webhooks"] },
+  { key: "nav.group.account", icon: "circle-user", items: ["mySessions", "mySecurity"] },
 ];
 
 /** The tenant path prefix. One constant so the router and the link builder cannot drift apart. */

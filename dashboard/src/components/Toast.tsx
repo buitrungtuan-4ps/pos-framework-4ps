@@ -7,6 +7,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { t } from "../i18n";
+import { useEscape } from "../lib/escape";
 
 type Tone = "ok" | "danger";
 type Note = { id: number; tone: Tone; message: string };
@@ -48,13 +49,13 @@ export function ToastHost() {
         {(note) => (
           <div
             role={note.tone === "danger" ? "alert" : "status"}
-            class={`pointer-events-auto flex max-w-md items-start gap-3 rounded-token border bg-surface px-3 py-2 text-sm shadow-lg ${toneClass(note.tone)}`}
+            class={`pointer-events-auto flex max-w-md items-start gap-3 rounded-token border bg-surface px-3 py-2 text-sm shadow-overlay ${toneClass(note.tone)}`}
           >
             <span class="flex-1 text-ink">{note.message}</span>
             <button
               type="button"
               aria-label={t("toast.dismiss")}
-              class="shrink-0 text-ink-muted hover:text-ink"
+              class="shrink-0 text-ink-muted transition-colors hover:text-ink"
               onClick={() => dismiss(note.id)}
             >
               <span aria-hidden="true">✕</span>
@@ -69,6 +70,7 @@ export function ToastHost() {
 /** The top-bar bell: a count of recent notifications and a dropdown of their history. */
 export function NotificationBell() {
   const [open, setOpen] = createSignal(false);
+  useEscape(open, () => setOpen(false));
   return (
     <div class="relative">
       <button
@@ -86,12 +88,12 @@ export function NotificationBell() {
         </Show>
       </button>
       <Show when={open()}>
-        <div class="absolute right-0 z-30 mt-1 w-80 rounded-token border border-line bg-surface shadow-lg">
+        <div class="absolute right-0 z-30 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay">
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("notifications.open")}</span>
             <button
               type="button"
-              class="text-sm text-ink-muted hover:text-ink"
+              class="text-sm text-ink-muted transition-colors hover:text-ink"
               onClick={() => setHistory([])}
             >
               {t("notifications.clear")}

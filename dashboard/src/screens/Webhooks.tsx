@@ -11,13 +11,12 @@ import type { WebhookSummary } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
   DataTable,
   EmptyState,
-  StatusBadge,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";

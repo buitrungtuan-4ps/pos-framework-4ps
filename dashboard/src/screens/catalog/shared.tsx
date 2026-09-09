@@ -10,7 +10,7 @@ import { ApiError } from "../../api/client";
 import type { EntityStatus, SalesChannel } from "../../api/types";
 import { SALES_CHANNELS } from "../../api/types";
 import { t, type MessageKey } from "../../i18n";
-import { StatusBadge } from "../../components/kit";
+import { StatusBadge } from "../../components/ui";
 
 /** The i18n key for each sales channel's short label (used by the Menus placement editor). */
 export const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
