@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A loading screen shows the shape of what is coming.** Thirteen places answered a pending read
+  with the word "Loading…", so a page jumped twice: once when the sentence appeared and again when
+  the real table replaced it and pushed everything below it down. They now show a block the size of
+  the answer. The words are not lost — the placeholder is a `status` region carrying the same text
+  with its bars hidden from assistive technology, so a sighted reader gains the shape and a
+  screen-reader user keeps the announcement (#262).
+
+- **Every list in the console has a ceiling on the rows it renders at once.** Eight tables had none —
+  not by choice, but because the page-size prop is optional and easy to forget. They now take the
+  same page size the server-paged screens ask for. Invisible at the volumes those lists hold, since
+  the pager appears only when the set exceeds the page; a bound at the volumes they do not (#262).
+
 - **The nav collapses, and opens as a drawer on a narrow screen.** Six groups and thirty entries
   used to be expanded all of the time: on a wide screen a column an operator scrolled past to reach
   the two screens they use, and under `md` thirty wrapped chips stacked above every page, so on a

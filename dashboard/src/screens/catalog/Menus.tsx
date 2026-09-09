@@ -27,6 +27,7 @@ import { storeId, storeName, tenantId } from "../../state/session";
 import { Banner, Button, Card, MoneyField, TextField } from "../../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -676,6 +677,7 @@ export function CatalogMenus() {
           <DataTable
             columns={sectionColumns()}
             rows={sections()}
+            pageSize={CLIENT_PAGE_SIZE}
             searchText={(row) => row.name}
             empty={<EmptyState title={t("catalog.sectionsEmpty")} />}
             actionsHeader={t("common.actions")}
@@ -717,6 +719,7 @@ export function CatalogMenus() {
               <DataTable
                 columns={placementColumns()}
                 rows={loaded()}
+                pageSize={CLIENT_PAGE_SIZE}
                 searchText={(row) => itemName(row.menu_item_id)}
                 empty={<EmptyState title={t("catalog.placementsEmpty")} />}
                 actionsHeader={t("common.actions")}

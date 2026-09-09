@@ -47,7 +47,7 @@ import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
 import { GetStarted } from "../components/GetStarted";
-import { Card, PageHeader } from "../components/ui";
+import { Card, PageHeader, Skeleton } from "../components/ui";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {
@@ -86,9 +86,15 @@ function HubCard<T>(props: {
       <Show
         when={props.panel.state === "ready" ? props.panel : null}
         fallback={
-          <p class="text-sm text-ink-muted">
-            {props.panel.state === "failed" ? props.panel.message : t("common.loading")}
-          </p>
+          <Show
+            when={props.panel.state === "failed" ? props.panel : null}
+            // Two bars: a card answers with one figure and one supporting line, so that is the
+            // shape the placeholder holds. A refusal stays words — there is nothing arriving for a
+            // skeleton to stand in for.
+            fallback={<Skeleton label={t("common.loading")} rows={2} />}
+          >
+            {(failed) => <p class="text-sm text-ink-muted">{failed().message}</p>}
+          </Show>
         }
       >
         {(ready) => {

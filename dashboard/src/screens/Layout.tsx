@@ -27,6 +27,7 @@ import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -752,6 +753,7 @@ export function Layout() {
                   <DataTable
                     columns={categoryColumns()}
                     rows={loaded()}
+                    pageSize={CLIENT_PAGE_SIZE}
                     searchText={(row) => row.name}
                     empty={<EmptyState title={t("layout.categoriesEmpty")} />}
                     actionsHeader={t("common.actions")}
@@ -794,6 +796,7 @@ export function Layout() {
                   <DataTable
                     columns={subcategoryColumns()}
                     rows={loaded()}
+                    pageSize={CLIENT_PAGE_SIZE}
                     searchText={(row) => `${row.name} ${categoryName(row.display_category_id)}`}
                     empty={<EmptyState title={t("layout.subcategoriesEmpty")} />}
                     actionsHeader={t("common.actions")}

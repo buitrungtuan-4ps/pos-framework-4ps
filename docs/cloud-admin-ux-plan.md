@@ -661,3 +661,68 @@ something in front of it. The topology is part of the system under test.
 The one deployment this would matter for is `pos_cloud` run bare with no proxy in front. `deploy/`
 does not describe that posture and `docs/deploy-runbook.md` does not support it, so it is not a case
 the plan needs to serve.
+
+## Stage 3 delivered — the table volume question, answered with numbers (2026-09-09)
+
+§3w.4 item 13 said "seed a volume fixture and measure the tables, then decide on virtualisation.
+Right now every list has been seen only empty; committing to virtualisation before measuring would
+be guessing." The previous correction narrowed Stage 3 to items 12 and 13 and called item 13 "the
+one place a real problem could be hiding". This is the measurement, and it closes the question.
+
+### How it was measured
+
+`dashboard/bench/volume.html` mounts the real `DataTable` with N synthetic five-column rows — an
+id, a name, a status, a number and a date, the shape the Stores, Devices, Employees and Items
+screens actually render — and reports the time from before `render` to after the browser has
+painted, two `requestAnimationFrame` ticks later. `dashboard/bench/measure.mjs` drives it in
+Chromium against the dev server and prints the table below. Both are committed: the numbers belong
+in the repository rather than in a terminal that has since closed.
+
+| rows | rendered | paint |
+| --- | --- | --- |
+| 100 | 100 | 36 ms |
+| 500 | 500 | 81 ms |
+| 1,000 | 1,000 | 161 ms |
+| 2,000 | 2,000 | 322 ms |
+| 5,000 | 5,000 | 1,614 ms |
+| 10,000 | 10,000 | 3,988 ms |
+| **10,000, `pageSize` 25** | **25** | **37 ms** |
+
+Linear to about 2,000 rows, then super-linear: the cost past that is the layout and paint of a very
+tall table, not Solid's per-row work. And the last row is the finding — **a page size makes the row
+count irrelevant**. Ten thousand rows behind a page of 25 paints in the same time as a hundred rows
+unpaged.
+
+### The decision: virtualisation is not built
+
+It would be a large, risky change to the one component every list screen renders, in order to solve
+a problem `pageSize` already solves at a hundred times the expected load. `DataTable`'s claim that
+it is "right-sized for tens to hundreds of rows" turns out to be true, and now measured rather than
+asserted.
+
+What the measurement *did* find is a different, smaller problem it was not looking for. Of the 38
+tables in the console, **eight rendered every row they were given** — no server paging and no client
+page size. Not because anyone chose that: `pageSize` is optional and easy to forget. The eight were
+the floor's QR tokens, the two Layout taxonomy tables, my own sessions, People's assignments,
+Stations' routing rules, and — the one that can genuinely reach thousands — a menu's sections and
+placements, which scale with the item catalogue.
+
+All eight now take `CLIENT_PAGE_SIZE` (25, matching what the server-paged screens already ask for).
+This is invisible at the volumes those lists actually hold, because the pager renders only when the
+set exceeds the page: a table of three routing rules looks exactly as it did. It is a ceiling, not a
+redesign. `dashboard/tests/table-volume.test.ts` fails if a table appears with neither a client page
+size nor server paging, because the next screen will forget it too.
+
+### Item 12, and a count that was wrong
+
+The skeletons shipped: a `Skeleton` primitive in `components/ui.tsx` and thirteen adopting call
+sites. The accessibility half is the half that mattered — replacing `<p>Loading…</p>` with grey bars
+would have made every loading state *silent* for a screen reader, a regression dressed as an
+improvement, so the container is a `status` region carrying the same words and the bars are
+`aria-hidden`.
+
+Item 12 says "the sixteen places that show it". The real number is **fourteen call sites**; sixteen
+was a count of `grep` hits, which included the two entries in `en.json` and `vi.json`. Of the
+fourteen, thirteen became skeletons and one stayed as words on purpose — the context picker's create
+button, whose own label reads "Loading…" while a request is in flight. A button is not a placeholder
+for content that is arriving, so a skeleton there would have been wrong rather than missing.

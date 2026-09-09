@@ -11,7 +11,7 @@ import type { AdminIdentity, AdminInvite, AdminRole } from "../api/types";
 import { ADMIN_ROLES } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { actingAdmin } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, TextField } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -220,7 +220,7 @@ export function Admins() {
           }
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-          <Show when={admins()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
+          <Show when={admins()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
             {(loaded) => (
               <DataTable
                 columns={columns()}

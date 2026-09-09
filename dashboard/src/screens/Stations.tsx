@@ -19,6 +19,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -460,6 +461,7 @@ export function Stations() {
                     },
                   ]}
                   rows={rules()}
+                  pageSize={CLIENT_PAGE_SIZE}
                   empty={<EmptyState title={t("stations.routingEmpty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (

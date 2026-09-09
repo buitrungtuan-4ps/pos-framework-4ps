@@ -4,7 +4,7 @@
 // translated by the caller — so the no-hardcoded-strings lint (ADR-0020) has nothing to flag here.
 
 import type { JSX, ParentProps } from "solid-js";
-import { Show, splitProps } from "solid-js";
+import { For, Show, splitProps } from "solid-js";
 
 import { locale } from "../i18n";
 
@@ -139,6 +139,55 @@ export function TextArea(props: {
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
     </label>
+  );
+}
+
+/**
+ * A placeholder in roughly the shape of the content that is loading.
+ *
+ * # Why a shape instead of the word "Loading…"
+ *
+ * Fourteen places in this console answered a pending read with `<p>Loading…</p>` — a line of text
+ * where a table, a card or a whole screen is about to appear. The page therefore jumps twice: once
+ * when the sentence replaces nothing, and again when the real content replaces the sentence and
+ * pushes everything below it. A block the size of the answer removes the second jump, and it tells
+ * an operator *what* is coming, not merely that something is.
+ *
+ * This is perceived performance and it is worth being precise about that: the console has no
+ * measured load problem in the path an operator uses. What it had was a load *appearance* problem.
+ *
+ * # The accessibility half, which is the half easy to get wrong
+ *
+ * Replacing the sentence with bare grey bars would make the loading state **silent** for a screen
+ * reader — a regression dressed as an improvement. So the container is a `status` region carrying
+ * the same words the sentence carried, and the bars are `aria-hidden`: a sighted reader gets the
+ * shape, a screen-reader user keeps the announcement, and neither loses anything.
+ *
+ * The pulse needs no `prefers-reduced-motion` guard of its own — `app.css` already clamps every
+ * animation to 0.01ms under that preference, for exactly this class of decoration.
+ *
+ * `label` is already-translated text, like every other string in this file.
+ */
+export function Skeleton(props: { label: string; rows?: number; class?: string }) {
+  const rows = () => Math.max(1, props.rows ?? 3);
+  return (
+    <div role="status" aria-label={props.label} class={props.class}>
+      <div class="flex flex-col gap-2" aria-hidden="true">
+        <For each={Array.from({ length: rows() }, (_, position) => position)}>
+          {(position) => (
+            // `bg-line` rather than `bg-surface-raised`: raised is a hair off the surface it sits
+            // on (0.995 against 1.0 in the light theme) and a bar in it is invisible. The last bar
+            // is short, because the last line of real content usually is — an even stack of full
+            // bars reads as a loading widget, an uneven one reads as content arriving.
+            <div
+              class={`h-4 animate-pulse rounded-token bg-line ${
+                position === rows() - 1 && rows() > 1 ? "w-2/3" : "w-full"
+              }`}
+            />
+          )}
+        </For>
+      </div>
+    </div>
   );
 }
 

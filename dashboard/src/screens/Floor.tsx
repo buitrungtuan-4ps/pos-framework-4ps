@@ -18,6 +18,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -607,6 +608,7 @@ export function Floor() {
                         },
                       ]}
                       rows={tokens()}
+                      pageSize={CLIENT_PAGE_SIZE}
                       empty={<EmptyState title={t("floor.qrEmpty")} />}
                     />
                   </Show>

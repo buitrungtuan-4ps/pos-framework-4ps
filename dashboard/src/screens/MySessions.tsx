@@ -9,9 +9,10 @@ import { createSignal, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { AdminSessionView } from "../api/types";
 import { locale, t } from "../i18n";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
 import {
   type Column,
+  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   EmptyState,
@@ -155,11 +156,12 @@ export function MySessions() {
         }
       >
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-        <Show when={sessions()} fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}>
+        <Show when={sessions()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
           {(loaded) => (
             <DataTable
               columns={columns()}
               rows={loaded()}
+              pageSize={CLIENT_PAGE_SIZE}
               empty={<EmptyState title={t("sessions.empty")} />}
               actionsHeader={t("common.actions")}
               actions={(row) => (

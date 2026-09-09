@@ -14,7 +14,7 @@ import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton } from "../components/ui";
 import { type Column, ConfirmDialog, DataTable, EmptyState, StatusBadge } from "../components/kit";
 import { toast } from "../components/Toast";
 
@@ -143,7 +143,7 @@ export function Reconcile() {
           >
             <Show
               when={runs()}
-              fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}
+              fallback={<Skeleton label={t("common.loading")} rows={4} />}
             >
               {(loaded) => (
                 <DataTable

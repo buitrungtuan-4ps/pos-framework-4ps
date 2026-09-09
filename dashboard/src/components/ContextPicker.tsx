@@ -28,7 +28,7 @@ import {
   screenPathOf,
   specOf,
 } from "../state/screens";
-import { Button } from "./ui";
+import { Button, Skeleton } from "./ui";
 
 export function ContextPicker() {
   const navigate = useNavigate();
@@ -222,9 +222,7 @@ export function ContextPicker() {
             </p>
             <Show
               when={tenants()}
-              fallback={
-                <p class="px-1 py-1 text-sm text-ink-muted">{t("common.loading")}</p>
-              }
+              fallback={<Skeleton label={t("common.loading")} rows={3} class="px-1 py-1" />}
             >
               {(loaded) => (
                 <Show

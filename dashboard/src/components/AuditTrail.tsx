@@ -10,6 +10,7 @@ import type { AuditEntry } from "../api/types";
 import { locale, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { StatusBadge } from "./kit";
+import { Skeleton } from "./ui";
 
 /** How many entries one panel pulls; a Detail view's history is short, so this is generous. */
 const AUDIT_PANEL_LIMIT = 50;
@@ -41,7 +42,7 @@ export function AuditTrail(props: { entityType: string; entityId?: string }) {
   return (
     <Show
       when={entries()}
-      fallback={<p class="text-sm text-ink-muted">{t("common.loading")}</p>}
+      fallback={<Skeleton label={t("common.loading")} rows={3} />}
     >
       {(list) => (
         <Show
