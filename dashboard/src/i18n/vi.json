@@ -1422,6 +1422,8 @@
   "stores.createBrand": "Tạo thương hiệu",
   "stores.created": "Đã tạo cửa hàng.",
   "stores.description": "Đặt tên, tạo và sắp xếp cửa hàng & thương hiệu của tenant này — không cần ULID.",
+  "stores.edit": "Sửa cửa hàng",
+  "stores.editBrand": "Sửa brand",
   "stores.empty": "Chưa có cửa hàng nào. Tạo ở bên dưới.",
   "stores.list": "Cửa hàng",
   "stores.loadHint": "Bấm Tải để xem cửa hàng của tenant này.",

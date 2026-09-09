@@ -1422,6 +1422,8 @@
   "stores.createBrand": "Create a brand",
   "stores.created": "Store created.",
   "stores.description": "Name, create, and organise this tenant's stores and brands — no ULID needed.",
+  "stores.edit": "Edit store",
+  "stores.editBrand": "Edit brand",
   "stores.empty": "No stores yet. Create one below.",
   "stores.list": "Stores",
   "stores.loadHint": "Load to see this tenant's stores.",

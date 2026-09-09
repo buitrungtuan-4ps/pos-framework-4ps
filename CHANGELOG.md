@@ -59,6 +59,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Stores no longer shows you two create forms you did not ask for.** The screen ended in a pair of
+  permanently-visible cards, "Create a store" and "Create a brand", occupying the bottom half of the
+  page whether or not anyone wanted to create anything. Both are now behind an Add button in the
+  header of the list they add to (#267). Three things improved with the move, each because the kit
+  made the better shape the easy one:
+
+  Renaming opens the panel instead of swapping a raw `<input>` into the table cell — that cell input
+  had no label association and no error slot, so a refused rename had nowhere to appear. A store's
+  brand is now part of the same save as its name; it was a `<select>` in the cell that wrote on
+  `change`, so one mis-click silently moved a shop to another brand, with no confirmation and no
+  undo. And stores and brands hold separate lifecycles, so saving a brand no longer disables the
+  stores table — that was one `busy()` shared by every button on the screen.
+
 - **`docs/cloud-admin-ux-plan.md` no longer claims work the tree does not contain.** Stage 4's six
   primitives, its "create moves into the page header" item and Stage 5's resource helper were
   recorded as delivered; measured against the tree, five of the six primitives are absent, the
