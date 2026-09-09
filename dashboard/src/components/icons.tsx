@@ -2,11 +2,11 @@
 //
 // # Why the geometry is vendored rather than drawn or imported
 //
-// The nav carries thirty entries in six groups. Icons are what let an operator stop reading the
-// words for the two screens they use every day — but only if they are consistent: thirty glyphs at
-// thirty different stroke weights and optical sizes are noise that makes the recognisable ones
-// harder to find, not easier. Hand-drawing a coherent set of thirty is a designer's job, and
-// hand-drawing an incoherent one would be worse than the plain text it replaced. That is why
+// The nav carries thirty entries. Icons are what let an operator stop reading the words for the two
+// screens they use every day — but only if they are consistent: thirty glyphs at thirty different
+// stroke weights and optical sizes are noise that makes the recognisable ones harder to find, not
+// easier. Hand-drawing a coherent set of thirty is a designer's job, and hand-drawing an incoherent
+// one would be worse than the plain text it replaced. That is why
 // [#261](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/261) collapsed the nav and
 // deliberately left the icons out.
 //
@@ -14,7 +14,10 @@
 // ADR merged first — correctly, because a runtime dependency is a supply chain. So the path data
 // below is **transcribed** from Lucide's published SVGs by a generator, checked in as source, and
 // carries the notice its licence requires. No entry in `package.json`, nothing in the lockfile,
-// nothing in `node_modules`, and only the thirty-six glyphs actually used ship in the bundle.
+// nothing in `node_modules`, and only the glyphs actually used ship in the bundle — one per screen,
+// and no more. The nav group headings used to carry one each too; they no longer do (see
+// `state/screens.ts` for why), and the five glyphs that only they drew went with them, because a
+// glyph nobody draws is bundle weight with nothing to show for it.
 //
 // Regenerating: `npm pack lucide-static@<version>` outside the repository, then re-run the
 // generator recorded in `docs/cloud-admin-ux-plan.md`. Editing a `d` attribute by hand is the one
@@ -49,18 +52,14 @@ export const ICON_NAMES = [
   "book-open",
   "chart-column",
   "chef-hat",
-  "circle-user",
   "clipboard-list",
   "credit-card",
-  "database",
   "file-cog",
   "gauge",
   "history",
   "image",
   "key",
-  "key-round",
   "languages",
-  "layout-dashboard",
   "layout-grid",
   "megaphone",
   "monitor-check",
@@ -74,7 +73,6 @@ export const ICON_NAMES = [
   "settings",
   "shield-check",
   "shield-user",
-  "sliders-horizontal",
   "store",
   "triangle-alert",
   "user-cog",
@@ -123,13 +121,6 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
       <path d="M6 17h12" />
     </>
   ),
-  "circle-user": () => (
-    <>
-      <circle cx="12" cy="12" r="10" />
-      <circle cx="12" cy="10" r="3" />
-      <path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662" />
-    </>
-  ),
   "clipboard-list": () => (
     <>
       <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
@@ -144,13 +135,6 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
     <>
       <rect width="20" height="14" x="2" y="5" rx="2" />
       <line x1="2" x2="22" y1="10" y2="10" />
-    </>
-  ),
-  "database": () => (
-    <>
-      <ellipse cx="12" cy="5" rx="9" ry="3" />
-      <path d="M3 5V19A9 3 0 0 0 21 19V5" />
-      <path d="M3 12A9 3 0 0 0 21 12" />
     </>
   ),
   "file-cog": () => (
@@ -196,12 +180,6 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
       <circle cx="15.5" cy="7.5" r="5.5" />
     </>
   ),
-  "key-round": () => (
-    <>
-      <path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" />
-      <circle cx="16.5" cy="7.5" r=".5" fill="currentColor" />
-    </>
-  ),
   "languages": () => (
     <>
       <path d="m5 8 6 6" />
@@ -210,14 +188,6 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
       <path d="M7 2h1" />
       <path d="m22 22-5-10-5 10" />
       <path d="M14 18h6" />
-    </>
-  ),
-  "layout-dashboard": () => (
-    <>
-      <rect width="7" height="9" x="3" y="3" rx="1" />
-      <rect width="7" height="5" x="14" y="3" rx="1" />
-      <rect width="7" height="9" x="14" y="12" rx="1" />
-      <rect width="7" height="5" x="3" y="16" rx="1" />
     </>
   ),
   "layout-grid": () => (
@@ -315,19 +285,6 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
       <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
       <path d="M6.376 18.91a6 6 0 0 1 11.249.003" />
       <circle cx="12" cy="11" r="4" />
-    </>
-  ),
-  "sliders-horizontal": () => (
-    <>
-      <path d="M10 5H3" />
-      <path d="M12 19H3" />
-      <path d="M14 3v4" />
-      <path d="M16 17v4" />
-      <path d="M21 12h-9" />
-      <path d="M21 19h-5" />
-      <path d="M21 5h-7" />
-      <path d="M8 10v4" />
-      <path d="M8 12H3" />
     </>
   ),
   "store": () => (

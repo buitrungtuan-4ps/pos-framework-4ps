@@ -16,6 +16,47 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **The left nav says which screen you are on, and stays short.** Three faults, reported together.
+  The open entry carried `bg-surface-raised` and so did every hovered entry — a half-percent step in
+  lightness in the light palette, which is at the edge of visible — so nothing on screen answered
+  "where am I". The open group heading and a closed one were both `text-ink-muted font-medium`, told
+  apart by one character. And nothing bounded the nav, so six groups open at once made the *page*
+  tall and pushed the page's own content under the fold.
+
+  The open entry is now an accent tint (two gated tokens, `--selected` and `--selected-ink`, 7.33:1
+  light and 9.03:1 dark) with hover moved to a different ground; the open group is told apart by ink,
+  weight and a turned chevron at once, and a closed group holding the open screen wears a labelled
+  dot, because its entries are `hidden` and cannot say it themselves. One group is open at a time, so
+  the nav is a fixed short shape however many groups the console grows — the cost, named plainly, is
+  that a screen in another group takes a click on that heading first; the command palette is still
+  one click. From `md` up the nav and the page scroll in their own boxes. Group headings are 48px
+  below `md` and 32px above; entries gained the 48px touch minimum below `md` that they never had
+  (they were 40px everywhere).
+
+  Fixed on the way: the nav read its open state from the link's `activeClass`, which matches on a
+  path *prefix*, so the new-store wizard at `/stores/new` lit Stores up as well and the nav claimed
+  two open screens. It now compares the screen table's exact match, which is what `aria-current`
+  already used — so what is drawn and what is announced agree ([#267 follow-up](docs/cloud-admin-ux-plan.md)).
+
+- **The nav's six groups became eight, and two screens moved out of headings that misdescribed
+  them.** "Master data" held eleven entries — the menu, the floor plan, the kitchen stations, the
+  staff roster, the reason codes, the stores — which is everything that is not a report rather than a
+  category. Six entries is now the ceiling. Two moves matter beyond tidiness: **Subject requests**
+  (the Decree 13 erase/export instrument, [ADR-0076](docs/adr/0076-subject-request-tooling.md)) left
+  Settings for a new **Compliance** group beside the audit trail, because nobody looks for customer
+  erasure beside a store's opening hours and "a setting" is what it must not read as; and **People**
+  (shop staff with till PINs) left the access heading it shared with **Admins** (console users with a
+  role over the tenant), because filing them together invites the belief that adding a person grants
+  console access. The other groups are Overview, Menu & pricing, Operations, Stores & devices,
+  Settings, Access & integrations and My account.
+
+  **Upgrade note** No API or permission change. The nav's remembered open/closed state is stored per
+  browser under `pos.dashboard.navGroups`; the old shape (a boolean per group) reads as "nothing
+  remembered" and the nav falls back to opening the group that holds the screen you are on, so an
+  operator sees a sensible nav on first load after the upgrade and nothing to fix.
+
 ### Fixed
 
 - **Choosing a store once is enough.** The console's working context was destroyed by walking

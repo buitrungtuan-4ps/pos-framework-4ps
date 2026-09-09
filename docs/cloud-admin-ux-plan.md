@@ -1047,7 +1047,8 @@ because a runtime dependency is a supply chain, and this one would have been add
 ### What was done instead
 
 The geometry is **transcribed** from Lucide's published SVGs (ISC, 2077 icons) by a generator, and
-the thirty-six glyphs the console uses are checked in as source in
+the glyphs the console uses — thirty-six at the time, thirty-one after the group headings gave
+theirs up — are checked in as source in
 `dashboard/src/components/icons.tsx` with the licence notice retained. No entry in `package.json`,
 nothing in the lockfile, nothing in `node_modules`, nothing for Dependabot or `deny.toml` to
 consider — and only what is drawn ships. The one thing not to do is hand-edit a `d` attribute: the
@@ -1068,7 +1069,8 @@ wrapper `<svg>` in `Icon` carries every shared attribute (the viewBox, `fill: no
 `stroke: currentColor`, the 2px weight, the round joins), so a glyph in the file is only geometry.
 Every one of the thirty-six was checked back against its source element-by-element and
 attribute-by-attribute before the tarball was deleted; that check is what makes "transcribed" a
-claim rather than a hope.
+claim rather than a hope. Deleting a glyph needs no tarball — the five that went were removed
+whole, and the orphan check is what said which five.
 
 Real elements rather than `innerHTML`: the generated JSX typechecks, renders through Solid's
 compiler like any other markup, and is reviewable in a diff.
@@ -1081,9 +1083,9 @@ rather than the single gap in a column of thirty. `IconName` reaches `screens.ts
 `import type`, so the union is checked without the state layer taking a runtime dependency on a
 component.
 
-`NAV_GROUPS` entries carry one too. `webhook` appears twice on purpose: the Integrations group holds
-exactly one entry, so the group and the entry are the same thing, and giving them different glyphs
-would imply a distinction that is not there.
+`NAV_GROUPS` entries carried one too, until the accordion (see *The nav, rewritten* below) took the
+icons off the group headings — so the set is now exactly one glyph per screen, and the five that
+only the headings drew were deleted rather than left as orphans.
 
 ### The cost, measured
 
@@ -1099,7 +1101,7 @@ already had.
 
 ### What is tested, and what is not
 
-Not tested: that every screen and group has an icon, and that the name resolves to a glyph. Both are
+Not tested: that every screen has an icon, and that the name resolves to a glyph. Both are
 compile-time facts (`Screen.icon` is a required `IconName`; `GLYPHS` is a `Record<IconName, …>`), and
 a runtime assertion of either could only ever pass.
 
@@ -1132,3 +1134,99 @@ the twenty-seven remaining copies of the `ApiError` ternary (mechanical, not a d
 actions — which are on the owner's checklist but which no screen has row selection for today, so
 they are new capability rather than cleanup, and they are where an admin console does damage at
 scale. That one is a question for the owner, not a default to pick.
+
+## The nav, rewritten: three questions it could not answer (2026-09-09)
+
+Reported by the owner, in their words: the left nav's active dropdown is unclear and too long, and
+you cannot see which tab is open. Three separate faults, and each was measurable rather than a
+matter of taste.
+
+### What was actually wrong
+
+**The open entry and the hovered entry were the same colour.** The entry an operator was standing on
+carried `activeClass="bg-surface-raised font-semibold"`. Every entry carried
+`hover:bg-surface-raised`. In the light palette `--surface-raised` is `oklch(0.995 …)` against a
+`--surface` of `oklch(1 0 0)` — a half-percent step in lightness, which is at the edge of visible on
+a good monitor and gone on a shop's. So the question "which screen am I on" was answered by a tint
+the pointer produced anyway, plus a font weight.
+
+**The open group and the closed group were the same too.** Both headings were `text-ink-muted`, both
+`font-medium`, both the same size. The whole difference was one character: `▾` or `▸`.
+
+**And nothing bounded the nav.** `<main>` had `overflow-y-auto`; the nav had nothing. Six groups
+could all be open at once — thirty entries, around 1200px — so on a laptop the nav made the *page*
+tall and the page's own content went under the fold.
+
+### What was done
+
+- **The open entry is an accent tint.** Two new tokens, `--selected` and `--selected-ink`, in all
+  three palettes; the pair is gated as text by `scripts/wcag-contrast.mjs` (7.33:1 light, 9.03:1
+  dark). Not a side stripe: this tree bans a coloured left border as an accent (it reads as a nested
+  scrollbar and it moves the text). Hover moved to `bg-canvas`, so the two states are different
+  grounds rather than two versions of one.
+- **Which state is drawn is read from the screen table, not from the link.** `<A>`'s `activeClass`
+  matches on a path *prefix*, so `/stores/new` used to light Stores up as well and the nav claimed
+  two open screens. The nav now compares `screenIdAtPath` against the entry's id, which is exact.
+  `aria-current` still comes from the router, which already used an exact match — so the visible
+  state and the announced state now agree.
+- **The open group is told apart three ways at once**: ink from muted to full, weight from medium to
+  semibold, and one chevron turned rather than two swapped. A closed group holding the open screen
+  wears a dot, labelled *Contains the open screen* — its entries are `hidden`, so without the
+  heading saying it the accordion could put an operator somewhere the nav did not admit to.
+- **One group open at a time** (`lib/nav-groups.ts`). That is what makes the nav a fixed, short
+  shape — the headings plus at most one group's entries — however many groups the console grows. The
+  remembered answer became a single key, with `null` for "I closed the lot" and `undefined` for "the
+  operator has never said", which is the state the containment rule answers. The old stored shape (a
+  boolean per group) and a key naming a group that no longer exists both read as "nothing
+  remembered", because a stale key must degrade to a working nav rather than to a nav with nothing
+  open.
+- **From `md` up the shell is the viewport**: the nav and the page scroll in their own boxes. Below
+  `md` nothing is bounded, because there the nav is a disclosure that pushes the page down, and
+  squeezing the page into a shrinking box instead would be a different and worse control.
+- **Density, without giving up touch.** Group headings are 48px below `md` — where a heading is
+  tapped — and 32px from `md` up, where a mouse does not need 48. Entries gained the touch minimum
+  they never had below `md` (they were 40px everywhere, which is under the 48 the tokens declare)
+  and tightened to 36px above it.
+
+The honest cost: reaching a screen in another group is a click on that heading and then the entry,
+where before it could be one click if that group happened to be open. The command palette is the
+one-click path for an operator who knows where they are going, and it does not care about groups.
+
+### The regrouping — six categories became eight
+
+Two of the six were sized by how the console was built rather than by what an operator does with it.
+"Master data" held eleven entries: the menu, the floor plan, the kitchen stations, the staff roster,
+the reason codes, the stores. That is not a category, it is everything that is not a report — and a
+category whose contents nobody can predict is worse than none, because you read all thirty names
+every time.
+
+Two of them also filed screens under headings that invited the wrong conclusion, which is the more
+expensive failure:
+
+- **Subject requests** sat under Settings. It is the instrument that erases or exports a named
+  customer's data under Decree 13 (ADR-0076). Nobody looks for that beside a store's opening hours,
+  and "a setting" is exactly what it must not read as. It is now under **Compliance**, with the audit
+  trail — the other thing an inspector asks for.
+- **People** sat beside **Admins** under a heading about access. People are shop staff with PINs on a
+  till; admins are console users with a password and a role over the whole tenant. Filing them
+  together invites the belief that adding a person grants console access. They are now two groups
+  apart: People is Operations, Admins is Access.
+
+| Group | Entries |
+| --- | --- |
+| Overview | store overview, reports, alerts |
+| Menu & pricing | menu, layout, media, channels & payments, campaigns, tax rates |
+| Operations | floor, kitchen stations, inventory, reason codes, people |
+| Stores & devices | stores, fleet, devices, activation, OTA, reconciliation |
+| Settings | configuration, store settings, translations |
+| Access & integrations | admins, API keys, webhooks |
+| Compliance | audit, subject requests |
+| My account | my sessions, my security |
+
+Six entries is the ceiling now, where the largest was eleven, and `tests/nav-groups.test.ts` holds
+both that and the arithmetic: every screen filed exactly once, and `newStore` — reached through
+Stores, not the sidebar — the only screen deliberately unfiled.
+
+One consequence worth naming: on `/stores/new` no group is open, because the wizard is in no group.
+That is the honest answer rather than a bug — no nav entry corresponds to the wizard, so marking one
+would be a lie — and eight short headings is a usable nav. It is asserted rather than left to chance.

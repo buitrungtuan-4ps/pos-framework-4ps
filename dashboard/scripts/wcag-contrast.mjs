@@ -158,12 +158,19 @@ const PAIRS = [
   ["ink-muted", "surface-raised", "text"],
   ["accent-ink", "accent", "text"],
   ["danger-ink", "danger", "text"],
+  // The open nav row: `selected-ink` on `selected`. Gated as text because that is what it is — the
+  // row's label — and it is the pair most easily got wrong, since a tint pale enough to sit under a
+  // whole row is also pale enough to lose its foreground.
+  ["selected-ink", "selected", "text"],
   ["accent", "surface", "text"],
   ["accent", "canvas", "text"],
   ["danger", "surface", "text"],
   ["ok", "surface", "text"],
   // Non-text, exempt under WCAG 1.4.11 — reported for the record, never gated.
   ["line", "surface", "ui"],
+  // The dot a closed group wears when it holds the open screen. Non-text, and it rides with a
+  // label, so it is reported rather than gated — same standing as the readiness marker.
+  ["selected-ink", "surface", "ui"],
   ["free", "canvas", "ui"],
   ["occupied", "canvas", "ui"],
   ["awaiting", "canvas", "ui"],
