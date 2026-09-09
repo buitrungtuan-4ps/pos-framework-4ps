@@ -153,7 +153,7 @@ export function ImagePicker(props: {
                       <button
                         type="button"
                         aria-label={t("media.selectThisImage")}
-                        class="rounded-token border border-line p-1 hover:border-accent"
+                        class="rounded-token border border-line p-1 transition-colors hover:border-accent"
                         onClick={() => {
                           props.onChange(asset.media_id);
                           setOpen(false);

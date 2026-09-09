@@ -97,7 +97,7 @@ export function CommandPalette() {
         onClick={close}
       >
         <div
-          class="w-full max-w-lg overflow-hidden rounded-token border border-line bg-surface shadow-lg"
+          class="w-full max-w-lg overflow-hidden rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <input

@@ -201,7 +201,7 @@ export function Shell(props: ParentProps) {
                         aria-expanded={open()}
                         aria-controls={`nav-group-${group.key}`}
                         onClick={() => setRemembered(remember(remembered(), group.key, !open()))}
-                        class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted hover:bg-surface-raised"
+                        class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted transition-colors hover:bg-surface-raised"
                       >
                         <span>{t(group.key)}</span>
                         <span aria-hidden="true">{open() ? "▾" : "▸"}</span>
@@ -226,7 +226,7 @@ export function Shell(props: ParentProps) {
                                   // tenant.
                                   href={screenHref(id, tenantId(), storeId())}
                                   end={specOf(id).path === "/"}
-                                  class={`flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base hover:bg-surface-raised ${
+                                  class={`flex items-center justify-between gap-2 rounded-token px-3 py-2 text-base transition-colors hover:bg-surface-raised ${
                                     blocked() ? "text-ink-muted" : "text-ink"
                                   }`}
                                   activeClass="bg-surface-raised font-semibold"

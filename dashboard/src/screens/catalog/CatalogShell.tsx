@@ -41,7 +41,7 @@ export function CatalogShell() {
                   type="button"
                   role="tab"
                   aria-selected={tab() === entry.key}
-                  class={`min-h-touch rounded-t-token px-4 text-sm font-medium ${
+                  class={`min-h-touch rounded-t-token px-4 text-sm font-medium transition-colors ${
                     tab() === entry.key
                       ? "border-b-2 border-accent text-ink"
                       : "text-ink-muted hover:text-ink"

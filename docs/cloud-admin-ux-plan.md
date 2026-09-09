@@ -726,3 +726,114 @@ was a count of `grep` hits, which included the two entries in `en.json` and `vi.
 fourteen, thirteen became skeletons and one stayed as words on purpose — the context picker's create
 button, whose own label reads "Loading…" while a request is in flight. A button is not a placeholder
 for content that is arriving, so a skeleton there would have been wrong rather than missing.
+
+## Stage 6 — the visual system, part one: what the tokens said and what the code did (2026-09-09)
+
+§3w.4 item 17 lists Stage 6 as "typography scale, spacing rhythm, elevation, iconography, motion,
+dark mode, and the header/identity/avatar work", and calls it optional, no operational risk, and
+cheapest to do last. That framing was right about the ordering and wrong about the risk: measuring
+the six subjects before restyling anything found that two of them were not missing polish but
+**broken**, and one of the two only in dark mode, which is why nobody had reported it.
+
+### What was measured, and what it found
+
+Six greps, before any change:
+
+| subject | state found |
+| --- | --- |
+| typography | **clean.** 502 size classes, every one on the six-step token scale, no arbitrary values |
+| colour | **clean.** No hex, `rgb()` or raw `oklch()` anywhere in `src/` — every colour goes through a token |
+| spacing | **clean.** No arbitrary spacing values |
+| elevation | **no token at all.** 6 sites on Tailwind's default `shadow-lg` |
+| motion | **1 site in the whole console**, and it bypassed the token it was built from |
+| iconography | absent from the nav (still Stage 6, still outstanding) |
+
+So four of the six subjects the plan lists as Stage 6 work were already done, which is the answer to
+whether a "token pass" was needed: the tokens were being honoured everywhere they existed. The two
+findings are the two places a token did *not* exist, and both had produced a real defect.
+
+### Elevation: the same class name was correct in one theme and inert in the other
+
+`shadow-lg` is `0 10px 15px -3px rgb(0 0 0 / 0.1)`. Over the light palette, that is a shadow. Over
+the dark palette — `--canvas` at `oklch(0.17 0.01 260)` — a ten-percent black shadow on a near-black
+ground is nothing at all. Every floating surface in the console (both modal shapes, the command
+palette, the org-switcher dropdown, the notification dropdown, the toast) therefore had depth in
+light mode and none in dark, reading as a flat patch of slightly different grey held apart from the
+page by its 1px border alone.
+
+This is precisely the failure the colour tokens exist to prevent, and elevation was the one visual
+property still outside them — because a drop shadow does not look like a colour. It is one:
+`--elevation-raised` and `--elevation-overlay` are now runtime variables with a value per theme,
+forwarded as the `shadow-raised` and `shadow-overlay` utilities. Dark does not merely deepen the
+alpha (though it does, from 10% to 50–60%, which is where a shadow starts to register on that
+ground); the overlay step also carries a hairline light ring, because on a dark background the eye
+reads the *lit top edge* of a floating surface as "above", and a shadow cannot draw an edge that
+faces the light.
+
+`Card` gained `shadow-raised`, which it never had. In the light palette `--surface` and `--canvas`
+differ by two percent of lightness, so until now every card in the console was separated from the
+page by its border and nothing else.
+
+### Motion: a token with zero consumers
+
+`--ease-token` had been declared in `@theme` since P6. Nothing used it. The one component in the
+console that animated anything — `Button` — wrote `ease-[cubic-bezier(0.2,0,0,1)]`, the token's
+exact value, longhand as an arbitrary Tailwind class, next to a bare `duration-150`. The token
+existed, its value was duplicated in a class string, and `tokens.css`'s own opening promise that "a
+utility resolves to a token, never a magic number" was not true of the only motion in the product.
+
+The fix is not to write `ease-token` at that one site. It is to set Tailwind's two
+`--default-transition-*` variables from the tokens, so that a **bare** `transition-colors` picks up
+the house easing and duration and a site that wants the house motion writes no number at all. That
+is the only version of a motion token a screen cannot drift away from. Sixteen hover states that
+changed colour instantly — the nav entries, the group headings, the catalog tabs, the dropdown rows,
+the dialog close buttons, the pager arrows — now transition, and not one of them names a duration.
+
+One hover was deliberately left alone: `Layout.tsx` hovers to an underline, and a text-decoration
+appearing has nothing to interpolate, so a transition class there would read as motion and produce
+none.
+
+### A third finding, in the gate rather than the product
+
+`tokens.css` holds three blocks that carry runtime values: light, system-dark
+(`@media (prefers-color-scheme: dark)`) and chosen-dark (`:root[data-theme="dark"]`). The WCAG-AA
+contrast gate — which runs on every build in both front-ends — read **two** of them: light and
+chosen-dark. The one it skipped is the palette a viewer whose system is dark and who has never
+picked a theme actually gets, which is to say the default dark experience was the only palette never
+audited. It passed only because it duplicates the chosen-dark block verbatim, and nothing checked
+that it still did; editing one and not the other would have shipped an unaudited palette with no
+failure anywhere.
+
+`scripts/wcag-contrast.mjs` now audits all three (36 gated pairs, up from 24) and, before that,
+checks the blocks against each other: the same token names in all three — the invariant the file
+states in prose and nothing enforced — and identical values in the two dark blocks, which is what
+makes duplicating them safe. The till's copy of the gate had the identical hole and got the identical
+fix; the two scripts remain byte-identical, which is how they are maintained.
+
+The till needed nothing else: it uses no shadows and no motion, so it has neither component-side
+defect. It was not given elevation tokens it has no use for.
+
+### Where the checks live, and why they are split
+
+`dashboard/tests/visual-tokens.test.ts` owns the component half — no `.tsx` reaches past the tokens
+to Tailwind's default shadow scale, none writes its own easing or duration, every colour hover
+transitions (checked per class value, not per file: a file-level check passes a file whose *second*
+hover site was missed, which is the shape this defect actually had), and both elevation steps have
+consumers, so the suite cannot pass by there being no shadows left to draw.
+
+The CSS half is in the contrast gate rather than beside it, and not by preference. Vitest stubs CSS
+imports (`css: false`), so a `?raw` import of a stylesheet resolves to an **empty string** under the
+test runner and every assertion about its contents passes vacuously — which the first version of
+this suite did, silently, until the probe that caught it. A check that cannot see its subject is
+worse than no check. The gate already parses `tokens.css` and already exits non-zero, so the
+invariant went where the file can actually be read.
+
+Each of the five component checks and both new gate checks was verified by breaking it and watching
+it fail while naming the offending file, then restoring the file byte-identically.
+
+### Still outstanding in Stage 6
+
+Iconography (the nav icons deferred from #261), the theme choice the console cannot offer — the
+`data-theme` attribute is honoured by the CSS and nothing in the console ever sets it, while the
+till has a toggle for it — and the header identity block, which is the "header/identity/avatar" half
+of item 17. All three are additive.

@@ -16,6 +16,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every floating surface was invisibly flat in dark mode.** Both modal shapes, the command
+  palette, the org-switcher dropdown, the notification dropdown and the toast all used Tailwind's
+  default `shadow-lg` — a ten-percent black shadow. Over a white page that is a shadow; over the
+  dark palette's near-black canvas it is nothing, so in dark mode every overlay in the console lost
+  its depth and read as a flat patch of slightly different grey. Elevation is now a design token
+  with a value per theme, like every colour: two steps, `raised` for a surface sitting on the page
+  and `overlay` for one floating above it. Cards gained the first, which they never had — until now
+  a card was separated from the page by its border alone (#264).
+
+- **The console's motion token had no consumers.** `--ease-token` had been declared since P6 and was
+  used nowhere: the one button that animated wrote the token's exact value out longhand as an
+  arbitrary class, beside a hardcoded duration. Both now come from the tokens, which is what lets
+  the sixteen hover states that changed colour instantly — the nav, the tabs, the dropdown rows, the
+  dialog close buttons — transition without any of them naming a number (#264).
+
+- **The contrast gate audited a palette nobody sees and skipped the one most people do.** Both
+  front-ends check every text pair against WCAG AA on every build, but only in the light palette and
+  the *explicitly chosen* dark one. The palette a viewer whose system is dark and who has never
+  picked a theme actually gets — the `prefers-color-scheme` block — was never audited. It passed
+  only because it duplicates the chosen-dark block verbatim, and nothing checked that it still did.
+  All three are now audited, and the gate first checks that they declare the same tokens and that
+  the two dark blocks still agree, so the duplication cannot drift unnoticed (#264).
+
 ### Added
 
 - **A loading screen shows the shape of what is coming.** Thirteen places answered a pending read

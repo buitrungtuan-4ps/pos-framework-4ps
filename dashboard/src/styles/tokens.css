@@ -6,6 +6,11 @@
  * apart as CSS variables in `:root` and re-pointed for dark, so a theme is a swap of values and the
  * structure never moves. `@theme` colours forward to those variables, which is what lets one utility
  * (`bg-surface`) be correct in both themes.
+ *
+ * Elevation sits in both halves for the same reason: `--shadow-raised`/`--shadow-overlay` are the
+ * utilities, and what they point at is re-pointed per theme, because a drop shadow is a colour. A
+ * shadow works on a white page by darkening the ground under a lighter surface; on a near-black
+ * page the surface is already the lighter thing and a 10%-black shadow does nothing at all.
  */
 
 @theme {
@@ -20,8 +25,15 @@
   /* One radius, one border. */
   --radius-token: 0.5rem; /* 8px */
 
-  /* Motion: 100–150ms, one easing. Honoured only when the viewer allows motion (see base). */
+  /* Motion: 100–150ms, one easing. Honoured only when the viewer allows motion (see base).
+   *
+   * `--ease-token` is the `ease-token` utility. Overriding Tailwind's two `--default-transition-*`
+   * variables is what makes a *bare* `transition-colors` honour this easing and duration, so a site
+   * that wants the house motion writes no duration and no easing class at all — which is the only
+   * version of this token that a screen can't drift away from by writing its own number. */
   --ease-token: cubic-bezier(0.2, 0, 0, 1);
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: var(--ease-token);
 
   /* Touch targets: 48px minimum, 60px for money and primary actions. */
   --spacing-touch: 3rem; /* 48 */
@@ -45,6 +57,13 @@
   --color-occupied: var(--occupied);
   --color-awaiting: var(--awaiting);
   --color-cleaning: var(--cleaning);
+
+  /* Elevation, in two steps: `raised` for something sitting on the page (a card), `overlay` for
+     something floating above it (a modal, drawer, dropdown, toast). Both forward to runtime
+     variables for the same reason the colours do — a shadow is a colour, and a shadow tuned for a
+     white page is invisible on a near-black one. */
+  --shadow-raised: var(--elevation-raised);
+  --shadow-overlay: var(--elevation-overlay);
 }
 
 /* Light — the default palette. Every colour token is defined here so none has its only value in a
@@ -66,6 +85,13 @@
   --occupied: oklch(0.6 0.14 240);
   --awaiting: oklch(0.72 0.15 75);
   --cleaning: oklch(0.68 0.13 300);
+
+  /* A shadow in the ink's own hue rather than pure black: on a white page a neutral-grey shadow
+     reads as dirt, and a shadow carrying the page's own hue reads as depth. */
+  --elevation-raised:
+    0 1px 2px -1px oklch(0.22 0.02 260 / 0.08), 0 2px 6px -2px oklch(0.22 0.02 260 / 0.06);
+  --elevation-overlay:
+    0 4px 8px -2px oklch(0.22 0.02 260 / 0.1), 0 12px 28px -8px oklch(0.22 0.02 260 / 0.16);
 }
 
 /* Dark — the same roles, re-pointed. Guarded so an explicit light choice wins over the system. */
@@ -87,6 +113,15 @@
     --occupied: oklch(0.62 0.14 240);
     --awaiting: oklch(0.72 0.15 75);
     --cleaning: oklch(0.66 0.13 300);
+
+    /* The same geometry, at the alpha a shadow needs to register on a 0.17-lightness ground —
+       Tailwind's 10%-black default is invisible here, which is what this token replaces. The
+       overlay's third layer is a hairline light ring: on dark, the top edge of a floating surface
+       is what the eye reads as "above", and a shadow cannot draw an edge that faces the light. */
+    --elevation-raised: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 2px 6px -2px oklch(0 0 0 / 0.4);
+    --elevation-overlay:
+      0 4px 8px -2px oklch(0 0 0 / 0.5), 0 12px 28px -8px oklch(0 0 0 / 0.6),
+      0 0 0 1px oklch(1 0 0 / 0.06);
   }
 }
 
@@ -108,4 +143,9 @@
   --occupied: oklch(0.62 0.14 240);
   --awaiting: oklch(0.72 0.15 75);
   --cleaning: oklch(0.66 0.13 300);
+
+  --elevation-raised: 0 1px 2px -1px oklch(0 0 0 / 0.5), 0 2px 6px -2px oklch(0 0 0 / 0.4);
+  --elevation-overlay:
+    0 4px 8px -2px oklch(0 0 0 / 0.5), 0 12px 28px -8px oklch(0 0 0 / 0.6),
+    0 0 0 1px oklch(1 0 0 / 0.06);
 }

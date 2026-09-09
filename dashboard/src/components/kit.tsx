@@ -338,7 +338,7 @@ export function DataTable<T>(props: {
                         <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
                           <button
                             type="button"
-                            class="inline-flex items-center gap-1 font-medium hover:text-ink"
+                            class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
                             onClick={() => toggleSort(column)}
                           >
                             <span>{column.header}</span>
@@ -421,7 +421,7 @@ export function Modal(
         <div
           role="dialog"
           aria-modal="true"
-          class="w-full max-w-lg rounded-token border border-line bg-surface shadow-lg"
+          class="w-full max-w-lg rounded-token border border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
@@ -429,7 +429,7 @@ export function Modal(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted hover:text-ink"
+              class="text-ink-muted transition-colors hover:text-ink"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
@@ -467,7 +467,7 @@ export function Drawer(
         <div
           role="dialog"
           aria-modal="true"
-          class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-lg"
+          class="flex h-full w-full max-w-md flex-col border-l border-line bg-surface shadow-overlay"
           onClick={(event) => event.stopPropagation()}
         >
           <header class="flex items-center justify-between gap-4 border-b border-line px-4 py-3">
@@ -475,7 +475,7 @@ export function Drawer(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted hover:text-ink"
+              class="text-ink-muted transition-colors hover:text-ink"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
@@ -694,7 +694,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.upLabel}
                 disabled={index() === 0}
-                class="text-ink-muted hover:text-ink disabled:opacity-30"
+                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() - 1)}
               >
                 <span aria-hidden="true">▲</span>
@@ -703,7 +703,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.downLabel}
                 disabled={index() === props.items.length - 1}
-                class="text-ink-muted hover:text-ink disabled:opacity-30"
+                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() + 1)}
               >
                 <span aria-hidden="true">▼</span>
