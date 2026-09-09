@@ -16,8 +16,9 @@ import {
 } from "solid-js";
 
 import { t } from "../i18n";
+import type { EntityCrud } from "../lib/entity-crud";
 import { useEscape } from "../lib/escape";
-import { Button, TextField } from "./ui";
+import { Banner, Button, TextField } from "./ui";
 
 // --- Pager --------------------------------------------------------------------------------------
 
@@ -478,6 +479,139 @@ export function Drawer(
           </Show>
         </div>
       </div>
+    </Show>
+  );
+}
+
+// --- FormPanel ------------------------------------------------------------------------------------
+
+/**
+ * The one shell every create and edit form lives in
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §1).
+ *
+ * It owns the chrome and nothing else: `Drawer` or `Modal`, the title chosen from the lifecycle's
+ * mode, the footer's Cancel and submit, the submit's disabled-while-saving state, the refusal
+ * banner, and the guard on closing with unsaved changes. The **fields stay with the screen**, as
+ * ordinary `FormField` children — ADR-0121 §2 records why this is a shell rather than a declarative
+ * field schema, and the short version is that the floor editor, the layout grid and the translation
+ * matrix would all have had to escape a schema.
+ *
+ * Renders as a drawer by default. `as="modal"` suits a form of about three fields or fewer; a modal
+ * does not scroll its body, so a long form in one is a form with a cut-off bottom.
+ *
+ * `dirty` is optional and, when given, is asked before any close the operator did not ask for by
+ * name — Escape, the backdrop, Cancel. The prompt replaces the footer rather than stacking a second
+ * dialog: a nested `role="dialog"` inside an `aria-modal` one is a focus-trap argument nobody wins,
+ * and the question is small enough to ask in place.
+ */
+export function FormPanel<T>(
+  props: ParentProps<{
+    crud: EntityCrud<T>;
+    createTitle: string;
+    editTitle: string;
+    submitLabel: string;
+    onSubmit: () => void;
+    as?: "drawer" | "modal";
+    /** Whether the form holds unsaved input. Omitted means closing never asks. */
+    dirty?: () => boolean;
+  }>,
+) {
+  const [confirmingDiscard, setConfirmingDiscard] = createSignal(false);
+
+  // Open for `creating` and `editing` only. `confirming` is the same lifecycle in a different shape
+  // and belongs to `ConfirmDialog`, so a panel must not appear over it.
+  const open = () => props.crud.mode() === "creating" || props.crud.mode() === "editing";
+
+  const finish = () => {
+    setConfirmingDiscard(false);
+    props.crud.close();
+  };
+
+  // Every close the operator did not spell out goes through here. A save in flight ignores it: the
+  // write is already gone to the server, and closing would leave them unable to see how it landed.
+  const requestClose = () => {
+    if (props.crud.saving()) {
+      return;
+    }
+    if (props.dirty?.()) {
+      setConfirmingDiscard(true);
+      return;
+    }
+    finish();
+  };
+
+  const body = (
+    <form
+      class="flex flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        props.onSubmit();
+      }}
+    >
+      {props.children}
+      <Show when={props.crud.error()}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
+      {/* A submit inside the form, so Enter in any field saves; the footer's button targets it by
+          id rather than duplicating the handler, which would let the two drift. */}
+      <button type="submit" class="hidden" aria-hidden="true" tabindex={-1} />
+    </form>
+  );
+
+  const footer = (
+    <Show
+      when={confirmingDiscard()}
+      fallback={
+        <>
+          <Button variant="secondary" onClick={requestClose} disabled={props.crud.saving()}>
+            {t("action.cancel")}
+          </Button>
+          <Button onClick={() => props.onSubmit()} disabled={props.crud.saving()}>
+            {props.crud.saving() ? t("common.saving") : props.submitLabel}
+          </Button>
+        </>
+      }
+    >
+      <div class="flex w-full items-center justify-between gap-4">
+        <p class="text-sm text-ink">{t("form.discardPrompt")}</p>
+        <div class="flex gap-2">
+          <Button variant="secondary" onClick={() => setConfirmingDiscard(false)}>
+            {t("form.keepEditing")}
+          </Button>
+          <Button variant="danger" onClick={finish}>
+            {t("form.discard")}
+          </Button>
+        </div>
+      </div>
+    </Show>
+  );
+
+  const title = () => (props.crud.mode() === "editing" ? props.editTitle : props.createTitle);
+
+  return (
+    <Show
+      when={props.as === "modal"}
+      fallback={
+        <Drawer
+          open={open()}
+          title={title()}
+          closeLabel={t("action.close")}
+          onClose={requestClose}
+          footer={footer}
+        >
+          {body}
+        </Drawer>
+      }
+    >
+      <Modal
+        open={open()}
+        title={title()}
+        closeLabel={t("action.close")}
+        onClose={requestClose}
+        footer={footer}
+      >
+        {body}
+      </Modal>
     </Show>
   );
 }

@@ -136,6 +136,57 @@ export function TextField(
 }
 
 /**
+ * A labelled `<select>`, the sibling `TextField` never had
+ * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ *
+ * Its absence is why there are 53 raw `<select>` across 22 screens. That is not a styling
+ * complaint: each hand-rolled one re-invents the label association — most wrap the control in a
+ * bare `<label>` with a `<span>`, which works, but nothing checks it — and none can be reached by
+ * `FormField`'s error slot, so a refused choice has nowhere to say so.
+ *
+ * `options` carries already-translated labels; the empty-value option is `placeholder`, present only
+ * when given, so "no brand" is an explicit choice a caller opts into rather than a blank row every
+ * select inherits.
+ */
+export function SelectField(props: {
+  label: string;
+  value: string;
+  options: readonly { readonly value: string; readonly label: string }[];
+  onChange: (value: string) => void;
+  placeholder?: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const hintId = createUniqueId();
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <select
+        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
+        value={props.value}
+        disabled={props.disabled}
+        aria-describedby={props.hint ? hintId : undefined}
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+      >
+        <Show when={props.placeholder}>
+          {(placeholder) => <option value="">{placeholder()}</option>}
+        </Show>
+        <For each={props.options}>
+          {(option) => <option value={option.value}>{option.label}</option>}
+        </For>
+      </select>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </label>
+  );
+}
+
+/**
  * A money input (ADR-0082) that edits an integer amount in a currency's smallest unit — the exact
  * `amount_minor` it stores — grouping the digits for the active locale as the operator types and
  * showing the (separately chosen) currency code as a static adornment. Only digits are accepted; an

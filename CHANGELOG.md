@@ -32,6 +32,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   different tenant therefore left the previous tenant's shop in scope. The invariant now lives in
   `setTenantId`, so both paths honour it.
 
+### Added
+
+- **One way to author an entity, and it is not a card at the bottom of the page.** Three additions
+  to the console kit ([ADR-0121](docs/adr/0121-one-way-to-author-an-entity.md), #267):
+
+  `FormPanel` is the shell every create and edit form now lives in — a drawer, or a modal for a
+  short form — owning the title, the footer, the disabled-while-saving submit, the refusal banner,
+  Escape and backdrop close, and a prompt before discarding unsaved input. The fields stay with the
+  screen as ordinary `FormField` children; ADR-0121 §2 records why this is a shell rather than a
+  declarative field schema, and the short version is that the floor editor, the layout grid and the
+  translation matrix would all have needed to escape one.
+
+  `useEntityCrud` owns the write lifecycle — `idle`/`creating`/`editing`/`confirming`, the subject,
+  a `saving` flag and the last refusal — replacing the per-screen `busy`/`error`/`editing`/`pending*`
+  sprawl. One instance per entity type, not per screen, so a screen authoring two kinds of thing no
+  longer freezes one while the other saves. Its `run()` is the single write path, and it **closes
+  only on success**: a refused save keeps the form and the operator's typing, which matters because
+  [ADR-0094](docs/adr/0094-console-optimistic-concurrency.md) makes a stale refusal routine.
+
+  `SelectField` joins `TextField`, so the 53 raw `<select>` across 22 screens have somewhere to go —
+  each of those re-invented its own label association and could not be reached by `FormField`'s
+  error slot.
+
+  Nothing is restyled and no screen has moved onto them yet; U2 does that, screen by screen.
+
 ### Changed
 
 - **`docs/cloud-admin-ux-plan.md` no longer claims work the tree does not contain.** Stage 4's six
