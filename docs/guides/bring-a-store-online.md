@@ -171,6 +171,38 @@ wrong.
 Either way, the machine now knows which store it is, opens its SQLite event log, and serves the store
 UI on the LAN (`0.0.0.0:8787` by default).
 
+### The listen port, which on Windows is not open by default
+
+**The installers open it for you** — this used to be a step here, and the failure it causes is the
+most misleading one in the whole bring-up, so it moved into the script.
+
+Defender Firewall drops an inbound connection to a port no rule names, silently and with no log line
+on either side. A Windows store installed correctly in every other respect therefore comes up, opens
+its database and writes its pairing URL, while every till on the floor gets a connection timeout —
+which looks exactly like a broken install. The Windows installer adds one rule, `pos-edge (TCP
+8787)`, on the **Private** profile only: the port is plain HTTP on the shop LAN, so a Public-profile
+rule would offer the till API to whatever network the box is plugged into next. Domain is left alone
+deliberately, for an estate that manages this with group policy. Re-running with a different port
+moves the rule rather than leaving the old port open beside the new one.
+
+On Linux there is usually nothing to do — a stock Debian or Ubuntu box ships no active packet filter
+— so the installer acts only on a filter that is actually **running** (`ufw status` reporting active,
+or `firewall-cmd --state` succeeding). A blind `ufw allow` on a box where ufw is installed but
+inactive would silently record a rule that first takes effect the day somebody enables the firewall
+for an unrelated reason, which is a change to the store's exposure made months earlier by an
+installer nobody remembers running.
+
+If the rule could not be added — a firewall switched off, driven by policy, or a Windows build
+without the `NetSecurity` module — the installer says so and carries on: the service is registered
+and running either way, and it is the port, not the store, that needs attention. Verify from a
+second machine on the LAN with `curl http://<the box>:8787/` before you go looking for anything else.
+
+None of this is a perimeter rule. **The store still accepts no inbound connection from the cloud**
+and needs no port forward on the router: every cloud→store flow is a store-initiated pull
+([ADR-0001](../adr/0001-offline-first-store-autonomy.md),
+[ADR-0061](../adr/0061-order-relay.md)). What is being opened is one host firewall, to the tills and
+kitchen displays on the same LAN.
+
 ### Reading the boot log
 
 **Do this now, before Step 3.** Everything the store server has to say — a config it will not parse, a
@@ -317,12 +349,50 @@ tablet may still be paired after a restart. Try again rather than assuming it is
 
 ---
 
+## Replacing the machine
+
+A store server is cattle, not a pet ([ADR-0003](../adr/0003-cattle-not-pets.md)): the shop's identity
+lives in the cloud, so replacing the box is a re-install and not a recovery. What follows is the same
+procedure whether the machine died overnight or is being retired on schedule.
+
+**Start in the console: Stores → the store's row → "Move to a new box".** That drawer is where the
+files come from, and it exists because they used to come only from the new-store wizard — which
+would have meant creating a *second* store to get an installer for an existing one. It leads with
+what a dead machine takes with it, because two of the four things are not in any file:
+
+| | Recovery |
+| --- | --- |
+| Which store this is, and which cloud it dials | **Regenerated.** A pure function of the registry row and this cloud's own origin. |
+| The store's sync key (`POS_EDGE_SYNC_KEY`) | **Re-issue.** Shown once and stored hashed, so it cannot be read back. The drawer issues a fresh one, scoped to the store with `read_config` + `relay_orders`. |
+| The device credential activation minted | **Gone.** It never left the old machine — it is in *that* machine's OS keyring ([ADR-0086](../adr/0086-edge-keyvault-and-activation.md)), not in a file and not on any screen. |
+| The store's event log (`store.sqlite`) | **Gone, in part.** Everything already published is safe in the fleet stream; anything still in the outbox is not. |
+
+Then, on the new machine:
+
+1. **Run the installer** the drawer gave you, with the binary. Same script as a first install and
+   safe to run twice.
+2. **Read the boot log** and find `pos_edge listening` (§"Reading the boot log").
+3. **Activate it.** This is the step that is easiest to miss, and the reason the drawer leads with
+   prose: a replacement box installs cleanly, boots, serves `/setup` — and will not sell, because
+   the boot gate reads a device credential it does not have. Issue a new activation code on
+   **Activation** and type it on the new box's `/setup`. A fresh code can always be minted for a
+   device slot; the `409` you may have read about is the *edge* refusing a second code for a box
+   that is already activated, which a new machine is not.
+4. **Pair the tills.** The installer prints the pairing URL; the log holds it too.
+5. **Take the old machine off the network, and revoke its key** on **API keys**. Issuing a new key
+   does not disable the old one, and — say this plainly — **the lease supersedes a replaced box for
+   updates, not for trading.** Two boxes on one store will both sell today. Unplug or wipe the one
+   you replaced; do not leave it powered on "just in case".
+
+If the old disk is readable, copy `store.sqlite` across before starting the new server: that is the
+only way to recover events the box committed but had not yet published. There is no off-box backup
+of it in this release — [ADR-0046](../adr/0046-backups-and-restore.md)'s store half (edge WAL
+shipping) is unbuilt, and the gate register records that rather than hiding it.
+
 ## The store is online
 
 It trades offline, it is named in the registry, it is activated, its tills are paired, and it takes
-configuration from the cloud. To swap the machine later (the 5–10 minute "cattle, not pets" replacement), re-drop the
-same `config.toml` and re-activate — the fresh box picks up where the old one left off
-([ADR-0003](../adr/0003-cattle-not-pets.md)).
+configuration from the cloud.
 
 ## Where to next
 

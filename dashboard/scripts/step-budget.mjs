@@ -90,6 +90,17 @@ const TASKS = [
     ],
   },
   {
+    task: "Replace a store's machine and get its files back",
+    budget: null,
+    note: "Four, and the middle two are the point rather than overhead: the drawer opens without writing anything (so reading what a dead machine costs cannot mint a credential), and the key is issued deliberately, because it is a new secret and the old one keeps working until somebody revokes it. It was unbounded before this flow existed — the only way to get an installer for an existing store was to create a second store — so the honest comparison is not four against three, it is four against reading a generator's source.",
+    steps: [
+      { nav: "stores" },
+      { screen: "stores", action: "openHandoff" },
+      { screen: "stores", action: "issueHandoffKey" },
+      { screen: "stores", action: "downloadHandoff" },
+    ],
+  },
+  {
     task: "Acknowledge a firing alert",
     budget: null,
     note: "Two. Acknowledging from the list rather than from a detail drawer is what keeps it at two — the drawer offers the same action for someone who opened it to read the detail first.",
