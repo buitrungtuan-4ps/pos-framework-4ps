@@ -43,6 +43,44 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
 
+/**
+ * The two steps that remain once the wizard has finished, as links rather than as two screen names
+ * in prose.
+ *
+ * The closing banner used to read "Next: activate the store's devices (Activation) and publish its
+ * configuration (Configuration)". That is the right advice, addressed to somebody who already knows
+ * where those two screens live and can find this store in the top bar again — which is nobody who
+ * needed a wizard. Both links carry the store that was just created rather than the ambient
+ * context, which at this point is still whatever store the operator had chosen before they opened
+ * the wizard.
+ *
+ * Exported so `tests/wizard-next-steps.test.tsx` can assert both links exist and both are scoped:
+ * the defect was silent, because prose naming a screen renders exactly as well as a link to it.
+ */
+export function NextSteps(props: { tenant: string; store: string }) {
+  return (
+    <div class="flex flex-col gap-2 border-t border-line pt-4">
+      <span class="text-sm font-medium text-ink">{t("wizard.nextTitle")}</span>
+      <p class="text-sm text-ink-muted">{t("wizard.doneHint")}</p>
+      <ul class="flex list-inside list-disc flex-col gap-1 text-sm">
+        <li>
+          <a
+            class="text-accent underline"
+            href={screenHref("activation", props.tenant, props.store)}
+          >
+            {t("wizard.nextActivation")}
+          </a>
+        </li>
+        <li>
+          <a class="text-accent underline" href={screenHref("config", props.tenant, props.store)}>
+            {t("wizard.nextConfig")}
+          </a>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 export function NewStore() {
   const navigate = useNavigate();
 
@@ -442,7 +480,9 @@ export function NewStore() {
                 </div>
               </div>
 
-              <Banner tone="ok" message={t("wizard.doneHint")} />
+              <Show when={created()}>
+                {(store) => <NextSteps tenant={tenantId()} store={store().store_id} />}
+              </Show>
               <div>
                 <Button onClick={() => navigate(screenHref("stores", tenantId(), ""), { replace: true })}>
                   {t("wizard.finish")}
