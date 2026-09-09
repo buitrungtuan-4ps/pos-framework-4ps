@@ -18,6 +18,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Every nav entry and every nav group carries an icon**, and the command palette shows them too.
+  Thirty entries in six groups were text alone, so the two screens an operator opens every day were
+  found by reading rather than by shape. The glyphs are transcribed from Lucide's published SVGs and
+  checked in as source with the notice its ISC licence requires — no package, no lockfile entry,
+  nothing in `node_modules`, and only the thirty-six actually used ship. A hand-drawn set of thirty
+  would have been thirty stroke weights, which is noise that makes the recognisable ones harder to
+  find; that is why #261 collapsed the nav and left the icons for this stage (#264).
+
 - **The console can be set to light or dark, or told to follow the operating system.** The
   stylesheet has honoured a theme choice since P6 and nothing in the console ever made one, so an
   operator got whichever palette their machine was in — while the till, reading the same token file,

@@ -33,6 +33,7 @@ import {
 } from "../state/screens";
 import { AccountMenu } from "./AccountMenu";
 import { CommandPalette, openPalette } from "./CommandPalette";
+import { Icon } from "./icons";
 import { ContextPicker } from "./ContextPicker";
 import { NotificationBell, ToastHost } from "./Toast";
 
@@ -189,7 +190,10 @@ export function Shell(props: ParentProps) {
                         onClick={() => setRemembered(remember(remembered(), group.key, !open()))}
                         class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token px-3 py-1 text-xs font-medium uppercase tracking-wide text-ink-muted transition-colors hover:bg-surface-raised"
                       >
-                        <span>{t(group.key)}</span>
+                        <span class="flex items-center gap-2">
+                          <Icon name={group.icon} />
+                          {t(group.key)}
+                        </span>
                         <span aria-hidden="true">{open() ? "▾" : "▸"}</span>
                       </button>
                       <ul
@@ -217,7 +221,10 @@ export function Shell(props: ParentProps) {
                                   }`}
                                   activeClass="bg-surface-raised font-semibold"
                                 >
-                                  <span>{t(specOf(id).key)}</span>
+                                  <span class="flex items-center gap-2">
+                                    <Icon name={specOf(id).icon} />
+                                    {t(specOf(id).key)}
+                                  </span>
                                   {/* Only a screen that cannot be opened yet is marked. A screen
                                       that is ready is the unremarkable case and carries nothing. */}
                                   <Show when={blocked() ? scope() : undefined}>

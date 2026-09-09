@@ -945,3 +945,112 @@ Verified by reinstating the bad import and watching it fail with
 
 Iconography — the nav icons deferred from #261 — and nothing else. Typography, colour, spacing,
 elevation, motion, dark mode and the header work are done.
+
+## Stage 6, part three: the icons, and how they got here (2026-09-09)
+
+The last item. #261 collapsed the nav and deliberately left the icons out, with the reason recorded
+at the time: "thirty emoji chosen by me would be decoration the visual system pass would redo".
+That still holds, and it is worth spelling out why, because the tempting shortcut is the bad one.
+
+### Why not simply draw them
+
+An icon earns its place by letting an operator stop reading the word — they learn the shape and go
+straight to it. That only works if the set is *consistent*. Thirty glyphs at thirty different stroke
+weights and optical sizes are visual noise, and noise does not merely fail to help: it makes the two
+or three genuinely recognisable icons harder to pick out, because the eye has more shapes to reject.
+Hand-drawing a coherent set of thirty is a designer's job. Hand-drawing an incoherent one would have
+been worse than the plain text it replaced.
+
+### Why not import an icon package
+
+That is the ordinary answer, and `AGENTS.md` §2 forbids it without an ADR merged first — correctly,
+because a runtime dependency is a supply chain, and this one would have been added for decoration.
+
+### What was done instead
+
+The geometry is **transcribed** from Lucide's published SVGs (ISC, 2077 icons) by a generator, and
+the thirty-six glyphs the console uses are checked in as source in
+`dashboard/src/components/icons.tsx` with the licence notice retained. No entry in `package.json`,
+nothing in the lockfile, nothing in `node_modules`, nothing for Dependabot or `deny.toml` to
+consider — and only what is drawn ships. The one thing not to do is hand-edit a `d` attribute: the
+value is a transcription, and a transcription that has been touched is a drawing with a false
+provenance.
+
+The generator is a fifty-line Python script; the reproducible part is the two commands and the
+mapping. To regenerate against a newer Lucide, outside the repository:
+
+```
+npm pack lucide-static@<version>
+tar xzf lucide-static-<version>.tgz
+```
+
+then, for each name in `ICON_NAMES`, take the child elements of `package/icons/<name>.svg` verbatim
+— every `<path>`, `<line>`, `<circle>`, `<rect>` — and emit them as the JSX body of that glyph. The
+wrapper `<svg>` in `Icon` carries every shared attribute (the viewBox, `fill: none`,
+`stroke: currentColor`, the 2px weight, the round joins), so a glyph in the file is only geometry.
+Every one of the thirty-six was checked back against its source element-by-element and
+attribute-by-attribute before the tarball was deleted; that check is what makes "transcribed" a
+claim rather than a hope.
+
+Real elements rather than `innerHTML`: the generated JSX typechecks, renders through Solid's
+compiler like any other markup, and is reviewable in a diff.
+
+### Where the icon lives in the model
+
+On the screen, in `state/screens.ts` — the table the router, the nav, the breadcrumb and the palette
+all read. `Screen.icon` is a required `IconName`, so a screen added without one is a compile error
+rather than the single gap in a column of thirty. `IconName` reaches `screens.ts` as an
+`import type`, so the union is checked without the state layer taking a runtime dependency on a
+component.
+
+`NAV_GROUPS` entries carry one too. `webhook` appears twice on purpose: the Integrations group holds
+exactly one entry, so the group and the entry are the same thing, and giving them different glyphs
+would imply a distinction that is not there.
+
+### The cost, measured
+
+| | shell chunk |
+| --- | --- |
+| before the icons | 55.0 kB (17.1 gzip) |
+| after 36 glyphs | 67.5 kB (20.9 gzip) |
+
+3.8 kB gzipped on a first visit, and it belongs in the shell rather than a lazy chunk because the nav
+renders on every authenticated screen — deferring it would mean the nav paints without icons and
+then reflows. The CSS did not change at all: the icons use `h-4 w-4 shrink-0`, utilities the tree
+already had.
+
+### What is tested, and what is not
+
+Not tested: that every screen and group has an icon, and that the name resolves to a glyph. Both are
+compile-time facts (`Screen.icon` is a required `IconName`; `GLYPHS` is a `Record<IconName, …>`), and
+a runtime assertion of either could only ever pass.
+
+Tested, because each has a failure nothing else would catch:
+
+- **The icons stay silent.** Every glyph rides beside a visible label, so the label is the accessible
+  name and `aria-hidden` is on the wrapper. Add a `<title>` to a glyph — the obvious "helpful"
+  change — and every nav entry announces its name twice, which a sighted reviewer cannot see.
+- **No glyph is orphaned**, in either direction. A vendored glyph nobody draws is bundle cost with no
+  benefit, and deleting a screen would leave one behind silently.
+- **No two glyphs share geometry**, which would mean a transcription took the wrong source — an icon
+  that looks plausible in the wrong place rather than one that looks broken.
+
+One imprecision found while writing this: `shell-bundle.test.ts` counted `import type` as a runtime
+edge, and `state/screens.ts` type-imports `IconName` from a component. `verbatimModuleSyntax` erases
+those entirely, so the guard would have reported a bundle cost that does not exist — and worse, would
+have fired on a future type-only import from `kit.tsx`. It now excludes them, verified both ways: a
+type-only import of `kit` passes, a value import of it fails.
+
+## Stage 6 is done
+
+All seven subjects of item 17: typography (already clean), spacing (already clean), colour (already
+clean), elevation, motion, dark mode, iconography, and the header/identity work. Two were broken
+rather than missing, one gate was auditing the wrong palette, one repo rule overruled a judgement
+call of mine, and one 14 kB regression was caused and caught inside the stage.
+
+That closes the plan's six stages. What remains outside them is recorded in the roadmap rather than
+here: Stage 1c (D1 per-admin login, which changes an authentication boundary and needs an ADR first),
+the twenty-seven remaining copies of the `ApiError` ternary (mechanical, not a defect), and bulk
+actions — which are on the owner's checklist but which no screen has row selection for today, so
+they are new capability rather than cleanup, and they are where an admin console does damage at
+scale. That one is a question for the owner, not a default to pick.

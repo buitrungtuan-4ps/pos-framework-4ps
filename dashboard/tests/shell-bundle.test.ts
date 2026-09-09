@@ -37,9 +37,16 @@ const sources: Record<string, string> = import.meta.glob("../src/**/*.{ts,tsx}",
  */
 const LAZY_ONLY = ["components/kit"];
 
-/** The `from "…"` specifiers of a module's static imports. A dynamic `import()` is not one. */
+/**
+ * The `from "…"` specifiers of a module's **value** imports.
+ *
+ * A dynamic `import()` is not one — that is the boundary this whole suite is about. Neither is
+ * `import type`, which `verbatimModuleSyntax` erases entirely: `state/screens.ts` type-imports
+ * `IconName` from a component, and counting that as a runtime edge would have this suite reporting
+ * a bundle cost that does not exist.
+ */
 function staticImports(text: string): string[] {
-  return [...text.matchAll(/^import\s(?:[\s\S]*?)from\s+"([^"]+)";/gm)].map(
+  return [...text.matchAll(/^import\s(?!type\s)(?:[\s\S]*?)from\s+"([^"]+)";/gm)].map(
     (match) => match[1] as string,
   );
 }
