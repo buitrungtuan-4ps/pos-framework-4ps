@@ -35,9 +35,18 @@ import { api, ApiError } from "../api/client";
 import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatMoney, formatRelativeAge } from "../lib/format";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { LOADING, type Panel, panelOf } from "../lib/panel";
+import {
+  configVerdict,
+  neverInstalled,
+  onlineVerdict,
+  toneClass,
+  type Tone,
+} from "../lib/posture";
+import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
+import { GetStarted } from "../components/GetStarted";
 import { Card, PageHeader } from "../components/ui";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
@@ -51,53 +60,9 @@ function ageSeconds(atMs: number): number {
   return Math.max(0, (Date.now() - atMs) / 1000);
 }
 
-/**
- * A card's own load outcome. A hub renders six independent answers, so one failed read must not
- * blank the page — and a page-level banner would make "the alert service is down" and "this shop has
- * no revenue yet" look identical, which is the mistake this type exists to prevent.
- */
-type Panel<T> = { readonly state: "loading" } | { readonly state: "ready"; readonly value: T } | {
-  readonly state: "failed";
-  readonly message: string;
-};
-
-const LOADING = { state: "loading" } as const;
-
-function panelOf<T>(promise: Promise<T>, set: (panel: Panel<T>) => void): Promise<void> {
-  return promise.then(
-    (value) => set({ state: "ready", value }),
-    (caught: unknown) =>
-      set({
-        state: "failed",
-        message: caught instanceof ApiError ? caught.message : String(caught),
-      }),
-  );
-}
-
 /** How many of `type` the day's activity rollup counted (absent means none happened). */
 function counted(day: DailyRollup | undefined, type: string): number {
   return day?.by_type[type] ?? 0;
-}
-
-/**
- * How a card's headline reads at a glance. The **support line always carries the same fact in
- * words**, so the hue is a second channel and never the only one — meaning carried by colour alone
- * is the accessibility failure the contrast gate's palette exists to avoid. `plain` is for a figure
- * that is neither good nor bad on its own: money taken is not a fault when it is low.
- */
-type Tone = "ok" | "attention" | "idle" | "plain";
-
-function toneClass(tone: Tone): string {
-  switch (tone) {
-    case "ok":
-      return "text-ok";
-    case "attention":
-      return "text-danger";
-    case "idle":
-      return "text-ink-muted";
-    default:
-      return "text-ink";
-  }
 }
 
 /** One card: a headline figure, a supporting line, and a link to the screen that owns the subject. */
@@ -180,6 +145,26 @@ export function StoreHub() {
     return panel.state === "ready" && panel.value.region_country !== null;
   };
 
+  // Whether the get-started checklist belongs on the screen.
+  //
+  // Six cards of absence do not tell an operator that this shop simply has not been installed yet,
+  // and the checklist does — so it renders whenever the setup is unfinished, and fires none of its
+  // reads when it is. A store that has checked in has been set up: every link of the chain happened
+  // or it could not have reported. That keeps the landing screen's request count flat for the whole
+  // life of a working store, which is the reason this decision is made here, on a read the hub
+  // already does, rather than inside the checklist on a seventh request of its own.
+  //
+  // With no store chosen the fleet read never runs — `onScopedContext("store")` is what gates it —
+  // so a permanently loading panel is not "we do not know yet", it is the fresh-install state, and
+  // the state the checklist exists for.
+  const showGetStarted = () => {
+    const panel = fleet();
+    if (panel.state === "ready") {
+      return neverInstalled(panel.value);
+    }
+    return !contextReady("store") || panel.state === "failed";
+  };
+
   // The answer an admin is typing, and whether one is in flight. Kept on the screen rather than in
   // the card, because the card is a pure render of a panel and this is the one place on the hub that
   // writes anything (ADR-0114; ADR-0099's read-only rule bends here for exactly one action, because
@@ -224,6 +209,9 @@ export function StoreHub() {
   return (
     <div class="space-y-6">
       <PageHeader title={t("hub.title")} description={t("hub.description")} />
+      <Show when={showGetStarted()}>
+        <GetStarted />
+      </Show>
       <RequireContext need="store">
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <HubCard
@@ -232,16 +220,19 @@ export function StoreHub() {
             link="fleet"
             linkLabel={t("hub.online.link")}
           >
-            {(store) => ({
-              headline: store.online ? t("hub.online.yes") : t("hub.online.no"),
-              tone: store.online ? "ok" : "attention",
-              support:
-                store.last_seen_at_ms === null
-                  ? t("hub.online.never")
-                  : t("hub.online.lastSeen", {
-                      when: formatRelativeAge(ageSeconds(store.last_seen_at_ms)),
-                    }),
-            })}
+            {(store) => {
+              const verdict = onlineVerdict(store);
+              return {
+                headline: t(verdict.headline),
+                tone: verdict.tone,
+                support:
+                  store.last_seen_at_ms === null
+                    ? t("hub.online.never")
+                    : t("hub.online.lastSeen", {
+                        when: formatRelativeAge(ageSeconds(store.last_seen_at_ms)),
+                      }),
+              };
+            }}
           </HubCard>
 
           {/* Where this store's data rests, and whether that agrees with the country the store
@@ -339,14 +330,17 @@ export function StoreHub() {
             link="config"
             linkLabel={t("hub.config.link")}
           >
-            {(store) => ({
-              headline: store.config_current ? t("hub.config.current") : t("hub.config.behind"),
-              tone: store.config_current ? "ok" : "attention",
-              support: t("hub.config.versions", {
-                held: store.config_version_held ?? t("hub.config.none"),
-                published: store.config_version_published ?? t("hub.config.none"),
-              }),
-            })}
+            {(store) => {
+              const verdict = configVerdict(store);
+              return {
+                headline: t(verdict.headline),
+                tone: verdict.tone,
+                support: t("hub.config.versions", {
+                  held: store.config_version_held ?? t("hub.config.none"),
+                  published: store.config_version_published ?? t("hub.config.none"),
+                }),
+              };
+            }}
           </HubCard>
 
           <Show

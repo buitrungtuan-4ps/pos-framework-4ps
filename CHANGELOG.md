@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console says what to do next.** A **get-started checklist** on the landing screen: the seven
+  links of the activation chain — an organisation, a brand, a store, that store's own key, a
+  published configuration, the machine installed with a till admitted, and the shop reporting — each
+  with its current state read from an endpoint the console already calls, and each linking to the
+  screen that does the work. Signing into a fresh console used to land on a store hub with no store,
+  whose only advice was "choose it in the top bar": correct, and impossible to follow, because there
+  was nothing to choose. Nothing anywhere said what the chain was; an operator learned it from a
+  runbook or from somebody who already knew. The list counts only the steps a shop cannot trade
+  without — a brand is marked optional because `POST /admin/stores` does not require one — stands
+  down entirely once they are done, and fires none of its reads for a store that has already
+  reported, so the landing screen's request count stays flat for the life of a working store. A step
+  whose read was refused says "could not check" rather than showing a cross: a role without
+  permission on the fleet has not failed to install anything (#260).
+
+- **The wizard hands over links, not the names of two screens.** Finishing the new-store wizard used
+  to close with "Next: activate the store's devices (Activation) and publish its configuration
+  (Configuration)" — the two steps a store cannot trade without, named in prose, addressed to
+  somebody who already knew where those screens were and could find the new store in the top bar
+  again. Both are now links, and both carry the store that was just created rather than whatever
+  store was in context before the wizard opened (#260).
+
 - **The console has a test harness.** Vitest plus a Solid testing library, and fifteen behavioural
   tests that render a piece of the console, do what an operator does, and assert what happens.
   `pnpm test` runs in the `pnpm build` chain, so the `dashboard` CI job that already runs on every
@@ -90,6 +111,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   fixing, not fixed by this change (#252).
 
 ### Fixed
+
+- **A store nobody has installed yet no longer opens in alarms.** The store hub read a freshly
+  provisioned store as **Not reporting** and **Behind**, both in the danger colour — two true
+  statements and two wrong pieces of advice, because no machine exists in that shop yet. Every new
+  store began life looking broken, which teaches an operator that red on this screen means nothing.
+  A store that has never once checked in now reads "Not installed yet" in a neutral hue, and the
+  configuration card separates the three gaps the server folds into one `config_current: false`:
+  nothing has been published yet, a published version has not reached a store that is not installed,
+  or a reporting store is holding an older version. Only the last is a fault, and only the last is
+  an alarm (#260).
 
 - **A mistyped API path answered `200 text/html`.** `pos_cloud` serves the console and the API on one
   origin, and the SPA fallback caught everything the router did not match — including
