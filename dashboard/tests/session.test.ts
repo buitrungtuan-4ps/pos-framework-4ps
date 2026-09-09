@@ -85,6 +85,48 @@ describe("the working context", () => {
     expect(session.storeName()).toBe(STORE_B.name);
   });
 
+  // ADR-0120 §3. The two ways a tenant enters the context used to disagree: `selectTenant` cleared
+  // the store, because a store belongs to a tenant, and `setTenantId` — the URL's way in — cleared
+  // only the name. The disagreement was masked while `TenantContext` cleared the store on every
+  // navigation, and making an absent `?store=` mean silence is what exposes it, so the invariant
+  // moved here where both paths honour it.
+  it("drops the store when the URL changes tenant", async () => {
+    const session = await freshSession();
+    session.selectTenant(TENANT_VN.id, TENANT_VN.name);
+    session.selectStore(STORE_A.id, STORE_A.name);
+
+    session.setTenantId(TENANT_JP.id);
+
+    expect(session.storeId()).toBe("");
+    expect(session.storeName()).toBe("");
+  });
+
+  it("keeps the store when the URL re-affirms the same tenant", async () => {
+    const session = await freshSession();
+    session.selectTenant(TENANT_VN.id, TENANT_VN.name);
+    session.selectStore(STORE_A.id, STORE_A.name);
+
+    // What every navigation within one tenant does — `TenantContext` re-affirms the path's tenant.
+    session.setTenantId(TENANT_VN.id);
+
+    expect(session.storeId()).toBe(STORE_A.id);
+    expect(session.storeName()).toBe(STORE_A.name);
+  });
+
+  // The clear has to reach the remembered copy too, or the next reload resurrects a shop that
+  // belongs to another tenant.
+  it("forgets the dropped store across a reload", async () => {
+    const first = await freshSession();
+    first.selectTenant(TENANT_VN.id, TENANT_VN.name);
+    first.selectStore(STORE_A.id, STORE_A.name);
+    first.setTenantId(TENANT_JP.id);
+
+    const reloaded = await reloadSession();
+
+    expect(reloaded.tenantId()).toBe(TENANT_JP.id);
+    expect(reloaded.storeId()).toBe("");
+  });
+
   it("remembers the context across a reload", async () => {
     const first = await freshSession();
     first.selectTenant(TENANT_VN.id, TENANT_VN.name);

@@ -126,5 +126,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0117](0117-a-headless-store-keeps-a-log.md) | A headless store keeps a log, and hands over its pairing code without logging it | Accepted |
 | [0118](0118-one-credential-per-box-and-the-cloud-learns.md) | One credential per box, and the cloud learns what a store admitted | Accepted |
 | [0119](0119-each-admin-signs-in-as-themselves.md) | Each admin signs in as themselves | Accepted |
+| [0120](0120-navigation-preserves-the-working-context.md) | An absent `?store=` is silence, not a denial | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

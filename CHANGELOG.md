@@ -18,6 +18,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Choosing a store once is enough.** The console's working context was destroyed by walking
+  through it. `screenHref` appends `?store=` only for a screen that declares `scope: "store"` — 7 of
+  26 — and `TenantContext` read an absent `?store=` as an instruction to clear, writing the empty
+  value through to `localStorage`. So picking a store on Devices and opening Translations lost it,
+  and going back to Devices asked for it again. An absent `?store=` is now silence rather than a
+  denial, which is what makes the remembered context the memory `state/session.ts` always claimed it
+  was ([ADR-0120](docs/adr/0120-navigation-preserves-the-working-context.md), #267).
+
+  Fixed with it, because decision (1) is what exposes it: `setTenantId` — the URL's way into the
+  context — cleared the remembered tenant *name* but left the store id alone, while the picker's
+  `selectTenant` cleared the store because a store belongs to a tenant. Following a link to a
+  different tenant therefore left the previous tenant's shop in scope. The invariant now lives in
+  `setTenantId`, so both paths honour it.
+
+### Changed
+
+- **`docs/cloud-admin-ux-plan.md` no longer claims work the tree does not contain.** Stage 4's six
+  primitives, its "create moves into the page header" item and Stage 5's resource helper were
+  recorded as delivered; measured against the tree, five of the six primitives are absent, the
+  create forms are still permanently-visible cards, and the console holds 523 `createSignal` against
+  2 `createResource`. The correction is in the document beside the items it corrects, and Track U
+  (§3w.6) carries what is actually being built.
+
+### Fixed
+
 - **An invited administrator can sign in.** `admin_users.password_phc` and `.totp_secret` have been
   written for every invited admin since the invitation route shipped, and sign-in read the single
   `super_admin` row instead — so the whole `/admins` roster, its invitations, its roles and its

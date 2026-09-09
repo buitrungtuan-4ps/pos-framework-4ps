@@ -51,24 +51,37 @@ export { storeName };
 const [tenantId, setTenantIdSignal] = createSignal(load(TENANT_KEY));
 export { tenantId };
 
+const [storeId, setStoreIdSignal] = createSignal(load(STORE_KEY));
+export { storeId };
+
 export function setTenantId(next: string): void {
   const trimmed = next.trim();
-  // A *different* tenant invalidates the remembered name. This is the URL's way in — `TenantContext`
-  // calls it on every navigation — and unlike `selectTenant` it is handed an id with no name beside
-  // it. Before this cleared, opening a link for one tenant while another was remembered left the top
-  // bar reading the old tenant's name over the new tenant's data (Wave 3 · D2). An empty name reads
-  // as the picker's placeholder, which is honest; a stale one is a lie, and the console publishes
-  // configuration under it.
+  // A *different* tenant invalidates the remembered name **and the remembered store**. This is the
+  // URL's way in — `TenantContext` calls it on navigation — and unlike `selectTenant` it is handed
+  // an id with no name beside it.
+  //
+  // The name half is Wave 3 · D2: before it cleared, opening a link for one tenant while another was
+  // remembered left the top bar reading the old tenant's name over the new tenant's data. An empty
+  // name reads as the picker's placeholder, which is honest; a stale one is a lie, and the console
+  // publishes configuration under it.
+  //
+  // The store half is [ADR-0120](../../../docs/adr/0120-navigation-preserves-the-working-context.md)
+  // §3. A store belongs to a tenant, so a store chosen under the old one cannot apply to the new —
+  // which is exactly why `selectTenant` has always cleared it. Until ADR-0120 this path did not, and
+  // the omission was masked by `TenantContext` clearing the store on *every* navigation; now that an
+  // absent `?store=` is silence rather than a denial, the invariant has to live here, where both ways
+  // a tenant enters the context can honour it.
   if (trimmed !== tenantId()) {
     setTenantNameSignal("");
     save(TENANT_NAME_KEY, "");
+    setStoreIdSignal("");
+    save(STORE_KEY, "");
+    setStoreNameSignal("");
+    save(STORE_NAME_KEY, "");
   }
   setTenantIdSignal(trimmed);
   save(TENANT_KEY, trimmed);
 }
-
-const [storeId, setStoreIdSignal] = createSignal(load(STORE_KEY));
-export { storeId };
 
 export function setStoreId(next: string): void {
   const trimmed = next.trim();
