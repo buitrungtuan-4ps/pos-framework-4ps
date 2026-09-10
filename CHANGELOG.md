@@ -18,6 +18,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A replaced till stops opening new orders, and finishes the ones it holds**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). Replacing a store's machine
+  bumps its lease, and until now that stopped the old box installing updates and nothing else — it
+  went on taking orders and minting receipt numbers as though it were still the shop. It now
+  refuses the three commands that create something: opening a shift, seating a table, and taking a
+  channel order from the relay. Everything already open still works — a seated table takes its next
+  round, fires it, gets its bill and settles — so the floor **drains** rather than the shop
+  stopping mid-service. A relayed order is refused as "not from here", so the cloud leaves it for
+  the replacement instead of dropping it.
+
+  Every till says so before anyone hits the refusal: each `/api/*` answer carries a
+  `pos-lease-standing` header and the store app draws a banner naming what still works here and
+  where new orders go. A box that reads *ahead* of the cloud keeps trading and gets a quieter
+  notice — under take-once the likeliest cause is a config rollback, which every till in the shop
+  would read at once, and an admin clicking "roll back" must not close a shop.
+
+  **Upgrade note.** Nothing changes for a store that has never been issued a lease, which is every
+  store until an operator deliberately issues one. When you do replace a machine: **bump the lease
+  first, then activate the replacement.** Copying the dead box's `store.sqlite` across to recover
+  unpublished events stays safe — activating the new box forgets any lease generation the copied
+  database carried. No migration, no wire change, no `PROTOCOL_VERSION` move.
+
 - **A store group is a cohort you publish to, and a batch names an outcome for every shop**
   ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The data a tenant authors was
   already shared — one price row prices an item for the whole estate — but delivery was not: every

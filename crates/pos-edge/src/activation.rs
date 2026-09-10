@@ -44,6 +44,7 @@ use pos_ports::{PortError, Secret};
 use pos_proto::ErrorStatus;
 
 use crate::app::Edge;
+use crate::lease_state::LeaseWatch;
 
 /// The collaborators the activation routes compose: the [`Edge`] (to append the completion event),
 /// the [`CloudSync`] channel (to exchange the code), and the [`KeyVault`] (to store the credential).
@@ -53,6 +54,10 @@ struct ActivationState<S, C, V> {
     edge: Arc<Edge<S>>,
     cloud: Arc<C>,
     vault: Arc<V>,
+    /// This box's lease, so activation can forget a generation it inherited from a copied
+    /// `store.sqlite` ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    /// `None` on a router built without one — the on-fakes example and the tests.
+    lease: Option<Arc<LeaseWatch>>,
 }
 
 // Hand-written rather than derived, so the state is `Clone` whatever `S`/`C`/`V` are (they sit behind
@@ -62,6 +67,7 @@ impl<S, C, V> Clone for ActivationState<S, C, V> {
         Self {
             edge: Arc::clone(&self.edge),
             cloud: Arc::clone(&self.cloud),
+            lease: self.lease.clone(),
             vault: Arc::clone(&self.vault),
         }
     }
@@ -96,6 +102,7 @@ pub fn activation_router<S, C, V>(
     edge: Arc<Edge<S>>,
     cloud: Arc<C>,
     vault: Arc<V>,
+    lease: Option<Arc<LeaseWatch>>,
     origins: &Arc<crate::origins::Origins>,
 ) -> Router
 where
@@ -117,7 +124,12 @@ where
     // credential that lands in the box's OS keyring (ADR-0086). A route that mints a machine
     // credential is not reachable from a page on another origin, and there is no cross-origin actor
     // in that story: an operator activates at the `/setup` screen the box itself serves.
-    let state = ActivationState { edge, cloud, vault };
+    let state = ActivationState {
+        edge,
+        cloud,
+        vault,
+        lease,
+    };
     Router::new()
         .route("/api/activate", post(activate::<S, C, V>))
         .merge(
@@ -179,6 +191,17 @@ where
     // credential that reached it is what makes the box activated.
     if let Err(error) = store_credential(state.vault.as_ref(), &grant.credential).await {
         return activation_error(&error);
+    }
+
+    // A box being activated is a box being provisioned, and this is the one moment that is a fact
+    // rather than a guess — so it forgets any lease generation it inherited (ADR-0123). Without
+    // this, a replacement built from a copy of the dead box's `store.sqlite` — which
+    // `docs/guides/bring-a-store-online.md` tells the operator to make, because it is the only way
+    // to recover unpublished events — comes up holding the dead box's generation, reads itself
+    // superseded, and refuses to seat a table. After the credential lands, so a failed exchange
+    // leaves the box exactly as it was.
+    if let Some(lease) = &state.lease {
+        lease.adopt_this_box().await;
     }
 
     // The completion event is a notification to the cloud, not the source of truth (the vault is), so
