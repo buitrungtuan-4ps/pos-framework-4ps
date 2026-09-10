@@ -1654,6 +1654,7 @@ dependencies = [
  "base64",
  "blob-garage",
  "bytes",
+ "chacha20poly1305",
  "csv",
  "getrandom 0.3.4",
  "hmac",
@@ -1690,6 +1691,7 @@ dependencies = [
  "url",
  "utoipa",
  "webpki-roots 1.0.9",
+ "zeroize",
 ]
 
 [[package]]

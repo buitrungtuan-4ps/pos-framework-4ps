@@ -18,6 +18,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud can hold a store's archive key, and cannot read it from its own backups**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The cloud half of the
+  store archive: migration `0062_store_archives.sql`, the per-store key, and the index of what each
+  store has shipped. The key is stored **wrapped** under a new box-local `archive_key_secret` in
+  `cloud.toml`, because `deploy/backup.sh` ships a `pg_dump` of the cloud database to the same
+  off-box tier the sealed archives sync to — a plaintext key column would have carried the key to
+  the same bucket as the ciphertext it opens, and the seal would have bought nothing at exactly the
+  tier it was bought for.
+
+  **Upgrade note.** `archive_key_secret` is 64 hexadecimal characters (`openssl rand -hex 32`) and
+  `bootstrap.sh` mints it. It is **optional**: a cloud without one runs exactly as before and
+  mounts no archive routes, saying so at boot. A malformed value is a boot refusal rather than a
+  warning, because a passphrase where a 32-byte key belongs mints keys nobody can unwrap and
+  nobody finds out until a restore. Changing the secret orphans every key already stored under it.
+
 - **A store's database can now be copied off the box, and opened again**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). Until now no copy of a shop's
   `store.sqlite` existed anywhere but the shop, so a dead disk took the unpublished outbox, the

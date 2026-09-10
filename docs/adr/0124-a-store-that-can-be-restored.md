@@ -81,6 +81,41 @@ The **A4 question is still open, and this record does not answer it.** Litestrea
 - **It does not deduplicate or do incrementals.** Every archive is the whole database. For a shop-sized database that is the right trade against a format nobody can open by hand in an emergency.
 - **It does not verify a restored store *trades*.** `integrity_check` proves the file is a database; that the edge comes up on it and reconciles every bill is the human drill, and it stays in `docs/gate-register.md` as one.
 
+**Amendment 1 (2026-09-10) — the cloud's copy of the key is wrapped, or decision 5 is not true.**
+
+Decision 5 said the cloud keeps a copy of each store's key, and that what the seal buys is *the
+tier beyond the cloud*: the object store, and the off-box destination `rclone` syncs to. Building
+the cloud half showed that the second half of that sentence was false as designed.
+
+[`deploy/backup.sh`](../../deploy/backup.sh) ships a `pg_dump` of the cloud database off-box with
+`rclone` ([ADR-0046](0046-backups-and-restore.md)) — to the **same tier** the sealed archives sync
+to. A plaintext key column would therefore have put the key and the ciphertext it opens in one
+bucket, and the seal would have bought nothing at exactly the tier it was bought for. Not a
+weakness in the cipher; a weakness in where the key was going to live.
+
+So a stored key is **wrapped** under `archive_key_secret`, a 32-byte value `bootstrap.sh` mints
+into the box's `cloud.toml` and which is not in the dump — the same posture
+`internal_shared_secret` already has ([ADR-0097](0097-internal-route-authentication.md),
+[ADR-0044](0044-fork-and-deploy.md)). Three consequences worth stating:
+
+- **The residue moves rather than disappearing.** The wrapping secret is on the same box as the
+  database, so a compromise of the *box* still reaches both. What this buys is the tier beyond the
+  box, which is where the data travels furthest and is guarded least — which is what decision 5
+  claimed and, without this, would not have delivered.
+- **Its absence turns store archives off, and does not weaken them.** A cloud with no
+  `archive_key_secret` does not mount the archive routes and says so at boot, on the same
+  principle as `[artifacts]`: a route that always answers `503` is worse than one honestly absent.
+  A malformed value is a boot refusal, because a passphrase where a 32-byte key belongs would mint
+  keys nobody could ever unwrap and nobody would find out until a restore.
+- **The layering enforces it.** `store-postgres` moves the wrapped text and holds no secret that
+  could open it; only `pos_cloud::archive` unwraps. "The database never sees a usable key" is
+  therefore a property of which crate holds what, not a rule a reviewer has to remember.
+
+**Rejected here too: rotating the secret re-wraps every key.** It would have to, and that is a
+migration over every row with the old secret still available — worth building when a rotation is
+actually needed, and not before. Until then, changing `archive_key_secret` orphans every stored
+key, which is why `bootstrap.sh` mints it once and leaves it alone.
+
 **Delivery.** In slices, each green on its own: **(1)** the snapshot and the sealed format, with the `pos-edge archive` tool — this commit; **(2)** the wire — the schedule at the edge, the `CloudSync` upload, the cloud's ciphertext sink over `BlobStore`, and the key the cloud mints; **(3)** retention, the console's view of when each store last archived, and the drill's store leg. Until slice 2 lands, an operator can seal and restore by hand with the tool, which is already more than existed.
 
 **Tested by.** `crates/adapters/store-sqlite/tests/snapshot.rs` — a snapshot of a *live* store carries every receipt number the WAL had not checkpointed; one taken while the writer is mid-burst is a gapless prefix rather than a torn read; vacuuming over an existing file is refused rather than merged. `crates/pos-edge/tests/store_archive.rs` — a till that has traded is sealed, opened on a different machine, and re-issues every bill its own receipt number with the B2B buyer's name intact; the wrong key, another shop's id, one flipped bit and half a download all refuse, and the refused restore leaves nothing on disk that looks like one.

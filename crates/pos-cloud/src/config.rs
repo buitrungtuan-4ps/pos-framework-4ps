@@ -293,6 +293,21 @@ pub struct CloudConfig {
     /// unconditionally would send it to an unauthenticated pre-activation endpoint.
     #[serde(default)]
     pub internal_shared_secret: Option<InternalSecret>,
+    /// The box-local secret every store's archive key is wrapped under
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). 64
+    /// hexadecimal characters — `openssl rand -hex 32`.
+    ///
+    /// **Optional, and its absence turns store archives off rather than weakening them.** Without
+    /// it the two `/sync` archive routes are not mounted at all and boot says so, on the same
+    /// principle as `[artifacts]`: a route that always answers `503` is worse than one honestly
+    /// absent. What is *not* acceptable is storing a usable key in a column, because
+    /// `deploy/backup.sh` ships a `pg_dump` of this database to the same off-box tier the archives
+    /// sync to — so a plaintext key would travel to the same bucket as the ciphertext it opens.
+    ///
+    /// `bootstrap.sh` mints it into this file, like `internal_shared_secret`, and it never leaves
+    /// the box. It is emphatically not a store's key: a till receives only its own, over `/sync`.
+    #[serde(default)]
+    pub archive_key_secret: Option<crate::archive::ArchiveSecret>,
     /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
     /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
     /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of
@@ -503,6 +518,16 @@ impl CloudConfig {
                 ));
             }
             Some(_) => {}
+        }
+        // Absent is a posture (store archives off, said at boot); malformed is a typo that would
+        // make every archive key unwrappable and would not be noticed until a restore.
+        if let Some(secret) = &self.archive_key_secret
+            && !secret.is_well_formed()
+        {
+            return Err(format!(
+                "archive_key_secret must be exactly {} hexadecimal characters — it is a 32-byte                  key, not a passphrase. Generate one with `openssl rand -hex 32`. Remove the key                  entirely to run without store archives (ADR-0124)",
+                crate::archive::KEY_TEXT_LEN
+            ));
         }
         // An alert webhook without a secret would deliver unsigned batches, which a receiver cannot
         // tell from a forgery. The URL itself is vetted at boot, not here — that needs DNS.

@@ -38,7 +38,10 @@ use store_postgres::{
     RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
     TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
+use store_postgres::{PostgresArchives, StoreArchiveRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
+
+use crate::archive::{ArchiveStore, ArchiveStoreError, StoreArchive};
 
 use pos_ports::PortError;
 use pos_ports::dynamic::BoxFuture;
@@ -5151,4 +5154,105 @@ impl StoreGroupStore for PostgresStoreGroups {
             })
             .collect()
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store archives ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md))
+// ---------------------------------------------------------------------------------------------
+
+/// The store-archive registry over PostgreSQL.
+///
+/// Thinner than most seams here, because most of what a seam usually does — turn a stored string
+/// into a domain type — must **not** happen for the key. It crosses as the wrapped text it is
+/// stored as, and only `crate::archive`, which holds the box's `ArchiveSecret`, turns it into a
+/// key. Keeping the unwrap out of this file is what makes "the database never sees a usable key" a
+/// property of the layering (ADR-0124 Amendment 1).
+impl ArchiveStore for PostgresArchives {
+    async fn wrapped_key(
+        &self,
+        tenant: &str,
+        store: StoreId,
+    ) -> Result<Option<String>, ArchiveStoreError> {
+        // Fully qualified: the inherent method and this trait method share a name and signature,
+        // and resolution silently prefers the inherent one — so a bare call would recurse forever
+        // the day the inherent method is renamed.
+        PostgresArchives::wrapped_key(self, tenant, &store.to_string())
+            .await
+            .map_err(|error| archive_unavailable(&error))
+    }
+
+    async fn adopt_key(
+        &self,
+        tenant: &str,
+        store: StoreId,
+        wrapped: &str,
+        minted_at: i64,
+    ) -> Result<String, ArchiveStoreError> {
+        PostgresArchives::adopt_key(self, tenant, &store.to_string(), wrapped, minted_at)
+            .await
+            .map_err(|error| archive_unavailable(&error))
+    }
+
+    async fn record_archive(
+        &self,
+        tenant: &str,
+        archive: &StoreArchive,
+    ) -> Result<(), ArchiveStoreError> {
+        PostgresArchives::record_archive(
+            self,
+            tenant,
+            &StoreArchiveRow {
+                store_id: archive.store_id.to_string(),
+                taken_at: archive.taken_at,
+                object_key: archive.object_key.clone(),
+                size_bytes: archive.size_bytes,
+                sha256: archive.sha256.clone(),
+                received_at: archive.received_at,
+            },
+        )
+        .await
+        .map_err(|error| archive_unavailable(&error))
+    }
+
+    async fn list_archives(
+        &self,
+        tenant: &str,
+        store: StoreId,
+        limit: i64,
+    ) -> Result<Vec<StoreArchive>, ArchiveStoreError> {
+        let rows = PostgresArchives::list_archives(self, tenant, &store.to_string(), limit)
+            .await
+            .map_err(|error| archive_unavailable(&error))?;
+        rows.into_iter().map(store_archive_from_row).collect()
+    }
+}
+
+/// Rehydrates a stored row.
+///
+/// A `store_id` that no longer parses means the row was written by something that did not come
+/// through this seam, and it is reported rather than skipped: an archive the cloud cannot describe
+/// must not look like an archive that was never taken.
+fn store_archive_from_row(row: StoreArchiveRow) -> Result<StoreArchive, ArchiveStoreError> {
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|_| {
+            ArchiveStoreError::Unavailable(format!(
+                "a stored archive names a store id that is not a ULID: {}",
+                row.store_id
+            ))
+        })?;
+    Ok(StoreArchive {
+        store_id,
+        taken_at: row.taken_at,
+        object_key: row.object_key,
+        size_bytes: row.size_bytes,
+        sha256: row.sha256,
+        received_at: row.received_at,
+    })
+}
+
+fn archive_unavailable(error: &PortError) -> ArchiveStoreError {
+    ArchiveStoreError::Unavailable(error.to_string())
 }

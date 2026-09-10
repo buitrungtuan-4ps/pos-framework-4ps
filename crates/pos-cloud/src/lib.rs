@@ -53,6 +53,7 @@
 
 pub mod activation;
 pub mod alerts;
+pub mod archive;
 pub mod assets;
 pub mod audit;
 pub mod auth;
