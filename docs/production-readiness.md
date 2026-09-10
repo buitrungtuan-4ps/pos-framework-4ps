@@ -136,8 +136,9 @@ a wrong conclusion with nothing in CI to stop it.
 
 ## Wave 8 — The roadmap's remaining feature work
 
-`B·W2` · `B·W3` · `B·W7` · `B·W8` · `A·P4` (printer transport, store-side WAL shipping, JetStream
-capacity probe) · `A·PF` (all four). **The relay live mode has left this list**:
+`B·W2` · `B·W3` · `B·W7` · `B·W8` · `A·P4` (printer transport, store-side *continuous* WAL
+shipping — the periodic store archive that makes a shop restorable at all has landed as
+[ADR-0124](adr/0124-a-store-that-can-be-restored.md) — JetStream capacity probe) · `A·PF` (all four). **The relay live mode has left this list**:
 [ADR-0062](adr/0062-the-relay-wake.md) is written, and it refuses the live cloud→store channel on
 merit rather than scheduling it — the relay's cost was an idle database load, not wire latency, and
 that is removed by waking the two waiters instead of polling for them. The sequence has no hole at

@@ -36,6 +36,7 @@ pub mod active_config;
 pub mod admission_events;
 pub mod app;
 pub mod auth;
+pub mod backup;
 pub mod clock;
 pub mod cloud_http;
 pub mod config;
@@ -81,6 +82,7 @@ pub use app::{
     LineView, ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
+pub use backup::{ArchiveError, ArchiveKey};
 pub use clock::SystemClock;
 pub use config::EdgeConfig;
 pub use discovery::{Advertiser, NoopAdvertiser};

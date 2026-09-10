@@ -22,10 +22,12 @@
 //! against this adapter unchanged.
 
 mod migrations;
+mod snapshot;
 mod store;
 mod tx;
 mod writer;
 
+pub use snapshot::{integrity_check, snapshot_to};
 pub use store::SqliteStore;
 pub use tx::SqliteTx;
 pub use writer::{

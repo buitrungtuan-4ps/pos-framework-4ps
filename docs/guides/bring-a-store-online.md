@@ -365,7 +365,7 @@ what a dead machine takes with it, because two of the four things are not in any
 | Which store this is, and which cloud it dials | **Regenerated.** A pure function of the registry row and this cloud's own origin. |
 | The store's sync key (`POS_EDGE_SYNC_KEY`) | **Re-issue.** Shown once and stored hashed, so it cannot be read back. The drawer issues a fresh one, scoped to the store with `read_config` + `relay_orders`. |
 | The device credential activation minted | **Gone.** It never left the old machine — it is in *that* machine's OS keyring ([ADR-0086](../adr/0086-edge-keyvault-and-activation.md)), not in a file and not on any screen. |
-| The store's event log (`store.sqlite`) | **Gone, in part.** Everything already published is safe in the fleet stream; anything still in the outbox is not. |
+| The store's event log (`store.sqlite`) | **Gone, in part.** Everything already published is safe in the fleet stream; anything still in the outbox is not — unless the store has a sealed archive ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)), which recovers everything up to when it was taken. |
 
 Then, on the new machine:
 
@@ -392,14 +392,31 @@ Then, on the new machine:
 current generation on first sight and is the store. The other way round it takes the old generation,
 and the bump then supersedes the machine that is actually trading.
 
-If the old disk is readable, copy `store.sqlite` across before starting the new server: that is the
-only way to recover events the box committed but had not yet published. There is no off-box backup
-of it in this release — [ADR-0046](../adr/0046-backups-and-restore.md)'s store half (edge WAL
-shipping) is unbuilt, and the gate register records that rather than hiding it. Copying it is safe
-for the lease: **activation forgets any lease generation the copied database carried**, so the
-replacement does not inherit the dead box's identity and refuse to seat a table (ADR-0123). That is
-also why step 3 is not optional on a box built from a copied disk — without the activation, the
-inherited generation stands.
+**Recovering what the old box had not published.** Two routes, in order of preference:
+
+- **If the old disk is readable**, copy `store.sqlite` across before starting the new server. This
+  is the most complete route, because it is the state as of the moment the machine died.
+- **If it is not**, restore the store's most recent sealed archive
+  ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)) with the store's archive key:
+
+  ```
+  POS_EDGE_ARCHIVE_KEY=<64 hex characters> \
+    pos-edge archive verify --store <STORE_ID> --archive store-2026-09-10.p4p
+  POS_EDGE_ARCHIVE_KEY=<64 hex characters> \
+    pos-edge archive open   --store <STORE_ID> --archive store-2026-09-10.p4p --into store.sqlite
+  ```
+
+  Run `verify` first — it opens the archive and runs SQLite's own integrity check over what came
+  out, which is how you learn the archive is a database rather than a file. An archive is bound to
+  its store, so the wrong `--store` refuses rather than restoring the wrong shop. What it cannot
+  recover is anything the store did **after** the archive was taken; the recovery point is one
+  archive interval, and [ADR-0124](../adr/0124-a-store-that-can-be-restored.md) says so plainly.
+  The key never goes on the command line — it is in `ps` output there.
+
+Either route is safe for the lease: **activation forgets any lease generation the restored database
+carried**, so the replacement does not inherit the dead box's identity and refuse to seat a table
+(ADR-0123). That is also why step 3 is not optional on a box built from a copied or restored disk —
+without the activation, the inherited generation stands.
 
 ## The store is online
 

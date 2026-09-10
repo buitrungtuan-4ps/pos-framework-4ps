@@ -77,6 +77,16 @@ pub enum EdgeError {
     #[error("could not rebuild the projection from the log: {0}")]
     Rebuild(crate::app::AppError),
 
+    /// A `pos-edge archive` run could not be completed — a missing argument, an absent or
+    /// malformed key, or an archive that did not open
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    ///
+    /// A `String` rather than [`crate::backup::ArchiveError`] because the failures a technician on
+    /// a bench hits are mostly about the command line rather than the cipher, and one message they
+    /// can read beats two error types they have to tell apart.
+    #[error("{0}")]
+    Archive(String),
+
     /// The async runtime could not be started.
     ///
     /// Its own variant because the runtime is now built by hand rather than by `#[tokio::main]`

@@ -1,7 +1,7 @@
 # ADR-0046 — Cloud backups and the restore drill
 
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-20
-**Relates to** [ADR-0003](0003-cattle-not-pets.md) · [ADR-0016](0016-postgres-access.md) · [ADR-0031](0031-cloud-adapter-transports.md) · [ADR-0044](0044-fork-and-deploy.md) · `docs/roadmap.md` P8
+**Relates to** [ADR-0003](0003-cattle-not-pets.md) · [ADR-0016](0016-postgres-access.md) · [ADR-0031](0031-cloud-adapter-transports.md) · [ADR-0044](0044-fork-and-deploy.md) · [ADR-0124](0124-a-store-that-can-be-restored.md) (the store half this record deferred) · `docs/roadmap.md` P8
 
 **Context.** The cell is cattle, not a pet ([ADR-0003](0003-cattle-not-pets.md)): the box is
 reproducible from this repo, and everything that is *not* reproducible — the event log, the rollups,
@@ -41,7 +41,11 @@ because *a backup that has never been restored is not a backup*.
   proving the dump is not just written but *loadable*. The archive requires the drill cover **both** a
   random store backup **and** the cloud database; the store half is edge WAL shipping, which lands
   with the machine-replacement work (`docs/roadmap.md` P9, spike A4), so this ADR builds the cloud-DB
-  half now and the drill grows its store half there. The scripts are exercised in CI against a
+  half now and the drill grows its store half there. **Amended 2026-09-10:** it did not wait for A4.
+  [ADR-0124](0124-a-store-that-can-be-restored.md) builds the store half as a periodic whole-database
+  archive instead — sealed at the till, so the buyer details a store holds leave the shop unreadable —
+  and gives the drill its store leg. A4's continuous shipping, when its verdict comes, joins that
+  rather than replacing it, for the reason this ADR already gives about WAL and a base. The scripts are exercised in CI against a
   synthetic dataset (a service Postgres); the real weekly drill on production data is a box cron.
 
 **Rejected.**
@@ -64,7 +68,9 @@ because *a backup that has never been restored is not a backup*.
   `restore-drill` job runs the drill for real against a service Postgres.
 - Recovery is now bounded: minutes of data at risk (WAL), a daily floor, an instant pre-deploy
   rollback, and a weekly proof that the floor restores. The full machine-replacement promise — the
-  store half, WAL shipping on Windows — remains P9 per spike A4; this is the cloud half it builds on.
+  store half — remains P9 per spike A4 as far as *continuous* shipping goes; the periodic archive that
+  makes a store restorable at all is [ADR-0124](0124-a-store-that-can-be-restored.md). This is the
+  cloud half both build on.
 - Like the rest of P8, the scripts cannot be run end to end in this repo's CI environment (no Docker
   daemon); they are validated by `bash -n`, the compose/workflow YAML parse, and the nightly drill's
   own run. The true proof is a human restoring a real backup — which is exactly what the weekly drill

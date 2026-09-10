@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store's database can now be copied off the box, and opened again**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). Until now no copy of a shop's
+  `store.sqlite` existed anywhere but the shop, so a dead disk took the unpublished outbox, the
+  gapless receipt counter, the intake ledger and the B2B buyer details with it — and the machine-
+  replacement procedure's only recovery step was "copy the file off the old disk", which assumes
+  the disk still reads. A store can now take a consistent copy of itself with SQLite's own
+  `VACUUM INTO` — on its own connection, so a sale in progress is not waiting behind the backup —
+  deflate it, and seal it with XChaCha20-Poly1305 bound to the store it came from. `pos-edge
+  archive seal | open | verify` is the tool: `verify` opens an archive and runs
+  `PRAGMA integrity_check` over what came out, which is the difference between a backup and a file.
+  This is the store half [ADR-0046](docs/adr/0046-backups-and-restore.md) deferred; the schedule,
+  the upload and the console's view of it are the next slices.
+
+  **Upgrade note.** The archive key is 64 hexadecimal characters and is read from
+  `POS_EDGE_ARCHIVE_KEY`, never from an argument — an argument is in `ps` output and in shell
+  history. A sealed archive is bound to its store's id: presenting one shop's archive as another's
+  refuses rather than restoring the wrong shop. A store archive contains personal data
+  ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)); shipping one off the box is a processing
+  activity under Vietnam's PDPD and, to a destination outside the country, a cross-border transfer
+  that needs a lawful basis and either a transfer agreement or consent on record.
+
 - **A replaced till stops opening new orders, and finishes the ones it holds**
   ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). Replacing a store's machine
   bumps its lease, and until now that stopped the old box installing updates and nothing else — it
