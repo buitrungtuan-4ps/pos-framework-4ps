@@ -22068,12 +22068,17 @@ fn archive_bytes() -> Vec<u8> {
     body
 }
 
-fn get_bearer(uri: &str, token: &str) -> Request<Body> {
+/// A `POST` with an empty JSON body, for the archive-key route.
+///
+/// A `POST` for what reads like a read, because the first call *mints* the key (ADR-0124): a `GET`
+/// with that side effect is one a caching proxy or a browser prefetch may perform unasked.
+fn mint_bearer(uri: &str, token: &str) -> Request<Body> {
     Request::builder()
-        .method("GET")
+        .method("POST")
         .uri(uri)
+        .header("content-type", "application/json")
         .header("authorization", format!("Bearer {token}"))
-        .body(Body::empty())
+        .body(Body::from("{}"))
         .expect("build the request")
 }
 
@@ -22098,7 +22103,7 @@ async fn a_store_asking_twice_gets_the_same_archive_key() {
 
     let first = router
         .clone()
-        .oneshot(get_bearer(&path, &token))
+        .oneshot(mint_bearer(&path, &token))
         .await
         .expect("route the first ask");
     assert_eq!(first.status(), StatusCode::OK);
@@ -22109,7 +22114,7 @@ async fn a_store_asking_twice_gets_the_same_archive_key() {
     assert_eq!(first_key.len(), 64, "64 hexadecimal characters");
 
     let second = router
-        .oneshot(get_bearer(&path, &token))
+        .oneshot(mint_bearer(&path, &token))
         .await
         .expect("route the second ask");
     assert_eq!(second.status(), StatusCode::OK);
@@ -22130,7 +22135,7 @@ async fn the_stored_column_is_not_the_key_the_store_receives() {
     let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
 
     let issued = router
-        .oneshot(get_bearer(
+        .oneshot(mint_bearer(
             &format!("/sync/stores/{}/archive-key", store_id()),
             &token,
         ))
@@ -22281,7 +22286,7 @@ async fn the_archive_routes_are_a_stores_own_door() {
 
     let unauthenticated = router
         .clone()
-        .oneshot(Request::get(&path).body(Body::empty()).expect("build"))
+        .oneshot(Request::post(&path).body(Body::from("{}")).expect("build"))
         .await
         .expect("route the unauthenticated ask");
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
@@ -22289,7 +22294,7 @@ async fn the_archive_routes_are_a_stores_own_door() {
     let wrong_scope = issue_key(&keys, tenant(), &[Scope::PlaceOrders]);
     let refused = router
         .clone()
-        .oneshot(get_bearer(&path, &wrong_scope))
+        .oneshot(mint_bearer(&path, &wrong_scope))
         .await
         .expect("route the wrongly scoped ask");
     assert_eq!(refused.status(), StatusCode::FORBIDDEN);
@@ -22299,7 +22304,7 @@ async fn the_archive_routes_are_a_stores_own_door() {
     let other_store = StoreId::new(Ulid::from_u128(0xB0FF));
     let neighbour = issue_store_key(&keys, tenant(), other_store, &[Scope::ReadConfig]);
     let confined = router
-        .oneshot(get_bearer(&path, &neighbour))
+        .oneshot(mint_bearer(&path, &neighbour))
         .await
         .expect("route the neighbour's ask");
     assert_eq!(confined.status(), StatusCode::FORBIDDEN);

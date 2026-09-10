@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store now archives itself, nightly, without anyone remembering to**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The wire that joins the two halves
+  already shipped: `CloudSync` grew `archive_key` and `upload_archive`, the `cloud-sync-http`
+  adapter speaks them over the store's existing scoped key, and `pos-edge` runs a loop that
+  snapshots the live database, seals it at the till, and ships only ciphertext. The plaintext
+  working copy is written beside the database — never in a system temp directory, which on a real
+  box is a tmpfs too small for a store — and is removed on both the succeeding and the failing
+  path.
+
+  Two properties are deliberate and are pinned by tests. A failed round is a warning and never a
+  stop: an unreachable cloud, a full disk or an oversized archive costs one interval, and the till
+  never learns it happened. And a **superseded box keeps archiving**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)) — it holds exactly the events
+  its replacement does not, so it is the box whose database most needs saving.
+
+  **Upgrade note.** `config.toml` gains `backup_interval_hours`, defaulting to `24`; that interval
+  is the recovery point. `0` switches archiving off and is announced as a warning at start-up, so a
+  store with no backups is visible in the log rather than silent. Archiving needs a `cloud_url`, a
+  scoped sync key, and a cloud with `archive_key_secret` and object storage configured; a box
+  missing any of those trades exactly as before and says which is absent.
+
 - **The cloud can hold a store's archive key, and cannot read it from its own backups**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The cloud half of the
   store archive: migration `0062_store_archives.sql`, the per-store key, and the index of what each

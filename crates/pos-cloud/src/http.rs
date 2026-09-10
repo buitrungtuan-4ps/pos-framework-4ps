@@ -1290,7 +1290,7 @@ where
     Router::new()
         .route(
             "/sync/stores/{store_id}/archive-key",
-            get(serve_store_archive_key::<K, C, B, R>),
+            post(serve_store_archive_key::<K, C, B, R>),
         )
         .route(
             "/sync/stores/{store_id}/archive",
@@ -1308,7 +1308,7 @@ where
         })
 }
 
-/// `GET /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted
+/// `POST /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted
 /// on the first ask.
 ///
 /// Mint-on-first-ask rather than an admin action, because a store that starts archiving must not
@@ -1316,6 +1316,11 @@ where
 /// insert-if-absent in one statement ([`ArchiveStore::adopt_key`]), so two tills asking in the same
 /// second get the *same* key rather than two — one of which would be the key to archives nobody
 /// could open.
+///
+/// A `POST` for a value that reads like a `GET`, and deliberately so: the first call has a side
+/// effect that outlives it. A `GET` that mints is one a caching proxy or a browser prefetch may
+/// perform unasked, and the thing it would create here is the key to every archive this store ever
+/// ships.
 async fn serve_store_archive_key<K, C, B, R>(
     State(state): State<ArchiveState<K, C, B, R>>,
     headers: HeaderMap,

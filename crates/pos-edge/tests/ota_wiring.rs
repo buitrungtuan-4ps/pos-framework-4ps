@@ -79,6 +79,27 @@ impl pos_ports::cloud_sync::CloudSync for RecordingCloud {
         self.reports.lock().expect("lock").push(report.clone());
         Ok(())
     }
+
+    async fn archive_key(&self, _store: StoreId) -> Result<String, pos_ports::PortError> {
+        // OTA wiring never archives. `unavailable` rather than a made-up key, so a future test
+        // that reaches here fails loudly instead of sealing under a stub's invention.
+        Err(pos_ports::PortError::unavailable(
+            pos_ports::PortName::CloudSync,
+            "this stub cloud stores no archives",
+        ))
+    }
+
+    async fn upload_archive(
+        &self,
+        _store: StoreId,
+        _taken_at: pos_proto::time::Timestamp,
+        _archive: &[u8],
+    ) -> Result<(), pos_ports::PortError> {
+        Err(pos_ports::PortError::unavailable(
+            pos_ports::PortName::CloudSync,
+            "this stub cloud stores no archives",
+        ))
+    }
 }
 
 /// A restart requester that counts, standing in for the process exiting.

@@ -44,6 +44,25 @@ pub trait HttpTransport: Send + Sync {
         path: &str,
         body: Vec<u8>,
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
+
+    /// `POST`s `body` to `path` under `content_type`, for the one payload that is not JSON: a
+    /// sealed store archive ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    ///
+    /// A separate method rather than a `content_type` parameter on [`Self::post_json`], because
+    /// every other call on this transport genuinely is JSON and should not have to say so. Base64
+    /// inside a JSON object was the alternative and is the same one the artifact fetch already
+    /// rejected: it would inflate tens of megabytes by a third to avoid one method.
+    ///
+    /// # Errors
+    ///
+    /// [`TransportError`], on the same terms as [`Self::post_json`] — a non-2xx response is not an
+    /// error here.
+    fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 }
 
 /// A response from the cloud: the HTTP status, the body bytes, and the response headers.
@@ -169,7 +188,12 @@ impl TlsHttpTransport {
 
     /// Performs one request: resolve → connect → TLS handshake against the hostname → one HTTP/1.1
     /// `POST` → read the whole response body.
-    async fn send(&self, path: &str, body: Vec<u8>) -> Result<HttpResponse, TransportError> {
+    async fn send(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<HttpResponse, TransportError> {
         let target = self.base.join(path).map_err(|error| {
             TransportError::new(format!("joining the request path failed: {error}"))
         })?;
@@ -208,7 +232,7 @@ impl TlsHttpTransport {
             .method("POST")
             .uri(&request_target)
             .header(HOST, host.as_str())
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, content_type)
             .body(Full::new(Bytes::from(body)))
             .map_err(|error| {
                 TransportError::new(format!("building the request failed: {error}"))
@@ -250,9 +274,24 @@ impl TlsHttpTransport {
 
 impl HttpTransport for TlsHttpTransport {
     async fn post_json(&self, path: &str, body: Vec<u8>) -> Result<HttpResponse, TransportError> {
+        self.post_bytes(path, "application/json", body).await
+    }
+
+    async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<HttpResponse, TransportError> {
         // A black-hole cloud must not wedge the caller: the whole resolve→connect→handshake→send is
         // bounded, and a timeout is an ordinary transport failure the caller maps to `unavailable`.
-        match tokio::time::timeout(self.timeout, self.send(path, body)).await {
+        //
+        // The same timeout covers an archive upload, which is a much larger body than anything else
+        // this transport sends. That is deliberate for now and is the honest limit: a shop on a slow
+        // uplink whose archive does not fit in the window will fail this round and retry the next,
+        // rather than hold the connection indefinitely. ADR-0124's size cap is what keeps that from
+        // being a store that can never archive at all.
+        match tokio::time::timeout(self.timeout, self.send(path, content_type, body)).await {
             Ok(result) => result,
             Err(_elapsed) => Err(TransportError::new("the request to the cloud timed out")),
         }

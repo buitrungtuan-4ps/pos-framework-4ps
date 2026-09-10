@@ -209,7 +209,27 @@ impl CloudHttpClient {
         query: Option<&str>,
         body: Vec<u8>,
     ) -> Result<CloudResponse, CloudHttpError> {
-        match tokio::time::timeout(self.timeout, self.send(method, path, query, body)).await {
+        self.request_full_as(method, path, query, "application/json", body)
+            .await
+    }
+
+    /// [`Self::request_full`] with the body's content type spelled out, for the one payload that
+    /// is not JSON: a sealed store archive
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    async fn request_full_as(
+        &self,
+        method: &hyper::Method,
+        path: &str,
+        query: Option<&str>,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<CloudResponse, CloudHttpError> {
+        match tokio::time::timeout(
+            self.timeout,
+            self.send(method, path, query, content_type, body),
+        )
+        .await
+        {
             Ok(result) => result,
             Err(_elapsed) => Err(CloudHttpError::new("the request to the cloud timed out")),
         }
@@ -221,6 +241,7 @@ impl CloudHttpClient {
         method: &hyper::Method,
         path: &str,
         query: Option<&str>,
+        content_type: &str,
         body: Vec<u8>,
     ) -> Result<CloudResponse, CloudHttpError> {
         let target = self.target(path, query);
@@ -257,7 +278,7 @@ impl CloudHttpClient {
             .header(HOST, host.as_str())
             .header(AUTHORIZATION, format!("Bearer {}", self.bearer));
         if has_body {
-            builder = builder.header(CONTENT_TYPE, "application/json");
+            builder = builder.header(CONTENT_TYPE, content_type);
         }
         let request = builder
             .body(Full::new(Bytes::from(body)))
@@ -680,6 +701,30 @@ impl cloud_sync_http::HttpTransport for OtaHttpTransport {
         let response = self
             .client
             .request_full(&hyper::Method::POST, path, None, body)
+            .await
+            .map_err(|error| cloud_sync_http::TransportError::new(error.to_string()))?;
+        Ok(cloud_sync_http::HttpResponse {
+            status: response.status,
+            body: response.body,
+            headers: response.headers,
+        })
+    }
+
+    async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<cloud_sync_http::HttpResponse, cloud_sync_http::TransportError> {
+        // The path carries the query for an archive upload (`?taken_at=`), so it is split here
+        // rather than asking every caller of the port to pass two pieces.
+        let (path, query) = match path.split_once('?') {
+            Some((path, query)) => (path, Some(query)),
+            None => (path, None),
+        };
+        let response = self
+            .client
+            .request_full_as(&hyper::Method::POST, path, query, content_type, body)
             .await
             .map_err(|error| cloud_sync_http::TransportError::new(error.to_string()))?;
         Ok(cloud_sync_http::HttpResponse {

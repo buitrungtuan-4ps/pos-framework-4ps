@@ -114,6 +114,27 @@ pub struct EdgeConfig {
     /// as text and drawn in the firmware's font, which this does not change.
     #[serde(default = "default_font_size_dots")]
     pub font_size_dots: u16,
+    /// How many hours between sealed off-box archives of this store's database
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). Defaults to 24.
+    ///
+    /// An archive is a `VACUUM INTO` copy of the whole database, compressed and encrypted at the
+    /// till, shipped to the cloud, and never readable by it. The interval is the recovery point: a
+    /// store on the default loses at most a day of trading if its disk dies, and lowering it costs
+    /// one snapshot's worth of disk and uplink each time.
+    ///
+    /// `0` turns archiving off, for a box on a metered link whose operator has arranged something
+    /// else. It is announced as a warning at start-up rather than accepted quietly — a store with no
+    /// backups is a fact somebody should have to see in the log.
+    ///
+    /// Archiving also requires a cloud: a box with no [`Self::cloud_url`], no scoped sync key, or a
+    /// cloud without archive storage configured has nowhere to ship to, and says so.
+    #[serde(default = "default_backup_interval_hours")]
+    pub backup_interval_hours: u64,
+}
+
+/// Once a day, which is the recovery point ADR-0046 assumes for a store.
+const fn default_backup_interval_hours() -> u64 {
+    24
 }
 
 /// The standard font directories for this platform.
@@ -180,6 +201,7 @@ impl EdgeConfig {
             sign_in_idle_timeout_minutes: default_sign_in_idle_timeout_minutes(),
             font_directories: default_font_directories(),
             font_size_dots: default_font_size_dots(),
+            backup_interval_hours: default_backup_interval_hours(),
         }
     }
 
