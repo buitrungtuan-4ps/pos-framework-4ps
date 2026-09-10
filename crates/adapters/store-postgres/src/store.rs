@@ -746,6 +746,18 @@ impl PostgresStore {
         crate::reason_codes::PostgresReasonCodes::new(self.pool.clone())
     }
 
+    /// The store-group tables over this pool
+    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `StoreGroupStore` seam over
+    /// it. Four tables behind one handle because they are one subject — a cohort and what was
+    /// published to it — and splitting them would make a batch's write span two adapters for no
+    /// gain.
+    #[must_use]
+    pub fn store_groups(&self) -> crate::store_groups::PostgresStoreGroups {
+        crate::store_groups::PostgresStoreGroups::new(self.pool.clone())
+    }
+
     /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).
     ///
     /// A cheap handle sharing the same pool; `pos-cloud` implements its `VoucherStore` seam over it.
