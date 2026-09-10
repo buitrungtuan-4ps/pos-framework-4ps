@@ -738,6 +738,587 @@
         }
       }
     },
+    "/admin/store-groups": {
+      "get": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin lists a tenant's store groups, each with its membership.",
+        "operationId": "admin_list_store_groups",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose cohorts to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's store groups, creation order, each with its membership. Archived groups are included: an operator needs to see a retired cohort in order to bring it back"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin creates an empty store group.",
+        "description": "Empty, deliberately: a group that started holding every store would make *creating* one an act\nwith a fleet-wide blast radius, and an operator naming a cohort has not yet said what is in it.",
+        "operationId": "admin_create_store_group",
+        "responses": {
+          "201": {
+            "description": "The group, with the ETag to hand back on its first edit. It holds no stores yet — membership is a second call, so naming a cohort is never itself an act with a fleet-wide reach"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID, or name is empty",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store is unreachable, or OS entropy is unavailable to mint an id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/store-groups/{group_id}": {
+      "patch": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin renames a group and/or archives or restores it.",
+        "operationId": "admin_update_store_group",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The group to rename or (un)archive (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the group was read at (ADR-0094). Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The group as it now stands, with its new ETag"
+          },
+          "400": {
+            "description": "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match is absent, or names a version the group has moved past",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/store-groups/{group_id}/batches": {
+      "get": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin reads a group's batch history, each batch with every member's outcome.",
+        "operationId": "admin_list_store_group_batches",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The cohort whose history to read (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The owning tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "How many batches, newest first (default 20, max 200)",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The group's batches, newest first, each with its per-store outcomes. A member whose last batch was not `applied` is a store that is not running what its group runs"
+          },
+          "400": {
+            "description": "An id is not a ULID, or limit is out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/store-groups/{group_id}/batches/{batch_id}": {
+      "get": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin reads one batch and what it did at every member.",
+        "operationId": "admin_read_store_group_batch",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The cohort the batch ran against (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "batch_id",
+            "in": "path",
+            "description": "The batch (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The owning tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The batch and an outcome for every member it reached"
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such batch on this group in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/store-groups/{group_id}/members": {
+      "put": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin replaces a group's membership.",
+        "description": "Every id is checked against the tenant's own stores before anything is written. An id that names\nno store of this tenant is a `422` rather than a stored row, because the failure it otherwise\nproduces is invisible: the cohort looks right on screen, and every batch quietly reports one more\n`skipped` store than the operator expects, forever.",
+        "operationId": "admin_set_store_group_members",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The group whose membership to replace (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the group was read at (ADR-0094/0095 shape C). Required",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The membership as stored, deduplicated, with the group's new ETag"
+          },
+          "400": {
+            "description": "group_id, tenant_id or a store id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.stores.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match is absent, or names a version the group has moved past",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "More than 200 stores, or an id that names no store of this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group store or the registry is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/store-groups/{group_id}/publish": {
+      "post": {
+        "tags": [
+          "store groups"
+        ],
+        "summary": "A super-admin publishes one node to every member of a store group.",
+        "description": "The fan-out, in order: settle the instruction (which node, and can it compile at all), record\nthe batch, walk the membership recording an outcome for each, close the batch, answer with the\nwhole report. Nothing is written to any store until the instruction has compiled once, so an\nunpublishable request costs no partial write; after that the batch does not stop, because\nstopping is what turns one bad shop into fifty un-updated ones (ADR-0122 §5).",
+        "operationId": "admin_publish_to_store_group",
+        "parameters": [
+          {
+            "name": "group_id",
+            "in": "path",
+            "description": "The cohort to publish to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The batch ran and every member has an outcome — `applied`, `skipped` or `failed`. A `200` does **not** mean every store succeeded: a batch is deliberately not atomic (ADR-0122 §5), and the per-store report is the answer"
+          },
+          "400": {
+            "description": "An id is not a ULID, the node is not one of the thirteen batchable kinds, or its arguments are the wrong shape",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The group is archived or empty, or the instruction itself is unpublishable (a menu that will not compile, an empty reason-code list) — nothing was written to any store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The store-group, registry or config store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/devices/admitted": {
       "get": {
         "tags": [
@@ -1158,6 +1739,10 @@
     {
       "name": "auth",
       "description": "Two-factor sign-in, the session it issues, and the second-factor levers (ADR-0034, ADR-0060). Everything else on this surface stands behind the session these routes establish."
+    },
+    {
+      "name": "store groups",
+      "description": "The cohorts a tenant publishes to as one, and their membership (ADR-0122). A group holds no configuration: publishing to one calls the same per-store publish once per member, so the config tree's four layers and the store's sync path are untouched. Membership is replaced wholesale under the group's own ETag, because a cohort is a set and a delta API merges two admins' concurrent edits into one neither of them chose."
     },
     {
       "name": "reason codes",

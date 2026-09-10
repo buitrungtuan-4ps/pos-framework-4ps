@@ -448,6 +448,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Store groups (ADR-0122): the named cohorts a tenant publishes to as one, and the batch
+        // publish that fans one node out over a cohort's membership. A group holds no configuration
+        // — it is a delivery axis, not a fifth config layer — so the batch writes the same document
+        // into N per-store trees, exactly as N individual publishes would have.
+        //
+        // The registry is here because both halves need it: a membership write checks every id
+        // against the tenant's own stores (a typo'd ULID would sit in the cohort permanently and be
+        // reported `skipped` by every batch, leaving a group quietly one store short of what the
+        // operator believes it is), and a batch skips a member that is archived or absent rather
+        // than publishing into it.
+        //
+        // `batch_nodes` takes the same seven authoring seams the single-store publish routers below
+        // already hold, which is what makes the batch the same code path rather than a second one:
+        // it calls each node's own compiler and the shared config-tree write, so a document a batch
+        // produces is byte-for-byte the document that route would have produced.
+        .merge(http::store_group_router(
+            store.store_groups(),
+            store.registry(),
+            store.config_trees(),
+            http::batch_nodes(
+                store.catalog(),
+                store.tax_rates(),
+                store.campaigns(),
+                store.inventory(),
+                store.reason_codes(),
+                store.people(),
+                store.floor(),
+            ),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
         // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
         // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.

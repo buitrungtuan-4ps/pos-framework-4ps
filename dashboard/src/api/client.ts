@@ -83,6 +83,8 @@ import type {
   ScheduledPublish,
   ScheduledPublishCreated,
   Store,
+  StoreGroup,
+  ConfigBatchReport,
   Supplier,
   SupplierInput,
   TaskHealthReport,
@@ -1072,6 +1074,69 @@ export const api = {
       status: fields.status,
       brand_id: fields.brandId,
     }),
+  // --- store groups (ADR-0122): the named cohorts a tenant publishes to as one ---
+  //
+  // A group holds no configuration. It is a delivery axis: a batch publish writes the same document
+  // into N per-store trees, exactly as N individual publishes would have, so the config tree's four
+  // layers and the store's sync path are untouched. Reads need console.data.read; group CRUD needs
+  // console.stores.manage (organising stores), and publishing to one needs console.config.publish
+  // (changing what they run) — two different acts, two different permissions.
+  listStoreGroups: (tenantId: string) =>
+    requestJson<StoreGroup[]>("GET", `/admin/store-groups?${tenantQuery(tenantId)}`),
+  createStoreGroup: (tenantId: string, name: string) =>
+    requestJson<StoreGroup>("POST", "/admin/store-groups", { tenant_id: tenantId, name }),
+  // Rename and/or (un)archive, conditional on the version the group was read at (ADR-0094).
+  updateStoreGroup: (
+    tenantId: string,
+    groupId: string,
+    fields: { name: string; status: EntityStatus },
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<StoreGroup>(
+      "PATCH",
+      `/admin/store-groups/${encodeURIComponent(groupId)}`,
+      etag,
+      { tenant_id: tenantId, name: fields.name, status: fields.status },
+    ),
+  // The whole membership, not a delta: the operator's mental model is a *set* ("these are the
+  // airport shops"), and a delta API makes two admins' concurrent edits merge into a cohort neither
+  // of them chose. Under `If-Match` the second one is refused instead.
+  setStoreGroupMembers: (
+    tenantId: string,
+    groupId: string,
+    storeIds: readonly string[],
+    etag: ETag,
+  ) =>
+    requestJsonIfMatch<{ store_ids: string[]; etag: ETag }>(
+      "PUT",
+      `/admin/store-groups/${encodeURIComponent(groupId)}/members`,
+      etag,
+      { tenant_id: tenantId, store_ids: [...storeIds] },
+    ),
+  // Publish one node to every member. The response is the report, and a `200` means the batch ran
+  // — not that every store succeeded: read `results`. A refusal here is the instruction itself
+  // being unpublishable, which writes to no store at all.
+  publishToStoreGroup: (tenantId: string, groupId: string, node: string, args: Json) =>
+    requestJson<ConfigBatchReport>(
+      "POST",
+      `/admin/store-groups/${encodeURIComponent(groupId)}/publish`,
+      { tenant_id: tenantId, node, arguments: args },
+    ),
+  listStoreGroupBatches: (tenantId: string, groupId: string, limit?: number) =>
+    requestJson<ConfigBatchReport[]>(
+      "GET",
+      `/admin/store-groups/${encodeURIComponent(groupId)}/batches?${tenantQuery(tenantId)}${
+        limit === undefined ? "" : `&limit=${limit}`
+      }`,
+    ),
+  readStoreGroupBatch: (tenantId: string, groupId: string, batchId: string) =>
+    requestJson<ConfigBatchReport>(
+      "GET",
+      `/admin/store-groups/${encodeURIComponent(groupId)}/batches/${encodeURIComponent(
+        batchId,
+      )}?${tenantQuery(tenantId)}`,
+    ),
+
   listDevices: (tenantId: string, storeId: string) =>
     requestJson<Device[]>(
       "GET",

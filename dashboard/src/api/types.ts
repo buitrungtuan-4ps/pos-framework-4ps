@@ -237,6 +237,64 @@ export interface Store {
   readonly etag: ETag;
 }
 
+/**
+ * A store group from `GET /admin/store-groups` — a named delivery cohort
+ * ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+ *
+ * Not the brand: a store belongs to exactly one brand and to any number of groups, because the
+ * sets an operator publishes to cut across identity — the airport branches on a reduced menu, the
+ * shops on one tax registration, the pilots that take a change first. A group holds no
+ * configuration of its own; it is a list of stores to publish to as one.
+ */
+export interface StoreGroup {
+  readonly group_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: EntityStatus;
+  /** The membership, riding along with the list so a screen never fetches it per group. */
+  readonly store_ids: readonly string[];
+  readonly etag: ETag;
+}
+
+/** What a batch did at one member (ADR-0122 §6). Three outcomes, never two. */
+export type BatchOutcome = "applied" | "skipped" | "failed";
+
+/** One member's row in a batch report. */
+export interface BatchResultRow {
+  readonly store_id: string;
+  readonly outcome: BatchOutcome;
+  /**
+   * The refusal's own message, for `skipped` and `failed` — the same sentence the single-store
+   * publish would have returned. Absent when it applied.
+   */
+  readonly detail?: string;
+  /** The config version the publish produced, for `applied`. This is what makes drift visible. */
+  readonly config_version_id?: string;
+  readonly at_ms: number;
+}
+
+/**
+ * A batch publish and what it did at every member.
+ *
+ * A `200` is *not* "every store succeeded": a batch is deliberately not atomic (ADR-0122 §5), so
+ * the counts and the per-store rows are the answer. A member whose last batch was not `applied` is
+ * a store that is not running what its group runs.
+ */
+export interface ConfigBatchReport {
+  readonly batch_id: string;
+  readonly group_id: string;
+  readonly node: string;
+  readonly arguments: Json;
+  readonly actor_email: string;
+  readonly started_at_ms: number;
+  /** Absent for a batch that died mid-fan-out — the row an operator goes looking for. */
+  readonly finished_at_ms?: number;
+  readonly applied: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly results: readonly BatchResultRow[];
+}
+
 /** A device from `GET /admin/stores/{id}/devices` — the canonical device identity. */
 export interface Device {
   readonly device_id: string;

@@ -212,6 +212,13 @@ const MIGRATION_0059: &str = include_str!("../migrations/0059_store_region_ackno
 /// resolvable.
 const MIGRATION_0060: &str = include_str!("../migrations/0060_reason_codes.sql");
 
+/// Store groups and the batches published to them
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The cohort an
+/// operator publishes to, and one durable row per `(batch, store)` saying what the publish did
+/// there — `applied`, `skipped`, or `failed`. Not a fifth config layer: a batch writes the same
+/// document into *N* per-store trees, so composition and the sync hot path are untouched.
+const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -511,6 +518,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0060)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0061)
+            .await
             .map_err(unavailable)
     }
 
@@ -733,6 +744,18 @@ impl PostgresStore {
     #[must_use]
     pub fn reason_codes(&self) -> crate::reason_codes::PostgresReasonCodes {
         crate::reason_codes::PostgresReasonCodes::new(self.pool.clone())
+    }
+
+    /// The store-group tables over this pool
+    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `StoreGroupStore` seam over
+    /// it. Four tables behind one handle because they are one subject — a cohort and what was
+    /// published to it — and splitting them would make a batch's write span two adapters for no
+    /// gain.
+    #[must_use]
+    pub fn store_groups(&self) -> crate::store_groups::PostgresStoreGroups {
+        crate::store_groups::PostgresStoreGroups::new(self.pool.clone())
     }
 
     /// The voucher store over this pool ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md), Track M3).

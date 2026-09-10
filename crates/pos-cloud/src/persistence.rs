@@ -38,6 +38,7 @@ use store_postgres::{
     RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
     TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
+use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
 use pos_ports::PortError;
 use pos_ports::dynamic::BoxFuture;
@@ -129,6 +130,10 @@ use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublish, ScheduledPublishError, ScheduledPublishStatus,
     ScheduledPublishStore,
+};
+use crate::store_groups::{
+    BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
+    StoreGroupStore, StoreGroupStoreError,
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use crate::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
@@ -4897,4 +4902,253 @@ fn release_artifact_from_row(
         sha256: row.sha256,
         recorded_at,
     })
+}
+
+/// Turns a stored group row into the cloud shape, or reports the id that could not be parsed.
+///
+/// A row whose id is not a ULID is a `503` rather than a silently skipped group: the ids in this
+/// table are minted by [`crate::http`] and nothing else writes them, so an unparseable one means the
+/// data has been tampered with or the schema has drifted, and either is worse than unavailable.
+fn store_group_from_row(
+    tenant_id: TenantId,
+    row: &StoreGroupRow,
+) -> Result<Versioned<StoreGroup>, StoreGroupStoreError> {
+    let group_id = parse_group_id(&row.group_id)?;
+    // `from_db` rather than a strict parse: an unrecognised value fails safe to *visible*, which
+    // for a cohort means an operator can see and fix it rather than losing a group to a typo in the
+    // one column a human might ever edit by hand.
+    let status = EntityStatus::from_db(&row.status);
+    Ok(Versioned::new(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: row.name.clone(),
+            status,
+        },
+        Version::new(row.version.clone()),
+    ))
+}
+
+/// Parses a stored group id.
+fn parse_group_id(text: &str) -> Result<StoreGroupId, StoreGroupStoreError> {
+    text.parse::<Ulid>()
+        .map(StoreGroupId::new)
+        .map_err(|_ignored| {
+            StoreGroupStoreError(format!("a stored group id is not a ULID: {text}"))
+        })
+}
+
+/// Parses a stored store id.
+fn parse_member_id(text: &str) -> Result<StoreId, StoreGroupStoreError> {
+    text.parse::<Ulid>().map(StoreId::new).map_err(|_ignored| {
+        StoreGroupStoreError(format!("a stored member id is not a ULID: {text}"))
+    })
+}
+
+/// Maps an adapter failure onto the seam's one error.
+fn store_group_unavailable(error: &PortError) -> StoreGroupStoreError {
+    StoreGroupStoreError(error.to_string())
+}
+
+impl StoreGroupStore for PostgresStoreGroups {
+    async fn create_group(&self, group: &StoreGroup) -> Result<Version, StoreGroupStoreError> {
+        let inserted = self
+            .insert_group(
+                &group.tenant_id.to_string(),
+                &group.group_id.to_string(),
+                &group.name,
+                group.status.as_str(),
+            )
+            .await
+            .map_err(|error| store_group_unavailable(&error))?;
+        // A collision is impossible in practice — the id is a freshly minted ULID — so an insert
+        // that touched nothing means the id was somehow reused, which is a state to report rather
+        // than to paper over with the version of whatever is already there.
+        inserted
+            .map(Version::new)
+            .ok_or_else(|| StoreGroupStoreError(format!("group {} already exists", group.group_id)))
+    }
+
+    async fn list_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<StoreGroup>>, StoreGroupStoreError> {
+        let rows = self
+            .fetch_groups(&tenant_id.to_string())
+            .await
+            .map_err(|error| store_group_unavailable(&error))?;
+        rows.iter()
+            .map(|row| store_group_from_row(tenant_id, row))
+            .collect()
+    }
+
+    async fn update_group(
+        &self,
+        group: &StoreGroup,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, StoreGroupStoreError> {
+        self.update_group_at(
+            &group.tenant_id.to_string(),
+            &group.group_id.to_string(),
+            &group.name,
+            group.status.as_str(),
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| store_group_unavailable(&error))
+    }
+
+    async fn list_members(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> Result<Vec<StoreId>, StoreGroupStoreError> {
+        let rows = self
+            .fetch_members(&tenant_id.to_string(), &group_id.to_string())
+            .await
+            .map_err(|error| store_group_unavailable(&error))?;
+        rows.iter().map(|id| parse_member_id(id)).collect()
+    }
+
+    async fn set_members(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        members: &[StoreId],
+        expected: &Version,
+    ) -> Result<UpdateOutcome, StoreGroupStoreError> {
+        let ids: Vec<String> = members.iter().map(ToString::to_string).collect();
+        self.set_members_at(
+            &tenant_id.to_string(),
+            &group_id.to_string(),
+            &ids,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| store_group_unavailable(&error))
+    }
+
+    async fn start_batch(&self, batch: &ConfigBatch) -> Result<(), StoreGroupStoreError> {
+        let arguments = serde_json::to_string(&batch.arguments).map_err(|error| {
+            StoreGroupStoreError(format!("could not serialize batch arguments: {error}"))
+        })?;
+        self.insert_batch(
+            &batch.tenant_id.to_string(),
+            &batch.batch_id.to_string(),
+            &batch.group_id.to_string(),
+            &batch.node,
+            &arguments,
+            &batch.actor_email,
+            batch.started_at_ms,
+        )
+        .await
+        .map_err(|error| store_group_unavailable(&error))
+    }
+
+    async fn record_result(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+        result: &BatchResult,
+    ) -> Result<(), StoreGroupStoreError> {
+        self.upsert_result(
+            &tenant_id.to_string(),
+            &batch_id.to_string(),
+            &result.store_id.to_string(),
+            result.outcome.as_wire(),
+            result.detail.as_deref(),
+            result.version_id.as_deref(),
+            result.at_ms,
+        )
+        .await
+        .map_err(|error| store_group_unavailable(&error))
+    }
+
+    async fn finish_batch(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+        finished_at_ms: i64,
+    ) -> Result<(), StoreGroupStoreError> {
+        PostgresStoreGroups::finish_batch(
+            self,
+            &tenant_id.to_string(),
+            &batch_id.to_string(),
+            finished_at_ms,
+        )
+        .await
+        .map_err(|error| store_group_unavailable(&error))
+    }
+
+    async fn list_batches(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        limit: u32,
+    ) -> Result<Vec<ConfigBatch>, StoreGroupStoreError> {
+        let rows = self
+            .fetch_batches(
+                &tenant_id.to_string(),
+                &group_id.to_string(),
+                i64::from(limit),
+            )
+            .await
+            .map_err(|error| store_group_unavailable(&error))?;
+        rows.iter()
+            .map(|row| {
+                Ok(ConfigBatch {
+                    batch_id: row
+                        .batch_id
+                        .parse::<Ulid>()
+                        .map(ConfigBatchId::new)
+                        .map_err(|_ignored| {
+                            StoreGroupStoreError(format!(
+                                "a stored batch id is not a ULID: {}",
+                                row.batch_id
+                            ))
+                        })?,
+                    tenant_id,
+                    group_id: parse_group_id(&row.group_id)?,
+                    node: row.node.clone(),
+                    arguments: serde_json::from_str(&row.arguments_json).map_err(|error| {
+                        StoreGroupStoreError(format!(
+                            "stored batch arguments could not be decoded: {error}"
+                        ))
+                    })?,
+                    actor_email: row.actor_email.clone(),
+                    started_at_ms: row.started_at_ms,
+                    finished_at_ms: row.finished_at_ms,
+                })
+            })
+            .collect()
+    }
+
+    async fn batch_results(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+    ) -> Result<Vec<BatchResult>, StoreGroupStoreError> {
+        let rows = self
+            .fetch_results(&tenant_id.to_string(), &batch_id.to_string())
+            .await
+            .map_err(|error| store_group_unavailable(&error))?;
+        rows.iter()
+            .map(|row| {
+                Ok(BatchResult {
+                    store_id: parse_member_id(&row.store_id)?,
+                    outcome: BatchOutcome::from_wire(&row.outcome).ok_or_else(|| {
+                        StoreGroupStoreError(format!(
+                            "a stored batch result has an unknown outcome: {}",
+                            row.outcome
+                        ))
+                    })?,
+                    detail: row.detail.clone(),
+                    version_id: row.version_id.clone(),
+                    at_ms: row.at_ms,
+                })
+            })
+            .collect()
+    }
 }

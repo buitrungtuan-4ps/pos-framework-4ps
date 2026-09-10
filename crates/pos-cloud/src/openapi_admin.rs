@@ -121,6 +121,13 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_publish_reason_codes,
         crate::http::admin_admitted_devices,
         crate::http::admin_revoke_device,
+        crate::http::admin_list_store_groups,
+        crate::http::admin_create_store_group,
+        crate::http::admin_update_store_group,
+        crate::http::admin_set_store_group_members,
+        crate::http::admin_publish_to_store_group,
+        crate::http::admin_list_store_group_batches,
+        crate::http::admin_read_store_group_batch,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
@@ -130,6 +137,15 @@ pub(crate) struct ErrorResponse {
             description = "Two-factor sign-in, the session it issues, and the second-factor levers \
                            (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
                            session these routes establish."
+        ),
+        (
+            name = "store groups",
+            description = "The cohorts a tenant publishes to as one, and their membership \
+                           (ADR-0122). A group holds no configuration: publishing to one calls the \
+                           same per-store publish once per member, so the config tree's four layers \
+                           and the store's sync path are untouched. Membership is replaced wholesale \
+                           under the group's own ETag, because a cohort is a set and a delta API \
+                           merges two admins' concurrent edits into one neither of them chose."
         ),
         (
             name = "reason codes",
