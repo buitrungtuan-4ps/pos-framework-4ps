@@ -74,6 +74,7 @@ use axum::http::header::{
     CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_MATCH, REFERRER_POLICY, RETRY_AFTER,
     SET_COOKIE, USER_AGENT, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
+use axum::http::HeaderName;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -19207,6 +19208,10 @@ pub async fn security_headers(request: Request, next: Next) -> Response {
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers.insert(
+        HeaderName::from_static("permissions-policy"),
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
     response
 }
 
