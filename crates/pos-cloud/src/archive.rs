@@ -47,7 +47,7 @@ use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use serde::Deserialize;
 use zeroize::Zeroize;
 
-use pos_proto::ids::StoreId;
+use pos_proto::ids::{StoreId, TenantId};
 
 /// Bytes in an archive key, and in the secret that wraps one.
 const KEY_LEN: usize = 32;
@@ -269,7 +269,7 @@ pub trait ArchiveStore: Send + Sync {
     /// [`ArchiveStoreError::Unavailable`] if the registry could not be read.
     fn wrapped_key(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
     ) -> impl Future<Output = Result<Option<String>, ArchiveStoreError>> + Send;
 
@@ -285,7 +285,7 @@ pub trait ArchiveStore: Send + Sync {
     /// [`ArchiveStoreError::Unavailable`] if the registry could not be written.
     fn adopt_key(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
         wrapped: &str,
         minted_at: i64,
@@ -299,7 +299,7 @@ pub trait ArchiveStore: Send + Sync {
     /// [`ArchiveStoreError::Unavailable`] if the registry could not be written.
     fn record_archive(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         archive: &StoreArchive,
     ) -> impl Future<Output = Result<(), ArchiveStoreError>> + Send;
 
@@ -310,7 +310,7 @@ pub trait ArchiveStore: Send + Sync {
     /// [`ArchiveStoreError::Unavailable`] if the registry could not be read.
     fn list_archives(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
         limit: i64,
     ) -> impl Future<Output = Result<Vec<StoreArchive>, ArchiveStoreError>> + Send;

@@ -5170,37 +5170,43 @@ impl StoreGroupStore for PostgresStoreGroups {
 impl ArchiveStore for PostgresArchives {
     async fn wrapped_key(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
     ) -> Result<Option<String>, ArchiveStoreError> {
         // Fully qualified: the inherent method and this trait method share a name and signature,
         // and resolution silently prefers the inherent one — so a bare call would recurse forever
         // the day the inherent method is renamed.
-        PostgresArchives::wrapped_key(self, tenant, &store.to_string())
+        PostgresArchives::wrapped_key(self, &tenant.to_string(), &store.to_string())
             .await
             .map_err(|error| archive_unavailable(&error))
     }
 
     async fn adopt_key(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
         wrapped: &str,
         minted_at: i64,
     ) -> Result<String, ArchiveStoreError> {
-        PostgresArchives::adopt_key(self, tenant, &store.to_string(), wrapped, minted_at)
-            .await
-            .map_err(|error| archive_unavailable(&error))
+        PostgresArchives::adopt_key(
+            self,
+            &tenant.to_string(),
+            &store.to_string(),
+            wrapped,
+            minted_at,
+        )
+        .await
+        .map_err(|error| archive_unavailable(&error))
     }
 
     async fn record_archive(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         archive: &StoreArchive,
     ) -> Result<(), ArchiveStoreError> {
         PostgresArchives::record_archive(
             self,
-            tenant,
+            &tenant.to_string(),
             &StoreArchiveRow {
                 store_id: archive.store_id.to_string(),
                 taken_at: archive.taken_at,
@@ -5216,13 +5222,14 @@ impl ArchiveStore for PostgresArchives {
 
     async fn list_archives(
         &self,
-        tenant: &str,
+        tenant: TenantId,
         store: StoreId,
         limit: i64,
     ) -> Result<Vec<StoreArchive>, ArchiveStoreError> {
-        let rows = PostgresArchives::list_archives(self, tenant, &store.to_string(), limit)
-            .await
-            .map_err(|error| archive_unavailable(&error))?;
+        let rows =
+            PostgresArchives::list_archives(self, &tenant.to_string(), &store.to_string(), limit)
+                .await
+                .map_err(|error| archive_unavailable(&error))?;
         rows.into_iter().map(store_archive_from_row).collect()
     }
 }

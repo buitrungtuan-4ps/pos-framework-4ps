@@ -405,7 +405,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // route a box downloads from, and the `/admin` route a release is uploaded to. Absent an
         // `[artifacts]` block there is nowhere for bytes to live, so both are honestly absent rather
         // than present and answering `503`.
-        .merge(match artifacts {
+        .merge(match artifacts.clone() {
             Some(blobs) => http::ota_artifact_router(
                 store.api_keys(),
                 SystemClock,
@@ -420,6 +420,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Arc::clone(&audit),
             )),
             None => Router::new(),
+        })
+        // Store archives (ADR-0124) need **both** halves of the same pair: somewhere for the sealed
+        // bytes to go, and a secret to wrap each store's key under. Either one missing and the
+        // routes are honestly absent rather than answering `503` — and boot says which, because a
+        // durability feature that is quietly off is the one nobody notices until a restore.
+        .merge(match (artifacts, config.archive_key_secret.clone()) {
+            (Some(blobs), Some(secret)) => http::store_archive_router(
+                store.api_keys(),
+                SystemClock,
+                blobs,
+                store.archives(),
+                secret,
+            ),
+            (blobs, secret) => {
+                tracing::warn!(
+                    has_object_store = blobs.is_some(),
+                    has_archive_key_secret = secret.is_some(),
+                    "store archives are off: both an [artifacts] object store and \
+                     archive_key_secret are required, and no store will back its database up \
+                     without them (ADR-0124)"
+                );
+                Router::new()
+            }
         })
         .merge(http::device_router(
             store.device_proposals(),
