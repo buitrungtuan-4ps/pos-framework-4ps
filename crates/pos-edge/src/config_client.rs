@@ -59,6 +59,7 @@ use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
 use crate::device_revocations::DeviceRevocations;
+use crate::lease_state::LeaseWatch;
 use crate::origins::Origins;
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
@@ -699,6 +700,15 @@ pub struct ConfigClient<T, S> {
     /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), or
     /// `None` on a client built without one.
     revocations: Option<Arc<DeviceRevocations>>,
+    /// This box's own lease and the shared standing a pull settles
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)), or `None` on a
+    /// client built without one — the on-fakes example and the tests, which have no lease.
+    ///
+    /// Here and not on the OTA tick or the heartbeat, though both already hold a `LeaseAuthority`:
+    /// this loop is the one thing that learns the *authoritative* generation, a box with no rollout
+    /// published never runs an OTA decision, and a heartbeat is a reporter. Hanging a store's
+    /// trading posture off a loop that can legitimately be idle is how a gate becomes decorative.
+    lease: Option<Arc<LeaseWatch>>,
 }
 
 impl<T, S> ConfigClient<T, S>
@@ -719,6 +729,7 @@ where
             held_version: Mutex::new(held_version),
             origins: None,
             revocations: None,
+            lease: None,
         }
     }
 
@@ -742,6 +753,18 @@ where
     #[must_use]
     pub fn with_device_revocations(mut self, revocations: Arc<DeviceRevocations>) -> Self {
         self.revocations = Some(revocations);
+        self
+    }
+
+    /// Shares this box's lease, so a pull settles whether a replacement has taken the store
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// Optional for the same reason `origins` and `revocations` are: the example and the tests
+    /// compose a loop over a store that is not a `LeaseAuthority`, and a store the cloud has never
+    /// issued a lease to reads `Active` either way.
+    #[must_use]
+    pub fn with_lease(mut self, lease: Arc<LeaseWatch>) -> Self {
+        self.lease = Some(lease);
         self
     }
 
@@ -769,6 +792,13 @@ where
         let base = self.edge.session();
         let rebuilt = session_from_config(&base, &synced.document);
         self.edge.apply_session(rebuilt);
+        // The `lease` node is now live on the session, so weigh it: the generation the cloud
+        // published against the one this box holds (ADR-0123). After the swap, because the
+        // authoritative generation it reads is the one this document just carried; and awaited
+        // rather than spawned, because the very next command may be the one that seats a table.
+        if let Some(lease) = &self.lease {
+            lease.settle(self.edge.session().lease_generation).await;
+        }
         // Beside the session swap, not inside it: a different reader on a different carrier.
         if let Some(origins) = &self.origins {
             apply_origins(origins, &synced.document);

@@ -42,6 +42,7 @@ use crate::event_publish::EventPublisher;
 use crate::heartbeat_client::{HeartbeatClient, StoreReport};
 use crate::installer::SystemdInstaller;
 use crate::lease_state::LeaseAuthority;
+use crate::lease_state::{LeaseWatch, StoreLease};
 use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
 use crate::ota_state::OtaStateAuthority;
@@ -615,6 +616,11 @@ where
     // whether the config-pull and heartbeat loops run (ADR-0085).
     let cloud_url = config.cloud_url.clone();
     let store_id = config.store_id;
+
+    // `Arc` around the lease authority because two loops hold it: the watch below, and the
+    // heartbeat that reports the generation this box holds (ADR-0108).
+    let lease_authority = Arc::new(lease_authority);
+    let lease_watch = lease_at_boot(&edge, Arc::clone(&lease_authority), store_id).await;
     let nats = config.nats.clone();
     let idle_timeout = config.sign_in_idle_timeout();
     // Pairing and sign-in are recorded in the store's own database, so a power blip, an OTA install
@@ -641,20 +647,7 @@ where
     // through this same seam (ADR-0118 §6).
     let sessions = Arc::new(Sessions::durable(Arc::clone(&registry), idle_timeout));
 
-    // Load both tables before the first request can arrive. Fatal if either fails: starting with an
-    // empty pairing table would silently unpair a store that *is* paired, and an operator would then
-    // re-pair every till to fix a problem that was never theirs.
-    let restored_devices = pairing.load().await.map_err(EdgeError::DeviceRegistry)?;
-    let restored_sessions = sessions
-        .load(SystemClock.now())
-        .await
-        .map_err(EdgeError::DeviceRegistry)?;
-    tracing::info!(
-        devices = restored_devices,
-        sign_ins = restored_sessions,
-        idle_timeout_minutes = idle_timeout.as_secs() / 60,
-        "restored device pairings and sign-ins from the store"
-    );
+    restore_auth_tables(&pairing, &sessions, idle_timeout).await?;
 
     // The deny-list the console published while this box was down (ADR-0118 §6).
     let revocations = revocations_at_boot(&edge, &pairing, registry).await;
@@ -664,8 +657,11 @@ where
     // Loaded before the configuration is handed to the application state, and logged there:
     // an operator needs to know at start-up whether tonight's tickets can print (ADR-0102).
     let fonts = load_fonts(&config);
-    let state =
-        AppState::with_fanout(config, edge.fanout().clone()).with_pairing(Arc::clone(&pairing));
+    let state = AppState::with_fanout(config, edge.fanout().clone())
+        .with_pairing(Arc::clone(&pairing))
+        // The same cell the commands refuse on, so the `pos-lease-standing` header on every
+        // `/api/*` answer and the refusal a tap gets cannot disagree (ADR-0123).
+        .with_lease_standing(Arc::clone(edge.lease()));
     // One allow-list, shared by the CORS layer on every covered router, the `/ws` upgrade and the
     // config-pull loop that keeps it current (ADR-0111). Empty until a store publishes an `origins`
     // node, which allows same-origin and nothing else — exactly today's behaviour.
@@ -749,6 +745,7 @@ where
             &config_edge,
             queue,
             lease_authority,
+            Arc::clone(&lease_watch),
             Arc::clone(&agents),
             nats.as_ref(),
             held_config_version,
@@ -835,6 +832,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     edge: &Arc<Edge<S>>,
     queue: Q,
     lease: L,
+    lease_watch: Arc<LeaseWatch>,
     agents: P,
     nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
@@ -880,6 +878,7 @@ where
         Arc::clone(edge),
         cloud,
         Arc::clone(&vault),
+        Some(Arc::clone(&lease_watch)),
         origins,
     ));
 
@@ -902,6 +901,7 @@ where
                 edge,
                 queue,
                 lease,
+                lease_watch,
                 agents,
                 sync_key,
                 held_config_version,
@@ -936,6 +936,58 @@ where
         publisher,
         farewell,
     }
+}
+
+/// Loads the pairing and sign-in tables before the first request can arrive (ADR-0091), and logs
+/// what came back.
+///
+/// # Errors
+///
+/// [`EdgeError::DeviceRegistry`] if either table could not be read — fatal on purpose: starting with
+/// an empty pairing table would silently unpair a store that *is* paired, and an operator would then
+/// re-pair every till in the shop to fix a problem that was never theirs.
+async fn restore_auth_tables(
+    pairing: &Pairing,
+    sessions: &Sessions,
+    idle_timeout: Duration,
+) -> Result<(), EdgeError> {
+    let restored_devices = pairing.load().await.map_err(EdgeError::DeviceRegistry)?;
+    let restored_sessions = sessions
+        .load(SystemClock.now())
+        .await
+        .map_err(EdgeError::DeviceRegistry)?;
+    tracing::info!(
+        devices = restored_devices,
+        sign_ins = restored_sessions,
+        idle_timeout_minutes = idle_timeout.as_secs() / 60,
+        "restored device pairings and sign-ins from the store"
+    );
+    Ok(())
+}
+
+/// This box's lease, weighed once **before** the socket binds
+/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+///
+/// The generation it weighs against is the one the *restored* configuration carries (C1), which is
+/// what makes an offline reboot honest: a box that comes back on a stored document naming a newer
+/// generation is superseded from its first request, rather than seating tables until a pull lands.
+/// A box with no cloud at all never pulls, so this is the only reading it will ever get — and a
+/// store the cloud has never issued a lease to reads `Active`, exactly as it did before any of this
+/// existed.
+async fn lease_at_boot<S, L>(
+    edge: &Arc<Edge<S>>,
+    authority: L,
+    store_id: StoreId,
+) -> Arc<LeaseWatch>
+where
+    L: LeaseAuthority + 'static,
+{
+    let watch = Arc::new(LeaseWatch::new(
+        Arc::new(StoreLease::new(authority, store_id)),
+        Arc::clone(edge.lease()),
+    ));
+    watch.settle(edge.session().lease_generation).await;
+    watch
 }
 
 /// Runs the store's retention sweep on a timer until shutdown
@@ -1024,6 +1076,7 @@ fn spawn_cloud_loops<S, Q, L, P>(
     edge: &Arc<Edge<S>>,
     queue: Q,
     lease: L,
+    lease_watch: Arc<LeaseWatch>,
     agents: P,
     sync_key: Option<String>,
     held_config_version: Option<String>,
@@ -1067,7 +1120,11 @@ where
     .with_origins(Arc::clone(origins))
     // And the same pairing state the request gates answer from, so a `revoked_devices` node retires
     // a till on this box rather than only in the console's picture of it (ADR-0118 §6).
-    .with_device_revocations(Arc::clone(revocations));
+    .with_device_revocations(Arc::clone(revocations))
+    // …and this box's own lease, so a pull that carries a newer generation makes the box stop
+    // seating tables rather than only stop installing updates (ADR-0123). The same `Arc` the
+    // application layer refuses on and the response header reports.
+    .with_lease(lease_watch);
     tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
 
     // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet

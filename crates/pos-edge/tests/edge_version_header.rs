@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The edge stamps its release on every `/api/*` answer
-//! ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+//! The edge stamps its release — and, since
+//! [ADR-0123](../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), its lease standing — on
+//! every `/api/*` answer ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 //!
 //! Version drift between an app and the edge it talks to shows up **after** pairing — an OTA ring
 //! moves the edge on a Tuesday, or a shell updates itself overnight — so a value read once at
@@ -31,6 +32,11 @@ const HOST: &str = "till.local";
 
 /// The header this file is about.
 const EDGE_VERSION: &str = "pos-edge-version";
+
+/// Its sibling: whether a replacement machine has taken this store (ADR-0123). Same rail, same
+/// scope, same CORS exposure, and for the same reason — a supersession, like a version drift,
+/// happens *after* pairing.
+const LEASE_STANDING: &str = "pos-lease-standing";
 
 /// A router with `published` as this store's origin allow-list.
 fn app(published: &[&str]) -> Router {
@@ -149,5 +155,45 @@ async fn a_cross_origin_response_exposes_the_header_to_the_page() {
     assert!(
         exposed.contains(EDGE_VERSION),
         "a page on a published origin must be allowed to read {EDGE_VERSION}; got {exposed:?}",
+    );
+    assert!(
+        exposed.contains(LEASE_STANDING),
+        "and to read {LEASE_STANDING}, or a hosted till never learns it has been replaced; got {exposed:?}",
+    );
+}
+
+/// Every `/api/*` answer also says whether a replacement has taken this store (ADR-0123).
+///
+/// `active` here, because the test router's `AppState` holds a fresh standing and no lease has been
+/// issued — which is every store in the fleet today. What is pinned is that the header is *present*
+/// on an ordinary answer: the till's banner reads it off calls it was making anyway, so a header
+/// that only appeared on some routes would mean a superseded box that looked fine on whichever
+/// screen the operator happened to be on.
+#[tokio::test]
+async fn an_api_response_says_whether_this_box_is_still_the_store() {
+    let response = app(&[])
+        .oneshot(get("/api/session"))
+        .await
+        .expect("the router answers");
+    assert_eq!(
+        response
+            .headers()
+            .get(LEASE_STANDING)
+            .and_then(|value| value.to_str().ok()),
+        Some("active"),
+        "a store that has never been issued a lease is active, exactly as before ADR-0123",
+    );
+}
+
+/// And `/healthz` does not carry it, for the same reason it carries no version.
+#[tokio::test]
+async fn the_liveness_probe_is_not_told_the_lease_standing_either() {
+    let response = app(&[])
+        .oneshot(get("/healthz"))
+        .await
+        .expect("the router answers");
+    assert!(
+        response.headers().get(LEASE_STANDING).is_none(),
+        "/healthz is a service manager's probe, not a till",
     );
 }

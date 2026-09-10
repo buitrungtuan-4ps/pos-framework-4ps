@@ -231,6 +231,13 @@ pub(crate) struct SessionState {
     signed_in: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     employee_id: Option<String>,
+    /// Whether a replacement machine has taken this store — `active`, `superseded` or `invalid`
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// On this route rather than a new one because it is the call the app already makes before it
+    /// draws anything, and because the state is a fact about the *box*, not about who is signed in:
+    /// a superseded till should say so on its sign-in screen, before anybody tries to seat a table.
+    lease_standing: &'static str,
 }
 
 /// `POST /api/session/sign-in` — verify a badge code + PIN against the synced roster and, on success,
@@ -338,14 +345,20 @@ pub(crate) async fn current<S>(
 where
     S: EventStore + Send + Sync + 'static,
 {
+    // The box's own standing rides the body as well as the `pos-lease-standing` header
+    // (ADR-0123), so the state is answerable with `curl` and not only by a browser reading response
+    // headers — and so the app has it on the one call it makes before drawing anything.
+    let lease_standing = deps.edge.lease().token();
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
             employee_id: Some(employee_id.to_string()),
+            lease_standing,
         },
         None => SessionState {
             signed_in: false,
             employee_id: None,
+            lease_standing,
         },
     };
     Json(state).into_response()

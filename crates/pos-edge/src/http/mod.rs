@@ -39,7 +39,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -52,6 +52,7 @@ use pos_proto::ulid::Ulid;
 
 use crate::app::{AppError, Edge};
 use crate::auth::{Lockout, Sessions};
+use crate::lease_state::CurrentStanding;
 use crate::pairing::Pairing;
 use crate::state::AppState;
 
@@ -61,6 +62,14 @@ use crate::state::AppState;
 /// Named here rather than in [`crate::version`] because it is an HTTP concern; `crate::origins`
 /// reads it too, to expose it across an origin.
 pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-edge-version");
+
+/// The header every `/api/*` response carries beside the version: whether a replacement machine
+/// has taken this store
+/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+///
+/// One of `active`, `superseded` or `invalid`. `crate::origins` exposes it across an origin for the
+/// same reason it exposes the version: a cross-origin page cannot read a header nobody listed.
+pub(crate) const LEASE_STANDING_HEADER: HeaderName = HeaderName::from_static("pos-lease-standing");
 
 /// Stamps [`EDGE_VERSION_HEADER`] on every `/api/*` response.
 ///
@@ -78,12 +87,27 @@ pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-
 /// a fact about the binary, true of every `/api` answer it gives — **including the `200 text/html`
 /// the asset fallback returns for a path one side moved**, which is precisely the failure the header
 /// exists to explain and which no `/api` sub-router would ever see.
-async fn stamp_edge_version(request: Request, next: Next) -> Response {
+async fn stamp_edge_version(
+    State(standing): State<Arc<CurrentStanding>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let is_api = request.uri().path().starts_with("/api/");
     let mut response = next.run(request).await;
-    if is_api && let Ok(value) = HeaderValue::from_str(crate::version::VERSION) {
+    if !is_api {
+        return response;
+    }
+    if let Ok(value) = HeaderValue::from_str(crate::version::VERSION) {
         response.headers_mut().insert(EDGE_VERSION_HEADER, value);
     }
+    // And the box's standing, on the same answer and for the same reason the version rides here
+    // (ADR-0123): a supersession happens *during* service, so a value the app read once at pairing
+    // time is a value that was true once. `from_static` on a token this enum can only produce, so
+    // the fallible construction the version needs is not needed here.
+    response.headers_mut().insert(
+        LEASE_STANDING_HEADER,
+        HeaderValue::from_static(standing.token()),
+    );
     response
 }
 
@@ -181,7 +205,10 @@ pub fn router(state: AppState) -> Router {
         )
         // The release this box is running, on every `/api/*` answer including the asset fallback's
         // (ADR-0111). Outermost, so it also stamps a response a layer below refused.
-        .layer(axum::middleware::from_fn(stamp_edge_version))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&state.standing),
+            stamp_edge_version,
+        ))
         .with_state(state)
 }
 
@@ -390,7 +417,13 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         // command is well-formed and applies to the record, and the only thing missing is the
         // authority to run it. `403` and not `401`, because the *caller* is authenticated — it is
         // the act that needs a second person (`docs/pos-spec.md` §9, §11.4).
-        AppError::ApprovalRequired | AppError::ApprovalRefused => {
+        //
+        // A superseded box joins them on the same reading (ADR-0123): the command is well-formed
+        // and the record is fine, and what is missing is the authority to run it — here the
+        // *machine's*, not the actor's, because a replacement holds this store's lease. Not `409`,
+        // which would say the caller asked at the wrong moment; not `503`, which would promise that
+        // trying again helps. It does not: the way back is to re-provision this box.
+        AppError::ApprovalRequired | AppError::ApprovalRefused | AppError::Superseded => {
             (StatusCode::FORBIDDEN, error.to_string()).into_response()
         }
         AppError::Port(_) => {
