@@ -1422,6 +1422,8 @@
   "storeGroups.archived": "Đã lưu trữ",
   "storeGroups.authoredHint": "Không cần chọn thêm: nội dung này được biên dịch lại từ những gì bạn đã soạn, và mọi cửa hàng trong nhóm đều nhận kết quả.",
   "storeGroups.batchRan": "{applied} đã xuất bản, {skipped} bỏ qua, {failed} bị từ chối.",
+  "storeGroups.caution.qr": "Hãy kiểm tra chênh lệch múi giờ trước khi xuất bản cho nhóm trải trên nhiều múi giờ. Đây là giá trị bạn nhập, không phải lấy từ cài đặt riêng của từng cửa hàng, nên cùng một chênh lệch sẽ được gửi tới mọi cửa hàng trong nhóm.",
+  "storeGroups.caution.tender": "Danh sách hình thức thanh toán rỗng nghĩa là cửa hàng không nhận thanh toán nào cả. Xuất bản cho cả nhóm sẽ chặn thu ngân ở mọi cửa hàng trong nhóm.",
   "storeGroups.copyFrom": "Sao chép cài đặt từ",
   "storeGroups.copyFromHint": "Cài đặt này được nhập riêng cho từng cửa hàng, nên nhóm sẽ lấy bản sao giá trị hiện tại của một cửa hàng. Hãy đặt nó ở cửa hàng đó trước, rồi xuất bản cho phần còn lại.",
   "storeGroups.description": "Xuất bản một thay đổi cho cả một nhóm cửa hàng, thay vì từng cửa hàng một.",

@@ -1422,6 +1422,8 @@
   "storeGroups.archived": "Archived",
   "storeGroups.authoredHint": "Nothing more to choose: this is recompiled from what you have already authored, and every shop in the group gets the result.",
   "storeGroups.batchRan": "{applied} published, {skipped} skipped, {failed} refused.",
+  "storeGroups.caution.qr": "Check the time-zone offset before publishing this to a cohort that spans more than one. It is a value you typed, not one taken from each shop's own settings, so the same offset will be published to every shop in the group.",
+  "storeGroups.caution.tender": "An empty list of payment methods means a shop takes no payment at all. Published to a group, that stops settlement at every shop in it.",
   "storeGroups.copyFrom": "Copy the setting from",
   "storeGroups.copyFromHint": "This setting is typed per shop, so the group takes a copy of one shop's current value. Set it on that shop first, then publish it to the rest.",
   "storeGroups.description": "Publish one change to a whole cohort of shops instead of one shop at a time.",

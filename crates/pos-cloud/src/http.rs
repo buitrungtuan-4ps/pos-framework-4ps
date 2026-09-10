@@ -3146,6 +3146,19 @@ pub trait BatchNode: Send + Sync {
     ///
     /// Checked per store before anything is written; a member missing one is `skipped` with the
     /// missing key named, and the batch carries on. Empty for every node but `menu`.
+    ///
+    /// # Why only `menu` has any
+    ///
+    /// §7 seeds the table with exactly two rules — `menu` requires `tax` and `locale`, and every
+    /// node requires the store to be active — and says the rest are added "as nodes acquire
+    /// dependencies". A code audit of all sixteen publishes turned up four more *candidates*:
+    /// `inventory` and `qr` arguably need `menu` (a recipe and a QR menu both key on item ids a
+    /// store has no book for), `qr` and `tax` arguably need `locale` (no currency, nothing to
+    /// price), and `campaigns` needs it only for the ones carrying a scheduled window or a money
+    /// amount. None is adopted here, deliberately: each was one reader's reading, an added
+    /// prerequisite makes a batch *skip* stores that would otherwise have been published to, and
+    /// a wrong skip is as silent as the failure the rule exists to prevent. They are written down
+    /// rather than dropped, so the next person to look has the list.
     fn prerequisites(&self) -> &'static [&'static str] {
         &[]
     }

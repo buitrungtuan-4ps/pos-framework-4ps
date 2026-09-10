@@ -73,6 +73,16 @@ interface NodeKind {
   readonly key: string;
   readonly label: MessageKey;
   readonly source: ArgumentSource;
+  /**
+   * A sentence shown once this node is chosen, for the two nodes that are batchable *and* carry a
+   * value that can be silently wrong at cohort scale.
+   *
+   * Neither is a reason to exclude the node — the instruction replays verbatim, which is §4's
+   * test — but both are the risk the record names in its Consequences: a group makes it one
+   * action to be wrong at two hundred shops, where doing it by hand was slow and slowness was
+   * doing some of the work of a safeguard.
+   */
+  readonly caution?: MessageKey;
 }
 
 /**
@@ -94,9 +104,19 @@ const NODE_KINDS: readonly NodeKind[] = [
   { key: "floor", label: "storeGroups.node.floor", source: "authored" },
   { key: "capabilities", label: "storeGroups.node.capabilities", source: "copy" },
   { key: "channels", label: "storeGroups.node.channels", source: "copy" },
-  { key: "tender", label: "storeGroups.node.tender", source: "copy" },
+  {
+    key: "tender",
+    label: "storeGroups.node.tender",
+    source: "copy",
+    caution: "storeGroups.caution.tender",
+  },
   { key: "origins", label: "storeGroups.node.origins", source: "copy" },
-  { key: "qr", label: "storeGroups.node.qr", source: "copy" },
+  {
+    key: "qr",
+    label: "storeGroups.node.qr",
+    source: "copy",
+    caution: "storeGroups.caution.qr",
+  },
   { key: "vendor_policies", label: "storeGroups.node.vendorPolicies", source: "copy" },
 ];
 
@@ -616,6 +636,19 @@ export function StoreGroups() {
             </Show>
             <Show when={chosenNode().source === "authored"}>
               <p class="text-sm text-ink-muted">{t("storeGroups.authoredHint")}</p>
+            </Show>
+            <Show when={chosenNode().caution}>
+              {(caution) => (
+                // A notice, not a failure: the operator may well mean it. The design system has
+                // `ok` and `danger` and nothing between, and `danger` would call a deliberate
+                // choice an error — so this is the neutral card shape, read as a status.
+                <div
+                  role="status"
+                  class="rounded-token border border-line bg-surface-raised px-3 py-2 text-sm text-ink"
+                >
+                  {t(caution())}
+                </div>
+              )}
             </Show>
             <Show when={publishing.error()}>
               {(message) => <Banner tone="danger" message={message()} />}
