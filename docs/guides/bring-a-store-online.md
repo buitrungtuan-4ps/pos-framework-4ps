@@ -272,11 +272,25 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 
 ## Step 4 — Publish the store's configuration
 
-From **Configuration** (store in context), publish a config level — menu, tax, layout, capability
-flags, and **permissions**, which is the staff roster the store authorises sign-ins against. The store
-pulls the new version over its sync channel and hot-reloads it, keeping the last-known-good if a
-version is rejected ([ADR-0004](../adr/0004-cloud-owned-configuration.md)). Authoring the catalogue and
-menu is its own workstream (roadmap Phase 2a); until then, publish a hand-written document here.
+Configuration is **authored on the screen that owns it and published from there** — there is no
+single form to fill in. The store pulls each new version over its sync channel and hot-reloads it,
+keeping the last-known-good if a version is rejected
+([ADR-0004](../adr/0004-cloud-owned-configuration.md)). With the store in context:
+
+| Screen | Publishes | Needed to sell? |
+|---|---|---|
+| **People** | the staff roster and what each role may do | **Yes** — nobody can sign in without it |
+| **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
+| **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
+| **Store settings** | country, currency, timezone, business-date cutoff | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)) |
+| **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
+| **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
+| **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
+
+Author in that order. Items before Menus (a menu places items that must exist), and tax classes
+before items (an item names one). **Store groups** publishes one node to a whole set of shops at
+once ([ADR-0122](../adr/0122-a-store-group-is-a-delivery-cohort.md)), which is how the second and later
+stores of a brand skip most of this step.
 
 **The permissions node is not optional and neither is the menu.** A freshly installed store boots with
 an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the
