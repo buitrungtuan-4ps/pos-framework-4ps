@@ -148,7 +148,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
-use crate::catalog_compiler::{compile_layout_book, compile_menu};
+use crate::catalog_compiler::{compile_layout_book, compile_menu, would_cycle};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config::InternalSecret;
 use crate::config_tree::{
@@ -17071,6 +17071,23 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    // A parent that loops is refused here rather than at publish. The compiler still catches a
+    // cycle — it has to, the stored graph may already hold one — but by then the operator is
+    // several screens away from the dropdown that caused it, reading a `422` about a menu they were
+    // not editing. This is the read the check costs: the tenant's menus, only when a parent is set.
+    if let Some(parent) = parent_menu_id {
+        match state.catalog.list_menus(tenant_id).await {
+            Ok(rows) => {
+                let menus: Vec<Menu> = rows.into_iter().map(|row| row.record).collect();
+                if would_cycle(&menus, menu_id, parent) {
+                    return unprocessable_violations(&[format!(
+                        "menu {menu_id} cannot inherit from {parent}: that would make the inheritance chain loop"
+                    )]);
+                }
+            }
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let record = Menu {
         menu_id,
         tenant_id,
