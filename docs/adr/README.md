@@ -128,5 +128,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0119](0119-each-admin-signs-in-as-themselves.md) | Each admin signs in as themselves | Accepted |
 | [0120](0120-navigation-preserves-the-working-context.md) | An absent `?store=` is silence, not a denial | Accepted |
 | [0121](0121-one-way-to-author-an-entity.md) | One way to author an entity: a shell and a lifecycle | Accepted |
+| [0122](0122-a-store-group-is-a-delivery-cohort.md) | A store group is a delivery cohort, and a batch publish reports every store | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

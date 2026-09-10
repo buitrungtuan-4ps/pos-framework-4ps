@@ -16,6 +16,61 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The console can hand a store's files over again — the machine-replacement path.** Stores → a
+  store's row → **Move to a new box** re-emits all four artifacts (`install-pos-edge.ps1`,
+  `install-pos-edge.sh`, `config.toml`, `env`) for a store that already exists.
+
+  Before this, only the new-store wizard emitted them, which made the handoff a one-shot: once its
+  last step closed, the only way to get an installer for an existing store was to create a *second*
+  store. Survivable until the day a shop's machine dies, which is the day it matters most.
+
+  The drawer leads with what a dead machine takes with it, because two of the four things are in no
+  file: the **device credential** activation minted lives in that machine's OS keyring
+  ([ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md)) and the replacement box needs a new
+  activation code, and the store's own `store.sqlite` is on the dead disk — published events are
+  safe in the fleet stream, anything still in the outbox is not. That warning is the point of the
+  feature: everything else about a replacement looks finished without it, and a box that installed
+  cleanly and will not sell is the most expensive way to learn why.
+
+  Opening it writes nothing. The fresh sync key is a button, scoped to the store with `read_config`
+  + `relay_orders`, and it does not revoke the dead machine's key — that stays a per-key decision on
+  API keys, because guessing which key belonged to the dead box can take a working store offline.
+  No new cloud route and no schema change: every value comes from the registry row already on the
+  screen plus the browser's own origin. `docs/guides/bring-a-store-online.md` gains the full
+  procedure, including the plain statement that **the lease supersedes a replaced box for updates,
+  not for trading** — two boxes on one store will both sell, so unplug the one you replaced.
+
+### Changed
+
+- **The installers open the store's listen port themselves.** It was a runbook step, and on Windows
+  the step nobody could debug: Defender Firewall drops an inbound connection to a port no rule
+  names, silently and with no log line on either side, so a box installed correctly in every other
+  respect comes up, writes its pairing URL, and answers no till on the floor — a failure
+  indistinguishable from a broken install.
+
+  Windows now gets one rule, `pos-edge (TCP <port>)`, on the **Private** profile only: the port is
+  plain HTTP on the shop LAN, so a Public-profile rule would offer the till API to whatever network
+  the machine is plugged into next, and `Domain` is left to an estate's group policy. Idempotent by
+  removal, so re-running with a different port moves the rule rather than leaving the old port open
+  beside the new one. A firewall that is off, policy-driven, or a Windows build without
+  `NetSecurity` is warned about and skipped — the service is registered and running either way.
+
+  On Linux the honest answer is usually that nothing is in the way, so the script acts **only** on a
+  filter that is actually running (`ufw status` reporting active, or `firewall-cmd --state`
+  succeeding). A blind `ufw allow` on a box where ufw is installed but inactive would silently record
+  a rule that first takes effect the day somebody enables the firewall for an unrelated reason.
+
+  None of this is a perimeter rule: the store still accepts no inbound connection from the cloud and
+  needs no port forward ([ADR-0001](docs/adr/0001-offline-first-store-autonomy.md),
+  [ADR-0061](docs/adr/0061-order-relay.md)). `docs/security-review.md` §1 said "no inbound firewall
+  rule", which was true of the router and not of the host; it now says which.
+
+- **The `env` file names the store it belongs to.** A comment line, ignored by `EnvironmentFile`.
+  It was the one artifact of the four that named no store, which is fine with one shop open and not
+  fine with two sets of four downloads in the same folder.
+
 ### Fixed
 
 - **The Windows installer could not run on Windows.** Reported from a real bring-up: the script the

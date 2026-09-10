@@ -111,6 +111,21 @@ sc.exe start pos-edge
   `store_path = "C:\\ProgramData\\pos-edge\\store.sqlite"` (TOML, so the separators are doubled).
 * **The `failure` line is not optional.** See below.
 
+There is a fourth line, and it is not an `sc.exe` one — **the port**:
+
+```
+New-NetFirewallRule -DisplayName 'pos-edge (TCP 8787)' -Direction Inbound -Action Allow `
+    -Protocol TCP -LocalPort 8787 -Profile Private
+```
+
+Defender Firewall drops an inbound connection to a port no rule names, silently and with no log line
+on either side, so a box that is installed and running correctly answers no till on the floor. The
+installer adds this rule and re-runs move it rather than adding a second one; `-Profile Private` is
+the whole of the judgement in it — plain HTTP on the shop LAN has no business being reachable from
+whatever network the machine is plugged into next, and `Domain` is left to an estate's group policy.
+A firewall that is off, policy-driven, or a Windows build without `NetSecurity` gets a warning and
+the install continues: the service runs either way, and it is the port that needs attention.
+
 `POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
 variable — the next section says why.
 
