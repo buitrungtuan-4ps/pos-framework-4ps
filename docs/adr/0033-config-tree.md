@@ -94,3 +94,12 @@ must never reach it, and a store that has been offline for a while must be able 
   store-side fleet wiring (P9).
 - **Deliberately not here yet:** a shared Tenant/Brand layer that fans out to every store under it is
   a future modeling step; today each store's tree holds its own four layers.
+- **Amended by [ADR-0122](0122-a-store-group-is-a-delivery-cohort.md):** the operational need the
+  bullet above named — publishing one change to a whole cohort of stores — is answered without the
+  shared layer. A *store group* fans out at **write** time, calling the same per-store publish once
+  per member and writing the same document into *N* trees; composition, the row-per-`(tenant, store)`
+  shape, and the delta/snapshot decision are untouched, so no store's effective document changes and
+  nothing here is wire-visible. The shared Tenant/Brand layer itself therefore stays unbuilt, and
+  ADR-0122 records why a fifth merge level was rejected rather than merely deferred: it would make
+  composition a multi-row read on the store's sync path, and it could not be undone by deleting the
+  groups.
