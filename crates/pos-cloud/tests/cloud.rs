@@ -39,6 +39,7 @@ use pos_cloud::auth::apikey::{
 use pos_cloud::auth::password::hash_password;
 use pos_cloud::auth::rate_limit::SlidingRateLimiter;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
+use pos_cloud::campaigns::{CampaignStore, CampaignStoreError};
 use pos_cloud::catalog::{
     CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
     ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu, MenuId,
@@ -88,6 +89,10 @@ use pos_cloud::relay::{
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
 };
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
+use pos_cloud::store_groups::{
+    BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId, StoreGroupStore,
+    StoreGroupStoreError,
+};
 use pos_cloud::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError};
 use pos_cloud::translations::{TranslationGrid, TranslationStore, TranslationStoreError};
 use pos_cloud::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
@@ -103,10 +108,12 @@ use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
+use pos_proto::campaign::PublishedCampaign;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::ids::CampaignId;
 use pos_proto::ids::{
     AreaId, BrandId, ConfigVersionId, CourseId, DeviceId, EventId, IngredientId, MenuItemId,
     ReasonCodeId, StationId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId,
@@ -21182,4 +21189,793 @@ async fn publishing_a_reason_valid_for_nothing_is_refused_and_names_it() {
             .is_none(),
         "and the whole publish is refused rather than half-applied"
     );
+}
+
+// --- Store groups and the batch publish (ADR-0122) ---------------------------------------------
+
+/// An in-memory `StoreGroupStore` for the batch-publish route tests.
+///
+/// Version-carrying like the real thing, because the membership write is conditional (ADR-0094),
+/// and it keeps the batch tables as flat lists — which is enough to prove the property the record
+/// actually promises: **every member gets a row**, whatever happened at it.
+/// One stored group: the tenant that owns it, and the record with the version it stands at.
+type StoreGroupRow = (TenantId, Versioned<StoreGroup>);
+
+/// A cohort's membership, keyed as `store_group_members` is.
+type StoreGroupMembers = HashMap<(TenantId, StoreGroupId), Vec<StoreId>>;
+
+/// One recorded per-store outcome, keyed as `config_batch_results` is.
+type BatchResultRow = (TenantId, ConfigBatchId, BatchResult);
+
+#[derive(Clone, Default)]
+struct FakeStoreGroups {
+    groups: Arc<Mutex<Vec<StoreGroupRow>>>,
+    members: Arc<Mutex<StoreGroupMembers>>,
+    batches: Arc<Mutex<Vec<ConfigBatch>>>,
+    results: Arc<Mutex<Vec<BatchResultRow>>>,
+    next_version: Arc<Mutex<u64>>,
+}
+
+impl FakeStoreGroups {
+    /// The fake's stand-in for `xmin` (ADR-0094).
+    fn mint(&self) -> Version {
+        let mut next = self.next_version.lock().expect("lock");
+        *next += 1;
+        Version::new(next.to_string())
+    }
+
+    /// Seeds a group and its membership without going through the routes.
+    fn seed(&self, group: StoreGroup, members: &[StoreId]) {
+        let version = self.mint();
+        let key = (group.tenant_id, group.group_id);
+        self.groups
+            .lock()
+            .expect("lock")
+            .push((group.tenant_id, Versioned::new(group, version)));
+        self.members
+            .lock()
+            .expect("lock")
+            .insert(key, members.to_vec());
+    }
+}
+
+impl StoreGroupStore for FakeStoreGroups {
+    async fn create_group(&self, group: &StoreGroup) -> Result<Version, StoreGroupStoreError> {
+        let version = self.mint();
+        self.groups.lock().expect("lock").push((
+            group.tenant_id,
+            Versioned::new(group.clone(), version.clone()),
+        ));
+        Ok(version)
+    }
+
+    async fn list_groups(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<StoreGroup>>, StoreGroupStoreError> {
+        Ok(self
+            .groups
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(owner, _)| *owner == tenant_id)
+            .map(|(_, row)| row.clone())
+            .collect())
+    }
+
+    async fn update_group(
+        &self,
+        group: &StoreGroup,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, StoreGroupStoreError> {
+        let version = self.mint();
+        let mut rows = self.groups.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|(owner, row)| {
+            *owner == group.tenant_id && row.record.group_id == group.group_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if row.1.etag != *expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.1 = Versioned::new(group.clone(), version.clone());
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn list_members(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> Result<Vec<StoreId>, StoreGroupStoreError> {
+        Ok(self
+            .members
+            .lock()
+            .expect("lock")
+            .get(&(tenant_id, group_id))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn set_members(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        members: &[StoreId],
+        expected: &Version,
+    ) -> Result<UpdateOutcome, StoreGroupStoreError> {
+        let version = self.mint();
+        let mut rows = self.groups.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|(owner, row)| *owner == tenant_id && row.record.group_id == group_id)
+        else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if row.1.etag != *expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.1 = Versioned::new(row.1.record.clone(), version.clone());
+        self.members
+            .lock()
+            .expect("lock")
+            .insert((tenant_id, group_id), members.to_vec());
+        Ok(UpdateOutcome::Updated(version))
+    }
+
+    async fn start_batch(&self, batch: &ConfigBatch) -> Result<(), StoreGroupStoreError> {
+        self.batches.lock().expect("lock").push(batch.clone());
+        Ok(())
+    }
+
+    async fn record_result(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+        result: &BatchResult,
+    ) -> Result<(), StoreGroupStoreError> {
+        self.results
+            .lock()
+            .expect("lock")
+            .push((tenant_id, batch_id, result.clone()));
+        Ok(())
+    }
+
+    async fn finish_batch(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+        finished_at_ms: i64,
+    ) -> Result<(), StoreGroupStoreError> {
+        if let Some(batch) = self
+            .batches
+            .lock()
+            .expect("lock")
+            .iter_mut()
+            .find(|batch| batch.tenant_id == tenant_id && batch.batch_id == batch_id)
+        {
+            batch.finished_at_ms = Some(finished_at_ms);
+        }
+        Ok(())
+    }
+
+    async fn list_batches(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        limit: u32,
+    ) -> Result<Vec<ConfigBatch>, StoreGroupStoreError> {
+        let batches = self.batches.lock().expect("lock");
+        let mut mine: Vec<ConfigBatch> = batches
+            .iter()
+            .filter(|batch| batch.tenant_id == tenant_id && batch.group_id == group_id)
+            .cloned()
+            .collect();
+        mine.sort_by(|left, right| right.started_at_ms.cmp(&left.started_at_ms));
+        mine.truncate(limit as usize);
+        Ok(mine)
+    }
+
+    async fn batch_results(
+        &self,
+        tenant_id: TenantId,
+        batch_id: ConfigBatchId,
+    ) -> Result<Vec<BatchResult>, StoreGroupStoreError> {
+        Ok(self
+            .results
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(owner, batch, _)| *owner == tenant_id && *batch == batch_id)
+            .map(|(_, _, result)| result.clone())
+            .collect())
+    }
+}
+
+/// A `CampaignStore` that holds nothing — the batch registry needs all seven authoring seams, and
+/// these tests exercise the `menu` and `tax` nodes.
+#[derive(Clone, Default)]
+struct FakeCampaigns;
+
+impl CampaignStore for FakeCampaigns {
+    async fn list_campaigns(
+        &self,
+        _tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<PublishedCampaign>>, CampaignStoreError> {
+        Ok(Vec::new())
+    }
+
+    async fn get_campaign(
+        &self,
+        _tenant_id: TenantId,
+        _campaign_id: CampaignId,
+    ) -> Result<Option<Versioned<PublishedCampaign>>, CampaignStoreError> {
+        Ok(None)
+    }
+
+    async fn create_campaign(
+        &self,
+        _tenant_id: TenantId,
+        _campaign: &PublishedCampaign,
+    ) -> Result<CreateOutcome, CampaignStoreError> {
+        Ok(CreateOutcome::Created(Version::new("1")))
+    }
+
+    async fn update_campaign(
+        &self,
+        _tenant_id: TenantId,
+        _campaign: &PublishedCampaign,
+        _expected: &Version,
+    ) -> Result<UpdateOutcome, CampaignStoreError> {
+        Ok(UpdateOutcome::NotFound)
+    }
+
+    async fn delete_campaign(
+        &self,
+        _tenant_id: TenantId,
+        _campaign_id: CampaignId,
+    ) -> Result<(), CampaignStoreError> {
+        Ok(())
+    }
+}
+
+/// The console surface a batch test needs: the catalog to author a menu with, the group routes,
+/// and the batch registry over the same seams `main.rs` builds it from.
+fn store_group_app(
+    admin: FakeAdmin,
+    groups: FakeStoreGroups,
+    registry: FakeRegistry,
+    config_trees: FakeConfigTrees,
+    catalog: FakeCatalog,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app)
+        .merge(http::catalog_router(
+            catalog.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::store_group_router(
+            groups,
+            registry,
+            config_trees,
+            http::batch_nodes(
+                catalog,
+                FakeTaxRates::default(),
+                FakeCampaigns,
+                FakeInventory::default(),
+                FakeReasonCodes::default(),
+                FakePeople::default(),
+                FakeFloor::default(),
+            ),
+            admin,
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+}
+
+/// Seeds a store into the registry at `status`, so the batch's protective check has something to
+/// read. A membership row for a store the registry never heard of is the third case, and the
+/// fake's absence of a row is exactly how it arises in production.
+fn seed_store(registry: &FakeRegistry, tenant_id: TenantId, store_id: StoreId, active: bool) {
+    let version = Version::new(format!("{}", store_id.as_ulid().to_u128()));
+    registry.stores.lock().expect("lock").push(Versioned::new(
+        StoreRecord {
+            store_id,
+            tenant_id,
+            brand_id: None,
+            name: format!("Store {}", store_id.as_ulid()),
+            status: if active {
+                EntityStatus::Active
+            } else {
+                EntityStatus::Archived
+            },
+        },
+        version,
+    ));
+}
+
+/// Gives one store the `tax` and `locale` nodes a `menu` batch requires (ADR-0122 §7), by writing
+/// the Store layer directly — the point under test is the batch, not how the prerequisites got
+/// there.
+fn seed_menu_prerequisites(config_trees: &FakeConfigTrees, tenant_id: TenantId, store_id: StoreId) {
+    config_trees.rows.lock().expect("lock").insert(
+        (tenant_id, store_id),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    serde_json::json!({ "tax": { "rates": [] }, "locale": { "currency_code": "VND" } }),
+                    serde_json::json!({}),
+                ],
+                history: Vec::new(),
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+}
+
+/// Authors one menu through the catalog routes and returns its id.
+async fn author_a_menu(router: &axum::Router, cookie: &str, tenant: &str) -> String {
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            cookie,
+        ))
+        .await
+        .expect("route create menu");
+    assert_eq!(menu.status(), StatusCode::CREATED);
+    json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned()
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one batch over three shops in three different states, asserted end to end — the \
+              per-store report is the deliverable ADR-0122 §5 names, so splitting the assertions \
+              across tests would duplicate the whole three-store fixture to check it in pieces"
+)]
+async fn a_batch_publish_reports_an_outcome_for_every_member() {
+    // Three shops in one cohort, each in a different state, and the third must be published to
+    // *regardless* of the first two — which is the whole of ADR-0122 §5 and §7 in one assertion.
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let archived = StoreId::new(Ulid::from_u128(11));
+    let incomplete = StoreId::new(Ulid::from_u128(12));
+    let ready = StoreId::new(Ulid::from_u128(13));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, archived, false);
+    seed_store(&registry, tenant_id, incomplete, true);
+    seed_store(&registry, tenant_id, ready, true);
+
+    let config_trees = FakeConfigTrees::default();
+    seed_menu_prerequisites(&config_trees, tenant_id, ready);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(21));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Airport branches".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[archived, incomplete, ready],
+    );
+
+    let router = store_group_app(
+        provisioned_admin(),
+        groups.clone(),
+        registry,
+        config_trees.clone(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "node": "menu",
+                "arguments": { "menu_id": menu_id },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let report = json_body(published).await;
+
+    assert_eq!(report["applied"], 1);
+    assert_eq!(report["skipped"], 2);
+    assert_eq!(report["failed"], 0);
+    let results = report["results"].as_array().expect("results");
+    assert_eq!(
+        results.len(),
+        3,
+        "every member has a row, which is the half of a batch that must not be partial"
+    );
+
+    let outcome_of = |store: StoreId| -> serde_json::Value {
+        results
+            .iter()
+            .find(|row| row["store_id"] == store.as_ulid().to_string())
+            .cloned()
+            .expect("a row for the store")
+    };
+
+    let archived_row = outcome_of(archived);
+    assert_eq!(archived_row["outcome"], "skipped");
+    assert!(
+        archived_row["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("archived"),
+        "a protected store says why, rather than being filed beside one that broke"
+    );
+
+    let incomplete_row = outcome_of(incomplete);
+    assert_eq!(incomplete_row["outcome"], "skipped");
+    assert!(
+        incomplete_row["detail"]
+            .as_str()
+            .expect("a detail")
+            .contains("`tax`"),
+        "the missing prerequisite is named: this is the store that would have taken the order and \
+         then failed at the payment screen"
+    );
+
+    let ready_row = outcome_of(ready);
+    assert_eq!(
+        ready_row["outcome"], "applied",
+        "a shop that was ready is published to whatever happened at the other two"
+    );
+    assert!(
+        ready_row["config_version_id"].is_string(),
+        "an applied row carries the version it produced, which is what makes drift visible"
+    );
+
+    // The tree really moved, and only at the store that applied.
+    let rows = config_trees.rows.lock().expect("lock");
+    assert!(
+        rows.get(&(tenant_id, ready)).expect("a tree").record.layers[2]
+            .get("menu")
+            .is_some(),
+        "the ready store's Store layer carries the compiled book"
+    );
+    assert!(
+        rows.get(&(tenant_id, archived)).is_none(),
+        "a skipped store was not written to at all"
+    );
+    drop(rows);
+
+    // The batch is durable and closed, and the report is reconstructible from the two tables.
+    let stored = groups.batches.lock().expect("lock");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].node, "menu");
+    assert!(
+        stored[0].finished_at_ms.is_some(),
+        "a batch that ran to the end records that it finished"
+    );
+    assert_eq!(groups.results.lock().expect("lock").len(), 3);
+}
+
+#[tokio::test]
+async fn a_batch_whose_instruction_cannot_compile_writes_to_no_store() {
+    // The refusal that would be the same answer at all 200 members refuses the batch instead of
+    // being recorded 200 times (ADR-0122 §3).
+    let tenant_id = TenantId::new(Ulid::from_u128(2));
+    let store_id = StoreId::new(Ulid::from_u128(14));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(22));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Pilots".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[store_id],
+    );
+
+    let config_trees = FakeConfigTrees::default();
+    let router = store_group_app(
+        provisioned_admin(),
+        groups.clone(),
+        registry,
+        config_trees.clone(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "node": "capabilities",
+                "arguments": { "flags": { "tables_enabled_typo": true } },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("a message")
+            .contains("tables_enabled_typo"),
+        "the batch refuses by the single-store route's own rule, naming the flag"
+    );
+
+    assert!(
+        groups.batches.lock().expect("lock").is_empty(),
+        "an unpublishable instruction records no batch: nothing happened, and the history should \
+         not suggest otherwise"
+    );
+    assert!(
+        config_trees.rows.lock().expect("lock").is_empty(),
+        "and no store was written to"
+    );
+}
+
+#[tokio::test]
+async fn a_batch_names_the_nodes_it_can_publish_when_asked_for_one_it_cannot() {
+    // `locale` is excluded by construction (ADR-0122 §4) — per-store under ADR-0114 — and an
+    // operator who asks for it needs to be told that, not that it does not exist.
+    let tenant_id = TenantId::new(Ulid::from_u128(3));
+    let group_id = StoreGroupId::new(Ulid::from_u128(23));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "City".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[StoreId::new(Ulid::from_u128(15))],
+    );
+    let router = store_group_app(
+        provisioned_admin(),
+        groups,
+        FakeRegistry::default(),
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({
+                "tenant_id": tenant_id.as_ulid().to_string(),
+                "node": "locale",
+                "arguments": {},
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .expect("a message")
+        .to_owned();
+    for node in [
+        "menu",
+        "tax",
+        "campaigns",
+        "inventory",
+        "reason_codes",
+        "permissions",
+        "floor",
+        "capabilities",
+        "channels",
+        "tender",
+        "origins",
+        "qr",
+        "vendor_policies",
+    ] {
+        assert!(
+            message.contains(node),
+            "the refusal lists `{node}`, so an operator can fix the request without the ADR"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_empty_or_archived_cohort_is_refused_rather_than_reported_as_a_success() {
+    let tenant_id = TenantId::new(Ulid::from_u128(4));
+    let empty = StoreGroupId::new(Ulid::from_u128(24));
+    let retired = StoreGroupId::new(Ulid::from_u128(25));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id: empty,
+            tenant_id,
+            name: "Nobody".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[],
+    );
+    groups.seed(
+        StoreGroup {
+            group_id: retired,
+            tenant_id,
+            name: "Last year's pilots".to_owned(),
+            status: EntityStatus::Archived,
+        },
+        &[StoreId::new(Ulid::from_u128(16))],
+    );
+    let router = store_group_app(
+        provisioned_admin(),
+        groups,
+        FakeRegistry::default(),
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let body = serde_json::json!({ "tenant_id": tenant, "node": "tax", "arguments": {} });
+
+    for (group_id, why) in [(empty, "reach nobody"), (retired, "archived")] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+                &body,
+                &cookie,
+            ))
+            .await
+            .expect("route the batch publish");
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a publish that reaches no shop is not a success with zero results"
+        );
+        assert!(
+            json_body(refused).await["error"]["message"]
+                .as_str()
+                .expect("a message")
+                .contains(why)
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_batch_is_readable_afterwards_from_the_groups_history() {
+    let tenant_id = TenantId::new(Ulid::from_u128(5));
+    let store_id = StoreId::new(Ulid::from_u128(17));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(26));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "One shop".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[store_id],
+    );
+    let router = store_group_app(
+        provisioned_admin(),
+        groups,
+        registry,
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({ "tenant_id": tenant, "node": "tax", "arguments": {} }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let batch_id = json_body(published).await["batch_id"]
+        .as_str()
+        .expect("a batch id")
+        .to_owned();
+
+    let history = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/store-groups/{}/batches?tenant_id={tenant}",
+                group_id.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the history");
+    assert_eq!(history.status(), StatusCode::OK);
+    let listed = json_body(history).await;
+    assert_eq!(listed.as_array().expect("array").len(), 1);
+    assert_eq!(listed[0]["batch_id"], batch_id);
+    assert_eq!(listed[0]["applied"], 1);
+
+    let one = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/store-groups/{}/batches/{batch_id}?tenant_id={tenant}",
+                group_id.as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the single batch");
+    assert_eq!(one.status(), StatusCode::OK);
+    let read = json_body(one).await;
+    assert_eq!(
+        read["results"][0]["store_id"],
+        store_id.as_ulid().to_string()
+    );
+    assert_eq!(read["results"][0]["outcome"], "applied");
+
+    // A batch id from nowhere is a `404` on this group, not somebody else's report.
+    let missing = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/store-groups/{}/batches/{}?tenant_id={tenant}",
+                group_id.as_ulid(),
+                Ulid::from_u128(999)
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the missing batch");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_batch_publish_needs_a_session() {
+    let router = store_group_app(
+        provisioned_admin(),
+        FakeStoreGroups::default(),
+        FakeRegistry::default(),
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let refused = router
+        .oneshot(post_json(
+            &format!("/admin/store-groups/{}/publish", ulid_text(9)),
+            &serde_json::json!({ "tenant_id": ulid_text(1), "node": "tax" }),
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 }

@@ -65,6 +65,7 @@
 
 use core::fmt;
 use core::fmt::Write as _;
+use core::future::Future;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -212,7 +213,10 @@ use crate::retention::{RetentionError, SubjectStore};
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
-use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore, StoreGroupStoreError};
+use crate::store_groups::{
+    BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
+    StoreGroupStore, StoreGroupStoreError,
+};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned, records};
@@ -2624,9 +2628,13 @@ const MAX_STORE_GROUP_MEMBERS: usize = 200;
 /// batch reports it `skipped` forever — a cohort quietly one store short of what the operator
 /// believes it is.
 #[derive(Clone)]
-struct StoreGroupState<Grp, Reg, A, C> {
+struct StoreGroupState<Grp, Reg, Cfg, A, C> {
     groups: Grp,
     registry: Reg,
+    /// Where a batch publish writes: the same seam every single-store publish already uses.
+    config_trees: Cfg,
+    /// The node kinds a batch may publish, built once in `main.rs` — see [`batch_nodes`].
+    nodes: Arc<Vec<Arc<dyn BatchNode>>>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -2682,9 +2690,11 @@ struct SetStoreGroupMembersRequest {
 ///
 /// Ids are server-minted: a batch names its group forever in `config_batches`, so a client that
 /// could choose one could collide with a cohort's history.
-pub fn store_group_router<Grp, Reg, A, C>(
+pub fn store_group_router<Grp, Reg, Cfg, A, C>(
     groups: Grp,
     registry: Reg,
+    config_trees: Cfg,
+    nodes: Vec<Arc<dyn BatchNode>>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -2692,26 +2702,41 @@ pub fn store_group_router<Grp, Reg, A, C>(
 where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/admin/store-groups",
-            get(admin_list_store_groups::<Grp, Reg, A, C>)
-                .post(admin_create_store_group::<Grp, Reg, A, C>),
+            get(admin_list_store_groups::<Grp, Reg, Cfg, A, C>)
+                .post(admin_create_store_group::<Grp, Reg, Cfg, A, C>),
         )
         .route(
             "/admin/store-groups/{group_id}",
-            axum::routing::patch(admin_update_store_group::<Grp, Reg, A, C>),
+            axum::routing::patch(admin_update_store_group::<Grp, Reg, Cfg, A, C>),
         )
         .route(
             "/admin/store-groups/{group_id}/members",
-            axum::routing::put(admin_set_store_group_members::<Grp, Reg, A, C>),
+            axum::routing::put(admin_set_store_group_members::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/publish",
+            post(admin_publish_to_store_group::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/batches",
+            get(admin_list_store_group_batches::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/batches/{batch_id}",
+            get(admin_read_store_group_batch::<Grp, Reg, Cfg, A, C>),
         )
         .with_state(StoreGroupState {
             groups,
             registry,
+            config_trees,
+            nodes: Arc::new(nodes),
             admin,
             clock,
             audit,
@@ -2743,14 +2768,15 @@ fn store_group_error_response(error: &StoreGroupStoreError) -> Response {
     tag = "store groups",
 )]
 /// A super-admin lists a tenant's store groups, each with its membership.
-async fn admin_list_store_groups<Grp, Reg, A, C>(
-    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+async fn admin_list_store_groups<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
 ) -> Response
 where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -2812,14 +2838,15 @@ where
 ///
 /// Empty, deliberately: a group that started holding every store would make *creating* one an act
 /// with a fleet-wide blast radius, and an operator naming a cohort has not yet said what is in it.
-async fn admin_create_store_group<Grp, Reg, A, C>(
-    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+async fn admin_create_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Json(request): Json<CreateStoreGroupRequest>,
 ) -> Response
 where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -2892,8 +2919,8 @@ where
     tag = "store groups",
 )]
 /// A super-admin renames a group and/or archives or restores it.
-async fn admin_update_store_group<Grp, Reg, A, C>(
-    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+async fn admin_update_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Path(group_id): Path<String>,
     Json(request): Json<UpdateStoreGroupRequest>,
@@ -2901,6 +2928,7 @@ async fn admin_update_store_group<Grp, Reg, A, C>(
 where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -2984,8 +3012,8 @@ where
 /// no store of this tenant is a `422` rather than a stored row, because the failure it otherwise
 /// produces is invisible: the cohort looks right on screen, and every batch quietly reports one more
 /// `skipped` store than the operator expects, forever.
-async fn admin_set_store_group_members<Grp, Reg, A, C>(
-    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+async fn admin_set_store_group_members<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
     Path(group_id): Path<String>,
     Json(request): Json<SetStoreGroupMembersRequest>,
@@ -2993,6 +3021,7 @@ async fn admin_set_store_group_members<Grp, Reg, A, C>(
 where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -3076,6 +3105,1305 @@ where
         Ok(UpdateOutcome::NotFound) => not_found("store group"),
         Err(error) => store_group_error_response(&error),
     }
+}
+
+// --- Batch publish to a store group (ADR-0122 §3–§7) -------------------------------------------
+
+/// A boxed future, because a trait object cannot return `impl Future`.
+///
+/// The workspace carries no `async-trait` dependency and adding one is an ADR's worth of decision
+/// (`docs/adr/0002-*`), so the two batch traits box by hand. One allocation per node per store,
+/// against a database round-trip and a versioned config write — it does not register.
+type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One node kind a batch publish can deliver
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
+///
+/// # Why a registry of trait objects and not thirteen routes
+///
+/// Each single-store publish lives behind its own `State` struct carrying its own authoring seam —
+/// the tax table, the catalog, the roster. One batch route needs all of them. Making the route
+/// generic over thirteen store types would give it thirteen type parameters and make adding a
+/// fourteenth node a change to the route's signature, `main.rs`, and every test that builds one.
+/// A `Vec<Arc<dyn BatchNode>>` erases them: `main.rs` builds the registry from the same store
+/// handles the single-store routers already hold, the route knows only this trait, and a new node
+/// kind is a new `impl` and one more line in the registry.
+///
+/// # What an implementation must not do
+///
+/// Compile its own document. Every implementation below delegates to the *same* `*_nodes` function
+/// its single-store route calls, which is what makes ADR-0122 §3 true rather than aspirational: a
+/// batch cannot validate more loosely than the route it fans out, because it is not a second copy
+/// of the rule.
+pub trait BatchNode: Send + Sync {
+    /// The node's wire name — what a batch request names and what `config_batches.node` records.
+    fn key(&self) -> &'static str;
+
+    /// The audit action each member's publish records, identical to the single-store route's.
+    fn audit_action(&self) -> &'static str;
+
+    /// Config node keys a member's Store layer must already carry (ADR-0122 §7).
+    ///
+    /// Checked per store before anything is written; a member missing one is `skipped` with the
+    /// missing key named, and the batch carries on. Empty for every node but `menu`.
+    fn prerequisites(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Reads the tenant-wide authoring model once, before any store is touched.
+    ///
+    /// A refusal here refuses the **whole batch** and writes nothing, because it means the
+    /// instruction itself is unpublishable — an unknown capability flag, a menu that will not
+    /// compile, an empty reason-code list — and would be the same answer at all 200 members.
+    /// A per-store refusal is a different thing and belongs in [`BatchNodePlan::compile_for`].
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>>;
+}
+
+/// The compiled half of a batch: what to write, once per member.
+pub trait BatchNodePlan: Send + Sync {
+    /// A compact, PII-free summary of what was compiled, for `config_batches` and the trail.
+    fn summary(&self) -> serde_json::Value;
+
+    /// The nodes to write at one member.
+    ///
+    /// Eleven of the thirteen ignore `store_id` entirely — see [`SameEverywhere`]. `permissions`
+    /// and `floor` do not: their document *is* the store's own, so they compile here, once per
+    /// member. Both are still batchable, because the instruction ("recompile each of these shops'
+    /// own rosters") carries nothing store-specific even though every result does.
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>>;
+}
+
+/// A plan whose document is byte-identical at every member — the shape eleven of the thirteen have.
+struct SameEverywhere {
+    nodes: Vec<(String, serde_json::Value)>,
+    summary: serde_json::Value,
+}
+
+impl SameEverywhere {
+    /// Boxes this plan as the trait object [`BatchNode::plan`] returns.
+    fn boxed<'a>(self) -> Box<dyn BatchNodePlan + 'a> {
+        Box::new(self)
+    }
+}
+
+impl BatchNodePlan for SameEverywhere {
+    fn summary(&self) -> serde_json::Value {
+        self.summary.clone()
+    }
+
+    fn compile_for(
+        &self,
+        _store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(core::future::ready(Ok(self.nodes.clone())))
+    }
+}
+
+/// Deserialises a batch's free-form `arguments` into the shape one node takes.
+///
+/// The refusal names the node, because `arguments` is untyped on the wire and the operator's
+/// mistake is nearly always "the right JSON for a different node kind".
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response, the same shape every other route helper carries"
+)]
+fn batch_arguments<T>(node: &str, arguments: &serde_json::Value) -> Result<T, Response>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(arguments.clone()).map_err(|error| {
+        api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("the arguments are not what the `{node}` node takes: {error}"),
+            &[("arguments", "INVALID_VALUE")],
+        )
+    })
+}
+
+/// The `capabilities` node: the flag booleans an operator ticked.
+struct CapabilitiesBatchNode;
+
+/// A `capabilities` batch's arguments — the same `flags` map the single-store body carries.
+#[derive(Debug, Clone, Deserialize)]
+struct CapabilitiesBatchArguments {
+    flags: std::collections::BTreeMap<String, bool>,
+}
+
+impl BatchNode for CapabilitiesBatchNode {
+    fn key(&self) -> &'static str {
+        "capabilities"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.capabilities.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: CapabilitiesBatchArguments = batch_arguments(self.key(), arguments)?;
+            let nodes = capability_flag_nodes(&parsed.flags)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "flags": parsed.flags.len() }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `channels` node: which sales channels each member answers.
+struct ChannelsBatchNode;
+
+/// A `channels` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct ChannelsBatchArguments {
+    #[serde(default)]
+    enabled: Vec<String>,
+}
+
+impl BatchNode for ChannelsBatchNode {
+    fn key(&self) -> &'static str {
+        "channels"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.channels.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: ChannelsBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = channels_node(&parsed.enabled)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "enabled": parsed.enabled }),
+                nodes: vec![("channels".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `tender` node: which payment methods each member accepts.
+struct TenderBatchNode;
+
+/// A `tender` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct TenderBatchArguments {
+    #[serde(default)]
+    accepted: Vec<String>,
+}
+
+impl BatchNode for TenderBatchNode {
+    fn key(&self) -> &'static str {
+        "tender"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.tender.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: TenderBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = tender_node(&parsed.accepted)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "accepted": parsed.accepted }),
+                nodes: vec![("tender".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `origins` node: the extra origins each member's edge answers (ADR-0111).
+struct OriginsBatchNode;
+
+/// An `origins` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct OriginsBatchArguments {
+    #[serde(default)]
+    allowed: Vec<String>,
+}
+
+impl BatchNode for OriginsBatchNode {
+    fn key(&self) -> &'static str {
+        "origins"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.origins.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: OriginsBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = origins_node(&parsed.allowed)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "allowed": parsed.allowed.len() }),
+                nodes: vec![("origins".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `qr` node: whether QR ordering is on at each member, and the guardrails (ADR-0116).
+struct QrBatchNode;
+
+impl BatchNode for QrBatchNode {
+    fn key(&self) -> &'static str {
+        "qr"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.qr.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: QrGuardrailFields = batch_arguments(self.key(), arguments)?;
+            let enabled = parsed.enabled;
+            let value = qr_guardrail_node(&parsed)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "enabled": enabled }),
+                nodes: vec![("qr".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `vendors` node: each member's per-marketplace policies.
+struct VendorPoliciesBatchNode;
+
+/// A `vendor_policies` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct VendorPoliciesBatchArguments {
+    #[serde(default)]
+    policies: Vec<PublishedVendorPolicy>,
+}
+
+impl BatchNode for VendorPoliciesBatchNode {
+    fn key(&self) -> &'static str {
+        "vendor_policies"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.vendors.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: VendorPoliciesBatchArguments = batch_arguments(self.key(), arguments)?;
+            let count = parsed.policies.len();
+            let value = vendor_policies_node(parsed.policies)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "policies": count }),
+                nodes: vec![("vendors".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `tax` node: the tenant's authored rate table (ADR-0074).
+struct TaxBatchNode<Tax> {
+    tax_rates: Tax,
+}
+
+impl<Tax> BatchNode for TaxBatchNode<Tax>
+where
+    Tax: TaxRateStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "tax"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.tax.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, rates) = tax_nodes(&self.tax_rates, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "rates": rates }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `campaigns` node: the tenant's authored promotions (ADR-0077).
+struct CampaignsBatchNode<Camp> {
+    campaigns: Camp,
+}
+
+impl<Camp> BatchNode for CampaignsBatchNode<Camp>
+where
+    Camp: CampaignStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "campaigns"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.campaigns.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, campaigns) = campaigns_nodes(&self.campaigns, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "campaigns": campaigns }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `inventory` node: the tenant's ingredients, recipes and suppliers (ADR-0079).
+struct InventoryBatchNode<Inv> {
+    inventory: Inv,
+}
+
+impl<Inv> BatchNode for InventoryBatchNode<Inv>
+where
+    Inv: InventoryStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "inventory"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.inventory.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, summary) = inventory_nodes(&self.inventory, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::to_value(summary).unwrap_or(serde_json::Value::Null),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `reason_codes` node: the managed list a void or discount must cite (ADR-0115).
+struct ReasonCodesBatchNode<R> {
+    reason_codes: R,
+}
+
+impl<R> BatchNode for ReasonCodesBatchNode<R>
+where
+    R: ReasonCodeStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "reason_codes"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.reason_codes.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, summary) = reason_code_nodes(&self.reason_codes, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::to_value(summary).unwrap_or(serde_json::Value::Null),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `menu` node (and the `layout` node it moves with): a compiled price book (ADR-0066).
+///
+/// The one node with prerequisites. A menu published to a store whose tree has no `tax` produces a
+/// shop that boots, syncs, shows the menu, takes the order — and then raises
+/// `DomainError::TaxRateNotConfigured` at the payment screen, with nothing before that saying a
+/// word (ADR-0122 §7). `locale` is the same shape of trap one layer down: without it the store has
+/// no currency, timezone or business-date cutoff to price and close against.
+struct MenuBatchNode<Cat> {
+    catalog: Cat,
+}
+
+/// A `menu` batch's arguments: which menu to compile.
+#[derive(Debug, Clone, Deserialize)]
+struct MenuBatchArguments {
+    menu_id: String,
+}
+
+impl<Cat> BatchNode for MenuBatchNode<Cat>
+where
+    Cat: CatalogStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "menu"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "catalog.publish"
+    }
+
+    fn prerequisites(&self) -> &'static [&'static str] {
+        &["tax", "locale"]
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: MenuBatchArguments = batch_arguments(self.key(), arguments)?;
+            let menu_id = match parse_ulid_fields([("menu_id", &parsed.menu_id)]) {
+                Ok([menu_id]) => MenuId::new(menu_id),
+                Err(refusal) => return Err(refusal),
+            };
+            let nodes = menu_nodes(&self.catalog, tenant_id, menu_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "menu_id": menu_id.to_string() }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `permissions` node: each member's own roster, compiled per store (ADR-0070).
+struct PermissionsBatchNode<P> {
+    people: P,
+}
+
+/// [`PermissionsBatchNode`]'s plan — it holds no compiled document, because there is not one.
+struct PermissionsBatchPlan<'a, P> {
+    people: &'a P,
+    tenant_id: TenantId,
+}
+
+impl<P> BatchNodePlan for PermissionsBatchPlan<'_, P>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync,
+{
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({ "compiled": "per-store" })
+    }
+
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(async move {
+            permissions_nodes(self.people, self.tenant_id, store_id)
+                .await
+                .map(|(nodes, _staff)| nodes)
+        })
+    }
+}
+
+impl<P> BatchNode for PermissionsBatchNode<P>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "permissions"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "permissions.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(core::future::ready(Ok(Box::new(PermissionsBatchPlan {
+            people: &self.people,
+            tenant_id,
+        })
+            as Box<dyn BatchNodePlan + 'a>)))
+    }
+}
+
+/// The `floor` and `stations` nodes: each member's own plan, compiled per store (ADR-0072).
+struct FloorBatchNode<F> {
+    floor: F,
+}
+
+/// [`FloorBatchNode`]'s plan — per store, for the same reason as [`PermissionsBatchPlan`].
+struct FloorBatchPlan<'a, F> {
+    floor: &'a F,
+    tenant_id: TenantId,
+}
+
+impl<F> BatchNodePlan for FloorBatchPlan<'_, F>
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync,
+{
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({ "compiled": "per-store" })
+    }
+
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(async move {
+            floor_nodes(self.floor, self.tenant_id, store_id)
+                .await
+                .map(|(nodes, _summary)| nodes)
+        })
+    }
+}
+
+impl<F> BatchNode for FloorBatchNode<F>
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "floor"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "floor.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(core::future::ready(Ok(Box::new(FloorBatchPlan {
+            floor: &self.floor,
+            tenant_id,
+        })
+            as Box<dyn BatchNodePlan + 'a>)))
+    }
+}
+
+/// Every node kind a batch can publish, in the order the console offers them.
+///
+/// The one place the thirteen are assembled. `main.rs` calls this with the same store handles the
+/// single-store routers already hold, so a node cannot be wired into a batch without being wired
+/// into its own route first — and the three ADR-0122 §4 excludes (`locale`, `store_profile`, the
+/// generic level write) are absent by simply never appearing here.
+pub fn batch_nodes<Cat, Tax, Camp, Inv, R, P, F>(
+    catalog: Cat,
+    tax_rates: Tax,
+    campaigns: Camp,
+    inventory: Inv,
+    reason_codes: R,
+    people: P,
+    floor: F,
+) -> Vec<Arc<dyn BatchNode>>
+where
+    Cat: CatalogStore + Send + Sync + 'static,
+    Tax: TaxRateStore + Send + Sync + 'static,
+    Camp: CampaignStore + Send + Sync + 'static,
+    Inv: InventoryStore + Send + Sync + 'static,
+    R: ReasonCodeStore + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync + 'static,
+{
+    vec![
+        Arc::new(MenuBatchNode { catalog }),
+        Arc::new(TaxBatchNode { tax_rates }),
+        Arc::new(CampaignsBatchNode { campaigns }),
+        Arc::new(InventoryBatchNode { inventory }),
+        Arc::new(ReasonCodesBatchNode { reason_codes }),
+        Arc::new(PermissionsBatchNode { people }),
+        Arc::new(FloorBatchNode { floor }),
+        Arc::new(CapabilitiesBatchNode),
+        Arc::new(ChannelsBatchNode),
+        Arc::new(TenderBatchNode),
+        Arc::new(OriginsBatchNode),
+        Arc::new(QrBatchNode),
+        Arc::new(VendorPoliciesBatchNode),
+    ]
+}
+
+/// A `POST /admin/store-groups/{group_id}/publish` body.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishToStoreGroupRequest {
+    tenant_id: String,
+    /// Which node kind to publish — one of the thirteen batchable ones (ADR-0122 §4).
+    node: String,
+    /// That node's own arguments: the single-store body minus the `(tenant, store)`. Nodes
+    /// compiled from tenant-wide authoring (`tax`, `campaigns`, `inventory`, `reason_codes`,
+    /// `permissions`, `floor`) take none, and an object is accepted and ignored for them.
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// What a batch did at one store.
+#[derive(Debug, Clone, Serialize)]
+struct BatchResultView {
+    store_id: String,
+    /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
+    outcome: String,
+    /// The refusal's own message, for `skipped` and `failed`; absent when it applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    /// The config version the publish produced, for `applied`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
+    at_ms: i64,
+}
+
+/// A batch and what it did at every member — the response body, and the read routes' shape.
+#[derive(Debug, Clone, Serialize)]
+struct BatchReport {
+    batch_id: String,
+    group_id: String,
+    node: String,
+    arguments: serde_json::Value,
+    actor_email: String,
+    started_at_ms: i64,
+    /// Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at_ms: Option<i64>,
+    applied: usize,
+    skipped: usize,
+    failed: usize,
+    results: Vec<BatchResultView>,
+}
+
+/// The most bytes a refusal body may contribute to a batch result's `detail`.
+///
+/// A refusal is one sentence and a `details` array; this is a bound on a value the batch stores
+/// once per member, not a wire limit.
+const MAX_REFUSAL_DETAIL_BYTES: usize = 4096;
+
+/// Renders a route's own refusal into the one line a batch result records.
+///
+/// The batch does not invent a message: it collects the AIP-193 envelope the single-store route
+/// would have returned and stores its `message`. That is what ADR-0122 §6's "the refusal's own
+/// message" means, and it is a correctness property rather than a convenience — the operator
+/// reading a batch report and the operator who published to one store are told the same thing.
+/// A body that will not parse degrades to the status code, which is still more than "failed".
+async fn refusal_detail(response: Response) -> String {
+    let status = response.status();
+    let Ok(bytes) = axum::body::to_bytes(response.into_body(), MAX_REFUSAL_DETAIL_BYTES).await
+    else {
+        return format!("the publish was refused with HTTP {status}");
+    };
+    serde_json::from_slice::<ErrorResponse>(&bytes).map_or_else(
+        |_| format!("the publish was refused with HTTP {status}"),
+        |envelope| envelope.error.message,
+    )
+}
+
+/// One member's outcome, before it is written to `config_batch_results`.
+struct MemberOutcome {
+    outcome: BatchOutcome,
+    detail: Option<String>,
+    version_id: Option<String>,
+}
+
+impl MemberOutcome {
+    /// The store is deliberately protected, or a prerequisite is missing: `skipped`, with why.
+    fn skipped(detail: impl Into<String>) -> Self {
+        Self {
+            outcome: BatchOutcome::Skipped,
+            detail: Some(detail.into()),
+            version_id: None,
+        }
+    }
+
+    /// The publish was attempted and refused: `failed`, carrying the refusal's own message.
+    fn failed(detail: impl Into<String>) -> Self {
+        Self {
+            outcome: BatchOutcome::Failed,
+            detail: Some(detail.into()),
+            version_id: None,
+        }
+    }
+}
+
+/// Publishes one node to one member, deciding between the three outcomes of ADR-0122 §6.
+///
+/// The order matters and is the record's: the **protective** checks run first and produce
+/// `skipped`, so a store that was never going to be written is never filed beside one that broke.
+/// Only once a member has passed them is anything compiled or written, and from there a refusal is
+/// `failed`.
+async fn publish_batch_member<Cfg, C>(
+    config_trees: &Cfg,
+    clock: &C,
+    plan: &dyn BatchNodePlan,
+    prerequisites: &[&str],
+    tenant_id: TenantId,
+    store_id: StoreId,
+    store_status: Option<EntityStatus>,
+) -> MemberOutcome
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    // A membership row can outlive the store it names — there is no foreign key, deliberately
+    // (migration 0061). Both of these are the cohort being one store short of what the operator
+    // believes it is, which is worth saying every time rather than passing over in silence.
+    match store_status {
+        None => {
+            return MemberOutcome::skipped("this store is not in the tenant's registry");
+        }
+        Some(EntityStatus::Archived) => {
+            return MemberOutcome::skipped("this store is archived");
+        }
+        Some(_) => {}
+    }
+
+    for key in prerequisites {
+        match read_store_node(config_trees, tenant_id, store_id, key).await {
+            Ok(serde_json::Value::Null) => {
+                return MemberOutcome::skipped(format!(
+                    "this store has no `{key}` node yet; publish one to it before this"
+                ));
+            }
+            Ok(_) => {}
+            Err(refusal) => return MemberOutcome::failed(refusal_detail(refusal).await),
+        }
+    }
+
+    let nodes = match plan.compile_for(store_id).await {
+        Ok(nodes) => nodes,
+        Err(refusal) => return MemberOutcome::failed(refusal_detail(refusal).await),
+    };
+    match publish_config_nodes(
+        config_trees,
+        clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(version_id) => MemberOutcome {
+            outcome: BatchOutcome::Applied,
+            detail: None,
+            version_id: Some(version_id.to_string()),
+        },
+        Err(refusal) => MemberOutcome::failed(refusal_detail(refusal).await),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/store-groups/{group_id}/publish",
+    params(("group_id" = String, Path, description = "The cohort to publish to (a 26-character ULID)")),
+    responses(
+        (status = 200, description = "The batch ran and every member has an outcome — `applied`, \
+                                      `skipped` or `failed`. A `200` does **not** mean every store \
+                                      succeeded: a batch is deliberately not atomic (ADR-0122 §5), \
+                                      and the per-store report is the answer"),
+        (status = 400, description = "An id is not a ULID, the node is not one of the thirteen \
+                                      batchable kinds, or its arguments are the wrong shape", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The group is archived or empty, or the instruction itself is \
+                                      unpublishable (a menu that will not compile, an empty \
+                                      reason-code list) — nothing was written to any store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group, registry or config store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin publishes one node to every member of a store group.
+///
+/// The fan-out, in order: settle the instruction (which node, and can it compile at all), record
+/// the batch, walk the membership recording an outcome for each, close the batch, answer with the
+/// whole report. Nothing is written to any store until the instruction has compiled once, so an
+/// unpublishable request costs no partial write; after that the batch does not stop, because
+/// stopping is what turns one bad shop into fifty un-updated ones (ADR-0122 §5).
+async fn admin_publish_to_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<PublishToStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, group_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("group_id", &group_id)]) {
+            Ok([tenant_id, group_id]) => (TenantId::new(tenant_id), StoreGroupId::new(group_id)),
+            Err(refusal) => return refusal,
+        };
+    let Some(node) = state
+        .nodes
+        .iter()
+        .find(|candidate| candidate.key() == request.node)
+    else {
+        return unknown_batch_node(&state.nodes, &request.node);
+    };
+
+    let members = match publishable_membership(&state.groups, tenant_id, group_id).await {
+        Ok(members) => members,
+        Err(refusal) => return refusal,
+    };
+
+    // Compile the instruction once, before anything is written. A refusal here is the request's
+    // own — an unknown flag, a menu that will not compile — and would be the answer at every
+    // member, so it refuses the batch rather than being recorded 200 times.
+    let plan = match node.plan(tenant_id, &request.arguments).await {
+        Ok(plan) => plan,
+        Err(refusal) => return refusal,
+    };
+
+    // One registry read for the whole batch. The alternative — a read per member — turns the
+    // protective check into the batch's dominant cost at the 200-store cap.
+    let statuses = match state.registry.list_stores(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| (row.record.store_id, row.record.status))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        Err(error) => return registry_error_response(&error),
+    };
+
+    let started_at_ms = state.clock.now().as_milliseconds_since_epoch();
+    let Some(batch_id) = mint_ulid(started_at_ms).map(ConfigBatchId::new) else {
+        return service_unavailable("store groups");
+    };
+    let batch = ConfigBatch {
+        batch_id,
+        tenant_id,
+        group_id,
+        node: node.key().to_owned(),
+        arguments: request.arguments.clone(),
+        actor_email: context.admin.email.clone(),
+        started_at_ms,
+        finished_at_ms: None,
+    };
+    if let Err(error) = state.groups.start_batch(&batch).await {
+        return store_group_error_response(&error);
+    }
+
+    let results =
+        match fan_out_batch(&state, plan.as_ref(), node, &batch, &members, &statuses).await {
+            Ok(results) => results,
+            Err(refusal) => return refusal,
+        };
+
+    let finished_at_ms = state.clock.now().as_milliseconds_since_epoch();
+    if let Err(error) = state
+        .groups
+        .finish_batch(tenant_id, batch_id, finished_at_ms)
+        .await
+    {
+        return store_group_error_response(&error);
+    }
+
+    let report = batch_report(&batch, Some(finished_at_ms), &results);
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "store_group.publish",
+        "store_group",
+        &group_id.to_string(),
+        None,
+        Some(serde_json::json!({
+            "batch_id": batch_id.to_string(),
+            "node": node.key(),
+            "audit_action": node.audit_action(),
+            "summary": plan.summary(),
+            "applied": report.applied,
+            "skipped": report.skipped,
+            "failed": report.failed,
+        })),
+    )
+    .await;
+    (StatusCode::OK, Json(report)).into_response()
+}
+
+/// Walks a cohort's membership, publishing to each member and recording what happened.
+///
+/// The loop is deliberately sequential rather than a `join_all`: ADR-0122 §8 sizes the batch to
+/// finish inside one request at 200 members, and firing 200 concurrent config-tree writes at one
+/// connection pool trades a bounded few seconds for a saturated database and a fresh set of lost
+/// conditional-write races between a batch and itself.
+///
+/// The `Err` here is not a store failing — that is a recorded `failed`. It is the *report* failing
+/// to record, which ADR-0122 §5 makes the one thing that must not be partial, so the batch stops.
+async fn fan_out_batch<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    plan: &dyn BatchNodePlan,
+    node: &Arc<dyn BatchNode>,
+    batch: &ConfigBatch,
+    members: &[StoreId],
+    statuses: &std::collections::BTreeMap<StoreId, EntityStatus>,
+) -> Result<Vec<BatchResult>, Response>
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let mut results = Vec::with_capacity(members.len());
+    for &store_id in members {
+        let member = publish_batch_member(
+            &state.config_trees,
+            &state.clock,
+            plan,
+            node.prerequisites(),
+            batch.tenant_id,
+            store_id,
+            statuses.get(&store_id).copied(),
+        )
+        .await;
+        let result = BatchResult {
+            store_id,
+            outcome: member.outcome,
+            detail: member.detail,
+            version_id: member.version_id,
+            at_ms: state.clock.now().as_milliseconds_since_epoch(),
+        };
+        state
+            .groups
+            .record_result(batch.tenant_id, batch.batch_id, &result)
+            .await
+            .map_err(|error| store_group_error_response(&error))?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+/// The `400` for a node kind that is not one of the thirteen, naming the ones that are.
+///
+/// Listing them is the difference between an operator fixing a typo and an operator reading the
+/// ADR: three of the sixteen publishes are excluded *by construction* (ADR-0122 §4), and someone
+/// who asks for `locale` needs to be told it is per-store, not that it does not exist.
+fn unknown_batch_node(nodes: &[Arc<dyn BatchNode>], asked: &str) -> Response {
+    let known = nodes
+        .iter()
+        .map(|node| node.key())
+        .collect::<Vec<_>>()
+        .join(", ");
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        format!("`{asked}` is not a node a batch can publish; the batchable nodes are {known}"),
+        &[("node", "INVALID_ENUM_VALUE")],
+    )
+}
+
+/// The membership a batch may publish to, or the refusal that says why there is none.
+///
+/// Both refusals are `422` rather than a batch that runs and reports nothing: an archived cohort
+/// and an empty one are states an operator has to *change*, and a `200` carrying zero results
+/// reads as "it worked" for a publish that reached no shop at all.
+async fn publishable_membership<Grp>(
+    groups: &Grp,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+) -> Result<Vec<StoreId>, Response>
+where
+    Grp: StoreGroupStore,
+{
+    let group = find_store_group(groups, tenant_id, group_id).await?;
+    if group.status == EntityStatus::Archived {
+        return Err(api_error(
+            ErrorStatus::Unprocessable,
+            "this store group is archived; restore it before publishing to it",
+        ));
+    }
+    let members = groups
+        .list_members(tenant_id, group_id)
+        .await
+        .map_err(|error| store_group_error_response(&error))?;
+    if members.is_empty() {
+        return Err(api_error(
+            ErrorStatus::Unprocessable,
+            "this store group has no members, so a publish to it would reach nobody",
+        ));
+    }
+    Ok(members)
+}
+
+/// Finds one group within its tenant, or the `404`/`503` that stands in for it.
+async fn find_store_group<Grp>(
+    groups: &Grp,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+) -> Result<StoreGroup, Response>
+where
+    Grp: StoreGroupStore,
+{
+    match groups.list_groups(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| row.record)
+            .find(|group| group.group_id == group_id)
+            .ok_or_else(|| not_found("store group")),
+        Err(error) => Err(store_group_error_response(&error)),
+    }
+}
+
+/// Assembles a batch and its per-store results into the report both the publish and the reads return.
+fn batch_report(
+    batch: &ConfigBatch,
+    finished_at_ms: Option<i64>,
+    results: &[BatchResult],
+) -> BatchReport {
+    let count = |wanted: BatchOutcome| results.iter().filter(|r| r.outcome == wanted).count();
+    BatchReport {
+        batch_id: batch.batch_id.to_string(),
+        group_id: batch.group_id.to_string(),
+        node: batch.node.clone(),
+        arguments: batch.arguments.clone(),
+        actor_email: batch.actor_email.clone(),
+        started_at_ms: batch.started_at_ms,
+        finished_at_ms,
+        applied: count(BatchOutcome::Applied),
+        skipped: count(BatchOutcome::Skipped),
+        failed: count(BatchOutcome::Failed),
+        results: results
+            .iter()
+            .map(|result| BatchResultView {
+                store_id: result.store_id.to_string(),
+                outcome: result.outcome.as_wire().to_owned(),
+                detail: result.detail.clone(),
+                config_version_id: result.version_id.clone(),
+                at_ms: result.at_ms,
+            })
+            .collect(),
+    }
+}
+
+/// How many of a group's batches a list returns when the caller names no limit.
+const DEFAULT_BATCH_HISTORY: u32 = 20;
+
+/// The most a caller may ask for in one page of batch history.
+const MAX_BATCH_HISTORY: u32 = 200;
+
+/// A `GET /admin/store-groups/{group_id}/batches` query.
+#[derive(Debug, Clone, Deserialize)]
+struct BatchHistoryQuery {
+    tenant_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups/{group_id}/batches",
+    params(
+        ("group_id" = String, Path, description = "The cohort whose history to read (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "How many batches, newest first (default 20, max 200)"),
+    ),
+    responses(
+        (status = 200, description = "The group's batches, newest first, each with its per-store \
+                                      outcomes. A member whose last batch was not `applied` is a \
+                                      store that is not running what its group runs"),
+        (status = 400, description = "An id is not a ULID, or limit is out of range", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin reads a group's batch history, each batch with every member's outcome.
+async fn admin_list_store_group_batches<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Query(query): Query<BatchHistoryQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, group_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("group_id", &group_id)]) {
+            Ok([tenant_id, group_id]) => (TenantId::new(tenant_id), StoreGroupId::new(group_id)),
+            Err(refusal) => return refusal,
+        };
+    let limit = query.limit.unwrap_or(DEFAULT_BATCH_HISTORY);
+    if limit == 0 || limit > MAX_BATCH_HISTORY {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("limit must be between 1 and {MAX_BATCH_HISTORY}"),
+            &[("limit", "OUT_OF_RANGE")],
+        );
+    }
+    let batches = match state.groups.list_batches(tenant_id, group_id, limit).await {
+        Ok(batches) => batches,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let mut reports = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let results = match state.groups.batch_results(tenant_id, batch.batch_id).await {
+            Ok(results) => results,
+            Err(error) => return store_group_error_response(&error),
+        };
+        let finished = batch.finished_at_ms;
+        reports.push(batch_report(&batch, finished, &results));
+    }
+    (StatusCode::OK, Json(reports)).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups/{group_id}/batches/{batch_id}",
+    params(
+        ("group_id" = String, Path, description = "The cohort the batch ran against (a 26-character ULID)"),
+        ("batch_id" = String, Path, description = "The batch (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The batch and an outcome for every member it reached"),
+        (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such batch on this group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin reads one batch and what it did at every member.
+async fn admin_read_store_group_batch<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path((group_id, batch_id)): Path<(String, String)>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, group_id, batch_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("group_id", &group_id),
+        ("batch_id", &batch_id),
+    ]) {
+        Ok([tenant_id, group_id, batch_id]) => (
+            TenantId::new(tenant_id),
+            StoreGroupId::new(group_id),
+            ConfigBatchId::new(batch_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    // Read the group's history rather than the batch by id alone: it is what confines the lookup
+    // to the group in the path, so a batch id from a sibling cohort answers `404` and not somebody
+    // else's report.
+    let batches = match state
+        .groups
+        .list_batches(tenant_id, group_id, MAX_BATCH_HISTORY)
+        .await
+    {
+        Ok(batches) => batches,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let Some(batch) = batches.into_iter().find(|batch| batch.batch_id == batch_id) else {
+        return not_found("config batch");
+    };
+    let results = match state.groups.batch_results(tenant_id, batch_id).await {
+        Ok(results) => results,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let finished = batch.finished_at_ms;
+    (
+        StatusCode::OK,
+        Json(batch_report(&batch, finished, &results)),
+    )
+        .into_response()
 }
 
 // --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------
@@ -5842,6 +7170,7 @@ fn vendor_policies_node(
 
 /// The QR guardrails themselves, with the `(tenant, store)` a single-store publish also carries
 /// stripped off — which is precisely what makes this node batchable under ADR-0122 §4.
+#[derive(Debug, Clone, Deserialize)]
 struct QrGuardrailFields {
     enabled: bool,
     staff_confirmation_required: bool,
