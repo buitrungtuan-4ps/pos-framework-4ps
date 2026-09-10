@@ -13778,6 +13778,122 @@ async fn a_stale_catalog_write_is_refused_and_the_first_edit_survives() {
     );
 }
 
+/// Archiving a taxonomy row that active items still point at is refused, and the refusal names how
+/// many.
+///
+/// The failure this prevents is at the payment screen, not the console: `pos_core::billing` raises
+/// `TaxRateNotConfigured` when no rate matches a line's tax class and channel, so an item left
+/// pointing at a class nobody publishes a rate for is a shop that takes the order and cannot close
+/// the bill. Nothing before that says a word — which is why the refusal has to be at the archive,
+/// where an operator is still looking at the thing they are about to break.
+#[tokio::test]
+async fn archiving_a_tax_class_active_items_still_use_is_refused() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/tax-classes",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard 10%" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tax class");
+    let created = json_body(created).await;
+    let tax_class_id = created["tax_class_id"].as_str().expect("an id").to_owned();
+    let class_etag = created["etag"].as_str().expect("an etag").to_owned();
+
+    let item = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant, "name": "Margherita", "tax_class_id": tax_class_id,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    let item = json_body(item).await;
+    let item_id = item["menu_item_id"].as_str().expect("an id").to_owned();
+    let item_etag = item["etag"].as_str().expect("an etag").to_owned();
+
+    let refused = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant, "name": "Standard 10%", "status": "archived",
+            }),
+            &cookie,
+            &class_etag,
+        ))
+        .await
+        .expect("route the archive");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["status"], "UNPROCESSABLE");
+    let message = body["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains('1') && message.contains("item"),
+        "the refusal names the size of the problem, not just that there is one: {message}"
+    );
+
+    // Renaming it is untouched — the guard is on the archive, not on the row.
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard", "status": "active" }),
+            &cookie,
+            &class_etag,
+        ))
+        .await
+        .expect("route the rename");
+    assert_eq!(renamed.status(), StatusCode::OK);
+    let class_etag = json_body(renamed).await["etag"]
+        .as_str()
+        .expect("an etag")
+        .to_owned();
+
+    // Retire the item, and the class is free. An *archived* item's reference does not count: it is
+    // not sold, so holding a tax class hostage to it would make this guard the thing operators
+    // route around rather than the thing that protects them.
+    let archived_item = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/items/{item_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Margherita",
+                "tax_class_id": tax_class_id,
+                "status": "archived",
+            }),
+            &cookie,
+            &item_etag,
+        ))
+        .await
+        .expect("route archive the item");
+    assert_eq!(archived_item.status(), StatusCode::OK);
+
+    let allowed = router
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/tax-classes/{tax_class_id}"),
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard", "status": "archived" }),
+            &cookie,
+            &class_etag,
+        ))
+        .await
+        .expect("route the second archive");
+    assert_eq!(
+        allowed.status(),
+        StatusCode::OK,
+        "with no active item referencing it, the archive goes through"
+    );
+}
+
 #[tokio::test]
 async fn catalog_item_taxonomy_categories_subcategories_and_item_linkage() {
     let router = catalog_app(provisioned_admin(), FakeCatalog::default());

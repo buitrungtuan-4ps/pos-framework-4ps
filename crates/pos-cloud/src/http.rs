@@ -148,7 +148,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
-use crate::catalog_compiler::{compile_layout_book, compile_menu};
+use crate::catalog_compiler::{compile_layout_book, compile_menu, would_cycle};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config::InternalSecret;
 use crate::config_tree::{
@@ -15795,6 +15795,50 @@ where
     }
 }
 
+/// How many of a tenant's **active** items still point at a taxonomy row, for the archive guard.
+///
+/// # Why archiving needed a guard at all
+///
+/// Archiving a tax class or a category was an unconditional write, and the two ends of that were
+/// already disagreeing with each other in the tree: the console's item editor
+/// (`Items.tsx`) *rewrites* a dangling taxonomy reference when it next saves the item, so a
+/// reference to an archived class did not stay dangling so much as quietly become something else.
+/// A tax class is the expensive one — `pos_core::billing` raises `TaxRateNotConfigured` when no
+/// rate matches a line's class and channel, and the store learns that at the payment screen, with
+/// a customer waiting.
+///
+/// Counting only **active** items is the deliberate part. An archived item is already not sold, so
+/// its reference costs nothing and holding a tax class hostage to a retired item would make the
+/// guard the thing operators route around.
+async fn active_items_referencing<Cat>(
+    catalog: &Cat,
+    tenant_id: TenantId,
+    references: impl Fn(&CatalogItem) -> bool,
+) -> Result<usize, CatalogStoreError>
+where
+    Cat: CatalogStore,
+{
+    let rows = catalog.list_items(tenant_id).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.record)
+        .filter(|item| item.status == EntityStatus::Active && references(item))
+        .count())
+}
+
+/// The `422` an archive gets when active items still reference the row.
+///
+/// It names the count rather than the items: a class held by two hundred items is a different
+/// problem from one held by two, and an operator deciding what to do next needs the size before
+/// the list. The list itself is one search away on the Items screen, which is where the fix
+/// happens anyway.
+fn still_referenced(kind: &str, count: usize) -> Response {
+    unprocessable_violations(&[format!(
+        "this {kind} cannot be archived: {count} active {} still use it",
+        if count == 1 { "item" } else { "items" }
+    )])
+}
+
 /// A super-admin renames a tax class and/or sets its status.
 async fn admin_update_tax_class<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -15834,6 +15878,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.tax_class_id == tax_class_id
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("tax class", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -15990,6 +16046,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.item_category_id == Some(item_category_id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("category", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -16156,6 +16224,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.item_subcategory_id == Some(item_subcategory_id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("sub-category", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -17071,6 +17151,23 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    // A parent that loops is refused here rather than at publish. The compiler still catches a
+    // cycle — it has to, the stored graph may already hold one — but by then the operator is
+    // several screens away from the dropdown that caused it, reading a `422` about a menu they were
+    // not editing. This is the read the check costs: the tenant's menus, only when a parent is set.
+    if let Some(parent) = parent_menu_id {
+        match state.catalog.list_menus(tenant_id).await {
+            Ok(rows) => {
+                let menus: Vec<Menu> = rows.into_iter().map(|row| row.record).collect();
+                if would_cycle(&menus, menu_id, parent) {
+                    return unprocessable_violations(&[format!(
+                        "menu {menu_id} cannot inherit from {parent}: that would make the inheritance chain loop"
+                    )]);
+                }
+            }
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let record = Menu {
         menu_id,
         tenant_id,

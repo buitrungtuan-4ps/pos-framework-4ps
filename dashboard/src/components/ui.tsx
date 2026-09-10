@@ -4,7 +4,16 @@
 // translated by the caller — so the no-hardcoded-strings lint (ADR-0020) has nothing to flag here.
 
 import type { JSX, ParentProps } from "solid-js";
-import { createUniqueId, For, Show, splitProps } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  createUniqueId,
+  For,
+  onCleanup,
+  Show,
+  splitProps,
+} from "solid-js";
 
 import { locale } from "../i18n";
 
@@ -212,53 +221,223 @@ export function SelectField(props: {
   );
 }
 
+/** One choice in a picker. `label` is already-translated, or a name the operator authored. */
+export interface PickerOption {
+  readonly value: string;
+  readonly label: string;
+  /**
+   * Extra text this option should be findable by, beyond its label.
+   *
+   * The case it exists for is a catalogue authored in two languages (ADR-0074): an item's `label`
+   * is its fallback name, often English, while the operator at the console is typing the Vietnamese
+   * one. `name_translations` is already on the wire for every item, so passing its values here
+   * makes the local filter find what the operator typed — which the server's own `q` also does, but
+   * without the round-trip, and *only* the local one can do it while the list is already held.
+   */
+  readonly keywords?: readonly string[];
+}
+
 /**
- * A labelled multi-choice list — a `<select multiple>`, with the label association and the value
- * plumbing done once ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
+ * Case-insensitive substring match over an option's label and its keywords, and the one place the
+ * console decides what "matches" means.
  *
- * Separate from {@link SelectField} rather than a flag on it, because the two have different value
- * types and a caller must not be able to get that wrong: one choice is a `string`, several are a
- * `readonly string[]`. A boolean `multiple` prop would make `value` mean two things.
+ * Deliberately not a fuzzy or prefix match. The lists these filter are item and ingredient names an
+ * operator typed themselves, often in Vietnamese, and the query they type is a fragment of the name
+ * they remember — "bến", "margh". A prefix match misses that, and a fuzzy match ranks `Bún bò` above
+ * `Bánh mì` for the query `b` on grounds no operator can predict.
  *
- * The plumbing this owns is the part every hand-rolled copy re-derived: a `<select multiple>` does
- * not report its selection through `event.currentTarget.value`, so each caller wrote its own
- * `Array.from(select.selectedOptions).map(o => o.value)`. There were four copies across the catalog
- * screens, two of them in the same file.
- *
- * `rows` is how tall the list stands (the native `size`), defaulting to six — enough to see a
- * handful without the box swallowing the form.
+ * `toLocaleLowerCase` on both sides rather than `toLowerCase`: the two differ for scripts the
+ * console is already translated into, and folding the query one way and the label the other is a
+ * search that silently misses.
  */
-export function MultiSelectField(props: {
+function matchesQuery(option: PickerOption, query: string): boolean {
+  const needle = query.toLocaleLowerCase();
+  if (option.label.toLocaleLowerCase().includes(needle)) {
+    return true;
+  }
+  return (option.keywords ?? []).some((word) => word.toLocaleLowerCase().includes(needle));
+}
+
+/**
+ * A searchable single-choice picker.
+ *
+ * # Why this exists beside {@link SelectField}
+ *
+ * A native `<select>` is the better control for a short, closed list — a status, a channel, a
+ * brand — and 60-odd of them across the console are right as they are: they get the platform's own
+ * picker on a phone, cost no JavaScript, and need no ARIA. This is for the other shape, and the
+ * console has exactly one of it: **a list as long as the tenant's item master.**
+ *
+ * `Menus` fed every item a tenant owns into one `<select>` for the placement editor — the *main*
+ * menu-authoring path. At 300 items that is a 300-row dropdown an operator scrolls, and a native
+ * select's only search is type-ahead on the first character, which for `Bánh mì` means pressing `B`
+ * and landing wherever the browser's collation puts it. The fix is not a nicer select; it is a
+ * control with a text box in it.
+ *
+ * # The server-side escape hatch
+ *
+ * With `onSearch` given, this filters **nothing** locally: the caller is querying a paged endpoint
+ * and `options` already answers the query. That matters beyond tidiness — filtering a page of 25
+ * against the same string the server already applied would silently hide rows the server chose to
+ * return, and the operator would see a list that disagrees with the count beside it.
+ */
+export function ComboboxField(props: {
   label: string;
-  values: readonly string[];
-  options: readonly { readonly value: string; readonly label: string }[];
-  onChange: (values: string[]) => void;
+  value: string;
+  options: readonly PickerOption[];
+  onChange: (value: string) => void;
+  /** Already-translated. What the trigger reads when nothing is chosen. */
+  placeholder: string;
+  /** Already-translated. Labels the search box, which has no visible label of its own. */
+  searchLabel: string;
+  /** Already-translated. Shown in place of the list when nothing matches. */
+  emptyLabel: string;
   hint?: string;
-  rows?: number;
   disabled?: boolean;
+  /**
+   * Called as the operator types, when the list is served rather than held. Its presence turns off
+   * local filtering — see the note above.
+   */
+  onSearch?: (query: string) => void;
 }) {
+  const labelId = createUniqueId();
   const hintId = createUniqueId();
+  const listId = createUniqueId();
+  const [open, setOpen] = createSignal(false);
+  const [query, setQuery] = createSignal("");
+  const [active, setActive] = createSignal(0);
+  let root: HTMLDivElement | undefined;
+  let search: HTMLInputElement | undefined;
+
+  const shown = createMemo(() => {
+    const needle = query().trim();
+    if (props.onSearch !== undefined || needle === "") {
+      return props.options;
+    }
+    return props.options.filter((option) => matchesQuery(option, needle));
+  });
+
+  const chosen = () => props.options.find((option) => option.value === props.value);
+
+  const close = () => {
+    setOpen(false);
+    setQuery("");
+    setActive(0);
+  };
+
+  const choose = (option: PickerOption) => {
+    props.onChange(option.value);
+    close();
+  };
+
+  // Closing on a click elsewhere is what makes this behave like the select it replaces. Bound only
+  // while open, and on `pointerdown` rather than `click` so a press that starts outside and ends on
+  // the list does not select through a closing popover.
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (root && !root.contains(event.target as Node)) {
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
+  });
+
+  createEffect(() => {
+    if (open()) {
+      queueMicrotask(() => search?.focus());
+    }
+  });
+
+  const onSearchKey = (event: KeyboardEvent) => {
+    const items = shown();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActive((index) => Math.min(index + 1, items.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActive((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const option = items[active()];
+      if (option) {
+        choose(option);
+      }
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  };
+
   return (
-    <label class="block">
-      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
-      <select
-        multiple
-        size={props.rows ?? 6}
-        class="w-full rounded-token border border-line bg-surface-raised p-2 text-sm text-ink disabled:cursor-not-allowed disabled:opacity-50"
+    <div class="block" ref={root}>
+      <span id={labelId} class="mb-1 block text-sm font-medium text-ink">
+        {props.label}
+      </span>
+      <button
+        type="button"
+        class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-left text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
         disabled={props.disabled}
+        aria-labelledby={labelId}
+        aria-haspopup="listbox"
+        aria-expanded={open()}
         aria-describedby={props.hint ? hintId : undefined}
-        onChange={(event) =>
-          props.onChange(Array.from(event.currentTarget.selectedOptions, (option) => option.value))
-        }
+        onClick={() => setOpen((value) => !value)}
       >
-        <For each={props.options}>
-          {(option) => (
-            <option value={option.value} selected={props.values.includes(option.value)}>
-              {option.label}
-            </option>
-          )}
-        </For>
-      </select>
+        <Show when={chosen()} fallback={<span class="text-ink-muted">{props.placeholder}</span>}>
+          {(option) => <span>{option().label}</span>}
+        </Show>
+      </button>
+      <Show when={open()}>
+        <div class="relative">
+          <div class="absolute z-30 mt-1 w-full overflow-hidden rounded-token border border-line bg-surface shadow-overlay">
+            <input
+              ref={search}
+              type="text"
+              role="combobox"
+              class="w-full border-b border-line bg-surface px-3 py-2 text-base text-ink outline-none"
+              aria-label={props.searchLabel}
+              placeholder={props.searchLabel}
+              aria-expanded={true}
+              aria-controls={listId}
+              aria-autocomplete="list"
+              value={query()}
+              onInput={(event) => {
+                const next = event.currentTarget.value;
+                setQuery(next);
+                setActive(0);
+                props.onSearch?.(next);
+              }}
+              onKeyDown={onSearchKey}
+            />
+            <Show
+              when={shown().length > 0}
+              fallback={<p class="px-3 py-2 text-sm text-ink-muted">{props.emptyLabel}</p>}
+            >
+              <ul id={listId} role="listbox" aria-labelledby={labelId} class="max-h-64 overflow-auto">
+                <For each={shown()}>
+                  {(option, index) => (
+                    <li
+                      role="option"
+                      aria-selected={option.value === props.value}
+                      class={`cursor-pointer px-3 py-2 text-sm ${
+                        index() === active() ? "bg-surface-raised text-ink" : "text-ink"
+                      }`}
+                      onPointerEnter={() => setActive(index())}
+                      onClick={() => choose(option)}
+                    >
+                      {option.label}
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+          </div>
+        </div>
+      </Show>
       <Show when={props.hint}>
         {(hint) => (
           <span id={hintId} class="mt-1 block text-sm text-ink-muted">
@@ -266,7 +445,187 @@ export function MultiSelectField(props: {
           </span>
         )}
       </Show>
-    </label>
+    </div>
+  );
+}
+
+/**
+ * A searchable multi-choice picker, replacing the `<select multiple>` this kit used to carry.
+ *
+ * # The defect that retired its predecessor
+ *
+ * `MultiSelectField` was a `<select multiple size={6}>` reading `selectedOptions` on change. Two
+ * things follow from that, and both are only visible with a real list in front of you. It had no
+ * search, over the same item master {@link ComboboxField} exists for. And a plain click in a native
+ * multi-select **replaces** the selection rather than adding to it — the platform reserves adding
+ * for Ctrl/Cmd-click — so an operator fifteen toppings into a modifier group who clicks the
+ * sixteenth without holding a modifier key loses all fifteen, with no undo and nothing on screen
+ * that warned them. The only two callers in the console were exactly that: a modifier group's
+ * members and the items it attaches to.
+ *
+ * So this toggles. A click adds or removes one choice and touches nothing else, which is what every
+ * operator already believed the old control did.
+ *
+ * # Why the chips
+ *
+ * The selection is rendered above the search box rather than only inside the list, because filtering
+ * hides rows: type `bánh` with eight things chosen and seven of them leave the viewport. The chips
+ * keep the whole selection on screen and removable no matter what the query is, so "what have I
+ * picked" is never a question you answer by clearing the search.
+ */
+export function MultiComboboxField(props: {
+  label: string;
+  values: readonly string[];
+  options: readonly PickerOption[];
+  onChange: (values: string[]) => void;
+  /** Already-translated. Labels the search box, which has no visible label of its own. */
+  searchLabel: string;
+  /** Already-translated. Shown in place of the list when nothing matches. */
+  emptyLabel: string;
+  /** Already-translated. The accessible name of a chip's remove button. */
+  removeLabel: string;
+  hint?: string;
+  disabled?: boolean;
+  /** Called as the operator types, when the list is served rather than held. Turns off local filtering. */
+  onSearch?: (query: string) => void;
+}) {
+  const labelId = createUniqueId();
+  const hintId = createUniqueId();
+  const listId = createUniqueId();
+  const [query, setQuery] = createSignal("");
+  const [active, setActive] = createSignal(0);
+
+  const shown = createMemo(() => {
+    const needle = query().trim();
+    if (props.onSearch !== undefined || needle === "") {
+      return props.options;
+    }
+    return props.options.filter((option) => matchesQuery(option, needle));
+  });
+
+  // The chosen options in the order the *option list* has them, not the order they were clicked, so
+  // the chip row is stable across re-renders and reads the same as the list beneath it.
+  const chips = createMemo(() => props.options.filter((option) => props.values.includes(option.value)));
+
+  const toggle = (value: string) => {
+    const next = props.values.includes(value)
+      ? props.values.filter((held) => held !== value)
+      : [...props.values, value];
+    props.onChange(next);
+  };
+
+  const onSearchKey = (event: KeyboardEvent) => {
+    const items = shown();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActive((index) => Math.min(index + 1, items.length - 1));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActive((index) => Math.max(index - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const option = items[active()];
+      if (option) {
+        toggle(option.value);
+      }
+    }
+  };
+
+  return (
+    <div class="block">
+      <span id={labelId} class="mb-1 block text-sm font-medium text-ink">
+        {props.label}
+      </span>
+      <Show when={chips().length > 0}>
+        <ul class="mb-2 flex flex-wrap gap-1">
+          <For each={chips()}>
+            {(option) => (
+              <li class="inline-flex items-center gap-1 rounded-full border border-line bg-surface-raised py-0.5 pl-2 pr-1 text-xs text-ink">
+                <span>{option.label}</span>
+                <button
+                  type="button"
+                  class="rounded-full px-1 text-ink-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={props.disabled}
+                  aria-label={`${props.removeLabel}: ${option.label}`}
+                  onClick={() => toggle(option.value)}
+                >
+                  ×
+                </button>
+              </li>
+            )}
+          </For>
+        </ul>
+      </Show>
+      <div class="rounded-token border border-line bg-surface-raised">
+        <input
+          type="text"
+          role="combobox"
+          class="w-full border-b border-line bg-surface-raised px-3 py-2 text-base text-ink outline-none disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={props.searchLabel}
+          placeholder={props.searchLabel}
+          aria-expanded={true}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          disabled={props.disabled}
+          aria-describedby={props.hint ? hintId : undefined}
+          value={query()}
+          onInput={(event) => {
+            const next = event.currentTarget.value;
+            setQuery(next);
+            setActive(0);
+            props.onSearch?.(next);
+          }}
+          onKeyDown={onSearchKey}
+        />
+        <Show
+          when={shown().length > 0}
+          fallback={<p class="px-3 py-2 text-sm text-ink-muted">{props.emptyLabel}</p>}
+        >
+          <ul
+            id={listId}
+            role="listbox"
+            aria-multiselectable={true}
+            aria-labelledby={labelId}
+            class="max-h-56 overflow-auto"
+          >
+            <For each={shown()}>
+              {(option, index) => (
+                <li
+                  role="option"
+                  aria-selected={props.values.includes(option.value)}
+                  class={`flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink ${
+                    index() === active() ? "bg-surface" : ""
+                  }`}
+                  onPointerEnter={() => setActive(index())}
+                  onClick={() => {
+                    if (!props.disabled) {
+                      toggle(option.value);
+                    }
+                  }}
+                >
+                  <span
+                    aria-hidden="true"
+                    class={`inline-block h-4 w-4 shrink-0 rounded-token border ${
+                      props.values.includes(option.value)
+                        ? "border-accent bg-accent"
+                        : "border-line bg-surface"
+                    }`}
+                  />
+                  <span>{option.label}</span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </div>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </div>
   );
 }
 

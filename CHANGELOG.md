@@ -18,6 +18,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A list you can type into.** Two picker primitives join the console kit, for the one shape a
+  native `<select>` cannot serve: a list as long as the tenant's item master.
+
+  `ComboboxField` is the searchable single choice. It sits *beside* `SelectField` rather than
+  replacing it — a native select is the better control for a short closed list (a status, a
+  channel, a brand), and the sixty-odd of those are right as they are. It is now used by the
+  placement editor on **Menus** (the main menu-authoring path, which fed every item a tenant owns
+  into one dropdown), and by the item pickers on **Layout**, **Stations** and **Inventory**, plus
+  the BOM line's ingredient picker.
+
+  `MultiComboboxField` replaces `MultiSelectField`, which is removed. Matching is a
+  case-insensitive substring over the option's label **and its per-locale names**
+  ([ADR-0074](docs/adr/0074-localization-and-tax.md)), so an operator typing the Vietnamese name of
+  an item whose fallback name is English finds it — with no round-trip, because
+  `name_translations` is already on the wire with every item.
+
 - **The console can hand a store's files over again — the machine-replacement path.** Stores → a
   store's row → **Move to a new box** re-emits all four artifacts (`install-pos-edge.ps1`,
   `install-pos-edge.sh`, `config.toml`, `env`) for a store that already exists.
@@ -41,6 +57,44 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   screen plus the browser's own origin. `docs/guides/bring-a-store-online.md` gains the full
   procedure, including the plain statement that **the lease supersedes a replaced box for updates,
   not for trading** — two boxes on one store will both sell, so unplug the one you replaced.
+
+### Fixed
+
+- **A plain click in a multi-select destroyed the selection.** `MultiSelectField` was a
+  `<select multiple>`, and the platform reserves *adding* for Ctrl/Cmd-click — so an operator
+  fifteen toppings into a modifier group who clicked the sixteenth without a modifier key lost all
+  fifteen, silently, with no undo. The replacement toggles: a click adds or removes one choice and
+  touches nothing else. The chosen options also render as removable chips above the search box, so
+  filtering the list never hides what is already picked.
+
+- **A bulk price change stopped at the first refusal and would not say what it had done.** It
+  `await`ed inside a `for`, so one refused placement aborted the rest and the operator got a single
+  error with no way to learn how many of fifty prices had changed. Worse, the rows that succeeded
+  now held versions the screen did not, so re-running refused everything that had worked and
+  applied everything that had not. It now attempts every row, reports each refusal with the item it
+  belongs to, and reloads the menu whatever happened, so a retry means what it says.
+
+- **An archived menu still published.** The compiler skipped archived *items* and never looked at
+  the menu's own status, so a retired menu compiled and shipped. Every menu in the inheritance
+  chain is now checked: an archived ancestor is refused rather than omitted, because a store
+  special silently rests on the prices its parent carries and dropping them would take items off a
+  till with nothing said.
+
+- **A menu inheritance cycle was authorable.** It was only fatal at publish, as a `422` several
+  screens from the dropdown that caused it. The menu update route now refuses the edge that would
+  close a loop, naming both menus; the compiler keeps its own check, because the stored graph may
+  already hold one.
+
+- **A tax class or category could be archived out from under the items using it.** The cost landed
+  at the payment screen: `pos_core::billing` refuses a line whose tax class has no rate, so a shop
+  showed the menu, took the order and could not close the bill. The three archive routes now count
+  the **active** items referencing the row and refuse with a `422` naming the count. Renaming is
+  untouched, and an archived item's reference does not count.
+
+- **Reports gated its only cross-store panel on picking one store.** The panel whose subject is
+  "how do my shops compare" sat inside the store gate, so a fleet-wide read needed a single shop
+  chosen first — and then reported on all of them anyway. The window and the comparison are now
+  under a tenant gate; the per-store cards keep the store gate.
 
 ### Changed
 
