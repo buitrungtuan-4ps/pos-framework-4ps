@@ -133,7 +133,7 @@ webpki-roots    = "1"
 chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 zeroize = "1.8"
 
-argon2 = "0.5"
+argon2 = "0.6"
 sha1   = "0.11"
 # The super-admin session token is 32 CSPRNG bytes minted at the binary edge and hashed before
 # storage (ADR-0034). `getrandom` is the same OS-entropy crate the edge already uses (pairing codes,

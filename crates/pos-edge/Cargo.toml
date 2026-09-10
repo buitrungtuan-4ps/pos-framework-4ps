@@ -105,7 +105,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # Argon2id hashes. Default features, which is what makes the shipped verify path
 # work; salt generation comes from the same default set and is reached only by
 # `auth::hash_pin` behind `demo-fixtures`, never by a store.
-argon2 = "0.5"
+argon2 = "0.6"
 
 # The OS CSPRNG (ADR-0030), for the single-use pairing code and device tokens.
 getrandom = "0.3"
