@@ -16,6 +16,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Fast-path i18n lookup for static translation strings.** `t(key, args)` in `ui` and `dashboard`
+  now returns static translation strings directly when no arguments are provided and no ICU
+  formatting placeholders (`{`) exist, bypassing `IntlMessageFormat` formatting overhead (~10x
+  faster lookup for static strings).
+
 ### Fixed
 
 - **The Windows installer could not run on Windows.** Reported from a real bring-up: the script the
