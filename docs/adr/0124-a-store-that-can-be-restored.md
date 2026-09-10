@@ -81,6 +81,58 @@ The **A4 question is still open, and this record does not answer it.** Litestrea
 - **It does not deduplicate or do incrementals.** Every archive is the whole database. For a shop-sized database that is the right trade against a format nobody can open by hand in an emergency.
 - **It does not verify a restored store *trades*.** `integrity_check` proves the file is a database; that the edge comes up on it and reconciles every bill is the human drill, and it stays in `docs/gate-register.md` as one.
 
-**Delivery.** In slices, each green on its own: **(1)** the snapshot and the sealed format, with the `pos-edge archive` tool — this commit; **(2)** the wire — the schedule at the edge, the `CloudSync` upload, the cloud's ciphertext sink over `BlobStore`, and the key the cloud mints; **(3)** retention, the console's view of when each store last archived, and the drill's store leg. Until slice 2 lands, an operator can seal and restore by hand with the tool, which is already more than existed.
+**Amendment 1 (2026-09-10) — the cloud's copy of the key is wrapped, or decision 5 is not true.**
 
-**Tested by.** `crates/adapters/store-sqlite/tests/snapshot.rs` — a snapshot of a *live* store carries every receipt number the WAL had not checkpointed; one taken while the writer is mid-burst is a gapless prefix rather than a torn read; vacuuming over an existing file is refused rather than merged. `crates/pos-edge/tests/store_archive.rs` — a till that has traded is sealed, opened on a different machine, and re-issues every bill its own receipt number with the B2B buyer's name intact; the wrong key, another shop's id, one flipped bit and half a download all refuse, and the refused restore leaves nothing on disk that looks like one.
+Decision 5 said the cloud keeps a copy of each store's key, and that what the seal buys is *the
+tier beyond the cloud*: the object store, and the off-box destination `rclone` syncs to. Building
+the cloud half showed that the second half of that sentence was false as designed.
+
+[`deploy/backup.sh`](../../deploy/backup.sh) ships a `pg_dump` of the cloud database off-box with
+`rclone` ([ADR-0046](0046-backups-and-restore.md)) — to the **same tier** the sealed archives sync
+to. A plaintext key column would therefore have put the key and the ciphertext it opens in one
+bucket, and the seal would have bought nothing at exactly the tier it was bought for. Not a
+weakness in the cipher; a weakness in where the key was going to live.
+
+So a stored key is **wrapped** under `archive_key_secret`, a 32-byte value `bootstrap.sh` mints
+into the box's `cloud.toml` and which is not in the dump — the same posture
+`internal_shared_secret` already has ([ADR-0097](0097-internal-route-authentication.md),
+[ADR-0044](0044-fork-and-deploy.md)). Three consequences worth stating:
+
+- **The residue moves rather than disappearing.** The wrapping secret is on the same box as the
+  database, so a compromise of the *box* still reaches both. What this buys is the tier beyond the
+  box, which is where the data travels furthest and is guarded least — which is what decision 5
+  claimed and, without this, would not have delivered.
+- **Its absence turns store archives off, and does not weaken them.** A cloud with no
+  `archive_key_secret` does not mount the archive routes and says so at boot, on the same
+  principle as `[artifacts]`: a route that always answers `503` is worse than one honestly absent.
+  A malformed value is a boot refusal, because a passphrase where a 32-byte key belongs would mint
+  keys nobody could ever unwrap and nobody would find out until a restore.
+- **The layering enforces it.** `store-postgres` moves the wrapped text and holds no secret that
+  could open it; only `pos_cloud::archive` unwraps. "The database never sees a usable key" is
+  therefore a property of which crate holds what, not a rule a reviewer has to remember.
+
+**Rejected here too: rotating the secret re-wraps every key.** It would have to, and that is a
+migration over every row with the old secret still available — worth building when a rotation is
+actually needed, and not before. Until then, changing `archive_key_secret` orphans every stored
+key, which is why `bootstrap.sh` mints it once and leaves it alone.
+
+**Delivery.** In slices, each green on its own: **(1)** the snapshot and the sealed format, with the `pos-edge archive` tool; **(2)** the wire — the schedule at the edge, the `CloudSync` upload, the cloud's ciphertext sink over `BlobStore`, and the key the cloud mints; **(3)** retention, the console's view of when each store last archived, and the drill's store leg. Until slice 2 landed, an operator could seal and restore by hand with the tool, which was already more than existed.
+
+**Delivery note (slice 2, complete).** Slices 1 and 2 are in the tree; slice 3 is not. Three things were decided while building the wire and are recorded here rather than in a commit message:
+
+- **`archive-key` is a `POST`, not a `GET`.** The first call *mints*, and a `GET` with a side effect is one a caching proxy or a browser prefetch may perform unasked. The mint is insert-if-absent in one statement, so a prefetch could not have created a *second* key — but the verb would still have been describing the wrong thing, and the next reader would have believed it.
+- **The plaintext working copy goes beside the database, never in the system temp directory.** `VACUUM INTO` writes a whole second database, and `/tmp` on a real box is frequently a tmpfs far smaller than a store — an archive loop pointed there fails on exactly the busy shops that most need it. The copy is removed on the succeeding *and* the failing path.
+- **The loop does not consult the lease.** A box superseded under [ADR-0123](0123-a-superseded-box-opens-nothing-new.md) holds precisely the events its replacement does not — the ones committed after the cut-over began and never published. Stopping its backups stops the backups of the only copy, so the gate that closes its doors to new business deliberately leaves archiving open.
+
+The interval is `config.toml`'s `backup_interval_hours` (default 24, `0` off with a start-up warning). The first archive is taken five minutes after boot rather than immediately or a whole interval later: immediately would put a snapshot inside every OTA restart and every crash-loop iteration, and a whole interval would mean a box restarted daily — an ordinary shop — never archives at all.
+
+**Delivery note (slice 3, complete).** ADR-0124 is delivered. The retention half is the decision the record turned on, so the shape it took is worth stating:
+
+- **The archive window is capped strictly below the subject window, and the cloud refuses to boot otherwise.** `archive_retention_days` (default 30) must be less than `retention_days`. That refusal is the mechanism, not a lint: an archive is a store's whole database taken *before* the masking cron redacted a buyer, so a window at or past the subject window leaves the masking done in the row and undone in the copy — with no symptom until somebody opens an archive. `retention_days` still has no default (a guessed legal period is a violation either way); `archive_retention_days` does, because a guessed archive window only decides how far back a restore reaches, and a month of backups is a better failure than none.
+- **The sweep removes bytes first, row second.** A crash between the two leaves a row naming nothing, which the next sweep finds and retries — `BlobStore::delete` succeeds whether or not the object was there. Row-first would leave an object nothing names: unreachable, unbilled-for by anyone watching, and findable only by listing a bucket.
+- **An object that will not delete keeps its row.** It is counted and left, so the console keeps telling the truth about what exists and the next sweep tries again. Forgetting the row would be the tidy-looking choice and would hide the leak.
+- **Erasure that must reach an archive is documented, not automated** — [`docs/guides/data-subject-requests.md`](../guides/data-subject-requests.md). The guide's recommendation is to **delete** the affected archives rather than edit them: a re-sealed archive with a row removed is a database the store never had, and a restore from it reconciles against nothing. The residue it names and cannot close: the off-box tier's own versioning and soft-delete are the operator's to sweep, and no code here can assert that they did.
+
+**Still not built, and named rather than left to be discovered:** key rotation. Changing `archive_key_secret` orphans every key wrapped under it, and re-wrapping every row is the migration that would fix it. It is worth building when a rotation is actually needed.
+
+**Tested by.** `crates/adapters/store-sqlite/tests/snapshot.rs` — a snapshot of a *live* store carries every receipt number the WAL had not checkpointed; one taken while the writer is mid-burst is a gapless prefix rather than a torn read; vacuuming over an existing file is refused rather than merged. `crates/pos-edge/tests/store_archive.rs` — a till that has traded is sealed, opened on a different machine, and re-issues every bill its own receipt number with the B2B buyer's name intact; the wrong key, another shop's id, one flipped bit and half a download all refuse, and the refused restore leaves nothing on disk that looks like one. `crates/pos-edge/tests/backup_loop.rs` — one round of the loop against a database that is still open and trading: what reaches the cloud carries the archive magic and not the SQLite header, the working copy is gone afterwards, and the bytes the cloud received open back into a store with the same receipt numbers; a cloud that will not issue a key ends the round *before* the snapshot, so a box with a down link does not vacuum its whole database every interval to find out. `crates/pos-contract-tests/src/cloud_sync.rs` — every `CloudSync`, present and future, owes the same key twice and refuses unopenable bytes as `InvalidArgument` rather than as something retryable. `crates/pos-cloud/tests/cloud.rs` — the two routes are the store's own door, the stored column is not the key it wraps, a `taken_at` that is missing or zero is refused rather than defaulted to now, and the console read returns newest-first with no key in it (an empty list for a store that has never archived, which is a `200` and not a `404`). `crates/pos-cloud/src/archive_retention.rs` — an archive past the window goes and a recent one stays; bytes that will not delete leave their row behind for the next sweep; a clock before the epoch expires nothing rather than everything. `crates/pos-cloud/src/config.rs` — an archive window at or past the subject window refuses the boot, one day inside it is accepted, and zero is refused.

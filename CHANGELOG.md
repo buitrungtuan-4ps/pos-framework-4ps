@@ -18,6 +18,70 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store's backups age out on their own, and the console says when it last backed up**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The last of D-2. A daily sweep
+  removes archives past `archive_retention_days` — bytes first, then the row that names them, so a
+  crash between the two leaves something the next sweep retries rather than an object nothing can
+  find. `GET /admin/stores/{store_id}/archives` and a **Backups** panel in the Fleet drawer show
+  what each store has, newest first; a store that has never archived says so in as many words
+  rather than showing an empty box.
+
+  The point of the sweep is not disk. A store's archive is its whole database including the buyer
+  details a B2B invoice needs ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)), taken *before*
+  the masking cron redacted them — so an archive window at or past the subject window would leave
+  the masking done in the row and undone in the copy, with nothing to notice. **`pos_cloud` now
+  refuses to start when the two windows are the wrong way round.**
+
+  `deploy/store-restore-drill.sh` is the store leg of the restore drill: pull a shop's newest
+  sealed archive, open it, and run SQLite's integrity check over what comes out.
+  [`docs/guides/data-subject-requests.md`](docs/guides/data-subject-requests.md) is the erasure
+  procedure for the exceptional case that cannot wait out the window — and recommends deleting the
+  affected archives rather than editing them, because a re-sealed archive is a database the store
+  never had.
+
+  **Upgrade note.** `cloud.toml` gains `archive_retention_days` (default 30) and
+  `archive_retention_sweep_interval_secs` (default daily). Migration `0063_store_archive_expiry.sql`
+  adds one index. A cloud whose `retention_days` is 30 or less **must lower
+  `archive_retention_days` before upgrading**, or it will refuse to boot — the refusal names both
+  numbers and what to set. A cloud with no `retention_days` at all is unaffected: the archive
+  window then stands alone.
+
+- **A store now archives itself, nightly, without anyone remembering to**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The wire that joins the two halves
+  already shipped: `CloudSync` grew `archive_key` and `upload_archive`, the `cloud-sync-http`
+  adapter speaks them over the store's existing scoped key, and `pos-edge` runs a loop that
+  snapshots the live database, seals it at the till, and ships only ciphertext. The plaintext
+  working copy is written beside the database — never in a system temp directory, which on a real
+  box is a tmpfs too small for a store — and is removed on both the succeeding and the failing
+  path.
+
+  Two properties are deliberate and are pinned by tests. A failed round is a warning and never a
+  stop: an unreachable cloud, a full disk or an oversized archive costs one interval, and the till
+  never learns it happened. And a **superseded box keeps archiving**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)) — it holds exactly the events
+  its replacement does not, so it is the box whose database most needs saving.
+
+  **Upgrade note.** `config.toml` gains `backup_interval_hours`, defaulting to `24`; that interval
+  is the recovery point. `0` switches archiving off and is announced as a warning at start-up, so a
+  store with no backups is visible in the log rather than silent. Archiving needs a `cloud_url`, a
+  scoped sync key, and a cloud with `archive_key_secret` and object storage configured; a box
+  missing any of those trades exactly as before and says which is absent.
+
+- **The cloud can hold a store's archive key, and cannot read it from its own backups**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The cloud half of the
+  store archive: migration `0062_store_archives.sql`, the per-store key, and the index of what each
+  store has shipped. The key is stored **wrapped** under a new box-local `archive_key_secret` in
+  `cloud.toml`, because `deploy/backup.sh` ships a `pg_dump` of the cloud database to the same
+  off-box tier the sealed archives sync to — a plaintext key column would have carried the key to
+  the same bucket as the ciphertext it opens, and the seal would have bought nothing at exactly the
+  tier it was bought for.
+
+  **Upgrade note.** `archive_key_secret` is 64 hexadecimal characters (`openssl rand -hex 32`) and
+  `bootstrap.sh` mints it. It is **optional**: a cloud without one runs exactly as before and
+  mounts no archive routes, saying so at boot. A malformed value is a boot refusal rather than a
+  warning, because a passphrase where a 32-byte key belongs mints keys nobody can unwrap and
+  nobody finds out until a restore. Changing the secret orphans every key already stored under it.
+
 - **A store's database can now be copied off the box, and opened again**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). Until now no copy of a shop's
   `store.sqlite` existed anywhere but the shop, so a dead disk took the unpublished outbox, the

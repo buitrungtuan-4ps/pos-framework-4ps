@@ -68,6 +68,27 @@ impl CloudSync for StubCloud {
         // Activation tests never report; accept it so the stub satisfies the port.
         Ok(())
     }
+
+    async fn archive_key(&self, _store: StoreId) -> Result<String, PortError> {
+        // Activation tests never archive. `unavailable` rather than a made-up key, so a future
+        // test that reaches here fails loudly instead of sealing under a stub's invention.
+        Err(PortError::unavailable(
+            PortName::CloudSync,
+            "the stub cloud stores no archives",
+        ))
+    }
+
+    async fn upload_archive(
+        &self,
+        _store: StoreId,
+        _taken_at: pos_proto::time::Timestamp,
+        _archive: &[u8],
+    ) -> Result<(), PortError> {
+        Err(PortError::unavailable(
+            PortName::CloudSync,
+            "the stub cloud stores no archives",
+        ))
+    }
 }
 
 /// A checksum-valid activation code the stub cloud will accept.

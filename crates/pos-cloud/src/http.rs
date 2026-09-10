@@ -124,6 +124,9 @@ use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
+use crate::archive::{
+    ArchiveSecret, ArchiveStore, StoreArchive, StoreArchiveKey, archive_object_key,
+};
 use crate::audit::{
     AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder,
 };
@@ -1206,6 +1209,489 @@ where
             blobs,
             releases,
         })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store archives ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md))
+// ---------------------------------------------------------------------------------------------
+
+/// The largest sealed archive the cloud accepts from a store.
+///
+/// The same number `pos_edge::backup::MAX_ARCHIVE_BYTES` refuses to *write*, so a store cannot
+/// produce an archive this rejects — the two must move together, and a mismatch shows up as a
+/// store whose backups have silently stopped. On the route rather than the reverse proxy, for the
+/// reason the release upload gives: a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
+/// `external` posture) still gets the limit.
+const MAX_STORE_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
+
+/// What the collaborators the archive routes need: the key store and clock that authenticate a
+/// store, the object store the sealed bytes go to, the registry that indexes them, and the
+/// box-local secret that wraps a key.
+#[derive(Clone)]
+struct ArchiveState<K, C, B, R> {
+    keys: K,
+    clock: C,
+    blobs: B,
+    archives: R,
+    secret: ArchiveSecret,
+}
+
+/// When the store took the snapshot — its clock, not the cloud's.
+///
+/// Required rather than defaulted to "now": a shop that was offline for a day ships yesterday's
+/// archive today, and the recovery point is when the snapshot was taken. Defaulting would quietly
+/// record the wrong one, and the wrong one is the number an operator reads when deciding what they
+/// have lost.
+#[derive(Debug, Clone, Deserialize)]
+struct ArchiveUploadQuery {
+    taken_at: i64,
+}
+
+/// The key a store seals with, as it comes back over `/sync`.
+#[derive(Debug, Clone, Serialize)]
+struct ArchiveKeyResponse {
+    key: String,
+}
+
+/// What the cloud recorded, echoed so a store can log what it shipped.
+#[derive(Debug, Clone, Serialize)]
+struct ArchiveAcceptedResponse {
+    object_key: String,
+    size_bytes: i64,
+    sha256: String,
+}
+
+/// Builds the store-archive sub-router
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+///
+/// Merged only when **both** an object store and `archive_key_secret` are configured, exactly like
+/// [`ota_artifact_router`]: with no object store there is nowhere for the bytes to go, and with no
+/// secret there is nowhere safe to keep the key, so a route that always answers `503` would be
+/// worse than one honestly absent. `pos-cloud`'s boot says which of the two is missing.
+///
+/// Two routes, both authenticated by the store's own scoped key and both held to it by
+/// [`require_store`] — the same gate the report route beside them uses (S1). `Scope::ReadConfig` is
+/// what a store's provisioned key carries, and it is what the whole store-facing `/sync` surface is
+/// gated on; a new scope would be a scope every already-issued key lacks, which would show up as
+/// archives that never start.
+pub fn store_archive_router<K, C, B, R>(
+    keys: K,
+    clock: C,
+    blobs: B,
+    archives: R,
+    secret: ArchiveSecret,
+) -> Router
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/sync/stores/{store_id}/archive-key",
+            post(serve_store_archive_key::<K, C, B, R>),
+        )
+        .route(
+            "/sync/stores/{store_id}/archive",
+            post(receive_store_archive::<K, C, B, R>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            MAX_STORE_ARCHIVE_BYTES,
+        ))
+        .with_state(ArchiveState {
+            keys,
+            clock,
+            blobs,
+            archives,
+            secret,
+        })
+}
+
+/// `POST /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted
+/// on the first ask.
+///
+/// Mint-on-first-ask rather than an admin action, because a store that starts archiving must not
+/// need somebody to have remembered; the console reveals and rotates it afterwards. The mint is
+/// insert-if-absent in one statement ([`ArchiveStore::adopt_key`]), so two tills asking in the same
+/// second get the *same* key rather than two — one of which would be the key to archives nobody
+/// could open.
+///
+/// A `POST` for a value that reads like a `GET`, and deliberately so: the first call has a side
+/// effect that outlives it. A `GET` that mints is one a caching proxy or a browser prefetch may
+/// perform unasked, and the thing it would create here is the key to every archive this store ever
+/// ships.
+async fn serve_store_archive_key<K, C, B, R>(
+    State(state): State<ArchiveState<K, C, B, R>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    let (grant, store_id) =
+        match authorize_store(&state.keys, &state.clock, &headers, &store_id).await {
+            Ok(pair) => pair,
+            Err(refusal) => return refusal,
+        };
+
+    match state.archives.wrapped_key(grant.tenant(), store_id).await {
+        Ok(Some(wrapped)) => match StoreArchiveKey::unwrap_from(&wrapped, &state.secret) {
+            Ok(key) => Json(ArchiveKeyResponse { key: key.to_text() }).into_response(),
+            Err(error) => {
+                // The stored key does not open under this box's secret. Almost always
+                // `archive_key_secret` was changed, which orphans every key wrapped under the old
+                // one (ADR-0124 Amendment 1). `Internal`, not `Unavailable`: retrying does not fix
+                // it, and telling a store to back off and try again would be a lie.
+                tracing::error!(
+                    %error,
+                    store = %store_id,
+                    "a stored archive key does not open under archive_key_secret; was the secret                      changed?"
+                );
+                api_error(
+                    ErrorStatus::Internal,
+                    "this store's archive key cannot be read with the configured                      archive_key_secret",
+                )
+            }
+        },
+        Ok(None) => mint_store_archive_key(&state, grant.tenant(), store_id).await,
+        Err(error) => {
+            tracing::warn!(%error, "reading the archive registry failed");
+            service_unavailable("archive registry")
+        }
+    }
+}
+
+/// Mints, wraps and adopts a key, answering with whichever key is current afterwards.
+async fn mint_store_archive_key<K, C, B, R>(
+    state: &ArchiveState<K, C, B, R>,
+    tenant: TenantId,
+    store_id: StoreId,
+) -> Response
+where
+    R: ArchiveStore,
+    C: ClockSource,
+{
+    let Ok(minted) = StoreArchiveKey::mint() else {
+        return api_error(
+            ErrorStatus::Internal,
+            "the OS entropy source is unavailable, so no archive key could be minted",
+        );
+    };
+    let wrapped = match minted.wrap(&state.secret) {
+        Ok(wrapped) => wrapped,
+        Err(error) => {
+            tracing::error!(%error, "wrapping a new archive key failed");
+            return api_error(
+                ErrorStatus::Internal,
+                "the new archive key could not be wrapped for storage",
+            );
+        }
+    };
+    let minted_at = state.clock.now().as_milliseconds_since_epoch();
+    // The returned wrapped key is whichever one is current — this one, or the one a concurrent
+    // till adopted a moment earlier. Unwrapping *that* rather than answering with `minted` is what
+    // makes the race safe rather than merely rare.
+    let current = match state
+        .archives
+        .adopt_key(tenant, store_id, &wrapped, minted_at)
+        .await
+    {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(%error, "recording a new archive key failed");
+            return service_unavailable("archive registry");
+        }
+    };
+    match StoreArchiveKey::unwrap_from(&current, &state.secret) {
+        Ok(key) => Json(ArchiveKeyResponse { key: key.to_text() }).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a just-adopted archive key does not open");
+            api_error(
+                ErrorStatus::Internal,
+                "this store's archive key cannot be read with the configured archive_key_secret",
+            )
+        }
+    }
+}
+
+/// `POST /sync/stores/{store_id}/archive?taken_at=` — a store ships a sealed archive.
+///
+/// The cloud is a **sink for bytes it cannot read**. It does not open the archive, does not parse
+/// it, and holds no key material for it beyond the wrapped column — the seal happened at the till
+/// precisely so that a store's buyer details ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md))
+/// never exist here in plaintext.
+///
+/// What it *does* check is the header: eight magic bytes and a format version, so an obviously
+/// wrong body (a plain database, a truncated download, an HTML error page from a proxy) is refused
+/// at upload instead of discovered at restore. That is a shape check and emphatically not
+/// verification — only the key opens an archive, and the cloud has none.
+async fn receive_store_archive<K, C, B, R>(
+    State(state): State<ArchiveState<K, C, B, R>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ArchiveUploadQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    let (grant, store_id) =
+        match authorize_store(&state.keys, &state.clock, &headers, &store_id).await {
+            Ok(pair) => pair,
+            Err(refusal) => return refusal,
+        };
+    if query.taken_at <= 0 {
+        return api_error(
+            ErrorStatus::InvalidArgument,
+            "taken_at: milliseconds since the epoch, from the store's own clock",
+        );
+    }
+    if !looks_like_a_store_archive(&body) {
+        return api_error(
+            ErrorStatus::InvalidArgument,
+            "this body is not a store archive; the store seals one with `pos-edge archive`",
+        );
+    }
+
+    let key_text = archive_object_key(store_id, query.taken_at);
+    let Ok(object_key) = BlobKey::parse(&key_text) else {
+        // Unreachable: the components are a ULID and a zero-padded integer. Reported rather than
+        // unwrapped, because a panic here would take the process down for a case the types nearly
+        // rule out.
+        return api_error(
+            ErrorStatus::Internal,
+            "the archive's storage key could not be built",
+        );
+    };
+    if let Err(error) = state.blobs.put(&object_key, &body).await {
+        tracing::warn!(%error, key = object_key.as_str(), "storing a store archive failed");
+        return service_unavailable("object store");
+    }
+
+    let size_bytes = i64::try_from(body.len()).unwrap_or(i64::MAX);
+    let sha256 = hex_digest(&body);
+    let archive = StoreArchive {
+        store_id,
+        taken_at: query.taken_at,
+        object_key: key_text,
+        size_bytes,
+        sha256: sha256.clone(),
+        received_at: state.clock.now().as_milliseconds_since_epoch(),
+    };
+    if let Err(error) = state
+        .archives
+        .record_archive(grant.tenant(), &archive)
+        .await
+    {
+        // The bytes are stored and the index row is not, so the archive exists but nothing knows
+        // it does. `Unavailable` rather than `Internal`, because the store retrying is exactly the
+        // right response: `put` is last-write-wins and `record_archive` is an upsert, so the retry
+        // converges rather than duplicating.
+        tracing::warn!(%error, "recording a store archive failed after the bytes were stored");
+        return service_unavailable("archive registry");
+    }
+    tracing::info!(
+        store = %store_id,
+        size_bytes,
+        taken_at = query.taken_at,
+        "a store archive arrived"
+    );
+    Json(ArchiveAcceptedResponse {
+        object_key: archive.object_key,
+        size_bytes,
+        sha256,
+    })
+    .into_response()
+}
+
+/// Authenticates a store's own scoped key and holds it to the store in the path.
+///
+/// Extracted because both archive routes need the identical four steps, and a second copy is a
+/// second place for one of them to go missing.
+async fn authorize_store<K, C>(
+    keys: &K,
+    clock: &C,
+    headers: &HeaderMap,
+    store_id: &str,
+) -> Result<(crate::auth::apikey::Grant, StoreId), Response>
+where
+    K: ApiKeyStore,
+    C: ClockSource,
+{
+    let grant = authenticate(keys, clock, headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    require_scope(&grant, Scope::ReadConfig).map_err(IntoResponse::into_response)?;
+    let store_id = match parse_ulid_fields([("store_id", store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return Err(refusal),
+    };
+    require_store(&grant, store_id).map_err(IntoResponse::into_response)?;
+    Ok((grant, store_id))
+}
+
+/// Whether these bytes begin the way `pos_edge::backup` writes an archive.
+///
+/// The magic and the format byte, and nothing else. It costs nine bytes to tell an operator "you
+/// uploaded the wrong file" at the moment they can still fix it, rather than at a restore months
+/// later; it proves nothing about the contents, which only the key can.
+fn looks_like_a_store_archive(body: &[u8]) -> bool {
+    const MAGIC: &[u8] = b"P4PSTORE";
+    const FORMAT_VERSION: u8 = 1;
+    body.get(..MAGIC.len()) == Some(MAGIC) && body.get(MAGIC.len()) == Some(&FORMAT_VERSION)
+}
+
+// --- The console's view of what a store has archived (ADR-0124 slice 3) ------------------------
+
+/// How many archives one console read returns.
+///
+/// The window is measured in weeks and archives are daily, so this comfortably covers a whole
+/// window and then some. It is a cap rather than a page: the question this answers is "what can I
+/// restore", and an operator scrolling past sixty backups is not the case to design for.
+const MAX_ARCHIVES_LISTED: i64 = 60;
+
+/// What the console-facing archive read needs.
+#[derive(Clone)]
+struct ArchiveReadState<R, A, C> {
+    archives: R,
+    admin: A,
+    clock: C,
+}
+
+/// One archive as the console sees it.
+///
+/// No key and nothing that could open one — this is the *index*, and the key is a separate,
+/// deliberate ask. `object_key` is here because it is what an operator types into a restore.
+#[derive(Debug, serde::Serialize)]
+struct ArchiveView {
+    /// When the store took the snapshot, Unix ms. **This is the recovery point** — not
+    /// `received_at_ms`, which is when a possibly-delayed upload landed.
+    taken_at_ms: i64,
+    /// When the cloud received it, Unix ms. The gap between the two is how far behind a store's
+    /// uplink was.
+    received_at_ms: i64,
+    /// How many bytes, sealed.
+    size_bytes: i64,
+    /// The cloud's hex SHA-256 of the sealed bytes as they arrived, so a download can be checked
+    /// before anybody spends time on a key.
+    sha256: String,
+    /// Where the bytes are in the object store.
+    object_key: String,
+}
+
+/// The answer: what this store has, newest first.
+#[derive(Debug, serde::Serialize)]
+struct StoreArchivesResponse {
+    archives: Vec<ArchiveView>,
+}
+
+/// Builds the console-facing archive read
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) slice 3).
+///
+/// Mounted **unconditionally**, unlike [`store_archive_router`], and that is the decision: the
+/// store-facing routes need an object store and `archive_key_secret` to do anything at all, but
+/// this one needs only the registry. An operator whose `archive_key_secret` has gone missing is
+/// exactly the operator who most needs to see what archives exist — hiding the list along with the
+/// routes would take the evidence away at the moment it matters.
+pub fn store_archive_admin_router<R, A, C>(archives: R, admin: A, clock: C) -> Router
+where
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/stores/{store_id}/archives",
+            get(admin_list_store_archives::<R, A, C>),
+        )
+        .with_state(ArchiveReadState {
+            archives,
+            admin,
+            clock,
+        })
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/archives",
+    params(
+        ("store_id" = String, Path, description = "The store whose archives to list (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "This store's sealed archives, newest first — the first row's \
+                                      taken_at_ms is the recovery point. An empty list is this \
+                                      answer too: the store has never archived"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The archive registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fleet",
+)]
+/// `GET /admin/stores/{store_id}/archives?tenant_id=` — what this store has shipped, newest first.
+///
+/// Behind [`ConsolePermission::Read`], the same gate the fleet view uses: "when did this store last
+/// back up" is an operational fact every console role should be able to see, and a Viewer who
+/// cannot see that a shop has not archived in a fortnight is a Viewer who cannot raise it.
+async fn admin_list_store_archives<R, A, C>(
+    State(state): State<ArchiveReadState<R, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant, store) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store)),
+            Err(refusal) => return refusal,
+        };
+    match state
+        .archives
+        .list_archives(tenant, store, MAX_ARCHIVES_LISTED)
+        .await
+    {
+        // An empty list is a `200`, not a `404`: a store that has never archived is a real and
+        // important answer, and the one an operator most needs to see plainly.
+        Ok(archives) => Json(StoreArchivesResponse {
+            archives: archives
+                .into_iter()
+                .map(|archive| ArchiveView {
+                    taken_at_ms: archive.taken_at,
+                    received_at_ms: archive.received_at,
+                    size_bytes: archive.size_bytes,
+                    sha256: archive.sha256,
+                    object_key: archive.object_key,
+                })
+                .collect(),
+        })
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "reading a store's archives failed");
+            service_unavailable("archive registry")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -616,6 +616,10 @@ where
     // whether the config-pull and heartbeat loops run (ADR-0085).
     let cloud_url = config.cloud_url.clone();
     let store_id = config.store_id;
+    // What this box archives and how often (ADR-0124), read for the same reason and at the same
+    // moment: `config` moves into the app state below, and the archive loop needs the path to the
+    // very file the store opened.
+    let backup = BackupPlan::from_config(&config);
 
     // `Arc` around the lease authority because two loops hold it: the watch below, and the
     // heartbeat that reports the generation this box holds (ADR-0108).
@@ -751,6 +755,7 @@ where
             held_config_version,
             &origins,
             &revocations,
+            backup,
             shutdown_rx,
         )
         .await;
@@ -838,6 +843,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
     revocations: &Arc<DeviceRevocations>,
+    backup: Option<BackupPlan>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> CloudSurface
 where
@@ -907,6 +913,7 @@ where
                 held_config_version,
                 origins,
                 revocations,
+                backup,
                 shutdown_rx,
                 drained_rx,
             ) {
@@ -1047,6 +1054,36 @@ async fn resolve_sync_key<V: KeyVault>(vault: &V) -> Option<String> {
         .filter(|key| !key.trim().is_empty())
 }
 
+/// What this box archives, and how often
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+///
+/// `None` means this box archives nothing, which is exactly one configuration:
+/// `backup_interval_hours = 0`. It carries the *database path* rather than re-deriving one, because
+/// the file that must be snapshotted is the one `main.rs` opened — a second guess at where the store
+/// lives would archive an empty database and report success.
+#[derive(Debug, Clone)]
+struct BackupPlan {
+    database: std::path::PathBuf,
+    interval: Duration,
+}
+
+impl BackupPlan {
+    /// Reads the plan out of the bootstrap configuration, announcing a store that has switched
+    /// archiving off.
+    fn from_config(config: &EdgeConfig) -> Option<Self> {
+        if config.backup_interval_hours == 0 {
+            tracing::warn!(
+                "backup_interval_hours = 0: this store ships no off-box archive of its database,                  so a failed disk loses everything since the last one taken by hand"
+            );
+            return None;
+        }
+        Some(Self {
+            database: config.store_path.clone(),
+            interval: Duration::from_secs(config.backup_interval_hours * 3600),
+        })
+    }
+}
+
 /// What [`spawn_cloud_loops`] hands back when it starts: the keyed client the OTA loop dials on, and
 /// the heartbeat task a stop has to release and then wait for.
 struct CloudLoops {
@@ -1082,6 +1119,7 @@ fn spawn_cloud_loops<S, Q, L, P>(
     held_config_version: Option<String>,
     origins: &Arc<crate::origins::Origins>,
     revocations: &Arc<DeviceRevocations>,
+    backup: Option<BackupPlan>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
     drained: tokio::sync::oneshot::Receiver<()>,
 ) -> Option<CloudLoops>
@@ -1156,6 +1194,32 @@ where
         EdgeOrderIn::new(Arc::clone(edge), queue, system_device_id(store_id)),
     );
     tokio::spawn(relay_client.run(wait_for_shutdown(shutdown_rx.clone())));
+
+    // The store's own off-box backup (ADR-0124): a `VACUUM INTO` snapshot, sealed at the till under
+    // a key the cloud hands out but cannot use, shipped to the cloud as ciphertext. It dials the
+    // same keyed client as the OTA loop — `/sync/stores/{id}/archive` is behind the store's scoped
+    // key, and the archive key is minted on the first ask.
+    //
+    // Deliberately *not* gated on this box's lease standing (ADR-0123): a superseded box holds
+    // exactly the events its replacement does not, so it is the box whose database most needs
+    // saving. See `crate::backup_client` for the rest of that argument.
+    if let Some(plan) = backup {
+        let archiver = crate::backup_client::BackupClient::new(
+            HttpCloudSync::new(
+                OtaHttpTransport::new(client.clone()),
+                store_id,
+                crate::version::target(),
+            ),
+            store_id,
+            plan.database,
+            plan.interval,
+        );
+        tokio::spawn(archiver.run(wait_for_shutdown(shutdown_rx.clone())));
+        tracing::info!(
+            hours = plan.interval.as_secs() / 3600,
+            "store archiving enabled"
+        );
+    }
 
     tracing::info!(
         %cloud_url,

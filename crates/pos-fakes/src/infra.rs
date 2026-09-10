@@ -583,6 +583,12 @@ impl FakeCloudSync {
         FakeSigner::sign(&Self::artifact_bytes(), &FakeSigner::key(1))
     }
 
+    /// The archive key this fake hands every store
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)): 64 hexadecimal
+    /// characters, the same on every ask.
+    pub const ARCHIVE_KEY: &'static str =
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+
     /// A well-formed update report the channel accepts — a store on [`Self::KNOWN_RELEASE`] whose
     /// self-test passed.
     #[must_use]
@@ -629,5 +635,32 @@ impl CloudSync for FakeCloudSync {
         // A faithful sink: a well-formed report is accepted. The fake has no read model to inspect;
         // the cloud adapter's contract test exercises the wire, and the store adapter its persistence.
         Ok(())
+    }
+
+    async fn archive_key(&self, _store: StoreId) -> Result<String, PortError> {
+        // The same key on every ask, which is the property that matters: a store sealing under two
+        // different keys has archives it cannot open
+        // ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). A fixed value
+        // rather than a minted one keeps the fake deterministic, and a caller that wants to see a
+        // *changed* key has to arrange it visibly.
+        Ok(Self::ARCHIVE_KEY.to_owned())
+    }
+
+    async fn upload_archive(
+        &self,
+        _store: StoreId,
+        _taken_at: Timestamp,
+        archive: &[u8],
+    ) -> Result<(), PortError> {
+        // The one check a faithful cloud makes, and the only one it *can* make: the archive's
+        // magic. Beyond that the cloud cannot read an archive, so neither does this.
+        if archive.starts_with(b"P4PSTORE") {
+            Ok(())
+        } else {
+            Err(PortError::invalid_argument(
+                PortName::CloudSync,
+                "these bytes are not a store archive",
+            ))
+        }
     }
 }

@@ -219,6 +219,14 @@ const MIGRATION_0060: &str = include_str!("../migrations/0060_reason_codes.sql")
 /// document into *N* per-store trees, so composition and the sync hot path are untouched.
 const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql");
 
+/// The per-store archive key and the index of what each store has shipped
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). The key is **wrapped**
+/// under the box's `archive_key_secret` rather than stored as itself: `deploy/backup.sh` ships a
+/// `pg_dump` of this database to the same off-box tier the archives sync to, so a plaintext column
+/// would carry the key to the same place as the ciphertext it opens (Amendment 1).
+const MIGRATION_0062: &str = include_str!("../migrations/0062_store_archives.sql");
+const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expiry.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -522,6 +530,14 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0061)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0062)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0063)
+            .await
             .map_err(unavailable)
     }
 
@@ -531,6 +547,16 @@ impl PostgresStore {
     #[must_use]
     pub fn rollups(&self) -> crate::rollups::PostgresRollups {
         crate::rollups::PostgresRollups::new(self.pool.clone())
+    }
+
+    /// The store-archive registry over this pool
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ArchiveStore` seam over
+    /// it. The key it moves is **wrapped** — this crate holds no secret that could open one.
+    #[must_use]
+    pub fn archives(&self) -> crate::archives::PostgresArchives {
+        crate::archives::PostgresArchives::new(self.pool.clone())
     }
 
     /// The API-key store over this pool ([ADR-0037](../../../docs/adr/0037-api-keys.md)).

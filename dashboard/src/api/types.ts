@@ -976,6 +976,29 @@ export interface AdmittedDevice {
   readonly revoked_at_ms: number | null;
 }
 
+/**
+ * One sealed archive a store has shipped
+ * ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+ *
+ * **The index, never the key.** Nothing here can open an archive; the key is a separate,
+ * deliberate ask, and the cloud holds it wrapped. What is here is what an operator needs to answer
+ * "can this store be restored, and to when".
+ */
+export interface StoreArchive {
+  /**
+   * When the *store* took the snapshot. This is the recovery point — not `received_at_ms`, which
+   * is when a possibly-delayed upload landed.
+   */
+  readonly taken_at_ms: number;
+  /** When the cloud received it. The gap from `taken_at_ms` is how far behind the uplink was. */
+  readonly received_at_ms: number;
+  readonly size_bytes: number;
+  /** The cloud's hex SHA-256 of the sealed bytes, so a download can be checked before a key is. */
+  readonly sha256: string;
+  /** Where the bytes are in the object store — what a restore is pointed at. */
+  readonly object_key: string;
+}
+
 export interface FleetStore {
   readonly store_id: string;
   readonly name: string;

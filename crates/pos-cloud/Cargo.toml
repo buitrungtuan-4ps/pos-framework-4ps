@@ -126,6 +126,13 @@ webpki-roots    = "1"
 # app-incompatible). `sha1` 0.11 is on the `digest` 0.11 line `hmac` 0.13 needs; the `sha1` 0.10
 # already pulled in by `axum`'s WebSocket handshake is on the older `digest` 0.10 line and cannot be
 # reused, so the two coexist under a documented `bans.skip` in `deny.toml`.
+# Wrapping each store's archive key before it is written to a column a `pg_dump` carries off-box
+# (ADR-0124 Amendment 1). Same crate and version `pos-edge` seals an archive with, so the lock gains
+# nothing new; `chacha20` 0.10 is already there through the `rand` 0.10 line the tokio-postgres SCRAM
+# nonce pulls. `zeroize` so the unwrapped key is not left in a heap buffer for a core dump.
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+zeroize = "1.8"
+
 argon2 = "0.5"
 sha1   = "0.11"
 # The super-admin session token is 32 CSPRNG bytes minted at the binary edge and hashed before

@@ -26,6 +26,9 @@ pub const RETENTION: &str = "retention";
 pub const WEBHOOK_DISPATCHER: &str = "webhook_dispatcher";
 /// The canonical name of the alert evaluator loop ([ADR-0073](../../../docs/adr/0073-alerting.md)).
 pub const ALERT_EVALUATOR: &str = "alert_evaluator";
+/// The canonical name of the store-archive retention sweep
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+pub const ARCHIVE_RETENTION: &str = "archive_retention";
 
 /// Builds a tick's self-describing detail. Every loop records at least `ok` (did this tick's work
 /// succeed) and `interval_secs` (its configured cadence, which the reader compares `now − last_tick`

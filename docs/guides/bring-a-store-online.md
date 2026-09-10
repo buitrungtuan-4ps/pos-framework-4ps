@@ -93,6 +93,14 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 >
 > The commented `advertised_ip` and `store_path` lines are optional overrides; leave them commented
 > unless you have a reason. `tenant_id` is not a key the edge accepts — the store id is enough.
+>
+> `backup_interval_hours` is the other override worth knowing about. It defaults to `24`, and that
+> number is the store's recovery point: the box snapshots its whole database on that interval,
+> seals it on the machine, and ships only ciphertext to the cloud
+> ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)). Lower it for a busy shop and the
+> recovery point shortens; set it to `0` and the store ships nothing, which the log says loudly at
+> every start-up. Archiving needs `cloud_url`, the scoped sync key, and a cloud configured for it;
+> a box missing any of those trades normally and names the missing piece in its log.
 
 ## Step 2 — Install the store server and drop the config
 
@@ -397,7 +405,12 @@ and the bump then supersedes the machine that is actually trading.
 - **If the old disk is readable**, copy `store.sqlite` across before starting the new server. This
   is the most complete route, because it is the state as of the moment the machine died.
 - **If it is not**, restore the store's most recent sealed archive
-  ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)) with the store's archive key:
+  ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)) with the store's archive key. The
+  archives are the ones the old box shipped on its own, filed under
+  `stores/<STORE_ID>/archives/<taken_at>.p4p` in the cloud's object store; the key is the one that
+  store minted on its first archive, which the cloud holds wrapped and hands back over
+  `POST /sync/stores/<STORE_ID>/archive-key` with the store's scoped key. Take the newest archive
+  whose `taken_at` is before the machine died:
 
   ```
   POS_EDGE_ARCHIVE_KEY=<64 hex characters> \
