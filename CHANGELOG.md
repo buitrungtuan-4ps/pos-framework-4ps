@@ -207,6 +207,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The store runbook still said the menu editor did not exist.** Step 4 of
+  [`bring-a-store-online.md`](docs/guides/bring-a-store-online.md) told the reader that authoring a
+  catalogue was "its own workstream" and to publish a hand-written document instead — written
+  before Phase 2a, and left behind by it and by F3. There are six catalogue sub-screens and
+  nineteen publish paths across the console now. The step is rewritten as a table of which screen
+  publishes which node and which of them a store cannot sell without, plus the authoring order
+  (tax classes before items, items before menus) and the note that **Store groups** publishes to a
+  whole cohort at once — which is what makes the second store of a brand quick.
+
 - **The cloud image would not build, for the second time, for the same reason.** The
   dashboard stage of `deploy/Dockerfile` copies `dashboard/` and nothing else, then runs
   `pnpm build`. Chained into that script is the installer-template drift check, which reads
