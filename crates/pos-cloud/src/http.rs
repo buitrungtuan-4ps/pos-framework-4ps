@@ -212,6 +212,7 @@ use crate::retention::{RetentionError, SubjectStore};
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
+use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore, StoreGroupStoreError};
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
 use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned, records};
@@ -2602,6 +2603,479 @@ where
             clock,
             audit,
         })
+}
+
+// --- Store groups (`/admin/store-groups`, ADR-0122) ---------------------------------------------
+
+/// The most stores one group may hold ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §8).
+///
+/// A batch publish runs synchronously inside its request and fans out over the membership, so the
+/// cap is what keeps that request finite: at roughly 10–30 ms per store publish, 200 is a handful of
+/// seconds. `docs/capacity-and-reliability.md` models tenants up to 1,000 stores, and such a tenant
+/// uses several groups — which is how an operator of that size already thinks about their estate
+/// (by city, by format, by pilot cohort). The alternative is a background job queue, which ADR-0122
+/// rejects *for now* and names the trigger for: a real tenant needing one cohort above this number.
+const MAX_STORE_GROUP_MEMBERS: usize = 200;
+
+/// The collaborators the store-group routes need.
+///
+/// The registry is here for one reason and it is worth stating: a membership write checks every id
+/// against the tenant's stores. Without that a typo'd ULID sits in the cohort permanently, and every
+/// batch reports it `skipped` forever — a cohort quietly one store short of what the operator
+/// believes it is.
+#[derive(Clone)]
+struct StoreGroupState<Grp, Reg, A, C> {
+    groups: Grp,
+    registry: Reg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A store group on the wire, with its membership.
+///
+/// Members ride along with the list rather than needing a read per group: the console's first
+/// question about a cohort is how big it is, and a screen that had to fetch each one would show a
+/// list of names with the counts arriving afterwards.
+#[derive(Debug, Clone, Serialize)]
+struct StoreGroupView {
+    group_id: String,
+    tenant_id: String,
+    name: String,
+    status: EntityStatus,
+    store_ids: Vec<String>,
+    etag: String,
+}
+
+/// A `POST /admin/store-groups` body. The id is server-minted.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateStoreGroupRequest {
+    tenant_id: String,
+    name: String,
+}
+
+/// A `PATCH /admin/store-groups/{group_id}` body: rename and/or set the status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateStoreGroupRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+/// A `PUT /admin/store-groups/{group_id}/members` body: the whole membership, not a delta.
+///
+/// Wholesale rather than add/remove because the operator's mental model is a *set* — "these are the
+/// airport shops" — and a delta API makes two admins' concurrent edits merge into a cohort neither
+/// of them chose. Under `If-Match` (ADR-0095 shape C) the second one is refused instead.
+#[derive(Debug, Clone, Deserialize)]
+struct SetStoreGroupMembersRequest {
+    tenant_id: String,
+    store_ids: Vec<String>,
+}
+
+/// Builds the store-group sub-router ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+///
+/// CRUD over the cohorts a tenant publishes to. Reads are behind [`ConsolePermission::Read`]; the
+/// writes are behind [`ConsolePermission::ManageStores`], the same permission that creates and
+/// renames a store — a group is a way of *organising* stores, not a way of changing what they run,
+/// and publishing to one is a separate act behind `console.config.publish`.
+///
+/// Ids are server-minted: a batch names its group forever in `config_batches`, so a client that
+/// could choose one could collide with a cohort's history.
+pub fn store_group_router<Grp, Reg, A, C>(
+    groups: Grp,
+    registry: Reg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/store-groups",
+            get(admin_list_store_groups::<Grp, Reg, A, C>)
+                .post(admin_create_store_group::<Grp, Reg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}",
+            axum::routing::patch(admin_update_store_group::<Grp, Reg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/members",
+            axum::routing::put(admin_set_store_group_members::<Grp, Reg, A, C>),
+        )
+        .with_state(StoreGroupState {
+            groups,
+            registry,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The `503` a store-group persistence failure becomes.
+fn store_group_error_response(error: &StoreGroupStoreError) -> Response {
+    tracing::error!(%error, "a store-group operation failed");
+    api_error(
+        ErrorStatus::Unavailable,
+        "the store-group service is unavailable",
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups",
+    params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
+    responses(
+        (status = 200, description = "The tenant's store groups, creation order, each with its \
+                                      membership. Archived groups are included: an operator needs to \
+                                      see a retired cohort in order to bring it back"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin lists a tenant's store groups, each with its membership.
+async fn admin_list_store_groups<Grp, Reg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let rows = match state.groups.list_groups(tenant_id).await {
+        Ok(rows) => rows,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let mut views: Vec<StoreGroupView> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let members = match state
+            .groups
+            .list_members(tenant_id, row.record.group_id)
+            .await
+        {
+            Ok(members) => members,
+            Err(error) => return store_group_error_response(&error),
+        };
+        views.push(StoreGroupView {
+            group_id: row.record.group_id.to_string(),
+            tenant_id: row.record.tenant_id.to_string(),
+            name: row.record.name,
+            status: row.record.status,
+            store_ids: members.iter().map(ToString::to_string).collect(),
+            etag: row.etag.as_str().to_owned(),
+        });
+    }
+    (StatusCode::OK, Json(views)).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/store-groups",
+    responses(
+        (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
+                                      holds no stores yet — membership is a second call, so naming \
+                                      a cohort is never itself an act with a fleet-wide reach"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or name is empty", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable, or OS entropy is unavailable to mint an id", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin creates an empty store group.
+///
+/// Empty, deliberately: a group that started holding every store would make *creating* one an act
+/// with a fleet-wide blast radius, and an operator naming a cohort has not yet said what is in it.
+async fn admin_create_store_group<Grp, Reg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let name = request.name.trim();
+    if name.is_empty() {
+        return FieldRefusal::new("name is required", "name", "REQUIRED").into_response();
+    }
+    let Some(group_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StoreGroupId::new)
+    else {
+        return service_unavailable("store groups");
+    };
+    let record = StoreGroup {
+        group_id,
+        tenant_id,
+        name: name.to_owned(),
+        status: EntityStatus::Active,
+    };
+    match state.groups.create_group(&record).await {
+        Ok(version) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.create",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_created(record, &version)
+        }
+        Err(error) => store_group_error_response(&error),
+    }
+}
+
+#[utoipa::path(
+    patch,
+    path = "/admin/store-groups/{group_id}",
+    params(
+        ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
+    ),
+    responses(
+        (status = 200, description = "The group as it now stands, with its new ETag"),
+        (status = 400, description = "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin renames a group and/or archives or restores it.
+async fn admin_update_store_group<Grp, Reg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<UpdateStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (group_id, tenant_id) =
+        match parse_ulid_fields([("group_id", &group_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
+    let name = request.name.trim();
+    if name.is_empty() {
+        return FieldRefusal::new("name is required", "name", "REQUIRED").into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return entity_status_refusal();
+    };
+    let record = StoreGroup {
+        group_id,
+        tenant_id,
+        name: name.to_owned(),
+        status,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.groups.update_group(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.update",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_ok(record, &version)
+        }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("store group"),
+        Err(error) => store_group_error_response(&error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/store-groups/{group_id}/members",
+    params(
+        ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
+    ),
+    responses(
+        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag"),
+        (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "More than 200 stores, or an id that names no store of this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store or the registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin replaces a group's membership.
+///
+/// Every id is checked against the tenant's own stores before anything is written. An id that names
+/// no store of this tenant is a `422` rather than a stored row, because the failure it otherwise
+/// produces is invisible: the cohort looks right on screen, and every batch quietly reports one more
+/// `skipped` store than the operator expects, forever.
+async fn admin_set_store_group_members<Grp, Reg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<SetStoreGroupMembersRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (group_id, tenant_id) =
+        match parse_ulid_fields([("group_id", &group_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
+    if request.store_ids.len() > MAX_STORE_GROUP_MEMBERS {
+        return unprocessable_violations(&[format!(
+            "a store group holds at most {MAX_STORE_GROUP_MEMBERS} stores; split this cohort in two"
+        )]);
+    }
+    let mut members: Vec<StoreId> = Vec::with_capacity(request.store_ids.len());
+    for id in &request.store_ids {
+        let Ok([parsed]) = parse_ulid_fields([("store_ids", id)]) else {
+            return ulid_refusal(&["store_ids"]);
+        };
+        let store_id = StoreId::new(parsed);
+        // Deduplicated here rather than left to the table's primary key: the operator's list is what
+        // the response echoes back, and a duplicate that silently vanished on write would make the
+        // screen and the database disagree about what was saved.
+        if !members.contains(&store_id) {
+            members.push(store_id);
+        }
+    }
+    let known = match state.registry.list_stores(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| row.record.store_id)
+            .collect::<Vec<_>>(),
+        Err(error) => return registry_error_response(&error),
+    };
+    if let Some(stranger) = members.iter().find(|id| !known.contains(id)) {
+        return unprocessable_violations(&[format!(
+            "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
+        )]);
+    }
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .groups
+        .set_members(tenant_id, group_id, &members, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
+            let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.members",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&membership).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                [(ETAG, version.as_str().to_owned())],
+                Json(serde_json::json!({ "store_ids": membership, "etag": version.as_str() })),
+            )
+                .into_response()
+        }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("store group"),
+        Err(error) => store_group_error_response(&error),
+    }
 }
 
 // --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------

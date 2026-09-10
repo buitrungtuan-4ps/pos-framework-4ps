@@ -448,6 +448,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Store groups (ADR-0122): the named cohorts a tenant publishes to as one. A group holds no
+        // configuration — it is a delivery axis, not a fifth config layer — so this router only
+        // authors the set. It reads the registry because a membership write checks every id against
+        // the tenant's own stores: a typo'd ULID stored here would sit in the cohort permanently and
+        // be reported `skipped` by every batch, leaving a group quietly one store short of what the
+        // operator believes it is.
+        .merge(http::store_group_router(
+            store.store_groups(),
+            store.registry(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
         // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
         // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.
