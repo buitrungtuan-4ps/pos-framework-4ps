@@ -18,6 +18,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store group is a cohort you publish to, and a batch names an outcome for every shop**
+  ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The data a tenant authors was
+  already shared — one price row prices an item for the whole estate — but delivery was not: every
+  publish took a `store_id`, so pushing one menu to fifty shops was 150 taps of which 147 were
+  repetition. **Settings → Store groups** names a cohort, gives it a membership, and publishes one
+  of thirteen configuration nodes to all of it at once.
+
+  A group is not the brand. A shop belongs to exactly one brand and to any number of groups,
+  because the sets an operator publishes to cut across identity: the airport branches on a reduced
+  menu, the shops on one tax registration, the pilots that take a change first. And a group holds
+  no configuration of its own — a batch writes the same document into *N* per-store trees, exactly
+  as *N* individual publishes would have, so the config tree
+  ([ADR-0033](docs/adr/0033-config-tree.md)) is untouched, no store's effective document changes,
+  and deleting every group returns the trees byte-for-byte to what they are without it.
+
+  **A batch is deliberately not atomic, and the report is what must not be partial.** Every member
+  gets one of three outcomes, never two: `applied` with the config version it produced, `skipped`
+  for a shop that was *protected* — archived, absent from the registry, or missing a prerequisite —
+  and `failed` for one the publish was attempted at and refused, carrying the refusal's own
+  sentence. Filing a shop that was deliberately protected beside one that broke would be the report
+  going wrong rather than the batch. The prerequisite that makes this non-negotiable: a menu
+  published to a shop with no `tax` node produces a store that boots, syncs, shows the menu, takes
+  the order, and then fails at the payment screen with nothing before that saying a word.
+
+  Thirteen nodes are batchable — menu and layout, tax rates, promotions, inventory, reason codes,
+  staff permissions, floor and stations, capability switches, sales channels, payment methods,
+  extra origins, QR guardrails and marketplace policies. Three are excluded by construction and
+  stay on the shop's own screens: a store's locale
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)), its legal identity
+  ([ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)), and the generic level write, whose
+  `If-Match` only means something for one store.
+
+  Group CRUD is behind `console.stores.manage` and publishing behind `console.config.publish` —
+  organising the estate and changing what it runs are two different acts. A group holds at most 200
+  shops, which is what keeps a batch inside one request.
+
+  **Upgrade note:** migration `0061` adds four tables (`store_groups`, `store_group_members`,
+  `config_batches`, `config_batch_results`). Additive and greenfield: a tenant with no groups
+  behaves exactly as it does today. No protocol change, no permission renamed, no default altered.
+
 - **A list you can type into.** Two picker primitives join the console kit, for the one shape a
   native `<select>` cannot serve: a list as long as the tenant's item master.
 

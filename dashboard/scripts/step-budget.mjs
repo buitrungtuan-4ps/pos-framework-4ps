@@ -101,6 +101,17 @@ const TASKS = [
     ],
   },
   {
+    task: "Publish one menu to a whole cohort of shops",
+    budget: null,
+    note: "Four, against 3N for the same change made shop by shop — 150 taps at fifty shops, of which 147 are repetition (ADR-0122). The two pickers in the middle are the instruction itself and are not removable: which cohort, and what to send it. What this number does not show is the half the record is actually about — the fourth tap answers with an outcome per shop, where fifty separate publishes answered fifty times and nobody counted.",
+    steps: [
+      { nav: "storeGroups" },
+      { screen: "storeGroups", action: "setTarget" },
+      { screen: "storeGroups", action: "setNode" },
+      { screen: "storeGroups", action: "publish" },
+    ],
+  },
+  {
     task: "Acknowledge a firing alert",
     budget: null,
     note: "Two. Acknowledging from the list rather than from a detail drawer is what keeps it at two — the drawer offers the same action for someone who opened it to read the detail first.",
