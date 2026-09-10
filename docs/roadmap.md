@@ -390,8 +390,11 @@ images, ships them over SSH, runs bootstrap, and carries the `reset_admin=true` 
 `production` Environment. Durability has landed too: continuous WAL archiving, `backup.sh` with the
 off-box rclone tier and the `.pre-update` snapshot, the four backup classes, and `restore-drill.sh`
 wired into `nightly.yml` (ADR-0046). Cloudflare rules, the fork-to-UI runbook
-(`docs/deploy-runbook.md`), and the optional `k8s/` lane are recorded. Deferred with a real home: the
-**store-backup half of the restore drill** is edge WAL shipping (P9, spike A4), and the **true
+(`docs/deploy-runbook.md`), and the optional `k8s/` lane are recorded. Deferred with a real home, and one of the two has since come home: the
+**store-backup half of the restore drill** now has its base — [ADR-0124](adr/0124-a-store-that-can-be-restored.md)
+gives every store a periodic whole-database archive, sealed at the till and openable with
+`pos-edge archive verify`, so the drill has a store leg that does not wait on A4 (continuous WAL
+shipping still does). The **true
 end-to-end fork test** — a human forking, setting the secrets, running the workflow, and reaching the
 UI — is the one layer the roadmap always said needs a human, since this environment has no Docker
 daemon to run the stack. The `k8s/` lane is a starting skeleton, not the exit-criterion path.
@@ -404,7 +407,9 @@ self-test, automatic rollback and a kill switch · the `.pre-update` database co
 activation codes exchanged once for credentials in TPM/DPAPI or the keyring · the
 single-active lease that **does not expire while offline**, revokes the old machine to
 read-only, and hands the replacement a **fresh invoice number range** so even an
-overlapping window cannot duplicate a legal invoice number · WAL shipping per A4's verdict.
+overlapping window cannot duplicate a legal invoice number · WAL shipping per A4's verdict, on
+top of the periodic sealed archive [ADR-0124](adr/0124-a-store-that-can-be-restored.md) landed
+independently of it.
 
 **Exit:** the simulator proves a ring rollout, a failed self-test rolling back, and the kill
 switch; a real Windows machine swap completes in 5–10 minutes with every bill reconciling.
