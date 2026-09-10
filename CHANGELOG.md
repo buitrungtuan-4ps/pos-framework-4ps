@@ -207,6 +207,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The cloud image would not build, for the second time, for the same reason.** The
+  dashboard stage of `deploy/Dockerfile` copies `dashboard/` and nothing else, then runs
+  `pnpm build`. Chained into that script is the installer-template drift check, which reads
+  `deploy/edge/*.ps1` — two directories above anything the stage can see. The image died on
+  `ENOENT` while every PR gate stayed green, because CI runs the same script against a full
+  checkout where the path resolves. #228 unchained the check to unblock the image; #269 chained it
+  back to give the drift gate a home in the `dashboard` job, and re-broke the image. Each change
+  was right about its own problem and wrong about the other one.
+
+  The script now knows where it is instead of the build chain having to remember: absent
+  templates are skipped with a loud line on the `pnpm build` path, and still refused under
+  `--emit`, whose only purpose is handing those files to the Windows job's PowerShell parser. A
+  new step in `pr.yml`'s `dashboard` job builds from a copy of `dashboard/` with nothing above
+  it — the image's condition, reproduced — so a third violation by any future script fails in CI
+  rather than in a production deploy.
+
 - **A plain click in a multi-select destroyed the selection.** `MultiSelectField` was a
   `<select multiple>`, and the platform reserves *adding* for Ctrl/Cmd-click — so an operator
   fifteen toppings into a modifier group who clicked the sixteenth without a modifier key lost all

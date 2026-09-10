@@ -25,7 +25,7 @@
 // the same case, and this comment is the record of which half each mechanism covers.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argv, exit } from "node:process";
@@ -204,7 +204,45 @@ let failures = 0;
 // the gate fails on a file that has not drifted by a single character. `.gitattributes` pins both
 // checked-in files to LF so this should not arise; this is the belt to that pair of braces.
 const lf = (text) => text.replace(/\r\n/gu, "\n");
-for (const template of TEMPLATES) {
+
+// Whether `deploy/edge/` is reachable from here at all — and what its absence means, which is not
+// the same answer for every caller.
+//
+// The cloud image's dashboard stage copies `dashboard/` AND NOTHING ELSE, then runs `pnpm build`.
+// These two templates live two directories above that, so inside the image they do not exist. A
+// bare `readFileSync` there dies on ENOENT and takes the whole image build with it — which is
+// exactly what happened twice: the check was chained into `pnpm build`, unchained in #228 to
+// unblock the image, then chained back in #269 to give the drift gate a home in the `dashboard`
+// job. Both changes were right about their own problem and wrong about the other one. The fix is
+// for the script to know where it is rather than for the build chain to keep swapping sides.
+//
+// So: absence is TOLERATED on the `pnpm build` path (the image, and any checkout without
+// `deploy/`), and REFUSED under `--emit`. `--emit` exists solely to hand these files to the
+// Windows job's PowerShell parser, so a run that cannot find them has failed at its only purpose —
+// and that is what stops the skip from quietly becoming universal the day a path moves.
+const missingTemplates = TEMPLATES.filter((template) => !existsSync(template.path));
+if (missingTemplates.length > 0 && emitFlag !== -1) {
+  console.error(
+    `✗ --emit needs the checked-in templates and cannot find ${missingTemplates
+      .map((template) => template.name)
+      .join(", ")}.\n` +
+      "  This run exists to hand them to the PowerShell parser, so there is nothing to emit.",
+  );
+  exit(1);
+}
+const templatesChecked = missingTemplates.length === 0;
+if (!templatesChecked) {
+  // Loud, and on stdout beside the ✓ lines rather than hidden in a warning stream: a reader
+  // counting checks must see that this one did not run.
+  console.log(
+    `— skipping the installer-template checks: ${missingTemplates
+      .map((template) => template.name)
+      .join(", ")} not present.\n` +
+      "  Expected inside the cloud image, whose dashboard stage copies only dashboard/.\n" +
+      "  On a full checkout these run here; the Windows CI job parses them under --emit.",
+  );
+}
+for (const template of templatesChecked ? TEMPLATES : []) {
   const onDisk = readFileSync(template.path, "utf8");
   if (lf(onDisk) !== lf(template.generate())) {
     console.error(
