@@ -212,6 +212,13 @@ const MIGRATION_0059: &str = include_str!("../migrations/0059_store_region_ackno
 /// resolvable.
 const MIGRATION_0060: &str = include_str!("../migrations/0060_reason_codes.sql");
 
+/// Store groups and the batches published to them
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The cohort an
+/// operator publishes to, and one durable row per `(batch, store)` saying what the publish did
+/// there — `applied`, `skipped`, or `failed`. Not a fifth config layer: a batch writes the same
+/// document into *N* per-store trees, so composition and the sync hot path are untouched.
+const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -510,6 +517,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0060)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0061)
             .await
             .map_err(unavailable)
     }
