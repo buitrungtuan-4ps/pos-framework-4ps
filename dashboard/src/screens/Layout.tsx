@@ -28,6 +28,7 @@ import {
   Banner,
   Button,
   Card,
+  ComboboxField,
   PageHeader,
   SelectField,
   TextField,
@@ -859,7 +860,7 @@ export function Layout() {
           }
         >
           <div class="flex flex-col gap-4">
-            <SelectField
+            <ComboboxField
               label={t("layout.item")}
               value={buttonItem()}
               options={items()
@@ -867,6 +868,8 @@ export function Layout() {
                 .map((item) => ({ value: item.menu_item_id, label: item.name }))}
               onChange={setButtonItem}
               placeholder={t("layout.chooseItem")}
+              searchLabel={t("catalog.searchItems")}
+              emptyLabel={t("picker.noMatch")}
               // Which item a button fires is fixed once it exists.
               disabled={buttonEditing() !== null}
             />

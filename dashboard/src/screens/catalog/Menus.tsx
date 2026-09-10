@@ -28,6 +28,7 @@ import {
   Banner,
   Button,
   Card,
+  ComboboxField,
   CheckboxField,
   MoneyField,
   SelectField,
@@ -915,7 +916,7 @@ export function CatalogMenus() {
         }
       >
         <div class="flex flex-col gap-4">
-          <SelectField
+          <ComboboxField
             label={t("catalog.item")}
             value={placementItem()}
             options={activeItems().map((item) => ({
@@ -924,6 +925,8 @@ export function CatalogMenus() {
             }))}
             onChange={setPlacementItem}
             placeholder={t("catalog.chooseItem")}
+            searchLabel={t("catalog.searchItems")}
+            emptyLabel={t("picker.noMatch")}
             // Which item a placement is for is fixed once it exists: changing it would be a
             // different placement, so an edit offers everything else and not this.
             disabled={placementEditing() !== null}

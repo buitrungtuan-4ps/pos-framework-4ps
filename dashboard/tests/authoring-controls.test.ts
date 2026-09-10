@@ -15,8 +15,9 @@
 //
 //   1. **No raw form control.** A `<select>`, `<input>` or `<textarea>` written by hand in a screen
 //      is a violation. Every shape the console actually needs has a primitive — `TextField`,
-//      `SelectField`, `MultiSelectField`, `CheckboxField`, `NumberField`, `MoneyField`, `TextArea`,
-//      `FileButton`, `CellField` — and the last two exist *because* the sweep found shapes the
+//      `SelectField`, `ComboboxField`, `MultiComboboxField`, `CheckboxField`, `NumberField`,
+//      `MoneyField`, `TextArea`, `FileButton`, `CellField` — and the last two exist *because* the
+//      sweep found shapes the
 //      others could not express (a file picker; a grid cell whose label is its column header). If a
 //      new shape turns up that none of them fit, the answer is a new primitive, not a raw control:
 //      that is the whole argument of §5, and it is cheap, because writing it once is what the screen
@@ -88,7 +89,8 @@ const RAW_CONTROL = /<(select|input|textarea)[\s>/]/;
 const FIELD_PRIMITIVES = [
   "TextField",
   "SelectField",
-  "MultiSelectField",
+  "ComboboxField",
+  "MultiComboboxField",
   "CheckboxField",
   "NumberField",
   "MoneyField",
