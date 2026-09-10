@@ -305,6 +305,8 @@
   "catalog.bulkChannel": "Kênh",
   "catalog.bulkClearHint": "Để trống số tiền để xóa giá kênh này trên các món trong phạm vi.",
   "catalog.bulkNoTargets": "Không có món nào trong phạm vi để cập nhật.",
+  "catalog.bulkPartial": "Đã đổi {applied} giá, {refused} bị từ chối.",
+  "catalog.bulkPartialHint": "Các giá dưới đây chưa đổi. Menu đã được tải lại, nên bấm áp dụng lần nữa chỉ thử lại phần còn khác.",
   "catalog.bulkPrice": "Đặt giá hàng loạt",
   "catalog.bulkPriceHint": "Đặt giá một kênh cho mọi món trong một nhóm mục (hoặc cả thực đơn) cùng lúc. Giá các kênh khác được giữ nguyên.",
   "catalog.categories": "Nhóm món",

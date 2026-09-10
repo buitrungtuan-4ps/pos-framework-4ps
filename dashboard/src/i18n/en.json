@@ -305,6 +305,8 @@
   "catalog.bulkChannel": "Channel",
   "catalog.bulkClearHint": "Leave the amount blank to clear this channel's price on the placements in scope.",
   "catalog.bulkNoTargets": "No placements in scope to update.",
+  "catalog.bulkPartial": "{applied, plural, one {# price changed} other {# prices changed}}, {refused, plural, one {# refused} other {# refused}}.",
+  "catalog.bulkPartialHint": "The prices below are unchanged. The menu has been reloaded, so applying again retries only what is still different.",
   "catalog.bulkPrice": "Bulk price",
   "catalog.bulkPriceHint": "Set one channel's price across every placement in a section (or the whole menu) at once. Other channels' prices are left as they are.",
   "catalog.categories": "Item categories",
