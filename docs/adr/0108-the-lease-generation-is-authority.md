@@ -131,7 +131,9 @@ action `production-readiness.md` **W4** named as blocked on exactly this row.
 
 ## What this deliberately does not do
 
-- **It does not stop a superseded box selling.** `Superseded` refuses an *install*, and that is
+- **It does not stop a superseded box selling** — *answered by
+  [ADR-0123](0123-a-superseded-box-opens-nothing-new.md), which took the brief below literally: a
+  refusal, an operator-visible one, and a way back.* `Superseded` refuses an *install*, and that is
   all. Read-only selling is ADR-0049's P9e assignment and touches every write path in
   `pos-edge::app`, with a far worse failure mode if it fires wrongly — a shop that cannot take
   money is a worse outcome than a shop running last week's binary. It wants its own slice, its own

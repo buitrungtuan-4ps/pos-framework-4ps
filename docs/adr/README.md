@@ -129,5 +129,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0120](0120-navigation-preserves-the-working-context.md) | An absent `?store=` is silence, not a denial | Accepted |
 | [0121](0121-one-way-to-author-an-entity.md) | One way to author an entity: a shell and a lifecycle | Accepted |
 | [0122](0122-a-store-group-is-a-delivery-cohort.md) | A store group is a delivery cohort, and a batch publish reports every store | Accepted |
+| [0123](0123-a-superseded-box-opens-nothing-new.md) | A superseded box opens nothing new, and finishes everything it holds | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

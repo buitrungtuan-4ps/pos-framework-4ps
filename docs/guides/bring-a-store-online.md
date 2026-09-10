@@ -380,14 +380,26 @@ Then, on the new machine:
    that is already activated, which a new machine is not.
 4. **Pair the tills.** The installer prints the pairing URL; the log holds it too.
 5. **Take the old machine off the network, and revoke its key** on **API keys**. Issuing a new key
-   does not disable the old one, and — say this plainly — **the lease supersedes a replaced box for
-   updates, not for trading.** Two boxes on one store will both sell today. Unplug or wipe the one
-   you replaced; do not leave it powered on "just in case".
+   does not disable the old one. Since
+   [ADR-0123](../adr/0123-a-superseded-box-opens-nothing-new.md) the bumped lease does stop the old
+   box **opening** anything new — no new table, no new counter order, no new shift, and no channel
+   order from the relay — but it deliberately lets the tables it already holds finish and settle, so
+   nobody's dinner is stranded on it. It is still not a substitute for unplugging the thing: while
+   it is powered on it is still finishing orders and still minting receipt numbers. Unplug or wipe
+   the one you replaced; do not leave it running "just in case".
+
+**Do the bump before you activate the replacement.** In that order the new box takes the store's
+current generation on first sight and is the store. The other way round it takes the old generation,
+and the bump then supersedes the machine that is actually trading.
 
 If the old disk is readable, copy `store.sqlite` across before starting the new server: that is the
 only way to recover events the box committed but had not yet published. There is no off-box backup
 of it in this release — [ADR-0046](../adr/0046-backups-and-restore.md)'s store half (edge WAL
-shipping) is unbuilt, and the gate register records that rather than hiding it.
+shipping) is unbuilt, and the gate register records that rather than hiding it. Copying it is safe
+for the lease: **activation forgets any lease generation the copied database carried**, so the
+replacement does not inherit the dead box's identity and refuse to seat a table (ADR-0123). That is
+also why step 3 is not optional on a box built from a copied disk — without the activation, the
+inherited generation stands.
 
 ## The store is online
 

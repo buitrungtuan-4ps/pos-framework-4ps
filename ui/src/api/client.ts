@@ -7,6 +7,7 @@
 
 import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./credentials";
 import { observeEdgeVersion } from "./edgeVersion";
+import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
@@ -102,6 +103,7 @@ async function request<T>(
   // Which release answered (ADR-0111). Before the `ok` check on purpose: the call that just failed
   // is exactly the one an operator is looking at when they ask which version this box is running.
   observeEdgeVersion(response);
+  observeLeaseStanding(response);
   if (!response.ok) {
     // A `401` means the device token is stale or missing — this device must pair again, so drop the
     // token and let the app route to pairing. A `403` means the token is fine but nobody is signed in
@@ -115,10 +117,16 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
-// Who is signed in on this device, as `GET /api/session` reports it (S0b, ADR-0084).
+// Who is signed in on this device, as `GET /api/session` reports it (S0b, ADR-0084) — and whether a
+// replacement machine has taken this store (ADR-0123).
+//
+// The standing is on this response as well as on the `pos-lease-standing` header of every answer,
+// because this is the call the app makes before it draws anything: a superseded till should say so
+// on its sign-in screen, before anyone tries to seat a table.
 export interface SessionState {
   signed_in: boolean;
   employee_id?: string;
+  lease_standing: LeaseStanding;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
@@ -280,6 +288,7 @@ export const api = {
       body: JSON.stringify({ code, pin }),
     });
     observeEdgeVersion(response);
+    observeLeaseStanding(response);
     if (response.ok) {
       const body = (await response.json()) as { employee_id: string };
       return { ok: true, employeeId: body.employee_id };
@@ -316,5 +325,6 @@ export const api = {
     // other wants no body at all — so each observes the header at its own call site. A client that
     // only stamped `request()` would learn nothing from the three routes a second origin most needs.
     observeEdgeVersion(response);
+    observeLeaseStanding(response);
   },
 };

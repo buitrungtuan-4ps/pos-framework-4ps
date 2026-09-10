@@ -78,6 +78,7 @@ use pos_proto::{
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
+use crate::lease_state::CurrentStanding;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
 
@@ -778,6 +779,19 @@ pub enum AppError {
     /// at the till enumerate who can approve a void.
     #[error("that manager PIN does not authorise this action")]
     ApprovalRefused,
+    /// A command that would **open** a new order or a new shift was refused because a replacement
+    /// machine has taken this store
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), closing
+    /// [ADR-0049](../../../docs/adr/0049-single-active-lease.md)'s edge half).
+    ///
+    /// Only the four commands that create an order or a shift raise it. Everything already open on
+    /// this box still fires, bills, voids and settles — the refusal drains the floor, it does not
+    /// stop the shop taking money for work it has already done.
+    #[error(
+        "this machine has been replaced; finish and settle what is open here, and take new orders \
+         on the replacement"
+    )]
+    Superseded,
     /// A void cited a reason the store's managed list does not hold for voiding
     /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///
@@ -1528,6 +1542,13 @@ pub struct Edge<S> {
     /// The gapless receipt-number authority a settle allocates from (ADR-0025). Injected rather than
     /// derived from `S`, so the one loop runs over the real SQLite store and over the fakes alike.
     receipts: Arc<dyn ReceiptAuthority>,
+    /// Whether a replacement machine has taken this store
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// Owned here and lent as one `Arc`, so the config-pull loop that decides it, the four commands
+    /// that refuse on it and the response header that reports it are all reading the same value.
+    /// `Active` until a pull says otherwise, which is every box that has never been issued a lease.
+    standing: Arc<CurrentStanding>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -1600,6 +1621,38 @@ impl<S> Edge<S> {
             .expect("session lock is not poisoned") = Arc::new(session);
     }
 
+    /// The lease standing this box is acting on
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// Lent as the shared cell rather than copied out, because the config-pull loop writes it and
+    /// the request path reads it, and a second copy is a second answer.
+    #[must_use]
+    pub const fn lease(&self) -> &Arc<CurrentStanding> {
+        &self.standing
+    }
+
+    /// Refuses a command that would **open** something new when a replacement machine has taken this
+    /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// Called by the three commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
+    /// no others — `open_shift`, `seat_table` and `open_inbound_order`, which are exactly the three
+    /// sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
+    /// its second round, gets its bill and is paid — because the order lives in *this* box's log and
+    /// there is nowhere else for those guests to be served. What the box cannot do is start
+    /// anything: the floor drains and does not refill.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Superseded`] when, and only when, the standing is
+    /// [`Superseded`](pos_core::lease::LeaseStanding::Superseded).
+    fn refuse_if_superseded(&self) -> Result<(), AppError> {
+        if self.standing.opens_new_work() {
+            Ok(())
+        } else {
+            Err(AppError::Superseded)
+        }
+    }
+
     /// The lines currently marked prepared (`kitchen.ticket.bumped`), for a KDS reading the current
     /// state on (re)connect.
     ///
@@ -1640,6 +1693,7 @@ impl<S: EventStore> Edge<S> {
             fanout: Fanout::new(),
             projection: Mutex::new(Projection::default()),
             receipts,
+            standing: Arc::new(CurrentStanding::new()),
         })
     }
 
@@ -1815,6 +1869,12 @@ impl<S: EventStore> Edge<S> {
     where
         S: IntakeLedger,
     {
+        // A replaced machine takes no new channel order (ADR-0123). Refused *before* the
+        // idempotency row is written, so the delivery is left un-acknowledged and the cloud can
+        // hand it to the replacement — see `crate::order_in`, which maps this to `unavailable`
+        // rather than to a failure, because an order the guest has already paid for must not be
+        // dropped because the shop swapped a machine.
+        self.refuse_if_superseded()?;
         let now = self.clock.now();
         let session = self.session();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
@@ -2348,6 +2408,9 @@ impl<S: EventStore> Edge<S> {
         table_id: TableId,
         guest_count: Option<u16>,
     ) -> Result<TableView, AppError> {
+        // A replaced machine seats nobody new (ADR-0123). The tables already seated on it finish
+        // and settle here; this is what stops the floor refilling.
+        self.refuse_if_superseded()?;
         let ctx = self.decision_ctx(actor)?;
         let current = self.table_state(table_id);
         let decision = decide_table(current, TableCommand::Seat, &ctx)?;
@@ -3096,6 +3159,10 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         opening_float: Money,
     ) -> Result<ShiftView, AppError> {
+        // A replaced machine does not open a new trading day (ADR-0123). Before the
+        // already-open check, so a box that is superseded says so rather than reporting whichever
+        // state it happens to be in.
+        self.refuse_if_superseded()?;
         if self.current_shift_id().is_some() {
             return Err(AppError::ShiftAlreadyOpen);
         }
