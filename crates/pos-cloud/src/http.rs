@@ -70,11 +70,11 @@ use std::sync::Arc;
 
 use argon2::password_hash::SaltString;
 use axum::extract::{Path, Query, Request, State};
+use axum::http::HeaderName;
 use axum::http::header::{
     CONTENT_SECURITY_POLICY, CONTENT_TYPE, ETAG, IF_MATCH, REFERRER_POLICY, RETRY_AFTER,
     SET_COOKIE, USER_AGENT, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
-use axum::http::HeaderName;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};

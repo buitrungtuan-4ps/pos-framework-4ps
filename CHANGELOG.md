@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Thêm Permissions-Policy header để bảo vệ ứng dụng cloud.** Middleware `security_headers` hiện tại bổ sung header `Permissions-Policy: camera=(), microphone=(), geolocation=()` trên tất cả các phản hồi nhằm hạn chế truy cập vào các API thiết bị trình duyệt không cần thiết, ngăn ngừa rủi ro lạm dụng tính năng phần cứng/trình duyệt.
+
 ### Fixed
 
 - **The Windows installer could not run on Windows.** Reported from a real bring-up: the script the
