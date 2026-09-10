@@ -225,18 +225,37 @@ export function SelectField(props: {
 export interface PickerOption {
   readonly value: string;
   readonly label: string;
+  /**
+   * Extra text this option should be findable by, beyond its label.
+   *
+   * The case it exists for is a catalogue authored in two languages (ADR-0074): an item's `label`
+   * is its fallback name, often English, while the operator at the console is typing the Vietnamese
+   * one. `name_translations` is already on the wire for every item, so passing its values here
+   * makes the local filter find what the operator typed — which the server's own `q` also does, but
+   * without the round-trip, and *only* the local one can do it while the list is already held.
+   */
+  readonly keywords?: readonly string[];
 }
 
 /**
- * Case-insensitive substring match, and the one place the console decides what "matches" means.
+ * Case-insensitive substring match over an option's label and its keywords, and the one place the
+ * console decides what "matches" means.
  *
  * Deliberately not a fuzzy or prefix match. The lists these filter are item and ingredient names an
  * operator typed themselves, often in Vietnamese, and the query they type is a fragment of the name
  * they remember — "bến", "margh". A prefix match misses that, and a fuzzy match ranks `Bún bò` above
  * `Bánh mì` for the query `b` on grounds no operator can predict.
+ *
+ * `toLocaleLowerCase` on both sides rather than `toLowerCase`: the two differ for scripts the
+ * console is already translated into, and folding the query one way and the label the other is a
+ * search that silently misses.
  */
-function matchesQuery(label: string, query: string): boolean {
-  return label.toLocaleLowerCase().includes(query.toLocaleLowerCase());
+function matchesQuery(option: PickerOption, query: string): boolean {
+  const needle = query.toLocaleLowerCase();
+  if (option.label.toLocaleLowerCase().includes(needle)) {
+    return true;
+  }
+  return (option.keywords ?? []).some((word) => word.toLocaleLowerCase().includes(needle));
 }
 
 /**
@@ -295,7 +314,7 @@ export function ComboboxField(props: {
     if (props.onSearch !== undefined || needle === "") {
       return props.options;
     }
-    return props.options.filter((option) => matchesQuery(option.label, needle));
+    return props.options.filter((option) => matchesQuery(option, needle));
   });
 
   const chosen = () => props.options.find((option) => option.value === props.value);
@@ -481,7 +500,7 @@ export function MultiComboboxField(props: {
     if (props.onSearch !== undefined || needle === "") {
       return props.options;
     }
-    return props.options.filter((option) => matchesQuery(option.label, needle));
+    return props.options.filter((option) => matchesQuery(option, needle));
   });
 
   // The chosen options in the order the *option list* has them, not the order they were clicked, so

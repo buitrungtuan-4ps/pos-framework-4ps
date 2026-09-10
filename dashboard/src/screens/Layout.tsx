@@ -865,7 +865,11 @@ export function Layout() {
               value={buttonItem()}
               options={items()
                 .filter((item) => item.status === "active")
-                .map((item) => ({ value: item.menu_item_id, label: item.name }))}
+                .map((item) => ({
+                  value: item.menu_item_id,
+                  label: item.name,
+                  keywords: Object.values(item.name_translations),
+                }))}
               onChange={setButtonItem}
               placeholder={t("layout.chooseItem")}
               searchLabel={t("catalog.searchItems")}

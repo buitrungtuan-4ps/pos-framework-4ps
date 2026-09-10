@@ -22,7 +22,9 @@ const ITEMS = [
   { value: "i1", label: "Bánh mì thịt nguội" },
   { value: "i2", label: "Bún bò Huế" },
   { value: "i3", label: "Margherita" },
-  { value: "i4", label: "Marinara" },
+  // The bilingual case (ADR-0074): the label is the fallback name the catalogue was authored
+  // under, and the operator at the console is typing the other one.
+  { value: "i4", label: "Marinara", keywords: ["Sốt cà chua tỏi"] },
 ];
 
 const LABELS = {
@@ -72,6 +74,16 @@ describe("the single-choice picker", () => {
     fireEvent.click(trigger());
     fireEvent.input(screen.getByRole("combobox"), { target: { value: "bò" } });
     expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Bún bò Huế"]);
+  });
+
+  it("finds an item by a name in another locale, which is how half this catalogue is typed", () => {
+    // A tenant authors items in English and its staff search in Vietnamese, or the reverse. The
+    // per-locale names are already on the wire with every item, so the local filter can answer
+    // this without a round-trip — and a filter that only saw `name` would return nothing at all.
+    mount();
+    fireEvent.click(trigger());
+    fireEvent.input(screen.getByRole("combobox"), { target: { value: "cà chua" } });
+    expect(screen.getAllByRole("option").map((node) => node.textContent)).toEqual(["Marinara"]);
   });
 
   it("says so rather than showing an empty box when nothing matches", () => {

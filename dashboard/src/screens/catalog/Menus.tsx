@@ -113,6 +113,21 @@ export function CatalogMenus() {
     setError("");
     setBusy(true);
     try {
+      // `listItems` and not `listItemsPage`, deliberately, and this is the one place in the console
+      // where that is a considered choice rather than an oversight.
+      //
+      // Two things read this list, and they want opposite shapes. The placement picker wants a
+      // window — but it is a `ComboboxField` now, which builds its options only when it is opened
+      // and filters them in the browser against every locale's name, so a held list costs nothing
+      // per render and answers a keystroke with no round-trip. The placements *table* wants the
+      // opposite: it renders `menu_item_id` for every row and has to turn each one into a name, and
+      // a placement can point at any item in the master, so a window would show ULIDs for whatever
+      // fell outside it.
+      //
+      // The real fix is for `list_placements` to return the item's name with the placement, which
+      // removes the coupling entirely and lets the picker be served. That is a read-model change in
+      // `pos-cloud` and it is not in this slice; until then the honest trade is one bounded fetch on
+      // screen entry over a table that cannot name its own rows.
       const [loadedMenus, loadedItems, loadedCountries] = await Promise.all([
         api.listMenus(tenantId()),
         api.listItems(tenantId()),
@@ -922,6 +937,7 @@ export function CatalogMenus() {
             options={activeItems().map((item) => ({
               value: item.menu_item_id,
               label: item.name,
+              keywords: Object.values(item.name_translations),
             }))}
             onChange={setPlacementItem}
             placeholder={t("catalog.chooseItem")}

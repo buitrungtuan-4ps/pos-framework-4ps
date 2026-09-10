@@ -412,7 +412,11 @@ export function Stations() {
                       value={ruleItem()}
                       options={items()
                         .filter((item) => item.status === "active")
-                        .map((item) => ({ value: item.menu_item_id, label: item.name }))}
+                        .map((item) => ({
+                          value: item.menu_item_id,
+                          label: item.name,
+                          keywords: Object.values(item.name_translations),
+                        }))}
                       onChange={setRuleItem}
                       placeholder={t("stations.chooseItem")}
                       searchLabel={t("catalog.searchItems")}

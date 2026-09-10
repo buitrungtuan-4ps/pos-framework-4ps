@@ -281,7 +281,11 @@ export function CatalogModifiers() {
           <MultiComboboxField
             label={t("catalog.groupMembers")}
             values={newMembers()}
-            options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+            options={items().map((item) => ({
+              value: item.menu_item_id,
+              label: item.name,
+              keywords: Object.values(item.name_translations),
+            }))}
             onChange={setNewMembers}
             searchLabel={t("catalog.searchItems")}
             emptyLabel={t("picker.noMatch")}
@@ -290,7 +294,11 @@ export function CatalogModifiers() {
           <MultiComboboxField
             label={t("catalog.groupAttached")}
             values={newAttached()}
-            options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+            options={items().map((item) => ({
+              value: item.menu_item_id,
+              label: item.name,
+              keywords: Object.values(item.name_translations),
+            }))}
             onChange={setNewAttached}
             searchLabel={t("catalog.searchItems")}
             emptyLabel={t("picker.noMatch")}

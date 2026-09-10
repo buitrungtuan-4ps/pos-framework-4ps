@@ -648,7 +648,11 @@ export function Inventory() {
             <ComboboxField
               label={t("inventory.item")}
               value={recItem()}
-              options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+              options={items().map((item) => ({
+                value: item.menu_item_id,
+                label: item.name,
+                keywords: Object.values(item.name_translations),
+              }))}
               onChange={setRecItem}
               placeholder={t("catalog.chooseItem")}
               searchLabel={t("catalog.searchItems")}
