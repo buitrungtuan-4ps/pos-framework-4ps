@@ -128,6 +128,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_publish_to_store_group,
         crate::http::admin_list_store_group_batches,
         crate::http::admin_read_store_group_batch,
+        crate::http::admin_list_store_archives,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),

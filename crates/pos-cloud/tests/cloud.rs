@@ -22036,11 +22036,63 @@ impl pos_cloud::archive::ArchiveStore for FakeArchives {
 
     async fn list_archives(
         &self,
-        _tenant: TenantId,
-        _store: StoreId,
-        _limit: i64,
+        tenant: TenantId,
+        store: StoreId,
+        limit: i64,
     ) -> Result<Vec<pos_cloud::archive::StoreArchive>, pos_cloud::archive::ArchiveStoreError> {
-        Ok(Vec::new())
+        let archives = self
+            .archives
+            .lock()
+            .expect("the archive list is not poisoned");
+        let mut matching: Vec<pos_cloud::archive::StoreArchive> = archives
+            .iter()
+            .filter(|(row_tenant, archive)| *row_tenant == tenant && archive.store_id == store)
+            .map(|(_tenant, archive)| archive.clone())
+            .collect();
+        // Newest first, like the real adapter's `ORDER BY taken_at DESC`.
+        matching.sort_by(|left, right| right.taken_at.cmp(&left.taken_at));
+        matching.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+        Ok(matching)
+    }
+
+    async fn expired_before(
+        &self,
+        cutoff: i64,
+        limit: i64,
+    ) -> Result<Vec<pos_cloud::archive::ExpiredArchive>, pos_cloud::archive::ArchiveStoreError>
+    {
+        let archives = self
+            .archives
+            .lock()
+            .expect("the archive list is not poisoned");
+        Ok(archives
+            .iter()
+            .filter(|(_tenant, archive)| archive.taken_at <= cutoff)
+            .take(usize::try_from(limit).unwrap_or(usize::MAX))
+            .map(|(tenant, archive)| pos_cloud::archive::ExpiredArchive {
+                tenant: *tenant,
+                store_id: archive.store_id,
+                taken_at: archive.taken_at,
+                object_key: archive.object_key.clone(),
+            })
+            .collect())
+    }
+
+    async fn forget_archive(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        taken_at: i64,
+    ) -> Result<(), pos_cloud::archive::ArchiveStoreError> {
+        self.archives
+            .lock()
+            .expect("the archive list is not poisoned")
+            .retain(|(row_tenant, archive)| {
+                !(*row_tenant == tenant
+                    && archive.store_id == store
+                    && archive.taken_at == taken_at)
+            });
+        Ok(())
     }
 }
 
@@ -22275,6 +22327,112 @@ async fn an_upload_without_a_believable_taken_at_is_refused() {
         .await
         .expect("route the upload");
     assert_eq!(zero.status(), StatusCode::BAD_REQUEST);
+}
+
+/// The console read: what a store has shipped, newest first, without a key going anywhere near it.
+#[tokio::test]
+async fn the_console_sees_what_a_store_has_archived_newest_first() {
+    let archives = FakeArchives::default();
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-archives").await;
+    for taken_at in [1_700_000_000_000_i64, 1_700_086_400_000] {
+        pos_cloud::archive::ArchiveStore::record_archive(
+            &archives,
+            tenant(),
+            &pos_cloud::archive::StoreArchive {
+                store_id: store_id(),
+                taken_at,
+                object_key: pos_cloud::archive::archive_object_key(store_id(), taken_at),
+                size_bytes: 4_096,
+                sha256: "00".repeat(32),
+                received_at: taken_at + 60_000,
+            },
+        )
+        .await
+        .expect("record an archive");
+    }
+    let router = http::store_archive_admin_router(archives, admin, clock());
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/stores/{}/archives?tenant_id={}",
+                store_id(),
+                tenant()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        listed.status(),
+        StatusCode::OK,
+        "console.data.read is every role, so a Viewer can see whether a shop is backing up"
+    );
+    let body = json_body(listed).await;
+    let rows = body["archives"].as_array().expect("a list");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows[0]["taken_at_ms"].as_i64(),
+        Some(1_700_086_400_000),
+        "newest first, so the first row is the recovery point"
+    );
+    assert!(
+        rows[0]["object_key"]
+            .as_str()
+            .is_some_and(|key| key.starts_with(&format!("stores/{}/archives/", store_id()))),
+        "the object key an operator types into a restore is here"
+    );
+    assert!(
+        body.to_string().find("key\":\"0123").is_none(),
+        "and nothing that could open an archive is: this is the index, not the key"
+    );
+}
+
+/// A store that has never archived is a `200` with an empty list, not a `404`. It is a real answer
+/// and the one an operator most needs stated plainly, rather than as a missing page.
+#[tokio::test]
+async fn a_store_that_has_never_archived_reads_as_an_empty_list() {
+    let admin = provisioned_admin();
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-none").await;
+    let router = http::store_archive_admin_router(FakeArchives::default(), admin, clock());
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/stores/{}/archives?tenant_id={}",
+                store_id(),
+                tenant()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(listed).await["archives"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+/// The console read is a console door, not a store's: an unauthenticated caller is refused.
+#[tokio::test]
+async fn the_console_archive_read_needs_a_session() {
+    let router =
+        http::store_archive_admin_router(FakeArchives::default(), provisioned_admin(), clock());
+    let refused = router
+        .oneshot(
+            Request::get(format!(
+                "/admin/stores/{}/archives?tenant_id={}",
+                store_id(),
+                tenant()
+            ))
+            .body(Body::empty())
+            .expect("build"),
+        )
+        .await
+        .expect("route the read");
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// Both routes are the store's own door: no key is `401`, the wrong scope is `403`, and a key

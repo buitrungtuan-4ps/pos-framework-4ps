@@ -1319,6 +1319,81 @@
         }
       }
     },
+    "/admin/stores/{store_id}/archives": {
+      "get": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "`GET /admin/stores/{store_id}/archives?tenant_id=` — what this store has shipped, newest first.",
+        "description": "Behind [`ConsolePermission::Read`], the same gate the fleet view uses: \"when did this store last\nback up\" is an operational fact every console role should be able to see, and a Viewer who\ncannot see that a shop has not archived in a fortnight is a Viewer who cannot raise it.",
+        "operationId": "admin_list_store_archives",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store whose archives to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant the store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This store's sealed archives, newest first — the first row's taken_at_ms is the recovery point. An empty list is this answer too: the store has never archived"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The archive registry is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/devices/admitted": {
       "get": {
         "tags": [

@@ -10,9 +10,16 @@
 # Connects over libpq (PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE), so the same script
 # serves the nightly CI drill (a service Postgres) and a box cron pointed at a reachable server.
 #
-# The archive requires the drill cover BOTH the cloud database and a random store backup. The
-# store half is edge WAL shipping (docs/roadmap.md P9, spike A4); this is the cloud half, and the
-# drill grows its store half when that lands.
+# The archive requires the drill cover BOTH the cloud database and a random store backup. This is
+# the cloud half. **The store half now exists**: `deploy/store-restore-drill.sh` opens a store's
+# own sealed archive and runs SQLite's integrity check over what comes out (ADR-0124). It is a
+# separate script rather than a leg of this one because it needs entirely different inputs — a
+# store id, that store's key, and the archive tier — and because a drill that could only run when
+# all of them were to hand would end up running never. Run both on the same schedule, a different
+# store each time.
+#
+# What is still owed to A4 is continuous WAL shipping *for a store*: this drill's store half
+# recovers to the last archive, not to the last transaction.
 set -euo pipefail
 
 : "${PGHOST:?set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE for the drill}"

@@ -42,6 +42,7 @@ import type {
   DisplayCategory,
   DisplaySubcategory,
   AdmittedDevice,
+  StoreArchive,
   Employee,
   EntityStatus,
   ETag,
@@ -1942,6 +1943,14 @@ export const api = {
     requestJson<AdmittedDevice[]>(
       "GET",
       `/admin/stores/${encodeURIComponent(storeId)}/devices/admitted?${tenantQuery(tenantId)}`,
+    ),
+  // What this store has archived, newest first (ADR-0124). Behind `console.data.read` like the
+  // fleet reads beside it: "is this shop backing up" is an operational fact every console role
+  // should be able to see. The response carries no key and nothing that could open an archive.
+  storeArchives: (tenantId: string, storeId: string) =>
+    requestJson<{ readonly archives: StoreArchive[] }>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/archives?${tenantQuery(tenantId)}`,
     ),
   // Retire one of the store's own tills remotely (ADR-0118 §6). `localDeviceId` must come from
   // `admittedDevices` above — it is the id the STORE minted, not a console `Device.device_id`, and

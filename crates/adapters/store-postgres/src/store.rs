@@ -225,6 +225,7 @@ const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql")
 /// `pg_dump` of this database to the same off-box tier the archives sync to, so a plaintext column
 /// would carry the key to the same place as the ciphertext it opens (Amendment 1).
 const MIGRATION_0062: &str = include_str!("../migrations/0062_store_archives.sql");
+const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expiry.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -532,6 +533,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0062)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0063)
             .await
             .map_err(unavailable)
     }

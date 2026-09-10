@@ -38,10 +38,10 @@ use store_postgres::{
     RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
     TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
-use store_postgres::{PostgresArchives, StoreArchiveRow};
+use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
-use crate::archive::{ArchiveStore, ArchiveStoreError, StoreArchive};
+use crate::archive::{ArchiveStore, ArchiveStoreError, ExpiredArchive, StoreArchive};
 
 use pos_ports::PortError;
 use pos_ports::dynamic::BoxFuture;
@@ -5232,6 +5232,63 @@ impl ArchiveStore for PostgresArchives {
                 .map_err(|error| archive_unavailable(&error))?;
         rows.into_iter().map(store_archive_from_row).collect()
     }
+
+    async fn expired_before(
+        &self,
+        cutoff: i64,
+        limit: i64,
+    ) -> Result<Vec<ExpiredArchive>, ArchiveStoreError> {
+        let rows = PostgresArchives::fetch_expired(self, cutoff, limit)
+            .await
+            .map_err(|error| archive_unavailable(&error))?;
+        rows.into_iter().map(expired_archive_from_row).collect()
+    }
+
+    async fn forget_archive(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        taken_at: i64,
+    ) -> Result<(), ArchiveStoreError> {
+        PostgresArchives::forget_archive(self, &tenant.to_string(), &store.to_string(), taken_at)
+            .await
+            .map(|_rows| ())
+            .map_err(|error| archive_unavailable(&error))
+    }
+}
+
+/// Rehydrates an expired row, on the same terms as [`store_archive_from_row`].
+///
+/// An unparseable tenant or store is reported rather than skipped, and here that matters more than
+/// it does on the console read: silently skipping would leave a row the sweep can never delete,
+/// which is an object nobody can find and nobody stops paying for.
+fn expired_archive_from_row(row: ExpiredArchiveRow) -> Result<ExpiredArchive, ArchiveStoreError> {
+    let tenant = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_| {
+            ArchiveStoreError::Unavailable(format!(
+                "an expired archive names a tenant id that is not a ULID: {}",
+                row.tenant_id
+            ))
+        })?;
+    let store_id = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(|_| {
+            ArchiveStoreError::Unavailable(format!(
+                "an expired archive names a store id that is not a ULID: {}",
+                row.store_id
+            ))
+        })?;
+    Ok(ExpiredArchive {
+        tenant,
+        store_id,
+        taken_at: row.taken_at,
+        object_key: row.object_key,
+    })
 }
 
 /// Rehydrates a stored row.

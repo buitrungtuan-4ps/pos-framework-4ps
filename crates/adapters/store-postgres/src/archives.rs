@@ -42,6 +42,23 @@ pub struct StoreArchiveRow {
     pub received_at: i64,
 }
 
+/// One archive that is past the retention window, as the sweep needs it.
+///
+/// Carries the tenant, unlike [`StoreArchiveRow`]: the sweep runs as the cloud over every tenant
+/// at once (the shape the subject-masking cron already has), so the tenant is an answer here
+/// rather than a question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredArchiveRow {
+    /// The tenant the archive belongs to.
+    pub tenant_id: String,
+    /// The store it came from.
+    pub store_id: String,
+    /// When the store took the snapshot, Unix ms.
+    pub taken_at: i64,
+    /// Where the sealed bytes are, so the sweep can remove them before it forgets the row.
+    pub object_key: String,
+}
+
 /// The archive registry over a shared pool. Built by
 /// [`PostgresStore::archives`](crate::PostgresStore::archives).
 #[derive(Clone, Debug)]
@@ -182,5 +199,69 @@ impl PostgresArchives {
                 received_at: row.get(5),
             })
             .collect())
+    }
+
+    /// Archives taken at or before `cutoff_ms`, **across every tenant**, oldest first, at most
+    /// `limit`.
+    ///
+    /// No tenant predicate, and that is the point: the cloud runs one retention pass over the
+    /// whole database rather than a query per tenant, the same shape
+    /// [`PostgresSubjects::fetch_due`](crate::subjects::PostgresSubjects::fetch_due) has. A
+    /// per-tenant loop would also silently skip a tenant created between two iterations. Migration
+    /// 0063 adds the `taken_at`-leading index this needs; 0062's tenant-leading one cannot serve a
+    /// predicate with no tenant in it.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_expired(
+        &self,
+        cutoff_ms: i64,
+        limit: i64,
+    ) -> Result<Vec<ExpiredArchiveRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT tenant_id, store_id, taken_at, object_key FROM store_archives \
+                 WHERE taken_at <= $1 ORDER BY taken_at ASC LIMIT $2",
+                &[&cutoff_ms, &limit],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ExpiredArchiveRow {
+                tenant_id: row.get(0),
+                store_id: row.get(1),
+                taken_at: row.get(2),
+                object_key: row.get(3),
+            })
+            .collect())
+    }
+
+    /// Removes one archive's row, whether or not it was there.
+    ///
+    /// Called *after* the sealed bytes have gone, never before — see the sweep's own note on why
+    /// that order is the safe one. Returns how many rows went, so a caller can tell a real deletion
+    /// from a retry of one already done.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn forget_archive(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        taken_at: i64,
+    ) -> Result<u64, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "DELETE FROM store_archives \
+                 WHERE tenant_id = $1 AND store_id = $2 AND taken_at = $3",
+                &[&tenant_id, &store_id, &taken_at],
+            )
+            .await
+            .map_err(unavailable)
     }
 }

@@ -314,6 +314,51 @@ pub trait ArchiveStore: Send + Sync {
         store: StoreId,
         limit: i64,
     ) -> impl Future<Output = Result<Vec<StoreArchive>, ArchiveStoreError>> + Send;
+
+    /// Archives taken at or before `cutoff`, **across every tenant**, oldest first, at most
+    /// `limit`.
+    ///
+    /// The one method here that is not tenant-scoped, because the caller is not a tenant: the
+    /// retention sweep runs as the cloud over the whole registry, the shape the subject-masking
+    /// cron already has ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)). A loop
+    /// over the tenant list would be a query per tenant per sweep and would skip a tenant created
+    /// between two iterations.
+    ///
+    /// # Errors
+    ///
+    /// [`ArchiveStoreError::Unavailable`] if the registry could not be read.
+    fn expired_before(
+        &self,
+        cutoff: i64,
+        limit: i64,
+    ) -> impl Future<Output = Result<Vec<ExpiredArchive>, ArchiveStoreError>> + Send;
+
+    /// Forgets one archive's row. Succeeds whether or not the row was there, so a retried sweep
+    /// converges rather than failing on what it already did.
+    ///
+    /// # Errors
+    ///
+    /// [`ArchiveStoreError::Unavailable`] if the registry could not be written.
+    fn forget_archive(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        taken_at: i64,
+    ) -> impl Future<Output = Result<(), ArchiveStoreError>> + Send;
+}
+
+/// An archive the retention window has passed, named well enough to remove.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpiredArchive {
+    /// The tenant it belongs to — an answer rather than a question, because the sweep is
+    /// cross-tenant.
+    pub tenant: TenantId,
+    /// The store it came from.
+    pub store_id: StoreId,
+    /// When the store took the snapshot, Unix ms. Part of the row's identity.
+    pub taken_at: i64,
+    /// Where the sealed bytes are, so they go before the row that names them does.
+    pub object_key: String,
 }
 
 /// Where a store's archives live in the object store.

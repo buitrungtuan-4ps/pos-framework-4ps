@@ -10,6 +10,7 @@ import { api, ApiError } from "../api/client";
 import type {
   AdmittedDevice,
   FleetStore,
+  StoreArchive,
   TaskHealthEntry,
   TaskHealthReport,
 } from "../api/types";
@@ -95,6 +96,13 @@ export function Fleet() {
   // `retiring` above, which retires a whole STORE from the fleet — a different act entirely.
   const [retiringDevice, setRetiringDevice] = createSignal<AdmittedDevice | null>(null);
   const [retireDeviceBusy, setRetireDeviceBusy] = createSignal(false);
+  // What this store has archived (ADR-0124). Read with the drawer for the same reason the roster
+  // above is: it is a second read per store, and asking it for every row on a 15-second poll would
+  // answer a question nobody opened. `null` is "not read yet" and renders differently from an
+  // empty list, because "we have not asked" and "this shop has never backed up" are very
+  // different things to tell an operator.
+  const [archives, setArchives] = createSignal<StoreArchive[] | null>(null);
+  const [archivesError, setArchivesError] = createSignal("");
 
   // Reads (or re-reads) one store's admitted-device roster into the drawer.
   //
@@ -120,10 +128,31 @@ export function Fleet() {
       );
   };
 
-  // Opens the detail drawer for a store and reads its admitted-device roster.
+  // Reads one store's archive index into the drawer.
+  const loadArchives = (storeId: string) => {
+    setArchives(null);
+    setArchivesError("");
+    const tenant = tenantId();
+    if (!tenant) {
+      return;
+    }
+    void api
+      .storeArchives(tenant, storeId)
+      .then((answer) => setArchives(answer.archives))
+      // Same posture as the roster: a backup list that will not load must not take the liveness
+      // panel down with it. It degrades to a banner and everything else still renders.
+      .catch((failure: unknown) =>
+        setArchivesError(
+          failure instanceof ApiError ? failure.message : t("fleet.archivesUnavailable"),
+        ),
+      );
+  };
+
+  // Opens the detail drawer for a store and reads the two per-store answers it carries.
   const openDetail = (store: FleetStore) => {
     setSelected(store);
     loadAdmitted(store.store_id);
+    loadArchives(store.store_id);
   };
 
   // Publishes one till onto the store's deny-list. The store carries it out on its next config
@@ -696,6 +725,62 @@ export function Fleet() {
                                     </Button>
                                   </div>
                                 </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </Show>
+                    )}
+                  </Show>
+                </div>
+                {/* Whether this shop can be brought back, and to when (ADR-0124). The first row
+                    is the recovery point; an empty list is the answer that matters most, so it is
+                    stated rather than left as a blank panel. Nothing here can open an archive —
+                    the key is a separate, deliberate ask. */}
+                <div class="flex flex-col gap-2">
+                  <h3 class="text-sm font-semibold">{t("fleet.archives")}</h3>
+                  <p class="text-xs text-ink-muted">{t("fleet.archivesHint")}</p>
+                  <Show when={archivesError()}>
+                    {(message) => <Banner tone="danger" message={message()} />}
+                  </Show>
+                  <Show
+                    when={archives()}
+                    fallback={
+                      <Show when={!archivesError()}>
+                        <Skeleton label={t("common.loading")} rows={3} />
+                      </Show>
+                    }
+                  >
+                    {(taken) => (
+                      <Show
+                        when={taken().length > 0}
+                        fallback={
+                          <Banner tone="danger" message={t("fleet.archivesNone")} />
+                        }
+                      >
+                        <ul class="flex flex-col gap-2">
+                          <For each={taken()}>
+                            {(archive, index) => (
+                              <li class="flex flex-col gap-1 rounded border border-line p-2">
+                                <div class="flex items-center gap-2">
+                                  {/* Only the newest is labelled: it is the one a restore would
+                                      use, and marking every row would say nothing. */}
+                                  <Show when={index() === 0}>
+                                    <StatusBadge
+                                      tone="active"
+                                      label={t("fleet.archivesNewest")}
+                                    />
+                                  </Show>
+                                  <span class="text-sm">
+                                    {formatRelativeAge(ageSeconds(archive.taken_at_ms))}
+                                  </span>
+                                </div>
+                                <p class="text-xs text-ink-muted">
+                                  {formatCount(archive.size_bytes)}
+                                </p>
+                                <TechnicalDetails label={t("common.technicalDetails")}>
+                                  {`${archive.object_key} · ${archive.sha256}`}
+                                </TechnicalDetails>
                               </li>
                             )}
                           </For>

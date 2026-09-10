@@ -17,6 +17,7 @@ use blob_garage::S3Blobs;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
 use pos_cloud::alerts::AlertThresholds;
+use pos_cloud::archive_retention;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
@@ -365,6 +366,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
+    // The store-archive retention sweep (ADR-0124 slice 3). It needs the same object store the
+    // archives were uploaded to, which is why it is spawned here rather than beside the subject
+    // cron above — and only where archiving is on at all, because a sweep with nothing to sweep is
+    // a daily query for no reason.
+    //
+    // Why it exists is not disk. A store's archive is its whole database, buyer details included
+    // (ADR-0107), taken *before* the masking cron redacted them; capping the archive window below
+    // the subject window is what makes that redaction eventually true in the copies too. The
+    // configuration refuses to start with the two windows the wrong way round, so by the time this
+    // spawns the ordering already holds.
+    let archive_retention_task = match (artifacts.clone(), config.archive_key_secret.as_ref()) {
+        (Some(blobs), Some(_secret)) => {
+            let interval = Duration::from_secs(config.archive_retention_sweep_interval_secs);
+            tracing::info!(
+                archive_retention_days = config.archive_retention_days,
+                interval_secs = config.archive_retention_sweep_interval_secs,
+                "store-archive retention sweep started"
+            );
+            Some(tokio::spawn(archive_retention::run(
+                store.archives(),
+                blobs,
+                archive_retention::ArchiveWindow::days(config.archive_retention_days),
+                SystemClock,
+                store.task_health(),
+                interval,
+                shutdown_signal(),
+            )))
+        }
+        _other => None,
+    };
+
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
@@ -444,6 +476,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Router::new()
             }
         })
+        // The console's view of what each store has archived, mounted **unconditionally** unlike
+        // the store-facing pair above: it needs only the registry, and an operator whose
+        // `archive_key_secret` has gone missing is exactly the one who most needs to see what
+        // archives exist (ADR-0124 slice 3).
+        .merge(http::store_archive_admin_router(
+            store.archives(),
+            store.admin(),
+            SystemClock,
+        ))
         .merge(http::device_router(
             store.device_proposals(),
             store.admin(),
@@ -892,6 +933,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     projector_task.abort();
     let _ = projector_task.await;
     if let Some(task) = retention_task {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = archive_retention_task {
         task.abort();
         let _ = task.await;
     }

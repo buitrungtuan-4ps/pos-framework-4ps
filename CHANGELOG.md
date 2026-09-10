@@ -18,6 +18,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store's backups age out on their own, and the console says when it last backed up**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The last of D-2. A daily sweep
+  removes archives past `archive_retention_days` — bytes first, then the row that names them, so a
+  crash between the two leaves something the next sweep retries rather than an object nothing can
+  find. `GET /admin/stores/{store_id}/archives` and a **Backups** panel in the Fleet drawer show
+  what each store has, newest first; a store that has never archived says so in as many words
+  rather than showing an empty box.
+
+  The point of the sweep is not disk. A store's archive is its whole database including the buyer
+  details a B2B invoice needs ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)), taken *before*
+  the masking cron redacted them — so an archive window at or past the subject window would leave
+  the masking done in the row and undone in the copy, with nothing to notice. **`pos_cloud` now
+  refuses to start when the two windows are the wrong way round.**
+
+  `deploy/store-restore-drill.sh` is the store leg of the restore drill: pull a shop's newest
+  sealed archive, open it, and run SQLite's integrity check over what comes out.
+  [`docs/guides/data-subject-requests.md`](docs/guides/data-subject-requests.md) is the erasure
+  procedure for the exceptional case that cannot wait out the window — and recommends deleting the
+  affected archives rather than editing them, because a re-sealed archive is a database the store
+  never had.
+
+  **Upgrade note.** `cloud.toml` gains `archive_retention_days` (default 30) and
+  `archive_retention_sweep_interval_secs` (default daily). Migration `0063_store_archive_expiry.sql`
+  adds one index. A cloud whose `retention_days` is 30 or less **must lower
+  `archive_retention_days` before upgrading**, or it will refuse to boot — the refusal names both
+  numbers and what to set. A cloud with no `retention_days` at all is unaffected: the archive
+  window then stands alone.
+
 - **A store now archives itself, nightly, without anyone remembering to**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The wire that joins the two halves
   already shipped: `CloudSync` grew `archive_key` and `upload_archive`, the `cloud-sync-http`

@@ -54,6 +54,7 @@
 pub mod activation;
 pub mod alerts;
 pub mod archive;
+pub mod archive_retention;
 pub mod assets;
 pub mod audit;
 pub mod auth;
