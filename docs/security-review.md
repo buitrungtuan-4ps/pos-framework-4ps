@@ -30,10 +30,16 @@ Three trust zones, deliberately not four:
 The store never accepts an inbound connection from the cloud. Every cloud→store flow is a store-initiated
 pull: config (`GET /sync/stores/{id}/config`), the order relay's long-poll, the heartbeat, the OTA
 fetch. That is an architectural property ([ADR-0001](adr/0001-offline-first-store-autonomy.md),
-[ADR-0061](adr/0061-order-relay.md)), and it is the reason a shop needs no inbound firewall rule and
-no port forward: **there is no cloud-side capability to reach into a store**, so a compromised cloud
+[ADR-0061](adr/0061-order-relay.md)), and it is the reason a shop needs no perimeter rule and no
+port forward: **there is no cloud-side capability to reach into a store**, so a compromised cloud
 cannot address a till directly. It can still publish a config or an OTA plan the store will pull —
 see §6.
+
+The one inbound rule a store does need is on the box's *own* firewall, admitting the tills and
+kitchen displays on the same LAN to the listen port — which the generated installers add on the
+Private profile only, never Public, for exactly the reason above: nothing off that LAN has any
+business addressing the till API. See
+[`bring-a-store-online.md`](guides/bring-a-store-online.md) §"The listen port".
 
 ## 2. Authenticated surfaces
 

@@ -28,6 +28,7 @@ use core::future::Future;
 
 use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::text::ReleaseTag;
+use pos_proto::time::Timestamp;
 
 use crate::error::PortError;
 use crate::key_vault::Secret;
@@ -155,4 +156,46 @@ pub trait CloudSync: Send + Sync {
     /// [`PortError::invalid_argument`] if the cloud rejected the report as malformed, and
     /// [`PortError::unavailable`] if the cloud could not be reached.
     fn report(&self, report: &UpdateReport) -> impl Future<Output = Result<(), PortError>> + Send;
+
+    /// The 64-character key this store seals its database archives with
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)), minted by the cloud on
+    /// the first ask and the same on every ask after.
+    ///
+    /// Fetched rather than generated locally, and fetched **before** every archive rather than once
+    /// at provisioning, because the recovery story depends on somebody other than this box having
+    /// the key: a store that minted its own would seal archives only the dead disk could open. The
+    /// cloud keeps it wrapped under a secret that does not travel with its own backups (ADR-0124
+    /// Amendment 1).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the cloud could not be reached, or if it is configured without
+    /// archive storage — in which case there is no key because there is nowhere to put an archive,
+    /// and the caller's right response is to skip this round rather than to seal with something it
+    /// invented. [`PortError::permission_denied`] if this store's key does not authorise the ask.
+    fn archive_key(&self, store: StoreId)
+    -> impl Future<Output = Result<String, PortError>> + Send;
+
+    /// Ships one sealed archive, taken at `taken_at`
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+    ///
+    /// `archive` is already sealed: the cloud is a sink for bytes it cannot read, and nothing on
+    /// the far side of this call can open them. `taken_at` is when the **store** took the snapshot
+    /// and not when the call is made — a shop that was offline for a day ships yesterday's archive
+    /// today, and the recovery point is the former.
+    ///
+    /// Idempotent on `(store, taken_at)`: a retry after a timeout replaces the same archive rather
+    /// than making a second one, so the edge may retry freely.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::invalid_argument`] if the cloud refused the bytes as not an archive, and
+    /// [`PortError::unavailable`] if the cloud could not be reached or is configured without
+    /// archive storage.
+    fn upload_archive(
+        &self,
+        store: StoreId,
+        taken_at: Timestamp,
+        archive: &[u8],
+    ) -> impl Future<Output = Result<(), PortError>> + Send;
 }

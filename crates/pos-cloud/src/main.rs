@@ -17,6 +17,7 @@ use blob_garage::S3Blobs;
 use link_nats::{ConsumerConfig, NatsConsumer};
 use metrics_vm::VmMetrics;
 use pos_cloud::alerts::AlertThresholds;
+use pos_cloud::archive_retention;
 use pos_cloud::audit::{AuditRecorder, AuditSink};
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http::CloudApp;
@@ -365,6 +366,37 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
+    // The store-archive retention sweep (ADR-0124 slice 3). It needs the same object store the
+    // archives were uploaded to, which is why it is spawned here rather than beside the subject
+    // cron above — and only where archiving is on at all, because a sweep with nothing to sweep is
+    // a daily query for no reason.
+    //
+    // Why it exists is not disk. A store's archive is its whole database, buyer details included
+    // (ADR-0107), taken *before* the masking cron redacted them; capping the archive window below
+    // the subject window is what makes that redaction eventually true in the copies too. The
+    // configuration refuses to start with the two windows the wrong way round, so by the time this
+    // spawns the ordering already holds.
+    let archive_retention_task = match (artifacts.clone(), config.archive_key_secret.as_ref()) {
+        (Some(blobs), Some(_secret)) => {
+            let interval = Duration::from_secs(config.archive_retention_sweep_interval_secs);
+            tracing::info!(
+                archive_retention_days = config.archive_retention_days,
+                interval_secs = config.archive_retention_sweep_interval_secs,
+                "store-archive retention sweep started"
+            );
+            Some(tokio::spawn(archive_retention::run(
+                store.archives(),
+                blobs,
+                archive_retention::ArchiveWindow::days(config.archive_retention_days),
+                SystemClock,
+                store.task_health(),
+                interval,
+                shutdown_signal(),
+            )))
+        }
+        _other => None,
+    };
+
     // The reconciliation diff (ADR-0040), device-onboarding (ADR-0041), translation-grid (ADR-0043)
     // and activation-exchange (ADR-0050/0051) endpoints carry their own state, so they are merged in
     // rather than threaded through CloudApp.
@@ -405,7 +437,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // route a box downloads from, and the `/admin` route a release is uploaded to. Absent an
         // `[artifacts]` block there is nowhere for bytes to live, so both are honestly absent rather
         // than present and answering `503`.
-        .merge(match artifacts {
+        .merge(match artifacts.clone() {
             Some(blobs) => http::ota_artifact_router(
                 store.api_keys(),
                 SystemClock,
@@ -421,6 +453,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )),
             None => Router::new(),
         })
+        // Store archives (ADR-0124) need **both** halves of the same pair: somewhere for the sealed
+        // bytes to go, and a secret to wrap each store's key under. Either one missing and the
+        // routes are honestly absent rather than answering `503` — and boot says which, because a
+        // durability feature that is quietly off is the one nobody notices until a restore.
+        .merge(match (artifacts, config.archive_key_secret.clone()) {
+            (Some(blobs), Some(secret)) => http::store_archive_router(
+                store.api_keys(),
+                SystemClock,
+                blobs,
+                store.archives(),
+                secret,
+            ),
+            (blobs, secret) => {
+                tracing::warn!(
+                    has_object_store = blobs.is_some(),
+                    has_archive_key_secret = secret.is_some(),
+                    "store archives are off: both an [artifacts] object store and \
+                     archive_key_secret are required, and no store will back its database up \
+                     without them (ADR-0124)"
+                );
+                Router::new()
+            }
+        })
+        // The console's view of what each store has archived, mounted **unconditionally** unlike
+        // the store-facing pair above: it needs only the registry, and an operator whose
+        // `archive_key_secret` has gone missing is exactly the one who most needs to see what
+        // archives exist (ADR-0124 slice 3).
+        .merge(http::store_archive_admin_router(
+            store.archives(),
+            store.admin(),
+            SystemClock,
+        ))
         .merge(http::device_router(
             store.device_proposals(),
             store.admin(),
@@ -444,6 +508,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // by migration 0011, so an existing cell's fleet appears here on the first boot after upgrade.
         .merge(http::registry_router(
             store.registry(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
+        // Store groups (ADR-0122): the named cohorts a tenant publishes to as one, and the batch
+        // publish that fans one node out over a cohort's membership. A group holds no configuration
+        // — it is a delivery axis, not a fifth config layer — so the batch writes the same document
+        // into N per-store trees, exactly as N individual publishes would have.
+        //
+        // The registry is here because both halves need it: a membership write checks every id
+        // against the tenant's own stores (a typo'd ULID would sit in the cohort permanently and be
+        // reported `skipped` by every batch, leaving a group quietly one store short of what the
+        // operator believes it is), and a batch skips a member that is archived or absent rather
+        // than publishing into it.
+        //
+        // `batch_nodes` takes the same seven authoring seams the single-store publish routers below
+        // already hold, which is what makes the batch the same code path rather than a second one:
+        // it calls each node's own compiler and the shared config-tree write, so a document a batch
+        // produces is byte-for-byte the document that route would have produced.
+        .merge(http::store_group_router(
+            store.store_groups(),
+            store.registry(),
+            store.config_trees(),
+            http::batch_nodes(
+                store.catalog(),
+                store.tax_rates(),
+                store.campaigns(),
+                store.inventory(),
+                store.reason_codes(),
+                store.people(),
+                store.floor(),
+            ),
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
@@ -837,6 +933,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     projector_task.abort();
     let _ = projector_task.await;
     if let Some(task) = retention_task {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = archive_retention_task {
         task.abort();
         let _ = task.await;
     }

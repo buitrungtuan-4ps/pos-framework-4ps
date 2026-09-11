@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use pos_core::lease::LeaseStanding;
 use pos_edge::config_client::{
     ConfigClient, ConfigTransport, ConfigTransportError, SyncedConfig, restore_session_from_store,
 };
@@ -288,4 +289,76 @@ fn a_device_node_naming_a_kind_this_build_predates_does_not_cost_the_store_its_p
         .find(|device| device.kind.known() == DeviceKind::Printer)
         .expect("the receipt printer survived the unfamiliar one");
     assert_eq!(receipt.address, "/dev/usb/lp0");
+}
+
+/// A pull that carries a newer `lease` generation makes the box stop opening new work
+/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+///
+/// The wiring is the property. `pos_core::lease` and `crate::lease_state` were both correct before
+/// this and the gate still did nothing, because the one loop that learns the *authoritative*
+/// generation did not weigh it — so the assertion that matters is not "the standing is right", it
+/// is "**a pull settles it**". Without this, an operator could replace a machine, watch the console
+/// show the split, and find the old till still seating tables.
+#[test]
+fn a_pull_that_carries_a_newer_lease_generation_supersedes_the_box() {
+    let edge = edge();
+    let lease = Arc::new(pos_edge::LeaseWatch::new(
+        Arc::new(pos_edge::StoreLease::new(
+            pos_edge::InMemoryLease::new(),
+            store_id(),
+        )),
+        Arc::clone(edge.lease()),
+    ));
+
+    // The first pull is this box's first sight of a lease: it takes generation 4 and is the store.
+    let client = ConfigClient::new(
+        FakeConfigTransport {
+            version: version(),
+            document: serde_json::json!({ "lease": { "generation": 4 } }),
+        },
+        Arc::clone(&edge),
+        None,
+    )
+    .with_lease(Arc::clone(&lease));
+    run_ready(client.pump_once()).expect("pump");
+    assert_eq!(edge.lease().get(), LeaseStanding::Active);
+    assert!(edge.lease().opens_new_work());
+
+    // A replacement is activated; the cloud bumps to 5 and publishes it.
+    let bumped = ConfigClient::new(
+        FakeConfigTransport {
+            version: Ulid::from_u128(43).to_string(),
+            document: serde_json::json!({ "lease": { "generation": 5 } }),
+        },
+        Arc::clone(&edge),
+        None,
+    )
+    .with_lease(lease);
+    run_ready(bumped.pump_once()).expect("second pump");
+    assert_eq!(edge.lease().get(), LeaseStanding::Superseded);
+    assert!(
+        !edge.lease().opens_new_work(),
+        "the pull is what turns a published generation into a till that will not seat a table"
+    );
+}
+
+/// A loop composed without a lease leaves the standing alone — the on-fakes example, and every
+/// store the cloud has never issued a lease to.
+#[test]
+fn a_loop_with_no_lease_leaves_the_box_active() {
+    let edge = edge();
+    let client = ConfigClient::new(
+        FakeConfigTransport {
+            version: version(),
+            document: serde_json::json!({ "lease": { "generation": 9 } }),
+        },
+        Arc::clone(&edge),
+        None,
+    );
+    run_ready(client.pump_once()).expect("pump");
+    assert_eq!(
+        edge.lease().get(),
+        LeaseStanding::Active,
+        "a box with no lease authority wired has not established that it is superseded"
+    );
 }

@@ -17,6 +17,7 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 use pos_core::activation::{ActivationCode, PAYLOAD_LEN};
+use pos_core::lease::{LeaseGeneration, LeaseStanding};
 use pos_edge::activation_router;
 use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::{FakeKeyVault, FakeStore};
@@ -67,6 +68,27 @@ impl CloudSync for StubCloud {
         // Activation tests never report; accept it so the stub satisfies the port.
         Ok(())
     }
+
+    async fn archive_key(&self, _store: StoreId) -> Result<String, PortError> {
+        // Activation tests never archive. `unavailable` rather than a made-up key, so a future
+        // test that reaches here fails loudly instead of sealing under a stub's invention.
+        Err(PortError::unavailable(
+            PortName::CloudSync,
+            "the stub cloud stores no archives",
+        ))
+    }
+
+    async fn upload_archive(
+        &self,
+        _store: StoreId,
+        _taken_at: pos_proto::time::Timestamp,
+        _archive: &[u8],
+    ) -> Result<(), PortError> {
+        Err(PortError::unavailable(
+            PortName::CloudSync,
+            "the stub cloud stores no archives",
+        ))
+    }
 }
 
 /// A checksum-valid activation code the stub cloud will accept.
@@ -105,7 +127,10 @@ fn harness_with_origins(
     origins
         .replace(published)
         .expect("the test's origins are valid");
-    let router = activation_router(Arc::clone(&edge), cloud, Arc::clone(&vault), &origins);
+    // No lease: the tests below are about the code exchange, and a store the cloud has never
+    // issued a lease to has nothing to forget (ADR-0123). The one case that *is* about the lease
+    // builds its own router below.
+    let router = activation_router(Arc::clone(&edge), cloud, Arc::clone(&vault), None, &origins);
     (router, vault, edge)
 }
 
@@ -290,4 +315,77 @@ async fn the_standing_route_is_reachable_cross_origin_and_the_exchange_is_not() 
     // pull this one in if they were ever merged back together.
     let (router, _vault, _edge) = harness_with_origins(&valid_code(), &[PUBLISHED_ORIGIN]);
     assert_eq!(preflighted(router, "POST", "/api/activate").await, None);
+}
+
+/// Activating forgets a lease generation this box inherited from a copied `store.sqlite`
+/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+///
+/// The scenario is the one `docs/guides/bring-a-store-online.md` actually tells an operator to
+/// perform: the shop's machine dies, the operator copies its `store.sqlite` onto the replacement to
+/// recover events the old box never published, and the console bumps the store's lease. Take-once
+/// then binds the *dead* box's generation to the new machine's disk — so without this, ADR-0123's
+/// gate refuses to seat a table on the machine that just replaced the broken one, which is exactly
+/// the "fires wrongly" failure ADR-0108 declined to risk.
+#[tokio::test]
+async fn activating_forgets_a_lease_generation_inherited_from_a_copied_disk() {
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3))),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("edge composes"),
+    );
+    let store_id = edge.store_id();
+    // The inherited row: this "disk" already holds generation 4, and the cloud has bumped to 5.
+    let authority = pos_edge::InMemoryLease::new();
+    let lease = Arc::new(pos_edge::LeaseWatch::new(
+        Arc::new(pos_edge::StoreLease::new(authority, store_id)),
+        Arc::clone(edge.lease()),
+    ));
+    lease.settle(Some(LeaseGeneration::new(4))).await;
+    lease.settle(Some(LeaseGeneration::new(5))).await;
+    assert_eq!(
+        edge.lease().get(),
+        LeaseStanding::Superseded,
+        "the premise: a replacement built from a copied disk reads itself as the dead box"
+    );
+
+    let code = valid_code();
+    let vault = Arc::new(FakeKeyVault::new());
+    let origins = Arc::new(pos_edge::origins::Origins::new());
+    let router = activation_router(
+        Arc::clone(&edge),
+        Arc::new(StubCloud {
+            accepts: code.clone(),
+        }),
+        Arc::clone(&vault),
+        Some(Arc::clone(&lease)),
+        &origins,
+    );
+
+    let (status, _body) = call(
+        router,
+        "POST",
+        "/api/activate",
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Both halves: the till stops refusing straight away…
+    assert_eq!(
+        edge.lease().get(),
+        LeaseStanding::Active,
+        "a freshly activated box must not be refusing to seat tables while it waits for a pull"
+    );
+    // …and the durable row is gone, so the next pull takes the store's *current* generation as a
+    // first sight rather than re-superseding the box.
+    lease.settle(Some(LeaseGeneration::new(5))).await;
+    assert_eq!(
+        edge.lease().get(),
+        LeaseStanding::Active,
+        "forgetting only the cell would let the next config pull undo the activation"
+    );
 }

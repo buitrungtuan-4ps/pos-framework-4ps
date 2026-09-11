@@ -31,6 +31,7 @@ import {
   windowsInstaller,
 } from "../installers.mjs";
 import type { InstallerValues } from "../installers.d.mts";
+import { downloadFile } from "../lib/handoff";
 import { apiMessage } from "../lib/errors";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
@@ -257,24 +258,15 @@ export function NewStore() {
   };
 
   // A real file download, not a data: link the operator has to rename — this dashboard is served by
-  // pos_cloud (same origin), so the browser saves the file under the name given here.
-  const download = (filename: string, body: string, mime: string) => {
-    const url = URL.createObjectURL(new Blob([body], { type: mime }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadConfig = () => download("config.toml", configToml(), "application/toml");
-  const downloadEnv = () => download("env", envFile(), "text/plain");
+  // pos_cloud (same origin), so the browser saves the file under the name given here. The helper
+  // lives in `lib/handoff.ts` because the Stores screen hands the same four files over again for a
+  // store this wizard is no longer holding, which is how a shop replaces a machine that died.
+  const downloadConfig = () => downloadFile("config.toml", configToml(), "application/toml");
+  const downloadEnv = () => downloadFile("env", envFile(), "text/plain");
   const downloadInstaller = () =>
-    download("install-pos-edge.sh", installer(), "application/x-shellscript");
+    downloadFile("install-pos-edge.sh", installer(), "application/x-shellscript");
   const downloadWindowsInstaller = () =>
-    download("install-pos-edge.ps1", windowsScript(), "text/plain");
+    downloadFile("install-pos-edge.ps1", windowsScript(), "text/plain");
 
   return (
     <div>

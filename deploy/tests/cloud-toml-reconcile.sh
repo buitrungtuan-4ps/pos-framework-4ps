@@ -110,12 +110,16 @@ expect_top_level() {
   fi
 }
 
-# --- A. Both keys already there. THE REGRESSION: this is every box that has bootstrapped since the
-#        template carried both keys, and the "already there" answer used to kill the script.
-scenario "A both keys present" <<'EOF'
+# --- A. Every key already there. THE REGRESSION: this is every box that has bootstrapped since the
+#        template carried them, and the "already there" answer used to kill the script.
+#
+#        Add a key to the template and it belongs here too, or this scenario stops meaning "a fully
+#        reconciled box" and starts meaning "a box missing the newest key" — which is scenario B.
+scenario "A every key present" <<'EOF'
 bind = "0.0.0.0:8080"
 internal_shared_secret = "aaaa"
 table_token_secret = "bbbb"
+archive_key_secret = "cccc"
 
 [artifacts]
 bucket = "pos-artifacts"

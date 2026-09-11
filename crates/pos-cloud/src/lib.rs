@@ -53,6 +53,8 @@
 
 pub mod activation;
 pub mod alerts;
+pub mod archive;
+pub mod archive_retention;
 pub mod assets;
 pub mod audit;
 pub mod auth;
@@ -95,6 +97,7 @@ pub mod registry;
 pub mod relay;
 pub mod retention;
 pub mod scheduling;
+pub mod store_groups;
 pub mod tax;
 pub mod translations;
 pub mod version;

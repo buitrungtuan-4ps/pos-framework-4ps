@@ -236,6 +236,26 @@ impl SqliteStore {
         stored_generation(held)
     }
 
+    /// Forgets the lease generation this store holds, so the next [`Self::take_lease`] takes the
+    /// generation the cloud is publishing now
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// Called by activation and by nothing else: it is the one moment a box is issued its own cloud
+    /// identity, and therefore the only moment a held generation inherited from a copied
+    /// `store.sqlite` is known to belong to a different machine. Idempotent — forgetting a
+    /// generation the store does not hold writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store could not be written.
+    pub async fn forget_lease(&self, store_id: StoreId) -> Result<(), PortError> {
+        self.ask(PortName::CloudSync, move |reply| Command::ForgetLease {
+            store_id,
+            reply,
+        })
+        .await
+    }
+
     /// Puts a rendered job on an agent's queue, unless that printer is at `cap`
     /// (migration 0009, [ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     ///

@@ -298,6 +298,13 @@ fn port_error_from_app(error: AppError) -> PortError {
         AppError::Domain(domain) => {
             PortError::failed_precondition(PortName::OrderIn, domain.to_string())
         }
+        // A replaced machine leaves a channel order **queued for the replacement** (ADR-0123).
+        // `unavailable` is the vocabulary for "not from here, ask again"; the catch-all below would
+        // have made it `internal`, which reads as a bug in this store and invites the caller to
+        // give up on an order a guest has already paid for.
+        replaced @ AppError::Superseded => {
+            PortError::unavailable(PortName::OrderIn, replaced.to_string())
+        }
         other => PortError::internal(PortName::OrderIn, other.to_string()),
     }
 }

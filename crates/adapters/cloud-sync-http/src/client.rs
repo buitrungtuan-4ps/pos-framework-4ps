@@ -14,6 +14,7 @@ use pos_ports::signer::Signature;
 use pos_ports::{PortError, PortName, Secret};
 use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::text::ReleaseTag;
+use pos_proto::time::Timestamp;
 
 use crate::wire::{HttpResponse, HttpTransport};
 
@@ -53,6 +54,25 @@ const SIGNATURE_HEADER: &str = "X-Pos-Artifact-Signature";
 /// the move was owed "when store-originated reporting gains a real caller"; this is that caller.
 fn report_path(store_id: StoreId) -> String {
     format!("/sync/stores/{store_id}/report")
+}
+
+/// The route that mints-if-absent and returns this store's archive key
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+///
+/// A `POST` for a value that reads like a `GET`, and deliberately: the first call **mints** the
+/// key. A `GET` with a side effect is one a caching proxy or a browser prefetch may perform
+/// unasked, and while minting is insert-if-absent and so survives that, the verb would still be
+/// describing the wrong thing.
+fn archive_key_path(store_id: StoreId) -> String {
+    format!("/sync/stores/{store_id}/archive-key")
+}
+
+/// The route a sealed archive is shipped to.
+fn archive_path(store_id: StoreId, taken_at: Timestamp) -> String {
+    format!(
+        "/sync/stores/{store_id}/archive?taken_at={}",
+        taken_at.as_milliseconds_since_epoch()
+    )
 }
 
 /// The [`CloudSync`] adapter: the edge's request/response channel to its cloud, over an
@@ -175,6 +195,106 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
             .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
         parse_report(&response)
     }
+
+    async fn archive_key(&self, store: StoreId) -> Result<String, PortError> {
+        // An empty JSON object rather than no body: the route takes no arguments, and a body that
+        // parses is one less thing for a proxy or a framework default to be opinionated about.
+        let response = self
+            .transport
+            .post_json(&archive_key_path(store), b"{}".to_vec())
+            .await
+            .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
+        parse_archive_key(&response)
+    }
+
+    async fn upload_archive(
+        &self,
+        store: StoreId,
+        taken_at: Timestamp,
+        archive: &[u8],
+    ) -> Result<(), PortError> {
+        let response = self
+            .transport
+            .post_bytes(
+                &archive_path(store, taken_at),
+                "application/octet-stream",
+                archive.to_vec(),
+            )
+            .await
+            .map_err(|error| PortError::unavailable(PORT, error.to_string()))?;
+        parse_archive_upload(&response)
+    }
+}
+
+/// Maps the archive-key response.
+///
+/// `404` is folded into `unavailable` rather than `not_found`, because it means the cloud is
+/// running without archive storage configured — the route is honestly absent (ADR-0124) — and the
+/// edge's right response is to skip this round and try later, not to invent a key or to treat the
+/// store as unknown.
+fn parse_archive_key(response: &HttpResponse) -> Result<String, PortError> {
+    match response.status {
+        200..=299 => {
+            let parsed: ArchiveKeyResponse =
+                serde_json::from_slice(&response.body).map_err(|error| {
+                    PortError::internal(
+                        PORT,
+                        format!("the cloud's archive-key response did not parse: {error}"),
+                    )
+                })?;
+            if parsed.key.len() != ARCHIVE_KEY_TEXT_LEN {
+                return Err(PortError::internal(
+                    PORT,
+                    "the cloud returned an archive key that is not 64 characters",
+                ));
+            }
+            Ok(parsed.key)
+        }
+        401 | 403 => Err(PortError::permission_denied(
+            PORT,
+            "this store's key does not authorise an archive key",
+        )),
+        _ => Err(PortError::unavailable(
+            PORT,
+            format!(
+                "the cloud would not issue an archive key (status {})",
+                response.status
+            ),
+        )),
+    }
+}
+
+/// Maps the archive-upload response.
+///
+/// `400` is the cloud saying these bytes are not an archive, which retrying cannot fix.
+fn parse_archive_upload(response: &HttpResponse) -> Result<(), PortError> {
+    match response.status {
+        200..=299 => Ok(()),
+        400 => Err(PortError::invalid_argument(
+            PORT,
+            "the cloud refused the upload: these bytes are not a store archive",
+        )),
+        401 | 403 => Err(PortError::permission_denied(
+            PORT,
+            "this store's key does not authorise an archive upload",
+        )),
+        _ => Err(PortError::unavailable(
+            PORT,
+            format!(
+                "the cloud would not accept the archive (status {})",
+                response.status
+            ),
+        )),
+    }
+}
+
+/// How many characters an archive key's text form has, mirroring `pos_edge::backup::ArchiveKey`.
+const ARCHIVE_KEY_TEXT_LEN: usize = 64;
+
+/// The archive key as the cloud answers with it.
+#[derive(Debug, serde::Deserialize)]
+struct ArchiveKeyResponse {
+    key: String,
 }
 
 /// Maps an activation response to a grant, or the right refusal.

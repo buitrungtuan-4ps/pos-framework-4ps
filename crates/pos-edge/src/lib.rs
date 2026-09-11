@@ -36,6 +36,8 @@ pub mod active_config;
 pub mod admission_events;
 pub mod app;
 pub mod auth;
+pub mod backup;
+pub mod backup_client;
 pub mod clock;
 pub mod cloud_http;
 pub mod config;
@@ -81,6 +83,7 @@ pub use app::{
     LineView, ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
+pub use backup::{ArchiveError, ArchiveKey};
 pub use clock::SystemClock;
 pub use config::EdgeConfig;
 pub use discovery::{Advertiser, NoopAdvertiser};
@@ -89,7 +92,9 @@ pub use event_publish::EventPublisher;
 pub use fanout::{Fanout, ServerMessage};
 pub use idgen::EdgeIdGenerator;
 pub use installer::{SELF_TEST_FLAG, SystemdInstaller, binary_directory};
-pub use lease_state::{InMemoryLease, LeaseAuthority};
+pub use lease_state::{
+    CurrentStanding, HeldLease, InMemoryLease, LeaseAuthority, LeaseWatch, StoreLease,
+};
 pub use order_in::EdgeOrderIn;
 pub use ota::{InstallError, OtaUpdater, UpdateError, UpdateInstaller, UpdateOutcome, UpdatePlan};
 pub use ota_client::{

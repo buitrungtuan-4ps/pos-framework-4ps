@@ -3,6 +3,7 @@ import { Route, Router } from "@solidjs/router";
 
 import { ApiError, api, deviceToken } from "./api/client";
 import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
+import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
 import { LiveLink } from "./api/live";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
@@ -44,12 +45,52 @@ function VersionDrift() {
   );
 }
 
+// Shown when a replacement machine has taken this shop (ADR-0123). Unlike the version banner this
+// one describes a refusal the operator will actually meet: this box will not seat a table, open a
+// counter order or open a shift, so it says which of those still work here and where the new ones
+// go. It still does not block anything on the screen — every control is needed to finish the
+// tables this box already holds, and the refusal itself lives on the store server.
+function Superseded() {
+  return (
+    <Show when={edgeIsSuperseded()}>
+      <div
+        role="alert"
+        class="border-b border-line border-l-4 border-l-danger bg-surface-raised px-4 py-2"
+      >
+        <p class="text-sm font-semibold text-ink">{t("lease.superseded_title")}</p>
+        <p class="text-sm text-ink-muted">{t("lease.superseded_detail")}</p>
+        <p class="text-sm text-ink-muted">{t("lease.superseded_recovery")}</p>
+      </div>
+    </Show>
+  );
+}
+
+// And the quieter one: this box holds a lease generation ahead of the cloud's. It keeps selling
+// (ADR-0123 decision 2), because the likeliest cause is a config rollback and refusing would stop
+// every till in the shop at once — but somebody should look at it, and the till is where a person
+// is.
+function LeaseAhead() {
+  return (
+    <Show when={edgeLeaseIsAhead()}>
+      <div
+        role="status"
+        class="border-b border-line border-l-4 border-l-awaiting bg-surface-raised px-4 py-2"
+      >
+        <p class="text-sm font-semibold text-ink">{t("lease.ahead_title")}</p>
+        <p class="text-sm text-ink-muted">{t("lease.ahead_detail")}</p>
+      </div>
+    </Show>
+  );
+}
+
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
 function Shell(props: ParentProps) {
   return (
     <div class="flex min-h-full flex-col">
       <StatusBar />
+      <Superseded />
+      <LeaseAhead />
       <VersionDrift />
       <main class="flex-1 overflow-y-auto">{props.children}</main>
     </div>

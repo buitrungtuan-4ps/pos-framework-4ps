@@ -82,9 +82,12 @@ function formatter(active: Locale, key: MessageKey): IntlMessageFormat {
 export function t(key: MessageKey, args?: Record<string, string | number>): string {
   const active = locale();
   const message = CATALOGUES[active][key] ?? en[key];
-  // Fast path: static strings without interpolation parameters skip IntlMessageFormat formatting,
-  // bypassing AST evaluation/formatting overhead (~10x faster lookup for >90% of i18n keys).
-  if (!args && typeof message === "string" && !message.includes("{")) {
+  // Fast path: a static string with no interpolation is returned as-is, skipping the
+  // IntlMessageFormat parse and format. Two characters disqualify it, and both were measured
+  // against the real library rather than assumed: `{` opens an argument, and `''` is ICU's escape
+  // for a literal apostrophe — `It''s` formats to `It's`, so returning it raw would be wrong.
+  // A lone apostrophe (`don't`, `a 'b' c`) is literal in ICU and stays on the fast path.
+  if (!args && typeof message === "string" && !message.includes("{") && !message.includes("''")) {
     return message;
   }
   const formatted = formatter(active, key).format(args);

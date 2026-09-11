@@ -93,6 +93,14 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 >
 > The commented `advertised_ip` and `store_path` lines are optional overrides; leave them commented
 > unless you have a reason. `tenant_id` is not a key the edge accepts — the store id is enough.
+>
+> `backup_interval_hours` is the other override worth knowing about. It defaults to `24`, and that
+> number is the store's recovery point: the box snapshots its whole database on that interval,
+> seals it on the machine, and ships only ciphertext to the cloud
+> ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)). Lower it for a busy shop and the
+> recovery point shortens; set it to `0` and the store ships nothing, which the log says loudly at
+> every start-up. Archiving needs `cloud_url`, the scoped sync key, and a cloud configured for it;
+> a box missing any of those trades normally and names the missing piece in its log.
 
 ## Step 2 — Install the store server and drop the config
 
@@ -171,6 +179,38 @@ wrong.
 Either way, the machine now knows which store it is, opens its SQLite event log, and serves the store
 UI on the LAN (`0.0.0.0:8787` by default).
 
+### The listen port, which on Windows is not open by default
+
+**The installers open it for you** — this used to be a step here, and the failure it causes is the
+most misleading one in the whole bring-up, so it moved into the script.
+
+Defender Firewall drops an inbound connection to a port no rule names, silently and with no log line
+on either side. A Windows store installed correctly in every other respect therefore comes up, opens
+its database and writes its pairing URL, while every till on the floor gets a connection timeout —
+which looks exactly like a broken install. The Windows installer adds one rule, `pos-edge (TCP
+8787)`, on the **Private** profile only: the port is plain HTTP on the shop LAN, so a Public-profile
+rule would offer the till API to whatever network the box is plugged into next. Domain is left alone
+deliberately, for an estate that manages this with group policy. Re-running with a different port
+moves the rule rather than leaving the old port open beside the new one.
+
+On Linux there is usually nothing to do — a stock Debian or Ubuntu box ships no active packet filter
+— so the installer acts only on a filter that is actually **running** (`ufw status` reporting active,
+or `firewall-cmd --state` succeeding). A blind `ufw allow` on a box where ufw is installed but
+inactive would silently record a rule that first takes effect the day somebody enables the firewall
+for an unrelated reason, which is a change to the store's exposure made months earlier by an
+installer nobody remembers running.
+
+If the rule could not be added — a firewall switched off, driven by policy, or a Windows build
+without the `NetSecurity` module — the installer says so and carries on: the service is registered
+and running either way, and it is the port, not the store, that needs attention. Verify from a
+second machine on the LAN with `curl http://<the box>:8787/` before you go looking for anything else.
+
+None of this is a perimeter rule. **The store still accepts no inbound connection from the cloud**
+and needs no port forward on the router: every cloud→store flow is a store-initiated pull
+([ADR-0001](../adr/0001-offline-first-store-autonomy.md),
+[ADR-0061](../adr/0061-order-relay.md)). What is being opened is one host firewall, to the tills and
+kitchen displays on the same LAN.
+
 ### Reading the boot log
 
 **Do this now, before Step 3.** Everything the store server has to say — a config it will not parse, a
@@ -232,11 +272,25 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 
 ## Step 4 — Publish the store's configuration
 
-From **Configuration** (store in context), publish a config level — menu, tax, layout, capability
-flags, and **permissions**, which is the staff roster the store authorises sign-ins against. The store
-pulls the new version over its sync channel and hot-reloads it, keeping the last-known-good if a
-version is rejected ([ADR-0004](../adr/0004-cloud-owned-configuration.md)). Authoring the catalogue and
-menu is its own workstream (roadmap Phase 2a); until then, publish a hand-written document here.
+Configuration is **authored on the screen that owns it and published from there** — there is no
+single form to fill in. The store pulls each new version over its sync channel and hot-reloads it,
+keeping the last-known-good if a version is rejected
+([ADR-0004](../adr/0004-cloud-owned-configuration.md)). With the store in context:
+
+| Screen | Publishes | Needed to sell? |
+|---|---|---|
+| **People** | the staff roster and what each role may do | **Yes** — nobody can sign in without it |
+| **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
+| **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
+| **Store settings** | country, currency, timezone, business-date cutoff | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)) |
+| **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
+| **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
+| **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
+
+Author in that order. Items before Menus (a menu places items that must exist), and tax classes
+before items (an item names one). **Store groups** publishes one node to a whole set of shops at
+once ([ADR-0122](../adr/0122-a-store-group-is-a-delivery-cohort.md)), which is how the second and later
+stores of a brand skip most of this step.
 
 **The permissions node is not optional and neither is the menu.** A freshly installed store boots with
 an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the
@@ -317,12 +371,84 @@ tablet may still be paired after a restart. Try again rather than assuming it is
 
 ---
 
+## Replacing the machine
+
+A store server is cattle, not a pet ([ADR-0003](../adr/0003-cattle-not-pets.md)): the shop's identity
+lives in the cloud, so replacing the box is a re-install and not a recovery. What follows is the same
+procedure whether the machine died overnight or is being retired on schedule.
+
+**Start in the console: Stores → the store's row → "Move to a new box".** That drawer is where the
+files come from, and it exists because they used to come only from the new-store wizard — which
+would have meant creating a *second* store to get an installer for an existing one. It leads with
+what a dead machine takes with it, because two of the four things are not in any file:
+
+| | Recovery |
+| --- | --- |
+| Which store this is, and which cloud it dials | **Regenerated.** A pure function of the registry row and this cloud's own origin. |
+| The store's sync key (`POS_EDGE_SYNC_KEY`) | **Re-issue.** Shown once and stored hashed, so it cannot be read back. The drawer issues a fresh one, scoped to the store with `read_config` + `relay_orders`. |
+| The device credential activation minted | **Gone.** It never left the old machine — it is in *that* machine's OS keyring ([ADR-0086](../adr/0086-edge-keyvault-and-activation.md)), not in a file and not on any screen. |
+| The store's event log (`store.sqlite`) | **Gone, in part.** Everything already published is safe in the fleet stream; anything still in the outbox is not — unless the store has a sealed archive ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)), which recovers everything up to when it was taken. |
+
+Then, on the new machine:
+
+1. **Run the installer** the drawer gave you, with the binary. Same script as a first install and
+   safe to run twice.
+2. **Read the boot log** and find `pos_edge listening` (§"Reading the boot log").
+3. **Activate it.** This is the step that is easiest to miss, and the reason the drawer leads with
+   prose: a replacement box installs cleanly, boots, serves `/setup` — and will not sell, because
+   the boot gate reads a device credential it does not have. Issue a new activation code on
+   **Activation** and type it on the new box's `/setup`. A fresh code can always be minted for a
+   device slot; the `409` you may have read about is the *edge* refusing a second code for a box
+   that is already activated, which a new machine is not.
+4. **Pair the tills.** The installer prints the pairing URL; the log holds it too.
+5. **Take the old machine off the network, and revoke its key** on **API keys**. Issuing a new key
+   does not disable the old one. Since
+   [ADR-0123](../adr/0123-a-superseded-box-opens-nothing-new.md) the bumped lease does stop the old
+   box **opening** anything new — no new table, no new counter order, no new shift, and no channel
+   order from the relay — but it deliberately lets the tables it already holds finish and settle, so
+   nobody's dinner is stranded on it. It is still not a substitute for unplugging the thing: while
+   it is powered on it is still finishing orders and still minting receipt numbers. Unplug or wipe
+   the one you replaced; do not leave it running "just in case".
+
+**Do the bump before you activate the replacement.** In that order the new box takes the store's
+current generation on first sight and is the store. The other way round it takes the old generation,
+and the bump then supersedes the machine that is actually trading.
+
+**Recovering what the old box had not published.** Two routes, in order of preference:
+
+- **If the old disk is readable**, copy `store.sqlite` across before starting the new server. This
+  is the most complete route, because it is the state as of the moment the machine died.
+- **If it is not**, restore the store's most recent sealed archive
+  ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)) with the store's archive key. The
+  archives are the ones the old box shipped on its own, filed under
+  `stores/<STORE_ID>/archives/<taken_at>.p4p` in the cloud's object store; the key is the one that
+  store minted on its first archive, which the cloud holds wrapped and hands back over
+  `POST /sync/stores/<STORE_ID>/archive-key` with the store's scoped key. Take the newest archive
+  whose `taken_at` is before the machine died:
+
+  ```
+  POS_EDGE_ARCHIVE_KEY=<64 hex characters> \
+    pos-edge archive verify --store <STORE_ID> --archive store-2026-09-10.p4p
+  POS_EDGE_ARCHIVE_KEY=<64 hex characters> \
+    pos-edge archive open   --store <STORE_ID> --archive store-2026-09-10.p4p --into store.sqlite
+  ```
+
+  Run `verify` first — it opens the archive and runs SQLite's own integrity check over what came
+  out, which is how you learn the archive is a database rather than a file. An archive is bound to
+  its store, so the wrong `--store` refuses rather than restoring the wrong shop. What it cannot
+  recover is anything the store did **after** the archive was taken; the recovery point is one
+  archive interval, and [ADR-0124](../adr/0124-a-store-that-can-be-restored.md) says so plainly.
+  The key never goes on the command line — it is in `ps` output there.
+
+Either route is safe for the lease: **activation forgets any lease generation the restored database
+carried**, so the replacement does not inherit the dead box's identity and refuse to seat a table
+(ADR-0123). That is also why step 3 is not optional on a box built from a copied or restored disk —
+without the activation, the inherited generation stands.
+
 ## The store is online
 
 It trades offline, it is named in the registry, it is activated, its tills are paired, and it takes
-configuration from the cloud. To swap the machine later (the 5–10 minute "cattle, not pets" replacement), re-drop the
-same `config.toml` and re-activate — the fresh box picks up where the old one left off
-([ADR-0003](../adr/0003-cattle-not-pets.md)).
+configuration from the cloud.
 
 ## Where to next
 

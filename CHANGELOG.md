@@ -18,10 +18,344 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
-- **Fast-path i18n lookup for static translation strings.** `t(key, args)` in `ui` and `dashboard`
-  now returns static translation strings directly when no arguments are provided and no ICU
-  formatting placeholders (`{`) exist, bypassing `IntlMessageFormat` formatting overhead (~10x
-  faster lookup for static strings).
+- **`t()` returns a static message without going through ICU.** Most keys carry no `{argument}`,
+  and parsing + formatting them per call was pure overhead. The fast path is guarded on two
+  characters, both measured against `intl-messageformat` rather than assumed: `{`, which opens an
+  argument, and `''`, which is ICU's escape for a literal apostrophe — `It''s` formats to `It's`,
+  so returning it raw would be a silent mistranslation. A lone apostrophe (`don't`) is literal in
+  ICU and keeps the fast path. No catalogue entry contains `''` today; the guard is there so the
+  first one that does cannot break quietly.
+
+---
+
+## [0.10.0] — 2026-09-11
+
+**Product version** 0.10.0 · **Protocol version** 1 · **MSRV** 1.94
+**For restaurant staff:** a shop's till can now be replaced without losing the day, a lost tablet can
+be retired from the floor, a void asks for a reason and a manager, and the store quietly keeps an
+encrypted copy of its own day so a dead machine is a bad afternoon rather than a lost week.
+
+The second release, and the first one a store should actually be installed from. Four things
+`v0.9.0` does not have are the reason:
+
+- **A headless store keeps a log** ([ADR-0117](docs/adr/0117-a-headless-store-keeps-a-log.md)).
+  A service started by Windows' Service Control Manager has no console, so on `v0.9.0` the pairing
+  code a box prints at start-up goes nowhere and **no till can be paired at all**. This release
+  writes both the log and `pairing-url.txt` to disk. Anyone installing a Windows store from
+  `v0.9.0` would hit that wall first.
+- **A replaced box opens nothing new**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). The edge now learns its lease
+  standing, so a machine that has been superseded stops opening tables, counter orders and shifts —
+  while still finishing and settling what it already holds. On `v0.9.0` two boxes on one store both
+  sell.
+- **A store that can be restored** ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The
+  box snapshots its whole database on a timer, seals it at the till, and ships only ciphertext. A
+  dead disk now costs one archive interval instead of everything since the last publish.
+- **A lost tablet can be retired** ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md)).
+  A signed-in manager mints the next pairing code from inside the store, the cloud learns what each
+  store admitted, and a device can be revoked remotely over the config rail.
+
+Also in this release: reason codes and manager-gated voids
+([ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md)/[ADR-0116](docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)),
+print agents for a store whose edge is not in the shop
+([ADR-0112](docs/adr/0112-print-agents.md)), a second origin that may address the edge
+([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)), edge placement and region as
+recorded attributes ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+[ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)), country packs for Vietnam, Japan
+and India with tax as named components ([ADR-0104](docs/adr/0104-multi-component-and-inclusive-tax.md)), the
+console's authoring kit and navigation rebuild
+([ADR-0120](docs/adr/0120-navigation-preserves-the-working-context.md),
+[ADR-0121](docs/adr/0121-one-way-to-author-an-entity.md)), store groups
+([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)), and six deploy blockers found by
+deploying.
+
+**Why 0.10 and not 1.0.** The same reason `v0.9.0` gave, unchanged: the code is complete and the
+checks that need a real machine have still not been run. [`docs/gate-register.md`](docs/gate-register.md)
+§6 is the list, and **P11 is the one that matters most** — that a headless Windows store produces a
+readable log and that a code read out of it actually pairs a device. This release is what makes that
+check runnable; it is not evidence that it passed. 1.0.0 is the version that carries the results.
+
+
+### Added
+
+- **A store's backups age out on their own, and the console says when it last backed up**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The last of D-2. A daily sweep
+  removes archives past `archive_retention_days` — bytes first, then the row that names them, so a
+  crash between the two leaves something the next sweep retries rather than an object nothing can
+  find. `GET /admin/stores/{store_id}/archives` and a **Backups** panel in the Fleet drawer show
+  what each store has, newest first; a store that has never archived says so in as many words
+  rather than showing an empty box.
+
+  The point of the sweep is not disk. A store's archive is its whole database including the buyer
+  details a B2B invoice needs ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)), taken *before*
+  the masking cron redacted them — so an archive window at or past the subject window would leave
+  the masking done in the row and undone in the copy, with nothing to notice. **`pos_cloud` now
+  refuses to start when the two windows are the wrong way round.**
+
+  `deploy/store-restore-drill.sh` is the store leg of the restore drill: pull a shop's newest
+  sealed archive, open it, and run SQLite's integrity check over what comes out.
+  [`docs/guides/data-subject-requests.md`](docs/guides/data-subject-requests.md) is the erasure
+  procedure for the exceptional case that cannot wait out the window — and recommends deleting the
+  affected archives rather than editing them, because a re-sealed archive is a database the store
+  never had.
+
+  **Upgrade note.** `cloud.toml` gains `archive_retention_days` (default 30) and
+  `archive_retention_sweep_interval_secs` (default daily). Migration `0063_store_archive_expiry.sql`
+  adds one index. A cloud whose `retention_days` is 30 or less **must lower
+  `archive_retention_days` before upgrading**, or it will refuse to boot — the refusal names both
+  numbers and what to set. A cloud with no `retention_days` at all is unaffected: the archive
+  window then stands alone.
+
+- **A store now archives itself, nightly, without anyone remembering to**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The wire that joins the two halves
+  already shipped: `CloudSync` grew `archive_key` and `upload_archive`, the `cloud-sync-http`
+  adapter speaks them over the store's existing scoped key, and `pos-edge` runs a loop that
+  snapshots the live database, seals it at the till, and ships only ciphertext. The plaintext
+  working copy is written beside the database — never in a system temp directory, which on a real
+  box is a tmpfs too small for a store — and is removed on both the succeeding and the failing
+  path.
+
+  Two properties are deliberate and are pinned by tests. A failed round is a warning and never a
+  stop: an unreachable cloud, a full disk or an oversized archive costs one interval, and the till
+  never learns it happened. And a **superseded box keeps archiving**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)) — it holds exactly the events
+  its replacement does not, so it is the box whose database most needs saving.
+
+  **Upgrade note.** `config.toml` gains `backup_interval_hours`, defaulting to `24`; that interval
+  is the recovery point. `0` switches archiving off and is announced as a warning at start-up, so a
+  store with no backups is visible in the log rather than silent. Archiving needs a `cloud_url`, a
+  scoped sync key, and a cloud with `archive_key_secret` and object storage configured; a box
+  missing any of those trades exactly as before and says which is absent.
+
+- **The cloud can hold a store's archive key, and cannot read it from its own backups**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). The cloud half of the
+  store archive: migration `0062_store_archives.sql`, the per-store key, and the index of what each
+  store has shipped. The key is stored **wrapped** under a new box-local `archive_key_secret` in
+  `cloud.toml`, because `deploy/backup.sh` ships a `pg_dump` of the cloud database to the same
+  off-box tier the sealed archives sync to — a plaintext key column would have carried the key to
+  the same bucket as the ciphertext it opens, and the seal would have bought nothing at exactly the
+  tier it was bought for.
+
+  **Upgrade note.** `archive_key_secret` is 64 hexadecimal characters (`openssl rand -hex 32`) and
+  `bootstrap.sh` mints it. It is **optional**: a cloud without one runs exactly as before and
+  mounts no archive routes, saying so at boot. A malformed value is a boot refusal rather than a
+  warning, because a passphrase where a 32-byte key belongs mints keys nobody can unwrap and
+  nobody finds out until a restore. Changing the secret orphans every key already stored under it.
+
+- **A store's database can now be copied off the box, and opened again**
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). Until now no copy of a shop's
+  `store.sqlite` existed anywhere but the shop, so a dead disk took the unpublished outbox, the
+  gapless receipt counter, the intake ledger and the B2B buyer details with it — and the machine-
+  replacement procedure's only recovery step was "copy the file off the old disk", which assumes
+  the disk still reads. A store can now take a consistent copy of itself with SQLite's own
+  `VACUUM INTO` — on its own connection, so a sale in progress is not waiting behind the backup —
+  deflate it, and seal it with XChaCha20-Poly1305 bound to the store it came from. `pos-edge
+  archive seal | open | verify` is the tool: `verify` opens an archive and runs
+  `PRAGMA integrity_check` over what came out, which is the difference between a backup and a file.
+  This is the store half [ADR-0046](docs/adr/0046-backups-and-restore.md) deferred; the schedule,
+  the upload and the console's view of it are the next slices.
+
+  **Upgrade note.** The archive key is 64 hexadecimal characters and is read from
+  `POS_EDGE_ARCHIVE_KEY`, never from an argument — an argument is in `ps` output and in shell
+  history. A sealed archive is bound to its store's id: presenting one shop's archive as another's
+  refuses rather than restoring the wrong shop. A store archive contains personal data
+  ([ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md)); shipping one off the box is a processing
+  activity under Vietnam's PDPD and, to a destination outside the country, a cross-border transfer
+  that needs a lawful basis and either a transfer agreement or consent on record.
+
+- **A replaced till stops opening new orders, and finishes the ones it holds**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). Replacing a store's machine
+  bumps its lease, and until now that stopped the old box installing updates and nothing else — it
+  went on taking orders and minting receipt numbers as though it were still the shop. It now
+  refuses the three commands that create something: opening a shift, seating a table, and taking a
+  channel order from the relay. Everything already open still works — a seated table takes its next
+  round, fires it, gets its bill and settles — so the floor **drains** rather than the shop
+  stopping mid-service. A relayed order is refused as "not from here", so the cloud leaves it for
+  the replacement instead of dropping it.
+
+  Every till says so before anyone hits the refusal: each `/api/*` answer carries a
+  `pos-lease-standing` header and the store app draws a banner naming what still works here and
+  where new orders go. A box that reads *ahead* of the cloud keeps trading and gets a quieter
+  notice — under take-once the likeliest cause is a config rollback, which every till in the shop
+  would read at once, and an admin clicking "roll back" must not close a shop.
+
+  **Upgrade note.** Nothing changes for a store that has never been issued a lease, which is every
+  store until an operator deliberately issues one. When you do replace a machine: **bump the lease
+  first, then activate the replacement.** Copying the dead box's `store.sqlite` across to recover
+  unpublished events stays safe — activating the new box forgets any lease generation the copied
+  database carried. No migration, no wire change, no `PROTOCOL_VERSION` move.
+
+- **A store group is a cohort you publish to, and a batch names an outcome for every shop**
+  ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). The data a tenant authors was
+  already shared — one price row prices an item for the whole estate — but delivery was not: every
+  publish took a `store_id`, so pushing one menu to fifty shops was 150 taps of which 147 were
+  repetition. **Settings → Store groups** names a cohort, gives it a membership, and publishes one
+  of thirteen configuration nodes to all of it at once.
+
+  A group is not the brand. A shop belongs to exactly one brand and to any number of groups,
+  because the sets an operator publishes to cut across identity: the airport branches on a reduced
+  menu, the shops on one tax registration, the pilots that take a change first. And a group holds
+  no configuration of its own — a batch writes the same document into *N* per-store trees, exactly
+  as *N* individual publishes would have, so the config tree
+  ([ADR-0033](docs/adr/0033-config-tree.md)) is untouched, no store's effective document changes,
+  and deleting every group returns the trees byte-for-byte to what they are without it.
+
+  **A batch is deliberately not atomic, and the report is what must not be partial.** Every member
+  gets one of three outcomes, never two: `applied` with the config version it produced, `skipped`
+  for a shop that was *protected* — archived, absent from the registry, or missing a prerequisite —
+  and `failed` for one the publish was attempted at and refused, carrying the refusal's own
+  sentence. Filing a shop that was deliberately protected beside one that broke would be the report
+  going wrong rather than the batch. The prerequisite that makes this non-negotiable: a menu
+  published to a shop with no `tax` node produces a store that boots, syncs, shows the menu, takes
+  the order, and then fails at the payment screen with nothing before that saying a word.
+
+  Thirteen nodes are batchable — menu and layout, tax rates, promotions, inventory, reason codes,
+  staff permissions, floor and stations, capability switches, sales channels, payment methods,
+  extra origins, QR guardrails and marketplace policies. Three are excluded by construction and
+  stay on the shop's own screens: a store's locale
+  ([ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)), its legal identity
+  ([ADR-0106](docs/adr/0106-the-store-is-a-legal-person.md)), and the generic level write, whose
+  `If-Match` only means something for one store.
+
+  Group CRUD is behind `console.stores.manage` and publishing behind `console.config.publish` —
+  organising the estate and changing what it runs are two different acts. A group holds at most 200
+  shops, which is what keeps a batch inside one request.
+
+  **Upgrade note:** migration `0061` adds four tables (`store_groups`, `store_group_members`,
+  `config_batches`, `config_batch_results`). Additive and greenfield: a tenant with no groups
+  behaves exactly as it does today. No protocol change, no permission renamed, no default altered.
+
+- **A list you can type into.** Two picker primitives join the console kit, for the one shape a
+  native `<select>` cannot serve: a list as long as the tenant's item master.
+
+  `ComboboxField` is the searchable single choice. It sits *beside* `SelectField` rather than
+  replacing it — a native select is the better control for a short closed list (a status, a
+  channel, a brand), and the sixty-odd of those are right as they are. It is now used by the
+  placement editor on **Menus** (the main menu-authoring path, which fed every item a tenant owns
+  into one dropdown), and by the item pickers on **Layout**, **Stations** and **Inventory**, plus
+  the BOM line's ingredient picker.
+
+  `MultiComboboxField` replaces `MultiSelectField`, which is removed. Matching is a
+  case-insensitive substring over the option's label **and its per-locale names**
+  ([ADR-0074](docs/adr/0074-localization-and-tax.md)), so an operator typing the Vietnamese name of
+  an item whose fallback name is English finds it — with no round-trip, because
+  `name_translations` is already on the wire with every item.
+
+- **The console can hand a store's files over again — the machine-replacement path.** Stores → a
+  store's row → **Move to a new box** re-emits all four artifacts (`install-pos-edge.ps1`,
+  `install-pos-edge.sh`, `config.toml`, `env`) for a store that already exists.
+
+  Before this, only the new-store wizard emitted them, which made the handoff a one-shot: once its
+  last step closed, the only way to get an installer for an existing store was to create a *second*
+  store. Survivable until the day a shop's machine dies, which is the day it matters most.
+
+  The drawer leads with what a dead machine takes with it, because two of the four things are in no
+  file: the **device credential** activation minted lives in that machine's OS keyring
+  ([ADR-0086](docs/adr/0086-edge-keyvault-and-activation.md)) and the replacement box needs a new
+  activation code, and the store's own `store.sqlite` is on the dead disk — published events are
+  safe in the fleet stream, anything still in the outbox is not. That warning is the point of the
+  feature: everything else about a replacement looks finished without it, and a box that installed
+  cleanly and will not sell is the most expensive way to learn why.
+
+  Opening it writes nothing. The fresh sync key is a button, scoped to the store with `read_config`
+  + `relay_orders`, and it does not revoke the dead machine's key — that stays a per-key decision on
+  API keys, because guessing which key belonged to the dead box can take a working store offline.
+  No new cloud route and no schema change: every value comes from the registry row already on the
+  screen plus the browser's own origin. `docs/guides/bring-a-store-online.md` gains the full
+  procedure, including the plain statement that **the lease supersedes a replaced box for updates,
+  not for trading** — two boxes on one store will both sell, so unplug the one you replaced.
+
+### Fixed
+
+- **The store runbook still said the menu editor did not exist.** Step 4 of
+  [`bring-a-store-online.md`](docs/guides/bring-a-store-online.md) told the reader that authoring a
+  catalogue was "its own workstream" and to publish a hand-written document instead — written
+  before Phase 2a, and left behind by it and by F3. There are six catalogue sub-screens and
+  nineteen publish paths across the console now. The step is rewritten as a table of which screen
+  publishes which node and which of them a store cannot sell without, plus the authoring order
+  (tax classes before items, items before menus) and the note that **Store groups** publishes to a
+  whole cohort at once — which is what makes the second store of a brand quick.
+
+- **The cloud image would not build, for the second time, for the same reason.** The
+  dashboard stage of `deploy/Dockerfile` copies `dashboard/` and nothing else, then runs
+  `pnpm build`. Chained into that script is the installer-template drift check, which reads
+  `deploy/edge/*.ps1` — two directories above anything the stage can see. The image died on
+  `ENOENT` while every PR gate stayed green, because CI runs the same script against a full
+  checkout where the path resolves. #228 unchained the check to unblock the image; #269 chained it
+  back to give the drift gate a home in the `dashboard` job, and re-broke the image. Each change
+  was right about its own problem and wrong about the other one.
+
+  The script now knows where it is instead of the build chain having to remember: absent
+  templates are skipped with a loud line on the `pnpm build` path, and still refused under
+  `--emit`, whose only purpose is handing those files to the Windows job's PowerShell parser. A
+  new step in `pr.yml`'s `dashboard` job builds from a copy of `dashboard/` with nothing above
+  it — the image's condition, reproduced — so a third violation by any future script fails in CI
+  rather than in a production deploy.
+
+- **A plain click in a multi-select destroyed the selection.** `MultiSelectField` was a
+  `<select multiple>`, and the platform reserves *adding* for Ctrl/Cmd-click — so an operator
+  fifteen toppings into a modifier group who clicked the sixteenth without a modifier key lost all
+  fifteen, silently, with no undo. The replacement toggles: a click adds or removes one choice and
+  touches nothing else. The chosen options also render as removable chips above the search box, so
+  filtering the list never hides what is already picked.
+
+- **A bulk price change stopped at the first refusal and would not say what it had done.** It
+  `await`ed inside a `for`, so one refused placement aborted the rest and the operator got a single
+  error with no way to learn how many of fifty prices had changed. Worse, the rows that succeeded
+  now held versions the screen did not, so re-running refused everything that had worked and
+  applied everything that had not. It now attempts every row, reports each refusal with the item it
+  belongs to, and reloads the menu whatever happened, so a retry means what it says.
+
+- **An archived menu still published.** The compiler skipped archived *items* and never looked at
+  the menu's own status, so a retired menu compiled and shipped. Every menu in the inheritance
+  chain is now checked: an archived ancestor is refused rather than omitted, because a store
+  special silently rests on the prices its parent carries and dropping them would take items off a
+  till with nothing said.
+
+- **A menu inheritance cycle was authorable.** It was only fatal at publish, as a `422` several
+  screens from the dropdown that caused it. The menu update route now refuses the edge that would
+  close a loop, naming both menus; the compiler keeps its own check, because the stored graph may
+  already hold one.
+
+- **A tax class or category could be archived out from under the items using it.** The cost landed
+  at the payment screen: `pos_core::billing` refuses a line whose tax class has no rate, so a shop
+  showed the menu, took the order and could not close the bill. The three archive routes now count
+  the **active** items referencing the row and refuse with a `422` naming the count. Renaming is
+  untouched, and an archived item's reference does not count.
+
+- **Reports gated its only cross-store panel on picking one store.** The panel whose subject is
+  "how do my shops compare" sat inside the store gate, so a fleet-wide read needed a single shop
+  chosen first — and then reported on all of them anyway. The window and the comparison are now
+  under a tenant gate; the per-store cards keep the store gate.
+
+### Changed
+
+- **The installers open the store's listen port themselves.** It was a runbook step, and on Windows
+  the step nobody could debug: Defender Firewall drops an inbound connection to a port no rule
+  names, silently and with no log line on either side, so a box installed correctly in every other
+  respect comes up, writes its pairing URL, and answers no till on the floor — a failure
+  indistinguishable from a broken install.
+
+  Windows now gets one rule, `pos-edge (TCP <port>)`, on the **Private** profile only: the port is
+  plain HTTP on the shop LAN, so a Public-profile rule would offer the till API to whatever network
+  the machine is plugged into next, and `Domain` is left to an estate's group policy. Idempotent by
+  removal, so re-running with a different port moves the rule rather than leaving the old port open
+  beside the new one. A firewall that is off, policy-driven, or a Windows build without
+  `NetSecurity` is warned about and skipped — the service is registered and running either way.
+
+  On Linux the honest answer is usually that nothing is in the way, so the script acts **only** on a
+  filter that is actually running (`ufw status` reporting active, or `firewall-cmd --state`
+  succeeding). A blind `ufw allow` on a box where ufw is installed but inactive would silently record
+  a rule that first takes effect the day somebody enables the firewall for an unrelated reason.
+
+  None of this is a perimeter rule: the store still accepts no inbound connection from the cloud and
+  needs no port forward ([ADR-0001](docs/adr/0001-offline-first-store-autonomy.md),
+  [ADR-0061](docs/adr/0061-order-relay.md)). `docs/security-review.md` §1 said "no inbound firewall
+  rule", which was true of the router and not of the host; it now says which.
+
+- **The `env` file names the store it belongs to.** A comment line, ignored by `EnvironmentFile`.
+  It was the one artifact of the four that named no store, which is fine with one shop open and not
+  fine with two sets of four downloads in the same folder.
 
 ### Fixed
 

@@ -280,6 +280,12 @@ pub(crate) enum Command {
         reply: oneshot::Sender<Result<i64, PortError>>,
     },
     /// The lease generation the store holds, or `None` if it has never taken one.
+    /// Forgets the lease generation this store holds, so the next take is a first sight again
+    /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ForgetLease {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<(), PortError>>,
+    },
     HeldLease {
         store_id: StoreId,
         reply: oneshot::Sender<Result<Option<i64>, PortError>>,
@@ -638,6 +644,9 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             }
             Command::PrintAgentBacklogs { now_ms, reply } => {
                 let _ = reply.send(print_agent_backlogs(&conn, now_ms));
+            }
+            Command::ForgetLease { store_id, reply } => {
+                let _ = reply.send(forget_lease(&conn, store_id));
             }
             Command::HeldLease { store_id, reply } => {
                 let _ = reply.send(held_lease(&conn, store_id));
@@ -1153,6 +1162,36 @@ fn take_lease(conn: &Connection, store_id: StoreId, generation: i64) -> Result<i
         |row| row.get::<_, i64>(0),
     )
     .map_err(|error| db_error(port, error))
+}
+
+/// Deletes this store's held lease generation, so the next
+/// [`take_lease`] is a first sight again
+/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+///
+/// # The one caller, and why the take-once rule survives it
+///
+/// Activation, and nothing else. Take-once exists so a *running* box cannot re-promote itself off a
+/// config pull; it was never meant to bind a generation to a **disk**. But that is what it does, and
+/// `docs/guides/bring-a-store-online.md` tells an operator replacing a dead machine to copy
+/// `store.sqlite` across — the only way to recover events the old box committed but had not
+/// published. The replacement then boots holding the *dead* box's generation and reads itself
+/// superseded.
+///
+/// Activation is the seam that tells the two apart, because it is the moment a box is issued its own
+/// cloud identity, and the edge refuses a second activation on a box that already holds a credential
+/// ([`crate`]'s caller checks the vault first). So this runs exactly once per box, at the only
+/// instant "this disk is now a different machine" is a fact rather than a guess — which is
+/// ADR-0108's own "a machine that must legitimately hold a newer one is a machine being
+/// re-provisioned", made true for a re-provisioning that reuses the data.
+///
+/// Reported under [`PortName::CloudSync`], like the two lease statements beside it.
+fn forget_lease(conn: &Connection, store_id: StoreId) -> Result<(), PortError> {
+    conn.execute(
+        "DELETE FROM store_lease WHERE store_id = ?1",
+        params![store_id.to_string()],
+    )
+    .map(|_rows| ())
+    .map_err(|error| db_error(PortName::CloudSync, error))
 }
 
 /// Puts a rendered job on an agent's queue, unless that printer is already at `cap`
