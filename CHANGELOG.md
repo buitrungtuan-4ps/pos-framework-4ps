@@ -18,10 +18,63 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
-- **Command Palette accessibility and keyboard navigation improvements.** WAI-ARIA
-  modal and combobox attributes (`role="dialog"`, `role="combobox"`, `role="listbox"`,
-  `role="option"`, `aria-selected`) added to `CommandPalette.tsx`, and active option
-  scrolling (`scrollIntoView({ block: "nearest" })`) enabled for arrow key navigation.
+- **The command palette answers a screen reader, and the keyboard can see where it is.** The
+  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
+  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
+  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
+  missing when the highlight walked past the bottom of a long result list and left the screen.
+
+---
+
+## [0.10.0] — 2026-09-11
+
+**Product version** 0.10.0 · **Protocol version** 1 · **MSRV** 1.94
+**For restaurant staff:** a shop's till can now be replaced without losing the day, a lost tablet can
+be retired from the floor, a void asks for a reason and a manager, and the store quietly keeps an
+encrypted copy of its own day so a dead machine is a bad afternoon rather than a lost week.
+
+The second release, and the first one a store should actually be installed from. Four things
+`v0.9.0` does not have are the reason:
+
+- **A headless store keeps a log** ([ADR-0117](docs/adr/0117-a-headless-store-keeps-a-log.md)).
+  A service started by Windows' Service Control Manager has no console, so on `v0.9.0` the pairing
+  code a box prints at start-up goes nowhere and **no till can be paired at all**. This release
+  writes both the log and `pairing-url.txt` to disk. Anyone installing a Windows store from
+  `v0.9.0` would hit that wall first.
+- **A replaced box opens nothing new**
+  ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). The edge now learns its lease
+  standing, so a machine that has been superseded stops opening tables, counter orders and shifts —
+  while still finishing and settling what it already holds. On `v0.9.0` two boxes on one store both
+  sell.
+- **A store that can be restored** ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The
+  box snapshots its whole database on a timer, seals it at the till, and ships only ciphertext. A
+  dead disk now costs one archive interval instead of everything since the last publish.
+- **A lost tablet can be retired** ([ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md)).
+  A signed-in manager mints the next pairing code from inside the store, the cloud learns what each
+  store admitted, and a device can be revoked remotely over the config rail.
+
+Also in this release: reason codes and manager-gated voids
+([ADR-0115](docs/adr/0115-reason-codes-are-a-managed-list.md)/[ADR-0116](docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)),
+print agents for a store whose edge is not in the shop
+([ADR-0112](docs/adr/0112-print-agents.md)), a second origin that may address the edge
+([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)), edge placement and region as
+recorded attributes ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md),
+[ADR-0114](docs/adr/0114-region-is-required-recorded-visible.md)), country packs for Vietnam, Japan
+and India with tax as named components ([ADR-0104](docs/adr/0104-multi-component-and-inclusive-tax.md)), the
+console's authoring kit and navigation rebuild
+([ADR-0120](docs/adr/0120-navigation-preserves-the-working-context.md),
+[ADR-0121](docs/adr/0121-one-way-to-author-an-entity.md)), store groups
+([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)), and six deploy blockers found by
+deploying.
+
+**Why 0.10 and not 1.0.** The same reason `v0.9.0` gave, unchanged: the code is complete and the
+checks that need a real machine have still not been run. [`docs/gate-register.md`](docs/gate-register.md)
+§6 is the list, and **P11 is the one that matters most** — that a headless Windows store produces a
+readable log and that a code read out of it actually pairs a device. This release is what makes that
+check runnable; it is not evidence that it passed. 1.0.0 is the version that carries the results.
+
+
+### Added
 
 - **A store's backups age out on their own, and the console says when it last backed up**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The last of D-2. A daily sweep
