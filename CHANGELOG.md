@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Console Layout screen performance optimization.** Memoized derived button views and list lookups in `dashboard/src/screens/Layout.tsx`, and optimized layout grid cell mapping from $O(R \cdot C \cdot N)$ to $O(N + R \cdot C)$ to eliminate re-computation overhead on layout re-renders.
+
 ### Added
 
 - **A store's backups age out on their own, and the console says when it last backed up**
