@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **SSRF vetting in `pos-cloud` now blocks IPv4-compatible IPv6 addresses (`::a.b.c.d`).**
+  Classifies IPv4-compatible IPv6 addresses through `classify_v4` to prevent SSRF bypasses
+  via IPv4-compatible notation (such as `::127.0.0.1` and `::169.254.169.254`).
+
 ### Added
 
 - **A store's backups age out on their own, and the console says when it last backed up**
