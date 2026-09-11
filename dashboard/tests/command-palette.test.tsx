@@ -41,7 +41,11 @@ describe("the command palette", () => {
 
     const options = screen.getAllByRole("option");
     expect(options.length).toBeGreaterThan(0);
-    expect(options[0].getAttribute("aria-selected")).toBe("true");
+    const firstOption = options[0];
+    expect(firstOption).toBeDefined();
+    if (firstOption) {
+      expect(firstOption.getAttribute("aria-selected")).toBe("true");
+    }
   });
 
   it("navigates selection with arrow keys and updates aria-selected", async () => {
@@ -52,12 +56,19 @@ describe("the command palette", () => {
     const input = screen.getByRole("combobox");
     const options = screen.getAllByRole("option");
 
-    expect(options[0].getAttribute("aria-selected")).toBe("true");
+    const opt0 = options[0];
+    const opt1 = options[1];
+    expect(opt0).toBeDefined();
+    expect(opt1).toBeDefined();
 
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    await waitFor(() => expect(options[1].getAttribute("aria-selected")).toBe("true"));
+    if (opt0 && opt1) {
+      expect(opt0.getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.keyDown(input, { key: "ArrowUp" });
-    await waitFor(() => expect(options[0].getAttribute("aria-selected")).toBe("true"));
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      await waitFor(() => expect(opt1.getAttribute("aria-selected")).toBe("true"));
+
+      fireEvent.keyDown(input, { key: "ArrowUp" });
+      await waitFor(() => expect(opt0.getAttribute("aria-selected")).toBe("true"));
+    }
   });
 });

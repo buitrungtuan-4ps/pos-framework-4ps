@@ -18,6 +18,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Command Palette accessibility and keyboard navigation improvements.** WAI-ARIA
+  modal and combobox attributes (`role="dialog"`, `role="combobox"`, `role="listbox"`,
+  `role="option"`, `aria-selected`) added to `CommandPalette.tsx`, and active option
+  scrolling (`scrollIntoView({ block: "nearest" })`) enabled for arrow key navigation.
+
 - **A store's backups age out on their own, and the console says when it last backed up**
   ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)). The last of D-2. A daily sweep
   removes archives past `archive_retention_days` — bytes first, then the row that names them, so a
