@@ -104,7 +104,7 @@ sha2 = "0.11"
 # is the one boundary where one becomes the other (ADR-0092 Correction 2), so the decoder lives here.
 # Already in the graph transitively at this version, so `multiple-versions = "deny"` stays satisfied
 # and no new supply-chain surface enters — this makes a transitive crate a stated dependency.
-base64 = "0.22"
+base64 = "0.23"
 
 # The webhook TLS sender (ADR-0038). Every crate here is already in the tree at these versions — the
 # HTTP/1.1 client (`hyper` + `hyper-util` + `http-body-util` + `bytes`) via `axum`, and the TLS stack
@@ -133,12 +133,12 @@ webpki-roots    = "1"
 chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 zeroize = "1.8"
 
-argon2 = "0.5"
+argon2 = "0.6"
 sha1   = "0.11"
 # The super-admin session token is 32 CSPRNG bytes minted at the binary edge and hashed before
 # storage (ADR-0034). `getrandom` is the same OS-entropy crate the edge already uses (pairing codes,
 # id-generator seeding), at the same 0.3 version, so no new randomness crate enters the graph.
-getrandom = "0.3"
+getrandom = "0.4"
 # ADR-0019: the public /v1 OpenAPI is generated from the handlers and types, never hand-written.
 # `utoipa::ToSchema` rides beside the serde derives on the response types, and `utoipa::path` beside
 # the axum handlers; a pos-cloud test renders docs/openapi.json and fails CI on drift.

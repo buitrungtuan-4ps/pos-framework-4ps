@@ -924,6 +924,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// A fixed 16-byte salt, so a hashed fixture is deterministic. Tests only.
+    const SALT: &[u8] = b"a-fixed-test-slt";
+
     use super::session_from_config;
     use pos_proto::SalesChannel;
     use pos_proto::ids::{MenuItemId, TaxClassId};
@@ -1056,10 +1059,9 @@ mod tests {
     /// A real Argon2id PHC of `pin`, with a fixed salt so the test needs no RNG (as `auth.rs` does).
     fn hash_of(pin: &str) -> String {
         use argon2::Argon2;
-        use argon2::password_hash::{PasswordHasher as _, SaltString};
-        let salt = SaltString::encode_b64(b"a-fixed-test-salt").expect("a valid salt");
+        use argon2::password_hash::PasswordHasher as _;
         Argon2::default()
-            .hash_password(pin.as_bytes(), &salt)
+            .hash_password_with_salt(pin.as_bytes(), SALT)
             .expect("hash")
             .to_string()
     }

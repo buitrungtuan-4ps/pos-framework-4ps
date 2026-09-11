@@ -16,8 +16,6 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt as _;
 use tower::ServiceExt as _;
 
-use argon2::password_hash::SaltString;
-
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
@@ -125,6 +123,9 @@ use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
+
+/// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
+const SALT: &[u8] = b"a-fixed-test-slt";
 
 /// The instant `clock()` is fixed at, in milliseconds and in seconds — the second form is what the
 /// TOTP code the admin tests submit is computed for.
@@ -834,8 +835,7 @@ fn provisioned_admin_as(id: &str, email: &str) -> FakeAdmin {
 
 /// The shared test credential: `ADMIN_PASSWORD` hashed under a fixed salt, and `ADMIN_TOTP_SEED`.
 fn admin_credential() -> SuperAdminCredential {
-    let salt = SaltString::encode_b64(b"cloud-admin-test-salt").expect("salt");
-    let phc = hash_password(ADMIN_PASSWORD, &salt).expect("hash");
+    let phc = hash_password(ADMIN_PASSWORD, SALT).expect("hash");
     SuperAdminCredential::new(phc, TotpSecret::new(ADMIN_TOTP_SEED.to_vec()))
 }
 

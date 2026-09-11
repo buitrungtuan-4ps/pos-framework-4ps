@@ -69,7 +69,6 @@ use core::future::Future;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use argon2::password_hash::SaltString;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::HeaderName;
 use axum::http::header::{
@@ -5041,8 +5040,7 @@ fn pin_is_well_formed(pin: &str) -> bool {
 fn hash_pin(pin: &str) -> Option<String> {
     let mut salt_bytes = [0_u8; 16];
     getrandom::fill(&mut salt_bytes).ok()?;
-    let salt = SaltString::encode_b64(&salt_bytes).ok()?;
-    hash_password(pin, &salt).ok()
+    hash_password(pin, &salt_bytes).ok()
 }
 
 /// Maps any people-store failure to a retryable `503`, logging the detail rather than leaking it.
@@ -24901,8 +24899,7 @@ fn mint_credential(password: &str) -> Option<([u8; TOTP_SECRET_BYTES], String)> 
     getrandom::fill(&mut secret).ok()?;
     let mut salt_bytes = [0_u8; 16];
     getrandom::fill(&mut salt_bytes).ok()?;
-    let salt = SaltString::encode_b64(&salt_bytes).ok()?;
-    let phc = hash_password(password, &salt).ok()?;
+    let phc = hash_password(password, &salt_bytes).ok()?;
     Some((secret, phc))
 }
 

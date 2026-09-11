@@ -40,6 +40,9 @@ use pos_proto::ulid::Ulid;
 use serde_json::json;
 use tower::ServiceExt;
 
+/// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
+const SALT: &[u8] = b"a-fixed-test-slt";
+
 /// A manager (may manage devices) and a waiter (may not) — the same split ADR-0112's binding uses,
 /// because admitting a device and binding a terminal are the same kind of act.
 const MANAGER_CODE: &str = "M01";
@@ -48,10 +51,9 @@ const PIN: &str = "2468";
 
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
-    use argon2::password_hash::{PasswordHasher, SaltString};
-    let salt = SaltString::encode_b64(b"fixed-test-salt!").expect("salt");
+    use argon2::password_hash::PasswordHasher as _;
     Argon2::default()
-        .hash_password(pin.as_bytes(), &salt)
+        .hash_password_with_salt(pin.as_bytes(), SALT)
         .expect("hash")
         .to_string()
 }
