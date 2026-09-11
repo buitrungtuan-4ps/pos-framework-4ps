@@ -16,8 +16,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-### Added
+### Security
 
+- **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
+  already caught, because `classify_ip` routes it through `to_ipv4_mapped()` before the v6 checks.
+  The deprecated IPv4-*compatible* form `::a.b.c.d` was not: `::169.254.169.254` has a zero first
+  segment, matches no v6 branch, and fell through to "public unicast" — so a webhook URL could be
+  registered against the cloud metadata endpoint and the delivery would be made. `classify_v6` now
+  recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
+  and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
+  fix was accepted.
 - **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
   geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
   for none of those three, so the header costs nothing and closes them to anything that later ends
