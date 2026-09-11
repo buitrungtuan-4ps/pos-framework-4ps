@@ -273,12 +273,30 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
 
 /// The forbidden class of an IPv6 address, or `None` if it is public unicast.
 fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
-    let [first, second, ..] = ip.segments();
     if ip.is_unspecified() {
-        Some(ForbiddenReason::Unspecified)
-    } else if ip.is_loopback() {
-        Some(ForbiddenReason::Loopback)
-    } else if ip.is_multicast() {
+        return Some(ForbiddenReason::Unspecified);
+    }
+    if ip.is_loopback() {
+        return Some(ForbiddenReason::Loopback);
+    }
+
+    let segments = ip.segments();
+    // IPv4-compatible IPv6 address (`::a.b.c.d`): first 96 bits are zero, last 32 bits are IPv4.
+    if segments[0] == 0
+        && segments[1] == 0
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0
+        && segments[5] == 0
+    {
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    }
+
+    let [first, second, ..] = segments;
+    if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
     } else if first & 0xfe00 == 0xfc00 {
         // fc00::/7 unique-local — the v6 private network.
@@ -454,6 +472,21 @@ mod tests {
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::ffff:127.0.0.1"),
                 ForbiddenReason::Loopback
+            ))
+        );
+        // IPv4-compatible IPv6 smuggling cases (`::a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::169.254.169.254"),
+                ForbiddenReason::LinkLocal
             ))
         );
     }
