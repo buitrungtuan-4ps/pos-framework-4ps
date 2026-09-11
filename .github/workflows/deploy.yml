@@ -196,6 +196,54 @@ jobs:
              POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='${CADDY_IMAGE}' POS_BOOTSTRAP_NO_BUILD=1 \
              ./bootstrap.sh"
 
+      # The step above ends when Compose prints `Started`, which only means the process was
+      # spawned. pos_cloud's boot refusals run after that: ADR-0097's internal_shared_secret
+      # check and ADR-0124's "archive window must sit below the subject window" check both
+      # exit non-zero once main() is already running, and `restart: unless-stopped` then loops
+      # the container quietly. Every deploy before this one therefore ended on a green tick
+      # whether or not a cloud was left serving.
+      #
+      # The probe runs inside the compose network rather than through Caddy, so it answers
+      # "is pos_cloud serving" and not "is the TLS posture right" — those are different
+      # failures and only the first one is this step's business. It borrows busybox wget from
+      # the `nats` service: the pos_cloud image is deliberately command-free (see
+      # deploy/Dockerfile) and bootstrap.sh never needed an HTTP client, so the box is not
+      # assumed to carry one. `docker compose run` takes the image and the networks from
+      # compose.yml, so there is no second place to update when nats is bumped, and `--no-deps`
+      # keeps it from starting anything. nats and pos_cloud share the `backend` network.
+      - name: Wait until the cloud actually serves
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          port="${VPS_PORT:-22}"
+          ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+          target="${VPS_USER}@${VPS_HOST}"
+          ssh -p "$port" $ssh_opts "$target" 'bash -s' <<'REMOTE'
+          set -uo pipefail
+          cd ~/pos-cloud/deploy
+          deadline=$((SECONDS + 120))
+          attempt=0
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            attempt=$((attempt + 1))
+            body="$(docker compose run --rm --no-deps --entrypoint wget nats \
+                      -q -O - -T 3 http://pos_cloud:8080/health 2>/dev/null || true)"
+            if [ "$body" = "ok" ]; then
+              echo "pos_cloud answered /health with '${body}' on attempt ${attempt}"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::pos_cloud never answered /health in 120s — it started and did not stay up"
+          echo "--- docker compose ps ---"
+          docker compose ps
+          echo "--- pos_cloud, last 120 lines ---"
+          docker compose logs --tail=120 --no-color pos_cloud
+          exit 1
+          REMOTE
+
       - name: Break-glass admin reset
         if: ${{ inputs.reset_admin }}
         env:
