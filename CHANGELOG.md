@@ -93,6 +93,12 @@ check runnable; it is not evidence that it passed. 1.0.0 is the version that car
   pass unchanged), `base64` 0.22 → 0.23, `getrandom` 0.3 → 0.4, and the `cargo-minor` transitive
   group. Those four needed no code change.
 
+  One bump in that group is deliberately held back: `flate2` stays at 1.1.9. 1.1.10 moves to
+  `miniz_oxide` 0.9, and `png` — which reaches the cloud through `image` — still pins `miniz_oxide`
+  0.8, so taking it would compile two copies of the same decompressor into every binary.
+  `cargo deny`'s duplicate ban caught it, and the ban is right: the fix belongs upstream in `png`,
+  not in a skip entry here. `flate2` moves when `png` does.
+
 ### Added
 
 - **A store's backups age out on their own, and the console says when it last backed up**
