@@ -28,6 +28,7 @@ import {
   Banner,
   Button,
   Card,
+  ComboboxField,
   CheckboxField,
   MoneyField,
   SelectField,
@@ -86,6 +87,17 @@ export function CatalogMenus() {
 
   // Bulk price editor (a Drawer over the current menu's placements).
   const [bulkOpen, setBulkOpen] = createSignal(false);
+  /**
+   * What the last bulk apply did to each row it could not change.
+   *
+   * `null` until an apply has run. Empty after one that changed everything in scope — which is not
+   * the same as `null`, and the difference is the whole point: an operator who has just been told
+   * "48 of 50" needs the other two named.
+   */
+  const [bulkRefused, setBulkRefused] = createSignal<
+    { readonly item: string; readonly message: string }[] | null
+  >(null);
+  const [bulkAppliedCount, setBulkAppliedCount] = createSignal(0);
   const [bulkSection, setBulkSection] = createSignal("");
   const [bulkChannel, setBulkChannel] = createSignal<SalesChannel>("SALES_CHANNEL_DINE_IN");
   const [bulkCurrency, setBulkCurrency] = createSignal("VND");
@@ -112,6 +124,21 @@ export function CatalogMenus() {
     setError("");
     setBusy(true);
     try {
+      // `listItems` and not `listItemsPage`, deliberately, and this is the one place in the console
+      // where that is a considered choice rather than an oversight.
+      //
+      // Two things read this list, and they want opposite shapes. The placement picker wants a
+      // window — but it is a `ComboboxField` now, which builds its options only when it is opened
+      // and filters them in the browser against every locale's name, so a held list costs nothing
+      // per render and answers a keystroke with no round-trip. The placements *table* wants the
+      // opposite: it renders `menu_item_id` for every row and has to turn each one into a name, and
+      // a placement can point at any item in the master, so a window would show ULIDs for whatever
+      // fell outside it.
+      //
+      // The real fix is for `list_placements` to return the item's name with the placement, which
+      // removes the coupling entirely and lets the picker be served. That is a read-model change in
+      // `pos-cloud` and it is not in this slice; until then the honest trade is one bounded fetch on
+      // screen entry over a table that cannot name its own rows.
       const [loadedMenus, loadedItems, loadedCountries] = await Promise.all([
         api.listMenus(tenantId()),
         api.listItems(tenantId()),
@@ -464,6 +491,8 @@ export function CatalogMenus() {
   // --- bulk price editing (ADR-0082) ---
 
   const openBulk = () => {
+    setBulkRefused(null);
+    setBulkAppliedCount(0);
     setBulkSection("");
     setBulkChannel("SALES_CHANNEL_DINE_IN");
     setBulkCurrency("VND");
@@ -474,6 +503,23 @@ export function CatalogMenus() {
   // Sets one channel's price across every placement in the chosen section (or all placements when no
   // section is chosen), preserving each placement's other channel prices, section, and availability.
   // A clear (empty amount) removes that channel's price from each in scope. N× the audited update.
+  //
+  // # Why this does not stop at the first refusal
+  //
+  // There is no transaction here and there was never going to be one: each placement is its own
+  // conditional write (ADR-0095), and a bulk change is N of them. What the first version got wrong
+  // was not the absence of atomicity but the absence of a *report* — it `await`ed inside a `for`,
+  // so one refusal aborted the rest and the operator was shown a single error with no way to learn
+  // how many of fifty prices had already changed.
+  //
+  // Worse, the state it left was a trap. The rows that succeeded had new versions the screen was
+  // still holding the old ones for, so re-running the bulk refused every row that had worked and
+  // applied every row that had not — the exact inverse of what the operator was trying to do, and
+  // it looked like the tool was broken rather than stale.
+  //
+  // So: attempt every row, collect the refusals with the item they belong to, and reload the menu
+  // afterwards **whatever happened**, so the versions on screen are the versions on the server and
+  // a retry means what it says.
   const applyBulk = async () => {
     const rows = placements() ?? [];
     const scope = bulkSection()
@@ -487,19 +533,22 @@ export function CatalogMenus() {
     const currency = bulkCurrency().trim() || "VND";
     const amount = bulkAmount();
     setBusy(true);
-    try {
-      for (const placement of scope) {
-        // Start from the placement's existing prices, then set/clear the target channel.
-        const others = placement.prices.filter(
-          (price) => price.sales_channel && price.sales_channel !== channel,
-        );
-        const next: ChannelPrice[] =
-          amount === null
-            ? others
-            : [
-                ...others,
-                { sales_channel: channel, unit_price: { currency_code: currency, amount_minor: amount } },
-              ];
+    setBulkRefused(null);
+    const refused: { item: string; message: string }[] = [];
+    let applied = 0;
+    for (const placement of scope) {
+      // Start from the placement's existing prices, then set/clear the target channel.
+      const others = placement.prices.filter(
+        (price) => price.sales_channel && price.sales_channel !== channel,
+      );
+      const next: ChannelPrice[] =
+        amount === null
+          ? others
+          : [
+              ...others,
+              { sales_channel: channel, unit_price: { currency_code: currency, amount_minor: amount } },
+            ];
+      try {
         // Each placement in scope was just read, so its reprice is conditional on the version it
         // carried: a bulk change against a row someone else has edited is refused rather than
         // overwriting their price (ADR-0095).
@@ -512,15 +561,25 @@ export function CatalogMenus() {
           placement.available,
           placement.menu_section_id,
         );
+        applied += 1;
+      } catch (caught) {
+        refused.push({ item: itemName(placement.menu_item_id), message: errorMessage(caught) });
       }
-      toast.ok(t("catalog.bulkApplied", { count: scope.length }));
-      setBulkOpen(false);
-      await loadMenuDetail(selectedMenu());
-    } catch (caught) {
-      toast.error(errorMessage(caught));
-    } finally {
-      setBusy(false);
     }
+    setBulkAppliedCount(applied);
+    setBulkRefused(refused);
+    // Unconditional, and load-bearing: the rows that succeeded now hold versions this screen does
+    // not, and a retry against the stale ones is the trap described above.
+    await loadMenuDetail(selectedMenu());
+    setBusy(false);
+    if (refused.length === 0) {
+      toast.ok(t("catalog.bulkApplied", { count: applied }));
+      setBulkOpen(false);
+      return;
+    }
+    // The drawer stays open, because the report is the outcome. Its numbers are the two an
+    // operator has to act on, and a toast that scrolls away is not where they belong.
+    toast.error(t("catalog.bulkPartial", { applied, refused: refused.length }));
   };
 
   // --- publish ---
@@ -915,15 +974,18 @@ export function CatalogMenus() {
         }
       >
         <div class="flex flex-col gap-4">
-          <SelectField
+          <ComboboxField
             label={t("catalog.item")}
             value={placementItem()}
             options={activeItems().map((item) => ({
               value: item.menu_item_id,
               label: item.name,
+              keywords: Object.values(item.name_translations),
             }))}
             onChange={setPlacementItem}
             placeholder={t("catalog.chooseItem")}
+            searchLabel={t("catalog.searchItems")}
+            emptyLabel={t("picker.noMatch")}
             // Which item a placement is for is fixed once it exists: changing it would be a
             // different placement, so an edit offers everything else and not this.
             disabled={placementEditing() !== null}
@@ -986,6 +1048,36 @@ export function CatalogMenus() {
         }
       >
         <div class="flex flex-col gap-4">
+          <Show when={bulkRefused()}>
+            {(rows) => (
+              <Show
+                when={rows().length > 0}
+                fallback={
+                  <Banner tone="ok" message={t("catalog.bulkApplied", { count: bulkAppliedCount() })} />
+                }
+              >
+                <div class="rounded-token border border-danger p-3">
+                  <p class="text-sm font-medium text-ink">
+                    {t("catalog.bulkPartial", {
+                      applied: bulkAppliedCount(),
+                      refused: rows().length,
+                    })}
+                  </p>
+                  <p class="mt-1 text-sm text-ink-muted">{t("catalog.bulkPartialHint")}</p>
+                  <ul class="mt-2 flex flex-col gap-1">
+                    <For each={rows()}>
+                      {(row) => (
+                        <li class="text-sm text-ink">
+                          <span class="font-medium">{row.item}</span>
+                          <span class="text-ink-muted"> — {row.message}</span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </div>
+              </Show>
+            )}
+          </Show>
           <p class="text-sm text-ink-muted">{t("catalog.bulkPriceHint")}</p>
           <SelectField
             label={t("catalog.section")}

@@ -67,6 +67,12 @@ const fn default_admin_invite_ttl_secs() -> u64 {
 
 /// How often the retention cron sweeps for records past their period, in seconds, when the config
 /// does not say — daily, ample for a period measured in months ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+/// A month of sealed archives, which is a recovery reach measured in weeks rather than the days a
+/// tighter window would give and the years an unbounded one would.
+const fn default_archive_retention_days() -> u32 {
+    30
+}
+
 const fn default_retention_sweep_interval_secs() -> u64 {
     24 * 60 * 60
 }
@@ -264,6 +270,26 @@ pub struct CloudConfig {
     /// How often the retention cron sweeps for records past their period, in seconds.
     #[serde(default = "default_retention_sweep_interval_secs")]
     pub retention_sweep_interval_secs: u64,
+    /// How many days a store's sealed archive is kept before the cloud removes it
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). Defaults to 30.
+    ///
+    /// **This must stay below [`Self::retention_days`], and [`Self::validate`] enforces it.** An
+    /// archive is a store's whole database, buyer details included (ADR-0107), taken *before* the
+    /// masking cron redacted them. Keeping archives longer than the subject window would mean the
+    /// redaction was true in the live row and false in the copy — the masking would look done and
+    /// would not be. Capping the archive window below it is what makes it eventually true
+    /// everywhere, with nobody having to remember.
+    ///
+    /// Unlike `retention_days` this **does** have a default, and the difference is deliberate: a
+    /// guessed masking period erases personal data early or keeps it too long, both violations,
+    /// whereas a guessed archive window only decides how far back a restore can reach — and a
+    /// default that keeps a month of backups is a better failure than one that keeps none.
+    /// `0` is refused: an archive deleted the moment it lands is a backup that never existed.
+    #[serde(default = "default_archive_retention_days")]
+    pub archive_retention_days: u32,
+    /// How often the archive-retention sweep runs, in seconds. Defaults to daily.
+    #[serde(default = "default_retention_sweep_interval_secs")]
+    pub archive_retention_sweep_interval_secs: u64,
     /// How often the webhook dispatcher sweeps the enabled fleet, in seconds
     /// ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
     #[serde(default = "default_webhook_dispatch_interval_secs")]
@@ -293,6 +319,21 @@ pub struct CloudConfig {
     /// unconditionally would send it to an unauthenticated pre-activation endpoint.
     #[serde(default)]
     pub internal_shared_secret: Option<InternalSecret>,
+    /// The box-local secret every store's archive key is wrapped under
+    /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) Amendment 1). 64
+    /// hexadecimal characters — `openssl rand -hex 32`.
+    ///
+    /// **Optional, and its absence turns store archives off rather than weakening them.** Without
+    /// it the two `/sync` archive routes are not mounted at all and boot says so, on the same
+    /// principle as `[artifacts]`: a route that always answers `503` is worse than one honestly
+    /// absent. What is *not* acceptable is storing a usable key in a column, because
+    /// `deploy/backup.sh` ships a `pg_dump` of this database to the same off-box tier the archives
+    /// sync to — so a plaintext key would travel to the same bucket as the ciphertext it opens.
+    ///
+    /// `bootstrap.sh` mints it into this file, like `internal_shared_secret`, and it never leaves
+    /// the box. It is emphatically not a store's key: a till receives only its own, over `/sync`.
+    #[serde(default)]
+    pub archive_key_secret: Option<crate::archive::ArchiveSecret>,
     /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
     /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
     /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of
@@ -504,6 +545,41 @@ impl CloudConfig {
             }
             Some(_) => {}
         }
+        // Absent is a posture (store archives off, said at boot); malformed is a typo that would
+        // make every archive key unwrappable and would not be noticed until a restore.
+        if let Some(secret) = &self.archive_key_secret
+            && !secret.is_well_formed()
+        {
+            return Err(format!(
+                "archive_key_secret must be exactly {} hexadecimal characters — it is a 32-byte                  key, not a passphrase. Generate one with `openssl rand -hex 32`. Remove the key                  entirely to run without store archives (ADR-0124)",
+                crate::archive::KEY_TEXT_LEN
+            ));
+        }
+        // Zero would delete an archive on the sweep that follows the upload, which is a backup that
+        // never existed — and would look, in the file, like the tidy choice.
+        if self.archive_retention_days == 0 {
+            return Err(
+                "archive_retention_days must be at least 1: a zero window removes an archive on \
+                 the first sweep after it arrives, so the store has no backup at all. Set it from \
+                 how far back a restore must be able to reach (ADR-0124)"
+                    .to_owned(),
+            );
+        }
+        // The rule ADR-0124's retention decision rests on. Refused rather than warned: a fleet that
+        // kept archives past the subject window would have a masking cron that looks done and is
+        // not, and nobody would find out — there is no symptom until somebody opens an archive.
+        if let Some(subject_days) = self.retention_days
+            && self.archive_retention_days >= subject_days
+        {
+            return Err(format!(
+                "archive_retention_days ({}) must be below retention_days ({subject_days}): a \
+                 store archive is its whole database, buyer details included, taken before the \
+                 masking cron redacted them — an archive window at or past the subject window \
+                 keeps that personal data alive in a copy after it was erased from the original \
+                 (ADR-0124, ADR-0035)",
+                self.archive_retention_days
+            ));
+        }
         // An alert webhook without a secret would deliver unsigned batches, which a receiver cannot
         // tell from a forgery. The URL itself is vetted at boot, not here — that needs DNS.
         match (&self.alert_webhook_url, &self.alert_webhook_secret) {
@@ -588,6 +664,75 @@ mod tests {
         config.internal_shared_secret =
             Some(InternalSecret::new("a".repeat(MIN_INTERNAL_SECRET_LEN)));
         config
+    }
+
+    /// The rule ADR-0124's retention decision rests on. An archive is a store's whole database,
+    /// buyer details included, taken *before* the masking cron redacted them — so an archive window
+    /// at or past the subject window would leave the masking done in the row and undone in the
+    /// copy, with no symptom until somebody opened an archive. It is a boot refusal for exactly
+    /// that reason: nothing later would notice.
+    #[test]
+    fn archives_kept_as_long_as_subjects_refuse_the_boot() {
+        for archive_days in [30_u32, 45] {
+            let mut config = valid();
+            config.retention_days = Some(30);
+            config.archive_retention_days = archive_days;
+            let error = config
+                .validate()
+                .expect_err("an archive window at or past the subject window is refused");
+            assert!(
+                error.contains("must be below retention_days"),
+                "the message names both windows: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_archive_window_inside_the_subject_window_is_accepted() {
+        let mut config = valid();
+        config.retention_days = Some(30);
+        config.archive_retention_days = 29;
+        assert!(
+            config.validate().is_ok(),
+            "one day inside the subject window is the boundary, and it holds"
+        );
+    }
+
+    /// With no subject window configured the masking cron is off entirely (ADR-0035), and there is
+    /// nothing for the archive window to be below. It still applies on its own: a bounded archive
+    /// is worth having whether or not anybody set a legal period.
+    #[test]
+    fn an_archive_window_stands_alone_when_no_subject_window_is_set() {
+        let mut config = valid();
+        config.retention_days = None;
+        config.archive_retention_days = 3650;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn a_zero_archive_window_refuses_the_boot() {
+        let mut config = valid();
+        config.archive_retention_days = 0;
+        let error = config.validate().expect_err("zero is refused");
+        assert!(
+            error.contains("archive_retention_days must be at least 1"),
+            "the message says what zero would mean: {error}"
+        );
+    }
+
+    #[test]
+    fn the_archive_window_defaults_to_a_month() {
+        let config = CloudConfig::from_toml(MINIMAL_TOML).expect("the minimal config parses");
+        assert_eq!(
+            config.archive_retention_days, 30,
+            "unlike retention_days, this has a default: a guessed archive window only decides how \
+             far back a restore reaches, and keeping a month beats keeping nothing"
+        );
+        assert_eq!(
+            config.archive_retention_sweep_interval_secs,
+            24 * 60 * 60,
+            "the archive sweep runs daily when unset"
+        );
     }
 
     #[test]

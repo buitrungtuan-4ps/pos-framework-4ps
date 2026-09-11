@@ -20,13 +20,19 @@
 //   * **Stores and brands hold separate lifecycles**, so saving a brand no longer disables the
 //     stores table. That was one shared `busy()` across every button on the screen.
 
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { A } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { Brand, Store, Tenant } from "../api/types";
+import type { Brand, CreateApiKeyResponse, Store, Tenant } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
+import {
+  downloadHandoff,
+  HANDOFF_FILES,
+  RECOVERY,
+  type Recovery,
+} from "../lib/handoff";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { screenHref } from "../state/screens";
@@ -43,12 +49,15 @@ import {
   type Column,
   ConfirmDialog,
   DataTable,
+  Drawer,
   EmptyState,
   FormPanel,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, withStaleReload } from "../lib/errors";
+import { DEFAULT_BIND_PORT } from "../installers.mjs";
+import type { InstallerValues } from "../installers.d.mts";
 
 export function Stores() {
   const [stores, setStores] = createSignal<Store[] | null>(null);
@@ -175,6 +184,107 @@ export function Stores() {
           void settled(status === "archived" ? t("stores.archived") : t("stores.restored"));
         }
       });
+
+  // --- the replacement handoff ------------------------------------------------------------------
+  // The wizard's last step emitted four files for a store it had just created, and nothing else in
+  // the console emitted them ever again. That made the handoff a one-shot: the only way to get an
+  // installer for an existing store was to create a second store. Which is survivable right up to
+  // the day a shop's machine dies — the day it matters most, and the day nobody wants to be reading
+  // the source of a generator to reconstruct a config file by hand.
+  //
+  // Deliberately not a new cloud route and deliberately not on the wizard. Every value the files
+  // need is already on this screen (the registry row) or is a property of the browser's own origin,
+  // and the one write it makes — a fresh scoped key — is a route that has existed since WS-C. The
+  // whole feature is a `Drawer` over `src/lib/handoff.ts`.
+
+  const [handoffStore, setHandoffStore] = createSignal<Store | null>(null);
+  // A property of the *machine*, not of the store: it shapes the generated config and never reaches
+  // the cloud, so it is asked for here rather than stored on the row. Blank takes the edge's default.
+  const [handoffPort, setHandoffPort] = createSignal("");
+  const [handoffKey, setHandoffKey] = createSignal<CreateApiKeyResponse | null>(null);
+  // "I know this box already holds its key" — the deliberate way past the key step, so that the
+  // files can be downloaded without a write. Distinct from "no key yet", which is the initial state
+  // and is the one that must not silently produce a credential-less env file.
+  const [handoffKeyless, setHandoffKeyless] = createSignal(false);
+  const [handoffBusy, setHandoffBusy] = createSignal(false);
+  const [handoffError, setHandoffError] = createSignal("");
+
+  const openHandoff = (row: Store) => {
+    setHandoffStore(row);
+    setHandoffPort("");
+    setHandoffKey(null);
+    setHandoffKeyless(false);
+    setHandoffError("");
+  };
+
+  const closeHandoff = () => setHandoffStore(null);
+
+  /**
+   * Issues the key the replacement box will present on `/sync`.
+   *
+   * Two scopes, and both are load-bearing: `read_config` is how the box collects its published
+   * configuration, `relay_orders` is how it drains the cloud's order relay. Store-scoped rather than
+   * tenant-wide because the store sync routes refuse a key that names another store or none (S1) —
+   * a tenant-wide key here would hand the operator a credential the box cannot use.
+   *
+   * It does **not** revoke the dead machine's key. That is a separate, per-key decision on the API
+   * keys screen, and doing it from here would mean guessing which of a store's keys belonged to the
+   * machine that died — a guess that, wrong, takes a working store offline.
+   */
+  const issueHandoffKey = async () => {
+    const row = handoffStore();
+    if (!row) {
+      return;
+    }
+    setHandoffError("");
+    setHandoffBusy(true);
+    try {
+      setHandoffKey(await api.createApiKey(tenantId(), ["read_config", "relay_orders"], row.store_id));
+      toast.ok(t("handoff.keyIssued"));
+    } catch (caught) {
+      setHandoffError(apiMessage(caught));
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
+  /**
+   * The values every generated artifact is rendered from.
+   *
+   * `cloudUrl` and `cloudHost` come from the browser's own location rather than from configuration,
+   * for the same reason the wizard does it: the console is served by `pos_cloud`, so the origin the
+   * operator is looking at *is* the origin the store must dial. A configured value could disagree
+   * with it, and the disagreement would only show up as a box that boots LAN-only.
+   */
+  const handoffValues = (): InstallerValues | null => {
+    const row = handoffStore();
+    if (!row) {
+      return null;
+    }
+    return {
+      storeName: row.name,
+      storeId: row.store_id,
+      tenantLabel: tenant()?.name ?? tenantId(),
+      tenantId: tenantId(),
+      cloudUrl: window.location.origin,
+      cloudHost: window.location.hostname,
+      bindPort: handoffPort(),
+      key: handoffKey()?.token ?? null,
+    };
+  };
+
+  /** Whether the operator has settled the key question, which is what unlocks the downloads. */
+  const handoffReady = () => handoffKey() !== null || handoffKeyless();
+
+  const recoveryTone = (recovery: Recovery) =>
+    recovery === "regenerated" ? "active" : recovery === "reissued" ? "neutral" : "danger";
+
+  const recoveryLabel = (recovery: Recovery) =>
+    recovery === "regenerated"
+      ? t("handoff.recoveryRegenerated")
+      : recovery === "reissued"
+        ? t("handoff.recoveryReissued")
+        : t("handoff.recoveryLost");
 
   // --- brands (production-readiness O2) ---------------------------------------------------------
   // The same three verbs the stores table has had since WS-C, over the `PATCH /admin/brands/{id}`
@@ -454,6 +564,9 @@ export function Stores() {
                       >
                         {t("action.edit")}
                       </Button>
+                      <Button variant="secondary" onClick={() => openHandoff(row)}>
+                        {t("handoff.open")}
+                      </Button>
                       <Show
                         when={row.status === "archived"}
                         fallback={
@@ -572,6 +685,166 @@ export function Stores() {
             placeholder={t("stores.brandNamePlaceholder")}
           />
         </FormPanel>
+
+        {/* The replacement handoff. A `Drawer` rather than a `Modal` because it is a reading task
+            first — four facts about what a dead machine takes with it — and only then four buttons;
+            a modal that tall is a page pretending to be a dialog. */}
+        <Drawer
+          open={handoffStore() !== null}
+          title={t("handoff.title")}
+          closeLabel={t("action.close")}
+          onClose={closeHandoff}
+          footer={
+            <Button variant="secondary" onClick={closeHandoff}>
+              {t("action.close")}
+            </Button>
+          }
+        >
+          <Show when={handoffStore()}>
+            {(row) => (
+              <div class="flex flex-col gap-5">
+                <p class="text-sm text-ink-muted">
+                  {t("handoff.intro", { store: row().name })}
+                </p>
+                <Show when={handoffError()}>
+                  {(message) => <Banner tone="danger" message={message()} />}
+                </Show>
+
+                {/* What survives the machine. First, because the two rows that need an action are
+                    the ones an operator does not know to look for — the device credential above
+                    all: a replacement box installs and boots and then will not sell, and nothing
+                    else on this screen would ever have said why. */}
+                <section class="flex flex-col gap-3">
+                  <h3 class="text-sm font-semibold text-ink">{t("handoff.factsTitle")}</h3>
+                  <ul class="flex flex-col gap-3">
+                    <For each={RECOVERY}>
+                      {(fact) => (
+                        <li class="flex flex-col gap-1 border-l-2 border-line pl-3">
+                          <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-sm font-medium text-ink">{t(fact.labelKey)}</span>
+                            <StatusBadge
+                              tone={recoveryTone(fact.recovery)}
+                              label={recoveryLabel(fact.recovery)}
+                            />
+                          </div>
+                          <p class="text-sm text-ink-muted">{t(fact.actionKey)}</p>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </section>
+
+                {/* The key. A write, so it is a button the operator presses rather than something
+                    that happens on open — opening this drawer to read the facts must not mint a
+                    credential. */}
+                <section class="flex flex-col gap-2">
+                  <h3 class="text-sm font-semibold text-ink">{t("handoff.keyTitle")}</h3>
+                  <p class="text-sm text-ink-muted">{t("handoff.keyHint")}</p>
+                  <Show
+                    when={handoffKey()}
+                    fallback={
+                      <div class="flex flex-col gap-2">
+                        <div class="flex flex-wrap gap-2">
+                          <Button disabled={handoffBusy()} onClick={() => void issueHandoffKey()}>
+                            {handoffBusy() ? t("common.saving") : t("handoff.issueKey")}
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            disabled={handoffBusy() || handoffKeyless()}
+                            onClick={() => setHandoffKeyless(true)}
+                          >
+                            {t("wizard.skipKey")}
+                          </Button>
+                        </div>
+                        <Show when={handoffKeyless()}>
+                          <Banner tone="danger" message={t("handoff.withoutKey")} />
+                        </Show>
+                      </div>
+                    }
+                  >
+                    {(key) => (
+                      <>
+                        <Banner tone="ok" message={t("handoff.keyIssued")} />
+                        <div class="break-all rounded-token border border-line bg-surface-raised p-3 font-mono text-xs text-ink">
+                          {key().token}
+                        </div>
+                        <TechnicalDetails label={t("common.technicalDetails")}>
+                          {key().id}
+                        </TechnicalDetails>
+                      </>
+                    )}
+                  </Show>
+                </section>
+
+                {/* The files, behind the key decision. Not because a credential-less handoff is
+                    invalid — a box that already holds its key is a real case — but because the
+                    silent version of it is an `env` file with no credential in it, which produces a
+                    store that trades and never syncs. Choosing is cheap; discovering is not. */}
+                <Show
+                  when={handoffReady()}
+                  fallback={<p class="text-sm text-ink-muted">{t("handoff.keyHint")}</p>}
+                >
+                  <section class="flex flex-col gap-3">
+                    <h3 class="text-sm font-semibold text-ink">{t("handoff.filesTitle")}</h3>
+                    <TextField
+                      label={t("wizard.bindPort")}
+                      value={handoffPort()}
+                      onInput={setHandoffPort}
+                      placeholder={DEFAULT_BIND_PORT}
+                    />
+                    <p class="text-sm text-ink-muted">{t("wizard.bindPortHint")}</p>
+                    <Show when={handoffKey()}>
+                      <Banner tone="danger" message={t("handoff.secretWarning")} />
+                    </Show>
+                    <For each={HANDOFF_FILES}>
+                      {(file) => (
+                        <div class="flex flex-col gap-1">
+                          <Button
+                            variant="secondary"
+                            onClick={() => {
+                              const values = handoffValues();
+                              if (values) {
+                                downloadHandoff(file, values);
+                              }
+                            }}
+                          >
+                            {t(file.labelKey)}
+                          </Button>
+                          <p class="text-sm text-ink-muted">{t(file.hintKey)}</p>
+                        </div>
+                      )}
+                    </For>
+                  </section>
+
+                  <section class="flex flex-col gap-2">
+                    <h3 class="text-sm font-semibold text-ink">{t("handoff.stepsTitle")}</h3>
+                    <ol class="flex list-decimal flex-col gap-2 pl-5 text-sm text-ink-muted">
+                      <li>{t("handoff.step1")}</li>
+                      <li>{t("handoff.step2")}</li>
+                      <li>{t("handoff.step3")}</li>
+                      <li>{t("handoff.step4")}</li>
+                      <li>{t("handoff.step5")}</li>
+                    </ol>
+                    <div class="flex flex-wrap gap-2">
+                      <A
+                        href={screenHref("activation", tenantId(), row().store_id)}
+                        class="inline-flex min-h-touch items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink"
+                      >
+                        {t("handoff.goActivation")}
+                      </A>
+                      <A
+                        href={screenHref("apiKeys", tenantId(), row().store_id)}
+                        class="inline-flex min-h-touch items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink"
+                      >
+                        {t("handoff.goApiKeys")}
+                      </A>
+                    </div>
+                  </section>
+                </Show>
+              </div>
+            )}
+          </Show>
+        </Drawer>
 
         <ConfirmDialog
           open={storeCrud.mode() === "confirming"}

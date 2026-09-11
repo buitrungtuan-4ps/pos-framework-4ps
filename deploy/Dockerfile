@@ -18,12 +18,22 @@ COPY dashboard/package.json dashboard/pnpm-lock.yaml ./
 RUN npm install --global pnpm@10 && pnpm install --frozen-lockfile
 COPY dashboard/ ./
 # `pnpm build` = tsc --noEmit, the no-hardcoded-strings lint, i18n parity, the WCAG contrast
-# audit, the step budget, then vite build. Every one of those reads only `dashboard/`, which is
-# all this stage copies — and that is a constraint on what may be chained into that script. The
-# installer-template check briefly was, and it reads `deploy/edge/*.ps1` two directories up: this
-# build died on `ENOENT` while CI stayed green, because CI runs the same script against a full
-# checkout. It was redundant there anyway — `build (windows-2022)` in `pr.yml` already runs that
-# script, where a real PowerShell parser checks the emitted installers as well as their drift.
+# audit, the installer check, the step budget, the unit tests, then vite build.
+#
+# THE CONSTRAINT: this stage copies `dashboard/` and nothing else, so anything chained into that
+# script may read only `dashboard/`. That has been violated twice by the same check — the
+# installer-template gate reads `deploy/edge/*.ps1`, two directories up. Each time the image died
+# on `ENOENT` while every PR gate stayed green, because CI runs the same script against a full
+# checkout where the path resolves. #228 unchained it; #269 chained it back to give the drift gate
+# a home in the `dashboard` job, and re-broke the image.
+#
+# It is chained again now, and safely: `installer-syntax.mjs` checks whether those templates are
+# reachable and skips them with a loud line when they are not, while `--emit` — the Windows job's
+# invocation, whose only purpose is handing them to a PowerShell parser — still refuses their
+# absence. So the script knows where it is instead of the build chain having to remember.
+#
+# `pr.yml`'s `dashboard` job now also builds from a copy of `dashboard/` with nothing above it,
+# which is this stage's condition reproduced. A third violation fails there rather than here.
 RUN pnpm build
 
 # ---- builder (runs natively on the runner) --------------------------------------------

@@ -32,6 +32,7 @@ import {
   Banner,
   Button,
   Card,
+  ComboboxField,
   PageHeader,
   SelectField,
   StatusBadge,
@@ -644,11 +645,18 @@ export function Inventory() {
           }
         >
           <div class="flex flex-col gap-4">
-            <SelectField
+            <ComboboxField
               label={t("inventory.item")}
               value={recItem()}
-              options={items().map((item) => ({ value: item.menu_item_id, label: item.name }))}
+              options={items().map((item) => ({
+                value: item.menu_item_id,
+                label: item.name,
+                keywords: Object.values(item.name_translations),
+              }))}
               onChange={setRecItem}
+              placeholder={t("catalog.chooseItem")}
+              searchLabel={t("catalog.searchItems")}
+              emptyLabel={t("picker.noMatch")}
               // Which item a recipe is for is fixed once it exists; the hint says so rather than
               // leaving a disabled control with no explanation.
               disabled={recEditing() !== null}
@@ -675,8 +683,10 @@ export function Inventory() {
                     {(line, index) => (
                       <div class="flex flex-wrap items-end gap-2">
                         <div class="grow">
-                          <SelectField
+                          <ComboboxField
                             label={t("inventory.lineIngredient")}
+                            searchLabel={t("inventory.searchIngredients")}
+                            emptyLabel={t("picker.noMatch")}
                             value={line.ingredient}
                             options={(ingredients() ?? []).map((ing) => ({
                               value: ing.id,

@@ -12,6 +12,11 @@
 //! One flag: `--self-test`, which the over-the-air installer runs against a *staged* binary before
 //! swapping it in ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md) Amendment 1).
 //!
+//! One subcommand: `archive`, which seals, opens and checks a store archive
+//! ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). It is here rather than in
+//! a tool of its own because the place a store archive is restored *to* is a till, and a till has
+//! this binary on it already. See [`archive`] for the shape.
+//!
 //! # Why `main` is not `#[tokio::main]`
 //!
 //! On Windows the process may be started by the Service Control Manager, which requires the **main
@@ -23,9 +28,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use pos_edge::{
-    Edge, EdgeConfig, EdgeError, EdgeSession, ServeOutcome, StoreIdentity, serve_until,
+    ArchiveKey, Edge, EdgeConfig, EdgeError, EdgeSession, ServeOutcome, StoreIdentity, serve_until,
     shutdown_signal, telemetry,
 };
+use pos_proto::ids::StoreId;
 use store_sqlite::SqliteStore;
 
 #[cfg(windows)]
@@ -39,6 +45,12 @@ fn main() -> Result<(), EdgeError> {
 
     if std::env::args().any(|argument| argument == pos_edge::SELF_TEST_FLAG) {
         return self_test(&path);
+    }
+
+    // Before anything opens a database or binds a socket: `archive` is a one-shot tool run by a
+    // technician on a bench, not the store server starting up.
+    if std::env::args().nth(1).as_deref() == Some(ARCHIVE_COMMAND) {
+        return archive(&std::env::args().skip(2).collect::<Vec<_>>());
     }
 
     // On Windows, hand the main thread to the Service Control Manager when SCM is the one that
@@ -161,4 +173,137 @@ fn self_test(config_path: &std::path::Path) -> Result<(), EdgeError> {
         "self-test passed: this binary runs and reads this store's configuration"
     );
     Ok(())
+}
+
+/// The subcommand that seals, opens and checks a store archive.
+const ARCHIVE_COMMAND: &str = "archive";
+
+/// Where the archive key is read from.
+///
+/// An environment variable and not an argument, deliberately: an argument is in `ps` output, in
+/// the shell history, and in the terminal recording of the incident everybody is watching. The key
+/// that opens a shop's personal data does not go there.
+const ARCHIVE_KEY_VAR: &str = "POS_EDGE_ARCHIVE_KEY";
+
+/// `pos-edge archive` — the store side of [ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md).
+///
+/// ```text
+/// POS_EDGE_ARCHIVE_KEY=<64 hex characters> pos-edge archive <verb> --store <ULID> [paths]
+///
+///   seal   --database <store.sqlite> --archive <out>   snapshot a store and seal it
+///   open   --archive <in> --into <store.sqlite>        restore an archive to a database
+///   verify --archive <in>                              open it, check it, say what is inside
+/// ```
+///
+/// `verify` is the drill: it proves an archive is not merely present but *loadable*, which is the
+/// only thing that makes it a backup ([ADR-0046](../../../docs/adr/0046-backups-and-restore.md)).
+///
+/// # Errors
+///
+/// [`EdgeError::Archive`] if an argument is missing or wrong, the key is absent or malformed, or
+/// the archive does not open.
+fn archive(arguments: &[String]) -> Result<(), EdgeError> {
+    let verb = arguments.first().map(String::as_str).unwrap_or_default();
+    let store = StoreId::new(
+        parse_ulid(&flag(arguments, "--store")?)
+            .ok_or_else(|| EdgeError::Archive("--store is not a ULID".to_owned()))?,
+    );
+    let key = ArchiveKey::parse(
+        &std::env::var(ARCHIVE_KEY_VAR)
+            .map_err(|_error| EdgeError::Archive(format!("set {ARCHIVE_KEY_VAR}")))?,
+    )
+    .map_err(|error| EdgeError::Archive(error.to_string()))?;
+
+    match verb {
+        "seal" => {
+            let database = PathBuf::from(flag(arguments, "--database")?);
+            let destination = PathBuf::from(flag(arguments, "--archive")?);
+            let work = tempdir_beside(&destination)?;
+            let snapshot = work.join("snapshot.sqlite");
+            // `VACUUM INTO` refuses an existing file, so clear whatever an interrupted run left.
+            let _ = std::fs::remove_file(&snapshot);
+            store_sqlite::snapshot_to(&database, &snapshot).map_err(EdgeError::Store)?;
+            let sealed = pos_edge::backup::seal_file(&snapshot, &key, store)
+                .map_err(|error| EdgeError::Archive(error.to_string()))?;
+            let _ = std::fs::remove_file(&snapshot);
+            let _ = std::fs::remove_dir(&work);
+            std::fs::write(&destination, &sealed)
+                .map_err(|error| EdgeError::Archive(error.to_string()))?;
+            tracing::info!(
+                bytes = sealed.len(),
+                archive = %destination.display(),
+                "sealed this store's archive"
+            );
+            Ok(())
+        }
+        "open" => {
+            let sealed = read_archive(arguments)?;
+            let destination = PathBuf::from(flag(arguments, "--into")?);
+            let bytes = pos_edge::backup::open_file(&sealed, &key, store, &destination)
+                .map_err(|error| EdgeError::Archive(error.to_string()))?;
+            tracing::info!(
+                bytes,
+                database = %destination.display(),
+                "opened the archive; check it with `archive verify` before serving from it"
+            );
+            Ok(())
+        }
+        "verify" => {
+            let source = PathBuf::from(flag(arguments, "--archive")?);
+            let sealed = read_archive(arguments)?;
+            // Beside the archive, not in the working directory: a technician runs this from
+            // wherever they happen to be, and a restored database is the size of a database.
+            let work = tempdir_beside(&source)?;
+            let restored = work.join("verify.sqlite");
+            let _ = std::fs::remove_file(&restored);
+            let bytes = pos_edge::backup::open_file(&sealed, &key, store, &restored)
+                .map_err(|error| EdgeError::Archive(error.to_string()))?;
+            let verdict = store_sqlite::integrity_check(&restored).map_err(EdgeError::Store)?;
+            let _ = std::fs::remove_file(&restored);
+            let _ = std::fs::remove_dir(&work);
+            if verdict == "ok" {
+                tracing::info!(
+                    bytes,
+                    "the archive opens and the database inside it is sound"
+                );
+                Ok(())
+            } else {
+                Err(EdgeError::Archive(format!(
+                    "the archive opened but the database inside it is damaged: {verdict}"
+                )))
+            }
+        }
+        other => Err(EdgeError::Archive(format!(
+            "unknown archive verb {other:?}; expected seal, open or verify"
+        ))),
+    }
+}
+
+fn read_archive(arguments: &[String]) -> Result<Vec<u8>, EdgeError> {
+    std::fs::read(flag(arguments, "--archive")?)
+        .map_err(|error| EdgeError::Archive(error.to_string()))
+}
+
+/// The value that follows `name`.
+fn flag(arguments: &[String], name: &str) -> Result<String, EdgeError> {
+    arguments
+        .iter()
+        .position(|argument| argument == name)
+        .and_then(|at| arguments.get(at + 1))
+        .cloned()
+        .ok_or_else(|| EdgeError::Archive(format!("{name} <value> is required")))
+}
+
+/// A scratch directory next to where the caller is writing, so a multi-gigabyte restore does not
+/// land on a small `/tmp` and so the temporary file is on the same filesystem as its destination.
+fn tempdir_beside(destination: &std::path::Path) -> Result<PathBuf, EdgeError> {
+    let parent = destination.parent().unwrap_or(std::path::Path::new("."));
+    let work = parent.join(".pos-edge-archive");
+    std::fs::create_dir_all(&work).map_err(|error| EdgeError::Archive(error.to_string()))?;
+    Ok(work)
+}
+
+/// A ULID from its 26-character text, or `None`.
+fn parse_ulid(text: &str) -> Option<pos_proto::ulid::Ulid> {
+    text.parse().ok()
 }

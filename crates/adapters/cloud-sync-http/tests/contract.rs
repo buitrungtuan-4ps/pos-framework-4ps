@@ -54,6 +54,11 @@ fn reporting_store() -> StoreId {
 /// *wire* carries a signature and the adapter decodes it, not that Ed25519 works.
 const ARTIFACT_SIGNATURE: &[u8] = b"stub-detached-signature";
 
+/// The archive key the stub cloud issues, in the 64-character text form the real cloud answers
+/// with (ADR-0124). A fixed value, not a random one: the suite asserts the adapter returns what the
+/// cloud said, not that the cloud invented something unpredictable.
+const ARCHIVE_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 /// Lowercase hex, matching what the cloud will put in the header.
 ///
 /// Pushed a nibble at a time rather than through `format!`, which the workspace lints reject for
@@ -191,11 +196,64 @@ impl HttpTransport for StubCloud {
                     ..HttpResponse::default()
                 }
             }
+            // ADR-0124: a `POST` for a value that reads like a read, because the first call
+            // *mints* the key. The stub answers the same shape the cloud does — a JSON object with
+            // one 64-character `key` — so the adapter's length check is exercised for real.
+            path if path.starts_with("/sync/stores/") && path.ends_with("/archive-key") => {
+                let payload = serde_json::json!({ "key": ARCHIVE_KEY });
+                HttpResponse {
+                    status: 200,
+                    body: serde_json::to_vec(&payload).expect("the stub encodes its own JSON"),
+                    ..HttpResponse::default()
+                }
+            }
             other => HttpResponse {
                 status: 404,
                 body: format!("the stub cloud has no route {other}").into_bytes(),
                 ..HttpResponse::default()
             },
+        };
+        Ok(response)
+    }
+
+    async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<HttpResponse, TransportError> {
+        // Exactly one route on this transport is not JSON — the sealed archive upload (ADR-0124).
+        // The query string is split off the way a server routes, so `taken_at` can be checked
+        // rather than swallowed by the path match.
+        let (route, query) = path.split_once('?').unwrap_or((path, ""));
+        let response = if route.starts_with("/sync/stores/") && route.ends_with("/archive") {
+            // The three things the real route insists on before it stores a byte: the archive
+            // magic, an opaque content type, and a `taken_at` that parses. A missing `taken_at` is
+            // a refusal rather than a silent "now" — the moment the snapshot was taken is what
+            // names the object, and guessing it would file an archive under the wrong instant.
+            let sealed = body.starts_with(b"P4PSTORE");
+            let stamped = query
+                .strip_prefix("taken_at=")
+                .is_some_and(|value| value.parse::<i64>().is_ok());
+            if sealed && stamped && content_type == "application/octet-stream" {
+                HttpResponse {
+                    status: 202,
+                    body: Vec::new(),
+                    ..HttpResponse::default()
+                }
+            } else {
+                HttpResponse {
+                    status: 400,
+                    body: b"these bytes are not a store archive".to_vec(),
+                    ..HttpResponse::default()
+                }
+            }
+        } else {
+            HttpResponse {
+                status: 404,
+                body: format!("the stub cloud has no byte route {route}").into_bytes(),
+                ..HttpResponse::default()
+            }
         };
         Ok(response)
     }

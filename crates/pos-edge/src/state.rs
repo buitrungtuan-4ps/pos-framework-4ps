@@ -14,6 +14,7 @@ use std::sync::Arc;
 use crate::clock::SystemClock;
 use crate::config::EdgeConfig;
 use crate::fanout::Fanout;
+use crate::lease_state::CurrentStanding;
 use crate::origins::Origins;
 use crate::pairing::Pairing;
 
@@ -71,6 +72,14 @@ pub struct AppState {
     /// Shaped like `pairing` for the same reason: the config-pull loop writes it and the request
     /// path reads it, so one `Arc` is shared and the mutability is interior.
     pub origins: Arc<Origins>,
+    /// Whether a replacement machine has taken this store
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// The same `Arc` the [`Edge`](crate::app::Edge) owns and the config-pull loop writes, so the
+    /// `pos-lease-standing` header on every `/api/*` answer and the four commands that refuse are
+    /// reading one value. Here for the same reason `origins` is: the request path runs in front of
+    /// any handler and needs the fact without reaching into the application layer.
+    pub standing: Arc<CurrentStanding>,
 }
 
 impl AppState {
@@ -92,6 +101,18 @@ impl AppState {
         self
     }
 
+    /// Shares the lease standing the composed [`Edge`](crate::app::Edge) owns
+    /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+    ///
+    /// `serve` uses this, exactly as it uses [`Self::with_pairing`]: one `Arc`, written by the
+    /// config-pull loop, read by the commands that refuse and by the response header that warns.
+    /// Tests and the on-fakes example keep the default, which reads `Active`.
+    #[must_use]
+    pub fn with_lease_standing(mut self, standing: Arc<CurrentStanding>) -> Self {
+        self.standing = standing;
+        self
+    }
+
     /// Builds the shared state over an existing fan-out.
     ///
     /// The composed edge shares one fan-out between the application loop (which publishes) and the
@@ -106,6 +127,7 @@ impl AppState {
             clock: SystemClock,
             pairing: Arc::new(Pairing::new()),
             origins: Arc::new(Origins::new()),
+            standing: Arc::new(CurrentStanding::new()),
         }
     }
 }

@@ -13,10 +13,11 @@
 
 .DESCRIPTION
     WHAT IT DOES, in order: creates the state directory, puts the binary in the first update
-    slot and points `current` at it, writes the bootstrap config, registers the service with
-    the Service Control Manager, sets the service-scoped environment (including the store key),
-    sets the failure actions that are what bring the box back after an update, and starts it.
-    Idempotent: running it twice is safe and re-applies the same layout.
+    slot and points `current` at it, writes the bootstrap config, opens the listen port on the
+    Private firewall profile, registers the service with the Service Control Manager, sets the
+    service-scoped environment (including the store key), sets the failure actions that are what
+    bring the box back after an update, and starts it. Idempotent: running it twice is safe and
+    re-applies the same layout.
 
     -SyncKey IS A SECRET. Prefer passing it interactively over leaving it in shell history.
 
@@ -136,6 +137,48 @@ $configPath = Join-Path $Root 'config.toml'
 # UTF-8 without a BOM: the TOML parser reads a leading BOM as part of the first key and refuses
 # the file. Set-Content -Encoding utf8 writes one on Windows PowerShell 5.1, which is what ships.
 [System.IO.File]::WriteAllText($configPath, $config, (New-Object System.Text.UTF8Encoding $false))
+
+# THE PORT, WHICH ON WINDOWS IS NOT OPEN.
+#
+# Defender Firewall drops an inbound connection to a port no rule names, silently and with no
+# log line on either side. So a Windows store installed correctly in every other respect comes
+# up, opens its database, writes its pairing URL — and every till on the floor gets a connection
+# timeout. That failure is indistinguishable from a broken install, which is why it belongs here
+# rather than as a step in a runbook for a technician to type and mis-type.
+#
+# Private profile only. This port is plain HTTP on the shop LAN, so a rule on the Public profile
+# would offer the till API to whatever network the box is plugged into next. Domain is left alone
+# deliberately: an estate that joins its boxes to a domain manages this with group policy, and an
+# installer should not quietly compete with it.
+#
+# Idempotent by removal, not by skip: re-running with a different port has to *move* the rule
+# rather than leave the old port open beside the new one. A firewall that is switched off, driven
+# by policy, or absent from this Windows build is not an install failure - it is warned about and
+# skipped, because the service itself is registered and running either way.
+$firewallPort = "$BindPort"
+$firewallRule = "pos-edge (TCP $firewallPort)"
+if (Get-Command -Name New-NetFirewallRule -ErrorAction SilentlyContinue) {
+    try {
+        # Matches every port this installer has ever opened, not just the one it is opening now.
+        $stale = @(Get-NetFirewallRule -DisplayName 'pos-edge (TCP *)' -ErrorAction SilentlyContinue)
+        foreach ($rule in $stale) { Remove-NetFirewallRule -Name $rule.Name -ErrorAction Stop }
+        $firewall = @{
+            DisplayName = $firewallRule
+            Direction   = 'Inbound'
+            Action      = 'Allow'
+            Protocol    = 'TCP'
+            LocalPort   = $firewallPort
+            Profile     = 'Private'
+            Description = 'Pizza 4P''s POS edge: tills and kitchen displays on the shop LAN.'
+        }
+        New-NetFirewallRule @firewall | Out-Null
+        Write-Host "firewall: inbound TCP $firewallPort allowed on the Private profile"
+    } catch {
+        Write-Warning "could not open TCP $firewallPort ($($_.Exception.Message)). The service will run, but no device on the LAN will reach it until that port is open."
+    }
+} else {
+    Write-Warning "New-NetFirewallRule is not available on this Windows build. Open inbound TCP $firewallPort by hand, or no till will reach this box."
+}
 
 # The service. `sc.exe create` fails if it already exists, so a re-run reconfigures instead —
 # which is also how the binPath is corrected if the layout moved.

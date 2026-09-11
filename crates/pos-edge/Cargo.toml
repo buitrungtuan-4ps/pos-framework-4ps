@@ -110,6 +110,26 @@ argon2 = "0.5"
 # The OS CSPRNG (ADR-0030), for the single-use pairing code and device tokens.
 getrandom = "0.3"
 
+# The sealed store archive (ADR-0124). A store's database carries the buyer details a B2B tax
+# invoice needs (ADR-0107) — the one place personal data sits at a till — so the copy that leaves
+# the shop is sealed here, at the shop, and the cloud only ever relays bytes it cannot read.
+# XChaCha20-Poly1305 from RustCrypto: authenticated, so a tampered archive fails to open rather
+# than restoring quietly, and 192-bit-nonce so a nonce drawn from `getrandom` per archive needs no
+# counter to stay unique. `chacha20` 0.10 is already in the lock (the `rand` 0.10 line the
+# tokio-postgres stack pulls), so this adds the AEAD wrapper — `aead`, `poly1305`, `cipher` — and
+# not a cipher implementation.
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+# The key this process holds, wiped on drop with a write the optimiser may not remove. A plain
+# `fill(0)` in `Drop` is dead-store elimination waiting to happen, which would make the claim in
+# `backup::ArchiveKey` false rather than merely weak. Already in the lock (rustls, ed25519-dalek,
+# the keyring adapter), and `chacha20poly1305`'s own `zeroize` feature pulls the same version.
+zeroize = "1.8"
+# A store database is mostly text and repeated page structure, and the wire out of a shop is its
+# uplink, so the archive is deflated before it is sealed. `flate2` is already in the lock (the
+# cloud's PNG decoder) and its default backend is `miniz_oxide` — pure Rust, no zlib to build or
+# ship on a Windows till.
+flate2 = "1"
+
 # Hashes a device token before it is stored (ADR-0091): the registry keeps a
 # SHA-256, never the token, so a stolen pos.db yields no working credential. Same
 # RustCrypto line pos-cloud and blob-garage already pin (sha2 0.11), so this adds

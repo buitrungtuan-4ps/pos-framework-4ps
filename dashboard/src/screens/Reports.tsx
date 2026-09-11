@@ -171,7 +171,14 @@ export function Reports() {
   return (
     <div>
       <PageHeader title={t("reports.title")} description={t("reports.description")} />
-      <RequireContext need="store">
+      {/*
+        The window and the fleet comparison are tenant-scoped; everything below them is one store's.
+        They used to sit inside the store gate together, which meant the console's only cross-store
+        read — the panel whose whole subject is "how do my shops compare" — could not be opened
+        without first picking one shop, and then reported on all of them anyway. The two gates are
+        now the two scopes the reads actually have.
+      */}
+      <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
@@ -187,6 +194,53 @@ export function Reports() {
             <p class="mt-2 text-sm text-ink-muted">{t("reports.windowHint")}</p>
           </Card>
 
+          {/* Cross-store comparison — the tenant's shops side by side, no store context needed. */}
+          <Show when={canReadRevenue()}>
+            <Card
+              title={t("reports.crossStoreTitle")}
+              actions={
+                <Button variant="secondary" disabled={busy()} onClick={() => void loadCrossStore()}>
+                  {t("reports.crossStoreLoad")}
+                </Button>
+              }
+            >
+              <p class="mb-3 text-sm text-ink-muted">{t("reports.crossStoreHint")}</p>
+              <Show when={cross()}>
+                {(stores) => (
+                  <Show
+                    when={stores().length > 0}
+                    fallback={<p class="text-sm text-ink-muted">{t("reports.revenueEmpty")}</p>}
+                  >
+                    <div class="overflow-x-auto">
+                      <table class="w-full text-left text-sm">
+                        <thead>
+                          <tr class="border-b border-line text-ink-muted">
+                            <th class="py-2 pr-4 font-medium">{t("reports.crossStoreStore")}</th>
+                            <th class="py-2 font-medium">{t("reports.crossStoreNet")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={stores()}>
+                            {(store) => (
+                              <tr class="border-b border-line text-ink">
+                                <td class="py-2 pr-4">{store.name}</td>
+                                <td class="py-2 font-medium">{money(store.net, store.currency)}</td>
+                              </tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </div>
+                  </Show>
+                )}
+              </Show>
+            </Card>
+          </Show>
+        </div>
+      </RequireContext>
+
+      <RequireContext need="store">
+        <div class="mt-6 flex flex-col gap-6">
           {/* Activity */}
           <Card
             title={t("reports.activityTitle")}
@@ -371,46 +425,6 @@ export function Reports() {
               </Show>
             </Card>
 
-            {/* Cross-store comparison */}
-            <Card
-              title={t("reports.crossStoreTitle")}
-              actions={
-                <Button variant="secondary" disabled={busy()} onClick={() => void loadCrossStore()}>
-                  {t("reports.crossStoreLoad")}
-                </Button>
-              }
-            >
-              <p class="mb-3 text-sm text-ink-muted">{t("reports.crossStoreHint")}</p>
-              <Show when={cross()}>
-                {(stores) => (
-                  <Show
-                    when={stores().length > 0}
-                    fallback={<p class="text-sm text-ink-muted">{t("reports.revenueEmpty")}</p>}
-                  >
-                    <div class="overflow-x-auto">
-                      <table class="w-full text-left text-sm">
-                        <thead>
-                          <tr class="border-b border-line text-ink-muted">
-                            <th class="py-2 pr-4 font-medium">{t("reports.crossStoreStore")}</th>
-                            <th class="py-2 font-medium">{t("reports.crossStoreNet")}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <For each={stores()}>
-                            {(store) => (
-                              <tr class="border-b border-line text-ink">
-                                <td class="py-2 pr-4">{store.name}</td>
-                                <td class="py-2 font-medium">{money(store.net, store.currency)}</td>
-                              </tr>
-                            )}
-                          </For>
-                        </tbody>
-                      </table>
-                    </div>
-                  </Show>
-                )}
-              </Show>
-            </Card>
           </Show>
         </div>
       </RequireContext>

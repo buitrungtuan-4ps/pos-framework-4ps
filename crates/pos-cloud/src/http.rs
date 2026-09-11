@@ -65,6 +65,7 @@
 
 use core::fmt;
 use core::fmt::Write as _;
+use core::future::Future;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -124,6 +125,9 @@ use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
 use crate::activation::{ActivationCodeStore, hash_code, mint_device_credential};
 use crate::alerts::{AlertRecord, AlertStore, AlertStoreError};
+use crate::archive::{
+    ArchiveSecret, ArchiveStore, StoreArchive, StoreArchiveKey, archive_object_key,
+};
 use crate::audit::{
     AuditActor, AuditEntry, AuditId, AuditRecorder, AuditStore, NoopAuditRecorder, TrailOrder,
 };
@@ -149,7 +153,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
-use crate::catalog_compiler::{compile_layout_book, compile_menu};
+use crate::catalog_compiler::{compile_layout_book, compile_menu, would_cycle};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config::InternalSecret;
 use crate::config_tree::{
@@ -212,6 +216,10 @@ use crate::registry::{
 use crate::retention::{RetentionError, SubjectStore};
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
+};
+use crate::store_groups::{
+    BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
+    StoreGroupStore, StoreGroupStoreError,
 };
 use crate::tax::{TaxRateEntry, TaxRateStore, TaxRateStoreError, to_table};
 use crate::translations::{TranslationGrid, TranslationStore};
@@ -1202,6 +1210,489 @@ where
             blobs,
             releases,
         })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store archives ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md))
+// ---------------------------------------------------------------------------------------------
+
+/// The largest sealed archive the cloud accepts from a store.
+///
+/// The same number `pos_edge::backup::MAX_ARCHIVE_BYTES` refuses to *write*, so a store cannot
+/// produce an archive this rejects — the two must move together, and a mismatch shows up as a
+/// store whose backups have silently stopped. On the route rather than the reverse proxy, for the
+/// reason the release upload gives: a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
+/// `external` posture) still gets the limit.
+const MAX_STORE_ARCHIVE_BYTES: usize = 256 * 1024 * 1024;
+
+/// What the collaborators the archive routes need: the key store and clock that authenticate a
+/// store, the object store the sealed bytes go to, the registry that indexes them, and the
+/// box-local secret that wraps a key.
+#[derive(Clone)]
+struct ArchiveState<K, C, B, R> {
+    keys: K,
+    clock: C,
+    blobs: B,
+    archives: R,
+    secret: ArchiveSecret,
+}
+
+/// When the store took the snapshot — its clock, not the cloud's.
+///
+/// Required rather than defaulted to "now": a shop that was offline for a day ships yesterday's
+/// archive today, and the recovery point is when the snapshot was taken. Defaulting would quietly
+/// record the wrong one, and the wrong one is the number an operator reads when deciding what they
+/// have lost.
+#[derive(Debug, Clone, Deserialize)]
+struct ArchiveUploadQuery {
+    taken_at: i64,
+}
+
+/// The key a store seals with, as it comes back over `/sync`.
+#[derive(Debug, Clone, Serialize)]
+struct ArchiveKeyResponse {
+    key: String,
+}
+
+/// What the cloud recorded, echoed so a store can log what it shipped.
+#[derive(Debug, Clone, Serialize)]
+struct ArchiveAcceptedResponse {
+    object_key: String,
+    size_bytes: i64,
+    sha256: String,
+}
+
+/// Builds the store-archive sub-router
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
+///
+/// Merged only when **both** an object store and `archive_key_secret` are configured, exactly like
+/// [`ota_artifact_router`]: with no object store there is nowhere for the bytes to go, and with no
+/// secret there is nowhere safe to keep the key, so a route that always answers `503` would be
+/// worse than one honestly absent. `pos-cloud`'s boot says which of the two is missing.
+///
+/// Two routes, both authenticated by the store's own scoped key and both held to it by
+/// [`require_store`] — the same gate the report route beside them uses (S1). `Scope::ReadConfig` is
+/// what a store's provisioned key carries, and it is what the whole store-facing `/sync` surface is
+/// gated on; a new scope would be a scope every already-issued key lacks, which would show up as
+/// archives that never start.
+pub fn store_archive_router<K, C, B, R>(
+    keys: K,
+    clock: C,
+    blobs: B,
+    archives: R,
+    secret: ArchiveSecret,
+) -> Router
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/sync/stores/{store_id}/archive-key",
+            post(serve_store_archive_key::<K, C, B, R>),
+        )
+        .route(
+            "/sync/stores/{store_id}/archive",
+            post(receive_store_archive::<K, C, B, R>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            MAX_STORE_ARCHIVE_BYTES,
+        ))
+        .with_state(ArchiveState {
+            keys,
+            clock,
+            blobs,
+            archives,
+            secret,
+        })
+}
+
+/// `POST /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted
+/// on the first ask.
+///
+/// Mint-on-first-ask rather than an admin action, because a store that starts archiving must not
+/// need somebody to have remembered; the console reveals and rotates it afterwards. The mint is
+/// insert-if-absent in one statement ([`ArchiveStore::adopt_key`]), so two tills asking in the same
+/// second get the *same* key rather than two — one of which would be the key to archives nobody
+/// could open.
+///
+/// A `POST` for a value that reads like a `GET`, and deliberately so: the first call has a side
+/// effect that outlives it. A `GET` that mints is one a caching proxy or a browser prefetch may
+/// perform unasked, and the thing it would create here is the key to every archive this store ever
+/// ships.
+async fn serve_store_archive_key<K, C, B, R>(
+    State(state): State<ArchiveState<K, C, B, R>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+) -> Response
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    let (grant, store_id) =
+        match authorize_store(&state.keys, &state.clock, &headers, &store_id).await {
+            Ok(pair) => pair,
+            Err(refusal) => return refusal,
+        };
+
+    match state.archives.wrapped_key(grant.tenant(), store_id).await {
+        Ok(Some(wrapped)) => match StoreArchiveKey::unwrap_from(&wrapped, &state.secret) {
+            Ok(key) => Json(ArchiveKeyResponse { key: key.to_text() }).into_response(),
+            Err(error) => {
+                // The stored key does not open under this box's secret. Almost always
+                // `archive_key_secret` was changed, which orphans every key wrapped under the old
+                // one (ADR-0124 Amendment 1). `Internal`, not `Unavailable`: retrying does not fix
+                // it, and telling a store to back off and try again would be a lie.
+                tracing::error!(
+                    %error,
+                    store = %store_id,
+                    "a stored archive key does not open under archive_key_secret; was the secret                      changed?"
+                );
+                api_error(
+                    ErrorStatus::Internal,
+                    "this store's archive key cannot be read with the configured                      archive_key_secret",
+                )
+            }
+        },
+        Ok(None) => mint_store_archive_key(&state, grant.tenant(), store_id).await,
+        Err(error) => {
+            tracing::warn!(%error, "reading the archive registry failed");
+            service_unavailable("archive registry")
+        }
+    }
+}
+
+/// Mints, wraps and adopts a key, answering with whichever key is current afterwards.
+async fn mint_store_archive_key<K, C, B, R>(
+    state: &ArchiveState<K, C, B, R>,
+    tenant: TenantId,
+    store_id: StoreId,
+) -> Response
+where
+    R: ArchiveStore,
+    C: ClockSource,
+{
+    let Ok(minted) = StoreArchiveKey::mint() else {
+        return api_error(
+            ErrorStatus::Internal,
+            "the OS entropy source is unavailable, so no archive key could be minted",
+        );
+    };
+    let wrapped = match minted.wrap(&state.secret) {
+        Ok(wrapped) => wrapped,
+        Err(error) => {
+            tracing::error!(%error, "wrapping a new archive key failed");
+            return api_error(
+                ErrorStatus::Internal,
+                "the new archive key could not be wrapped for storage",
+            );
+        }
+    };
+    let minted_at = state.clock.now().as_milliseconds_since_epoch();
+    // The returned wrapped key is whichever one is current — this one, or the one a concurrent
+    // till adopted a moment earlier. Unwrapping *that* rather than answering with `minted` is what
+    // makes the race safe rather than merely rare.
+    let current = match state
+        .archives
+        .adopt_key(tenant, store_id, &wrapped, minted_at)
+        .await
+    {
+        Ok(current) => current,
+        Err(error) => {
+            tracing::warn!(%error, "recording a new archive key failed");
+            return service_unavailable("archive registry");
+        }
+    };
+    match StoreArchiveKey::unwrap_from(&current, &state.secret) {
+        Ok(key) => Json(ArchiveKeyResponse { key: key.to_text() }).into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a just-adopted archive key does not open");
+            api_error(
+                ErrorStatus::Internal,
+                "this store's archive key cannot be read with the configured archive_key_secret",
+            )
+        }
+    }
+}
+
+/// `POST /sync/stores/{store_id}/archive?taken_at=` — a store ships a sealed archive.
+///
+/// The cloud is a **sink for bytes it cannot read**. It does not open the archive, does not parse
+/// it, and holds no key material for it beyond the wrapped column — the seal happened at the till
+/// precisely so that a store's buyer details ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md))
+/// never exist here in plaintext.
+///
+/// What it *does* check is the header: eight magic bytes and a format version, so an obviously
+/// wrong body (a plain database, a truncated download, an HTML error page from a proxy) is refused
+/// at upload instead of discovered at restore. That is a shape check and emphatically not
+/// verification — only the key opens an archive, and the cloud has none.
+async fn receive_store_archive<K, C, B, R>(
+    State(state): State<ArchiveState<K, C, B, R>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ArchiveUploadQuery>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+{
+    let (grant, store_id) =
+        match authorize_store(&state.keys, &state.clock, &headers, &store_id).await {
+            Ok(pair) => pair,
+            Err(refusal) => return refusal,
+        };
+    if query.taken_at <= 0 {
+        return api_error(
+            ErrorStatus::InvalidArgument,
+            "taken_at: milliseconds since the epoch, from the store's own clock",
+        );
+    }
+    if !looks_like_a_store_archive(&body) {
+        return api_error(
+            ErrorStatus::InvalidArgument,
+            "this body is not a store archive; the store seals one with `pos-edge archive`",
+        );
+    }
+
+    let key_text = archive_object_key(store_id, query.taken_at);
+    let Ok(object_key) = BlobKey::parse(&key_text) else {
+        // Unreachable: the components are a ULID and a zero-padded integer. Reported rather than
+        // unwrapped, because a panic here would take the process down for a case the types nearly
+        // rule out.
+        return api_error(
+            ErrorStatus::Internal,
+            "the archive's storage key could not be built",
+        );
+    };
+    if let Err(error) = state.blobs.put(&object_key, &body).await {
+        tracing::warn!(%error, key = object_key.as_str(), "storing a store archive failed");
+        return service_unavailable("object store");
+    }
+
+    let size_bytes = i64::try_from(body.len()).unwrap_or(i64::MAX);
+    let sha256 = hex_digest(&body);
+    let archive = StoreArchive {
+        store_id,
+        taken_at: query.taken_at,
+        object_key: key_text,
+        size_bytes,
+        sha256: sha256.clone(),
+        received_at: state.clock.now().as_milliseconds_since_epoch(),
+    };
+    if let Err(error) = state
+        .archives
+        .record_archive(grant.tenant(), &archive)
+        .await
+    {
+        // The bytes are stored and the index row is not, so the archive exists but nothing knows
+        // it does. `Unavailable` rather than `Internal`, because the store retrying is exactly the
+        // right response: `put` is last-write-wins and `record_archive` is an upsert, so the retry
+        // converges rather than duplicating.
+        tracing::warn!(%error, "recording a store archive failed after the bytes were stored");
+        return service_unavailable("archive registry");
+    }
+    tracing::info!(
+        store = %store_id,
+        size_bytes,
+        taken_at = query.taken_at,
+        "a store archive arrived"
+    );
+    Json(ArchiveAcceptedResponse {
+        object_key: archive.object_key,
+        size_bytes,
+        sha256,
+    })
+    .into_response()
+}
+
+/// Authenticates a store's own scoped key and holds it to the store in the path.
+///
+/// Extracted because both archive routes need the identical four steps, and a second copy is a
+/// second place for one of them to go missing.
+async fn authorize_store<K, C>(
+    keys: &K,
+    clock: &C,
+    headers: &HeaderMap,
+    store_id: &str,
+) -> Result<(crate::auth::apikey::Grant, StoreId), Response>
+where
+    K: ApiKeyStore,
+    C: ClockSource,
+{
+    let grant = authenticate(keys, clock, headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    require_scope(&grant, Scope::ReadConfig).map_err(IntoResponse::into_response)?;
+    let store_id = match parse_ulid_fields([("store_id", store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return Err(refusal),
+    };
+    require_store(&grant, store_id).map_err(IntoResponse::into_response)?;
+    Ok((grant, store_id))
+}
+
+/// Whether these bytes begin the way `pos_edge::backup` writes an archive.
+///
+/// The magic and the format byte, and nothing else. It costs nine bytes to tell an operator "you
+/// uploaded the wrong file" at the moment they can still fix it, rather than at a restore months
+/// later; it proves nothing about the contents, which only the key can.
+fn looks_like_a_store_archive(body: &[u8]) -> bool {
+    const MAGIC: &[u8] = b"P4PSTORE";
+    const FORMAT_VERSION: u8 = 1;
+    body.get(..MAGIC.len()) == Some(MAGIC) && body.get(MAGIC.len()) == Some(&FORMAT_VERSION)
+}
+
+// --- The console's view of what a store has archived (ADR-0124 slice 3) ------------------------
+
+/// How many archives one console read returns.
+///
+/// The window is measured in weeks and archives are daily, so this comfortably covers a whole
+/// window and then some. It is a cap rather than a page: the question this answers is "what can I
+/// restore", and an operator scrolling past sixty backups is not the case to design for.
+const MAX_ARCHIVES_LISTED: i64 = 60;
+
+/// What the console-facing archive read needs.
+#[derive(Clone)]
+struct ArchiveReadState<R, A, C> {
+    archives: R,
+    admin: A,
+    clock: C,
+}
+
+/// One archive as the console sees it.
+///
+/// No key and nothing that could open one — this is the *index*, and the key is a separate,
+/// deliberate ask. `object_key` is here because it is what an operator types into a restore.
+#[derive(Debug, serde::Serialize)]
+struct ArchiveView {
+    /// When the store took the snapshot, Unix ms. **This is the recovery point** — not
+    /// `received_at_ms`, which is when a possibly-delayed upload landed.
+    taken_at_ms: i64,
+    /// When the cloud received it, Unix ms. The gap between the two is how far behind a store's
+    /// uplink was.
+    received_at_ms: i64,
+    /// How many bytes, sealed.
+    size_bytes: i64,
+    /// The cloud's hex SHA-256 of the sealed bytes as they arrived, so a download can be checked
+    /// before anybody spends time on a key.
+    sha256: String,
+    /// Where the bytes are in the object store.
+    object_key: String,
+}
+
+/// The answer: what this store has, newest first.
+#[derive(Debug, serde::Serialize)]
+struct StoreArchivesResponse {
+    archives: Vec<ArchiveView>,
+}
+
+/// Builds the console-facing archive read
+/// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md) slice 3).
+///
+/// Mounted **unconditionally**, unlike [`store_archive_router`], and that is the decision: the
+/// store-facing routes need an object store and `archive_key_secret` to do anything at all, but
+/// this one needs only the registry. An operator whose `archive_key_secret` has gone missing is
+/// exactly the operator who most needs to see what archives exist — hiding the list along with the
+/// routes would take the evidence away at the moment it matters.
+pub fn store_archive_admin_router<R, A, C>(archives: R, admin: A, clock: C) -> Router
+where
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/stores/{store_id}/archives",
+            get(admin_list_store_archives::<R, A, C>),
+        )
+        .with_state(ArchiveReadState {
+            archives,
+            admin,
+            clock,
+        })
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/archives",
+    params(
+        ("store_id" = String, Path, description = "The store whose archives to list (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "This store's sealed archives, newest first — the first row's \
+                                      taken_at_ms is the recovery point. An empty list is this \
+                                      answer too: the store has never archived"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The archive registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "fleet",
+)]
+/// `GET /admin/stores/{store_id}/archives?tenant_id=` — what this store has shipped, newest first.
+///
+/// Behind [`ConsolePermission::Read`], the same gate the fleet view uses: "when did this store last
+/// back up" is an operational fact every console role should be able to see, and a Viewer who
+/// cannot see that a shop has not archived in a fortnight is a Viewer who cannot raise it.
+async fn admin_list_store_archives<R, A, C>(
+    State(state): State<ArchiveReadState<R, A, C>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    R: ArchiveStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant, store) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store)),
+            Err(refusal) => return refusal,
+        };
+    match state
+        .archives
+        .list_archives(tenant, store, MAX_ARCHIVES_LISTED)
+        .await
+    {
+        // An empty list is a `200`, not a `404`: a store that has never archived is a real and
+        // important answer, and the one an operator most needs to see plainly.
+        Ok(archives) => Json(StoreArchivesResponse {
+            archives: archives
+                .into_iter()
+                .map(|archive| ArchiveView {
+                    taken_at_ms: archive.taken_at,
+                    received_at_ms: archive.received_at,
+                    size_bytes: archive.size_bytes,
+                    sha256: archive.sha256,
+                    object_key: archive.object_key,
+                })
+                .collect(),
+        })
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "reading a store's archives failed");
+            service_unavailable("archive registry")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2605,6 +3096,1816 @@ where
         })
 }
 
+// --- Store groups (`/admin/store-groups`, ADR-0122) ---------------------------------------------
+
+/// The most stores one group may hold ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §8).
+///
+/// A batch publish runs synchronously inside its request and fans out over the membership, so the
+/// cap is what keeps that request finite: at roughly 10–30 ms per store publish, 200 is a handful of
+/// seconds. `docs/capacity-and-reliability.md` models tenants up to 1,000 stores, and such a tenant
+/// uses several groups — which is how an operator of that size already thinks about their estate
+/// (by city, by format, by pilot cohort). The alternative is a background job queue, which ADR-0122
+/// rejects *for now* and names the trigger for: a real tenant needing one cohort above this number.
+const MAX_STORE_GROUP_MEMBERS: usize = 200;
+
+/// The collaborators the store-group routes need.
+///
+/// The registry is here for one reason and it is worth stating: a membership write checks every id
+/// against the tenant's stores. Without that a typo'd ULID sits in the cohort permanently, and every
+/// batch reports it `skipped` forever — a cohort quietly one store short of what the operator
+/// believes it is.
+#[derive(Clone)]
+struct StoreGroupState<Grp, Reg, Cfg, A, C> {
+    groups: Grp,
+    registry: Reg,
+    /// Where a batch publish writes: the same seam every single-store publish already uses.
+    config_trees: Cfg,
+    /// The node kinds a batch may publish, built once in `main.rs` — see [`batch_nodes`].
+    nodes: Arc<Vec<Arc<dyn BatchNode>>>,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A store group on the wire, with its membership.
+///
+/// Members ride along with the list rather than needing a read per group: the console's first
+/// question about a cohort is how big it is, and a screen that had to fetch each one would show a
+/// list of names with the counts arriving afterwards.
+#[derive(Debug, Clone, Serialize)]
+struct StoreGroupView {
+    group_id: String,
+    tenant_id: String,
+    name: String,
+    status: EntityStatus,
+    store_ids: Vec<String>,
+    etag: String,
+}
+
+/// A `POST /admin/store-groups` body. The id is server-minted.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateStoreGroupRequest {
+    tenant_id: String,
+    name: String,
+}
+
+/// A `PATCH /admin/store-groups/{group_id}` body: rename and/or set the status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateStoreGroupRequest {
+    tenant_id: String,
+    name: String,
+    status: String,
+}
+
+/// A `PUT /admin/store-groups/{group_id}/members` body: the whole membership, not a delta.
+///
+/// Wholesale rather than add/remove because the operator's mental model is a *set* — "these are the
+/// airport shops" — and a delta API makes two admins' concurrent edits merge into a cohort neither
+/// of them chose. Under `If-Match` (ADR-0095 shape C) the second one is refused instead.
+#[derive(Debug, Clone, Deserialize)]
+struct SetStoreGroupMembersRequest {
+    tenant_id: String,
+    store_ids: Vec<String>,
+}
+
+/// Builds the store-group sub-router ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+///
+/// CRUD over the cohorts a tenant publishes to. Reads are behind [`ConsolePermission::Read`]; the
+/// writes are behind [`ConsolePermission::ManageStores`], the same permission that creates and
+/// renames a store — a group is a way of *organising* stores, not a way of changing what they run,
+/// and publishing to one is a separate act behind `console.config.publish`.
+///
+/// Ids are server-minted: a batch names its group forever in `config_batches`, so a client that
+/// could choose one could collide with a cohort's history.
+pub fn store_group_router<Grp, Reg, Cfg, A, C>(
+    groups: Grp,
+    registry: Reg,
+    config_trees: Cfg,
+    nodes: Vec<Arc<dyn BatchNode>>,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/store-groups",
+            get(admin_list_store_groups::<Grp, Reg, Cfg, A, C>)
+                .post(admin_create_store_group::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}",
+            axum::routing::patch(admin_update_store_group::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/members",
+            axum::routing::put(admin_set_store_group_members::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/publish",
+            post(admin_publish_to_store_group::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/batches",
+            get(admin_list_store_group_batches::<Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/store-groups/{group_id}/batches/{batch_id}",
+            get(admin_read_store_group_batch::<Grp, Reg, Cfg, A, C>),
+        )
+        .with_state(StoreGroupState {
+            groups,
+            registry,
+            config_trees,
+            nodes: Arc::new(nodes),
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The `503` a store-group persistence failure becomes.
+fn store_group_error_response(error: &StoreGroupStoreError) -> Response {
+    tracing::error!(%error, "a store-group operation failed");
+    api_error(
+        ErrorStatus::Unavailable,
+        "the store-group service is unavailable",
+    )
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups",
+    params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
+    responses(
+        (status = 200, description = "The tenant's store groups, creation order, each with its \
+                                      membership. Archived groups are included: an operator needs to \
+                                      see a retired cohort in order to bring it back"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin lists a tenant's store groups, each with its membership.
+async fn admin_list_store_groups<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let rows = match state.groups.list_groups(tenant_id).await {
+        Ok(rows) => rows,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let mut views: Vec<StoreGroupView> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let members = match state
+            .groups
+            .list_members(tenant_id, row.record.group_id)
+            .await
+        {
+            Ok(members) => members,
+            Err(error) => return store_group_error_response(&error),
+        };
+        views.push(StoreGroupView {
+            group_id: row.record.group_id.to_string(),
+            tenant_id: row.record.tenant_id.to_string(),
+            name: row.record.name,
+            status: row.record.status,
+            store_ids: members.iter().map(ToString::to_string).collect(),
+            etag: row.etag.as_str().to_owned(),
+        });
+    }
+    (StatusCode::OK, Json(views)).into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/store-groups",
+    responses(
+        (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
+                                      holds no stores yet — membership is a second call, so naming \
+                                      a cohort is never itself an act with a fleet-wide reach"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or name is empty", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable, or OS entropy is unavailable to mint an id", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin creates an empty store group.
+///
+/// Empty, deliberately: a group that started holding every store would make *creating* one an act
+/// with a fleet-wide blast radius, and an operator naming a cohort has not yet said what is in it.
+async fn admin_create_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let name = request.name.trim();
+    if name.is_empty() {
+        return FieldRefusal::new("name is required", "name", "REQUIRED").into_response();
+    }
+    let Some(group_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StoreGroupId::new)
+    else {
+        return service_unavailable("store groups");
+    };
+    let record = StoreGroup {
+        group_id,
+        tenant_id,
+        name: name.to_owned(),
+        status: EntityStatus::Active,
+    };
+    match state.groups.create_group(&record).await {
+        Ok(version) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.create",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_created(record, &version)
+        }
+        Err(error) => store_group_error_response(&error),
+    }
+}
+
+#[utoipa::path(
+    patch,
+    path = "/admin/store-groups/{group_id}",
+    params(
+        ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
+    ),
+    responses(
+        (status = 200, description = "The group as it now stands, with its new ETag"),
+        (status = 400, description = "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin renames a group and/or archives or restores it.
+async fn admin_update_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<UpdateStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (group_id, tenant_id) =
+        match parse_ulid_fields([("group_id", &group_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
+    let name = request.name.trim();
+    if name.is_empty() {
+        return FieldRefusal::new("name is required", "name", "REQUIRED").into_response();
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return entity_status_refusal();
+    };
+    let record = StoreGroup {
+        group_id,
+        tenant_id,
+        name: name.to_owned(),
+        status,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.groups.update_group(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.update",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_ok(record, &version)
+        }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("store group"),
+        Err(error) => store_group_error_response(&error),
+    }
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/store-groups/{group_id}/members",
+    params(
+        ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
+    ),
+    responses(
+        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag"),
+        (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "More than 200 stores, or an id that names no store of this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store or the registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin replaces a group's membership.
+///
+/// Every id is checked against the tenant's own stores before anything is written. An id that names
+/// no store of this tenant is a `422` rather than a stored row, because the failure it otherwise
+/// produces is invisible: the cohort looks right on screen, and every batch quietly reports one more
+/// `skipped` store than the operator expects, forever.
+async fn admin_set_store_group_members<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<SetStoreGroupMembersRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageStores,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (group_id, tenant_id) =
+        match parse_ulid_fields([("group_id", &group_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
+    if request.store_ids.len() > MAX_STORE_GROUP_MEMBERS {
+        return unprocessable_violations(&[format!(
+            "a store group holds at most {MAX_STORE_GROUP_MEMBERS} stores; split this cohort in two"
+        )]);
+    }
+    let mut members: Vec<StoreId> = Vec::with_capacity(request.store_ids.len());
+    for id in &request.store_ids {
+        let Ok([parsed]) = parse_ulid_fields([("store_ids", id)]) else {
+            return ulid_refusal(&["store_ids"]);
+        };
+        let store_id = StoreId::new(parsed);
+        // Deduplicated here rather than left to the table's primary key: the operator's list is what
+        // the response echoes back, and a duplicate that silently vanished on write would make the
+        // screen and the database disagree about what was saved.
+        if !members.contains(&store_id) {
+            members.push(store_id);
+        }
+    }
+    let known = match state.registry.list_stores(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| row.record.store_id)
+            .collect::<Vec<_>>(),
+        Err(error) => return registry_error_response(&error),
+    };
+    if let Some(stranger) = members.iter().find(|id| !known.contains(id)) {
+        return unprocessable_violations(&[format!(
+            "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
+        )]);
+    }
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .groups
+        .set_members(tenant_id, group_id, &members, &expected)
+        .await
+    {
+        Ok(UpdateOutcome::Updated(version)) => {
+            let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "store_group.members",
+                "store_group",
+                &group_id.to_string(),
+                None,
+                serde_json::to_value(&membership).ok(),
+            )
+            .await;
+            (
+                StatusCode::OK,
+                [(ETAG, version.as_str().to_owned())],
+                Json(serde_json::json!({ "store_ids": membership, "etag": version.as_str() })),
+            )
+                .into_response()
+        }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("store group"),
+        Err(error) => store_group_error_response(&error),
+    }
+}
+
+// --- Batch publish to a store group (ADR-0122 §3–§7) -------------------------------------------
+
+/// A boxed future, because a trait object cannot return `impl Future`.
+///
+/// The workspace carries no `async-trait` dependency and adding one is an ADR's worth of decision
+/// (`docs/adr/0002-*`), so the two batch traits box by hand. One allocation per node per store,
+/// against a database round-trip and a versioned config write — it does not register.
+type BoxFuture<'a, T> = core::pin::Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// One node kind a batch publish can deliver
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
+///
+/// # Why a registry of trait objects and not thirteen routes
+///
+/// Each single-store publish lives behind its own `State` struct carrying its own authoring seam —
+/// the tax table, the catalog, the roster. One batch route needs all of them. Making the route
+/// generic over thirteen store types would give it thirteen type parameters and make adding a
+/// fourteenth node a change to the route's signature, `main.rs`, and every test that builds one.
+/// A `Vec<Arc<dyn BatchNode>>` erases them: `main.rs` builds the registry from the same store
+/// handles the single-store routers already hold, the route knows only this trait, and a new node
+/// kind is a new `impl` and one more line in the registry.
+///
+/// # What an implementation must not do
+///
+/// Compile its own document. Every implementation below delegates to the *same* `*_nodes` function
+/// its single-store route calls, which is what makes ADR-0122 §3 true rather than aspirational: a
+/// batch cannot validate more loosely than the route it fans out, because it is not a second copy
+/// of the rule.
+pub trait BatchNode: Send + Sync {
+    /// The node's wire name — what a batch request names and what `config_batches.node` records.
+    fn key(&self) -> &'static str;
+
+    /// The audit action each member's publish records, identical to the single-store route's.
+    fn audit_action(&self) -> &'static str;
+
+    /// Config node keys a member's Store layer must already carry (ADR-0122 §7).
+    ///
+    /// Checked per store before anything is written; a member missing one is `skipped` with the
+    /// missing key named, and the batch carries on. Empty for every node but `menu`.
+    ///
+    /// # Why only `menu` has any
+    ///
+    /// §7 seeds the table with exactly two rules — `menu` requires `tax` and `locale`, and every
+    /// node requires the store to be active — and says the rest are added "as nodes acquire
+    /// dependencies". A code audit of all sixteen publishes turned up four more *candidates*:
+    /// `inventory` and `qr` arguably need `menu` (a recipe and a QR menu both key on item ids a
+    /// store has no book for), `qr` and `tax` arguably need `locale` (no currency, nothing to
+    /// price), and `campaigns` needs it only for the ones carrying a scheduled window or a money
+    /// amount. None is adopted here, deliberately: each was one reader's reading, an added
+    /// prerequisite makes a batch *skip* stores that would otherwise have been published to, and
+    /// a wrong skip is as silent as the failure the rule exists to prevent. They are written down
+    /// rather than dropped, so the next person to look has the list.
+    fn prerequisites(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// Reads the tenant-wide authoring model once, before any store is touched.
+    ///
+    /// A refusal here refuses the **whole batch** and writes nothing, because it means the
+    /// instruction itself is unpublishable — an unknown capability flag, a menu that will not
+    /// compile, an empty reason-code list — and would be the same answer at all 200 members.
+    /// A per-store refusal is a different thing and belongs in [`BatchNodePlan::compile_for`].
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>>;
+}
+
+/// The compiled half of a batch: what to write, once per member.
+pub trait BatchNodePlan: Send + Sync {
+    /// A compact, PII-free summary of what was compiled, for `config_batches` and the trail.
+    fn summary(&self) -> serde_json::Value;
+
+    /// The nodes to write at one member.
+    ///
+    /// Eleven of the thirteen ignore `store_id` entirely — see [`SameEverywhere`]. `permissions`
+    /// and `floor` do not: their document *is* the store's own, so they compile here, once per
+    /// member. Both are still batchable, because the instruction ("recompile each of these shops'
+    /// own rosters") carries nothing store-specific even though every result does.
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>>;
+}
+
+/// A plan whose document is byte-identical at every member — the shape eleven of the thirteen have.
+struct SameEverywhere {
+    nodes: Vec<(String, serde_json::Value)>,
+    summary: serde_json::Value,
+}
+
+impl SameEverywhere {
+    /// Boxes this plan as the trait object [`BatchNode::plan`] returns.
+    fn boxed<'a>(self) -> Box<dyn BatchNodePlan + 'a> {
+        Box::new(self)
+    }
+}
+
+impl BatchNodePlan for SameEverywhere {
+    fn summary(&self) -> serde_json::Value {
+        self.summary.clone()
+    }
+
+    fn compile_for(
+        &self,
+        _store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(core::future::ready(Ok(self.nodes.clone())))
+    }
+}
+
+/// Deserialises a batch's free-form `arguments` into the shape one node takes.
+///
+/// The refusal names the node, because `arguments` is untyped on the wire and the operator's
+/// mistake is nearly always "the right JSON for a different node kind".
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response, the same shape every other route helper carries"
+)]
+fn batch_arguments<T>(node: &str, arguments: &serde_json::Value) -> Result<T, Response>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(arguments.clone()).map_err(|error| {
+        api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("the arguments are not what the `{node}` node takes: {error}"),
+            &[("arguments", "INVALID_VALUE")],
+        )
+    })
+}
+
+/// The `capabilities` node: the flag booleans an operator ticked.
+struct CapabilitiesBatchNode;
+
+/// A `capabilities` batch's arguments — the same `flags` map the single-store body carries.
+#[derive(Debug, Clone, Deserialize)]
+struct CapabilitiesBatchArguments {
+    flags: std::collections::BTreeMap<String, bool>,
+}
+
+impl BatchNode for CapabilitiesBatchNode {
+    fn key(&self) -> &'static str {
+        "capabilities"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.capabilities.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: CapabilitiesBatchArguments = batch_arguments(self.key(), arguments)?;
+            let nodes = capability_flag_nodes(&parsed.flags)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "flags": parsed.flags.len() }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `channels` node: which sales channels each member answers.
+struct ChannelsBatchNode;
+
+/// A `channels` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct ChannelsBatchArguments {
+    #[serde(default)]
+    enabled: Vec<String>,
+}
+
+impl BatchNode for ChannelsBatchNode {
+    fn key(&self) -> &'static str {
+        "channels"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.channels.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: ChannelsBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = channels_node(&parsed.enabled)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "enabled": parsed.enabled }),
+                nodes: vec![("channels".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `tender` node: which payment methods each member accepts.
+struct TenderBatchNode;
+
+/// A `tender` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct TenderBatchArguments {
+    #[serde(default)]
+    accepted: Vec<String>,
+}
+
+impl BatchNode for TenderBatchNode {
+    fn key(&self) -> &'static str {
+        "tender"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.tender.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: TenderBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = tender_node(&parsed.accepted)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "accepted": parsed.accepted }),
+                nodes: vec![("tender".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `origins` node: the extra origins each member's edge answers (ADR-0111).
+struct OriginsBatchNode;
+
+/// An `origins` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct OriginsBatchArguments {
+    #[serde(default)]
+    allowed: Vec<String>,
+}
+
+impl BatchNode for OriginsBatchNode {
+    fn key(&self) -> &'static str {
+        "origins"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.origins.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: OriginsBatchArguments = batch_arguments(self.key(), arguments)?;
+            let value = origins_node(&parsed.allowed)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "allowed": parsed.allowed.len() }),
+                nodes: vec![("origins".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `qr` node: whether QR ordering is on at each member, and the guardrails (ADR-0116).
+struct QrBatchNode;
+
+impl BatchNode for QrBatchNode {
+    fn key(&self) -> &'static str {
+        "qr"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.qr.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: QrGuardrailFields = batch_arguments(self.key(), arguments)?;
+            let enabled = parsed.enabled;
+            let value = qr_guardrail_node(&parsed)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "enabled": enabled }),
+                nodes: vec![("qr".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `vendors` node: each member's per-marketplace policies.
+struct VendorPoliciesBatchNode;
+
+/// A `vendor_policies` batch's arguments.
+#[derive(Debug, Clone, Deserialize)]
+struct VendorPoliciesBatchArguments {
+    #[serde(default)]
+    policies: Vec<PublishedVendorPolicy>,
+}
+
+impl BatchNode for VendorPoliciesBatchNode {
+    fn key(&self) -> &'static str {
+        "vendor_policies"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.vendors.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        _tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: VendorPoliciesBatchArguments = batch_arguments(self.key(), arguments)?;
+            let count = parsed.policies.len();
+            let value = vendor_policies_node(parsed.policies)?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "policies": count }),
+                nodes: vec![("vendors".to_owned(), value)],
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `tax` node: the tenant's authored rate table (ADR-0074).
+struct TaxBatchNode<Tax> {
+    tax_rates: Tax,
+}
+
+impl<Tax> BatchNode for TaxBatchNode<Tax>
+where
+    Tax: TaxRateStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "tax"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.tax.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, rates) = tax_nodes(&self.tax_rates, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "rates": rates }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `campaigns` node: the tenant's authored promotions (ADR-0077).
+struct CampaignsBatchNode<Camp> {
+    campaigns: Camp,
+}
+
+impl<Camp> BatchNode for CampaignsBatchNode<Camp>
+where
+    Camp: CampaignStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "campaigns"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.campaigns.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, campaigns) = campaigns_nodes(&self.campaigns, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "campaigns": campaigns }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `inventory` node: the tenant's ingredients, recipes and suppliers (ADR-0079).
+struct InventoryBatchNode<Inv> {
+    inventory: Inv,
+}
+
+impl<Inv> BatchNode for InventoryBatchNode<Inv>
+where
+    Inv: InventoryStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "inventory"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.inventory.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, summary) = inventory_nodes(&self.inventory, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::to_value(summary).unwrap_or(serde_json::Value::Null),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `reason_codes` node: the managed list a void or discount must cite (ADR-0115).
+struct ReasonCodesBatchNode<R> {
+    reason_codes: R,
+}
+
+impl<R> BatchNode for ReasonCodesBatchNode<R>
+where
+    R: ReasonCodeStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "reason_codes"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "config.reason_codes.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let (nodes, summary) = reason_code_nodes(&self.reason_codes, tenant_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::to_value(summary).unwrap_or(serde_json::Value::Null),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `menu` node (and the `layout` node it moves with): a compiled price book (ADR-0066).
+///
+/// The one node with prerequisites. A menu published to a store whose tree has no `tax` produces a
+/// shop that boots, syncs, shows the menu, takes the order — and then raises
+/// `DomainError::TaxRateNotConfigured` at the payment screen, with nothing before that saying a
+/// word (ADR-0122 §7). `locale` is the same shape of trap one layer down: without it the store has
+/// no currency, timezone or business-date cutoff to price and close against.
+struct MenuBatchNode<Cat> {
+    catalog: Cat,
+}
+
+/// A `menu` batch's arguments: which menu to compile.
+#[derive(Debug, Clone, Deserialize)]
+struct MenuBatchArguments {
+    menu_id: String,
+}
+
+impl<Cat> BatchNode for MenuBatchNode<Cat>
+where
+    Cat: CatalogStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "menu"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "catalog.publish"
+    }
+
+    fn prerequisites(&self) -> &'static [&'static str] {
+        &["tax", "locale"]
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(async move {
+            let parsed: MenuBatchArguments = batch_arguments(self.key(), arguments)?;
+            let menu_id = match parse_ulid_fields([("menu_id", &parsed.menu_id)]) {
+                Ok([menu_id]) => MenuId::new(menu_id),
+                Err(refusal) => return Err(refusal),
+            };
+            let nodes = menu_nodes(&self.catalog, tenant_id, menu_id).await?;
+            Ok(SameEverywhere {
+                summary: serde_json::json!({ "menu_id": menu_id.to_string() }),
+                nodes,
+            }
+            .boxed())
+        })
+    }
+}
+
+/// The `permissions` node: each member's own roster, compiled per store (ADR-0070).
+struct PermissionsBatchNode<P> {
+    people: P,
+}
+
+/// [`PermissionsBatchNode`]'s plan — it holds no compiled document, because there is not one.
+struct PermissionsBatchPlan<'a, P> {
+    people: &'a P,
+    tenant_id: TenantId,
+}
+
+impl<P> BatchNodePlan for PermissionsBatchPlan<'_, P>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync,
+{
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({ "compiled": "per-store" })
+    }
+
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(async move {
+            permissions_nodes(self.people, self.tenant_id, store_id)
+                .await
+                .map(|(nodes, _staff)| nodes)
+        })
+    }
+}
+
+impl<P> BatchNode for PermissionsBatchNode<P>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "permissions"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "permissions.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(core::future::ready(Ok(Box::new(PermissionsBatchPlan {
+            people: &self.people,
+            tenant_id,
+        })
+            as Box<dyn BatchNodePlan + 'a>)))
+    }
+}
+
+/// The `floor` and `stations` nodes: each member's own plan, compiled per store (ADR-0072).
+struct FloorBatchNode<F> {
+    floor: F,
+}
+
+/// [`FloorBatchNode`]'s plan — per store, for the same reason as [`PermissionsBatchPlan`].
+struct FloorBatchPlan<'a, F> {
+    floor: &'a F,
+    tenant_id: TenantId,
+}
+
+impl<F> BatchNodePlan for FloorBatchPlan<'_, F>
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync,
+{
+    fn summary(&self) -> serde_json::Value {
+        serde_json::json!({ "compiled": "per-store" })
+    }
+
+    fn compile_for(
+        &self,
+        store_id: StoreId,
+    ) -> BoxFuture<'_, Result<Vec<(String, serde_json::Value)>, Response>> {
+        Box::pin(async move {
+            floor_nodes(self.floor, self.tenant_id, store_id)
+                .await
+                .map(|(nodes, _summary)| nodes)
+        })
+    }
+}
+
+impl<F> BatchNode for FloorBatchNode<F>
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync + 'static,
+{
+    fn key(&self) -> &'static str {
+        "floor"
+    }
+
+    fn audit_action(&self) -> &'static str {
+        "floor.publish"
+    }
+
+    fn plan<'a>(
+        &'a self,
+        tenant_id: TenantId,
+        _arguments: &'a serde_json::Value,
+    ) -> BoxFuture<'a, Result<Box<dyn BatchNodePlan + 'a>, Response>> {
+        Box::pin(core::future::ready(Ok(Box::new(FloorBatchPlan {
+            floor: &self.floor,
+            tenant_id,
+        })
+            as Box<dyn BatchNodePlan + 'a>)))
+    }
+}
+
+/// Every node kind a batch can publish, in the order the console offers them.
+///
+/// The one place the thirteen are assembled. `main.rs` calls this with the same store handles the
+/// single-store routers already hold, so a node cannot be wired into a batch without being wired
+/// into its own route first — and the three ADR-0122 §4 excludes (`locale`, `store_profile`, the
+/// generic level write) are absent by simply never appearing here.
+pub fn batch_nodes<Cat, Tax, Camp, Inv, R, P, F>(
+    catalog: Cat,
+    tax_rates: Tax,
+    campaigns: Camp,
+    inventory: Inv,
+    reason_codes: R,
+    people: P,
+    floor: F,
+) -> Vec<Arc<dyn BatchNode>>
+where
+    Cat: CatalogStore + Send + Sync + 'static,
+    Tax: TaxRateStore + Send + Sync + 'static,
+    Camp: CampaignStore + Send + Sync + 'static,
+    Inv: InventoryStore + Send + Sync + 'static,
+    R: ReasonCodeStore + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore + Send + Sync + 'static,
+{
+    vec![
+        Arc::new(MenuBatchNode { catalog }),
+        Arc::new(TaxBatchNode { tax_rates }),
+        Arc::new(CampaignsBatchNode { campaigns }),
+        Arc::new(InventoryBatchNode { inventory }),
+        Arc::new(ReasonCodesBatchNode { reason_codes }),
+        Arc::new(PermissionsBatchNode { people }),
+        Arc::new(FloorBatchNode { floor }),
+        Arc::new(CapabilitiesBatchNode),
+        Arc::new(ChannelsBatchNode),
+        Arc::new(TenderBatchNode),
+        Arc::new(OriginsBatchNode),
+        Arc::new(QrBatchNode),
+        Arc::new(VendorPoliciesBatchNode),
+    ]
+}
+
+/// A `POST /admin/store-groups/{group_id}/publish` body.
+#[derive(Debug, Clone, Deserialize)]
+struct PublishToStoreGroupRequest {
+    tenant_id: String,
+    /// Which node kind to publish — one of the thirteen batchable ones (ADR-0122 §4).
+    node: String,
+    /// That node's own arguments: the single-store body minus the `(tenant, store)`. Nodes
+    /// compiled from tenant-wide authoring (`tax`, `campaigns`, `inventory`, `reason_codes`,
+    /// `permissions`, `floor`) take none, and an object is accepted and ignored for them.
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// What a batch did at one store.
+#[derive(Debug, Clone, Serialize)]
+struct BatchResultView {
+    store_id: String,
+    /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
+    outcome: String,
+    /// The refusal's own message, for `skipped` and `failed`; absent when it applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    /// The config version the publish produced, for `applied`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
+    at_ms: i64,
+}
+
+/// A batch and what it did at every member — the response body, and the read routes' shape.
+#[derive(Debug, Clone, Serialize)]
+struct BatchReport {
+    batch_id: String,
+    group_id: String,
+    node: String,
+    arguments: serde_json::Value,
+    actor_email: String,
+    started_at_ms: i64,
+    /// Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished_at_ms: Option<i64>,
+    applied: usize,
+    skipped: usize,
+    failed: usize,
+    results: Vec<BatchResultView>,
+}
+
+/// The most bytes a refusal body may contribute to a batch result's `detail`.
+///
+/// A refusal is one sentence and a `details` array; this is a bound on a value the batch stores
+/// once per member, not a wire limit.
+const MAX_REFUSAL_DETAIL_BYTES: usize = 4096;
+
+/// Renders a route's own refusal into the one line a batch result records.
+///
+/// The batch does not invent a message: it collects the AIP-193 envelope the single-store route
+/// would have returned and stores its `message`. That is what ADR-0122 §6's "the refusal's own
+/// message" means, and it is a correctness property rather than a convenience — the operator
+/// reading a batch report and the operator who published to one store are told the same thing.
+/// A body that will not parse degrades to the status code, which is still more than "failed".
+async fn refusal_detail(response: Response) -> String {
+    let status = response.status();
+    let Ok(bytes) = axum::body::to_bytes(response.into_body(), MAX_REFUSAL_DETAIL_BYTES).await
+    else {
+        return format!("the publish was refused with HTTP {status}");
+    };
+    serde_json::from_slice::<ErrorResponse>(&bytes).map_or_else(
+        |_| format!("the publish was refused with HTTP {status}"),
+        |envelope| envelope.error.message,
+    )
+}
+
+/// One member's outcome, before it is written to `config_batch_results`.
+struct MemberOutcome {
+    outcome: BatchOutcome,
+    detail: Option<String>,
+    version_id: Option<String>,
+}
+
+impl MemberOutcome {
+    /// The store is deliberately protected, or a prerequisite is missing: `skipped`, with why.
+    fn skipped(detail: impl Into<String>) -> Self {
+        Self {
+            outcome: BatchOutcome::Skipped,
+            detail: Some(detail.into()),
+            version_id: None,
+        }
+    }
+
+    /// The publish was attempted and refused: `failed`, carrying the refusal's own message.
+    fn failed(detail: impl Into<String>) -> Self {
+        Self {
+            outcome: BatchOutcome::Failed,
+            detail: Some(detail.into()),
+            version_id: None,
+        }
+    }
+}
+
+/// Publishes one node to one member, deciding between the three outcomes of ADR-0122 §6.
+///
+/// The order matters and is the record's: the **protective** checks run first and produce
+/// `skipped`, so a store that was never going to be written is never filed beside one that broke.
+/// Only once a member has passed them is anything compiled or written, and from there a refusal is
+/// `failed`.
+async fn publish_batch_member<Cfg, C>(
+    config_trees: &Cfg,
+    clock: &C,
+    plan: &dyn BatchNodePlan,
+    prerequisites: &[&str],
+    tenant_id: TenantId,
+    store_id: StoreId,
+    store_status: Option<EntityStatus>,
+) -> MemberOutcome
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    // A membership row can outlive the store it names — there is no foreign key, deliberately
+    // (migration 0061). Both of these are the cohort being one store short of what the operator
+    // believes it is, which is worth saying every time rather than passing over in silence.
+    match store_status {
+        None => {
+            return MemberOutcome::skipped("this store is not in the tenant's registry");
+        }
+        Some(EntityStatus::Archived) => {
+            return MemberOutcome::skipped("this store is archived");
+        }
+        Some(_) => {}
+    }
+
+    for key in prerequisites {
+        match read_store_node(config_trees, tenant_id, store_id, key).await {
+            Ok(serde_json::Value::Null) => {
+                return MemberOutcome::skipped(format!(
+                    "this store has no `{key}` node yet; publish one to it before this"
+                ));
+            }
+            Ok(_) => {}
+            Err(refusal) => return MemberOutcome::failed(refusal_detail(refusal).await),
+        }
+    }
+
+    let nodes = match plan.compile_for(store_id).await {
+        Ok(nodes) => nodes,
+        Err(refusal) => return MemberOutcome::failed(refusal_detail(refusal).await),
+    };
+    match publish_config_nodes(
+        config_trees,
+        clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Store,
+        nodes,
+    )
+    .await
+    {
+        Ok(version_id) => MemberOutcome {
+            outcome: BatchOutcome::Applied,
+            detail: None,
+            version_id: Some(version_id.to_string()),
+        },
+        Err(refusal) => MemberOutcome::failed(refusal_detail(refusal).await),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/store-groups/{group_id}/publish",
+    params(("group_id" = String, Path, description = "The cohort to publish to (a 26-character ULID)")),
+    responses(
+        (status = 200, description = "The batch ran and every member has an outcome — `applied`, \
+                                      `skipped` or `failed`. A `200` does **not** mean every store \
+                                      succeeded: a batch is deliberately not atomic (ADR-0122 §5), \
+                                      and the per-store report is the answer"),
+        (status = 400, description = "An id is not a ULID, the node is not one of the thirteen \
+                                      batchable kinds, or its arguments are the wrong shape", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The group is archived or empty, or the instruction itself is \
+                                      unpublishable (a menu that will not compile, an empty \
+                                      reason-code list) — nothing was written to any store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group, registry or config store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin publishes one node to every member of a store group.
+///
+/// The fan-out, in order: settle the instruction (which node, and can it compile at all), record
+/// the batch, walk the membership recording an outcome for each, close the batch, answer with the
+/// whole report. Nothing is written to any store until the instruction has compiled once, so an
+/// unpublishable request costs no partial write; after that the batch does not stop, because
+/// stopping is what turns one bad shop into fifty un-updated ones (ADR-0122 §5).
+async fn admin_publish_to_store_group<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Json(request): Json<PublishToStoreGroupRequest>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, group_id) =
+        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("group_id", &group_id)]) {
+            Ok([tenant_id, group_id]) => (TenantId::new(tenant_id), StoreGroupId::new(group_id)),
+            Err(refusal) => return refusal,
+        };
+    let Some(node) = state
+        .nodes
+        .iter()
+        .find(|candidate| candidate.key() == request.node)
+    else {
+        return unknown_batch_node(&state.nodes, &request.node);
+    };
+
+    let members = match publishable_membership(&state.groups, tenant_id, group_id).await {
+        Ok(members) => members,
+        Err(refusal) => return refusal,
+    };
+
+    // Compile the instruction once, before anything is written. A refusal here is the request's
+    // own — an unknown flag, a menu that will not compile — and would be the answer at every
+    // member, so it refuses the batch rather than being recorded 200 times.
+    let plan = match node.plan(tenant_id, &request.arguments).await {
+        Ok(plan) => plan,
+        Err(refusal) => return refusal,
+    };
+
+    // One registry read for the whole batch. The alternative — a read per member — turns the
+    // protective check into the batch's dominant cost at the 200-store cap.
+    let statuses = match state.registry.list_stores(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| (row.record.store_id, row.record.status))
+            .collect::<std::collections::BTreeMap<_, _>>(),
+        Err(error) => return registry_error_response(&error),
+    };
+
+    let started_at_ms = state.clock.now().as_milliseconds_since_epoch();
+    let Some(batch_id) = mint_ulid(started_at_ms).map(ConfigBatchId::new) else {
+        return service_unavailable("store groups");
+    };
+    let batch = ConfigBatch {
+        batch_id,
+        tenant_id,
+        group_id,
+        node: node.key().to_owned(),
+        arguments: request.arguments.clone(),
+        actor_email: context.admin.email.clone(),
+        started_at_ms,
+        finished_at_ms: None,
+    };
+    if let Err(error) = state.groups.start_batch(&batch).await {
+        return store_group_error_response(&error);
+    }
+
+    let results =
+        match fan_out_batch(&state, plan.as_ref(), node, &batch, &members, &statuses).await {
+            Ok(results) => results,
+            Err(refusal) => return refusal,
+        };
+
+    let finished_at_ms = state.clock.now().as_milliseconds_since_epoch();
+    if let Err(error) = state
+        .groups
+        .finish_batch(tenant_id, batch_id, finished_at_ms)
+        .await
+    {
+        return store_group_error_response(&error);
+    }
+
+    let report = batch_report(&batch, Some(finished_at_ms), &results);
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "store_group.publish",
+        "store_group",
+        &group_id.to_string(),
+        None,
+        Some(serde_json::json!({
+            "batch_id": batch_id.to_string(),
+            "node": node.key(),
+            "audit_action": node.audit_action(),
+            "summary": plan.summary(),
+            "applied": report.applied,
+            "skipped": report.skipped,
+            "failed": report.failed,
+        })),
+    )
+    .await;
+    (StatusCode::OK, Json(report)).into_response()
+}
+
+/// Walks a cohort's membership, publishing to each member and recording what happened.
+///
+/// The loop is deliberately sequential rather than a `join_all`: ADR-0122 §8 sizes the batch to
+/// finish inside one request at 200 members, and firing 200 concurrent config-tree writes at one
+/// connection pool trades a bounded few seconds for a saturated database and a fresh set of lost
+/// conditional-write races between a batch and itself.
+///
+/// The `Err` here is not a store failing — that is a recorded `failed`. It is the *report* failing
+/// to record, which ADR-0122 §5 makes the one thing that must not be partial, so the batch stops.
+async fn fan_out_batch<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    plan: &dyn BatchNodePlan,
+    node: &Arc<dyn BatchNode>,
+    batch: &ConfigBatch,
+    members: &[StoreId],
+    statuses: &std::collections::BTreeMap<StoreId, EntityStatus>,
+) -> Result<Vec<BatchResult>, Response>
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let mut results = Vec::with_capacity(members.len());
+    for &store_id in members {
+        let member = publish_batch_member(
+            &state.config_trees,
+            &state.clock,
+            plan,
+            node.prerequisites(),
+            batch.tenant_id,
+            store_id,
+            statuses.get(&store_id).copied(),
+        )
+        .await;
+        let result = BatchResult {
+            store_id,
+            outcome: member.outcome,
+            detail: member.detail,
+            version_id: member.version_id,
+            at_ms: state.clock.now().as_milliseconds_since_epoch(),
+        };
+        state
+            .groups
+            .record_result(batch.tenant_id, batch.batch_id, &result)
+            .await
+            .map_err(|error| store_group_error_response(&error))?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+/// The `400` for a node kind that is not one of the thirteen, naming the ones that are.
+///
+/// Listing them is the difference between an operator fixing a typo and an operator reading the
+/// ADR: three of the sixteen publishes are excluded *by construction* (ADR-0122 §4), and someone
+/// who asks for `locale` needs to be told it is per-store, not that it does not exist.
+fn unknown_batch_node(nodes: &[Arc<dyn BatchNode>], asked: &str) -> Response {
+    let known = nodes
+        .iter()
+        .map(|node| node.key())
+        .collect::<Vec<_>>()
+        .join(", ");
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        format!("`{asked}` is not a node a batch can publish; the batchable nodes are {known}"),
+        &[("node", "INVALID_ENUM_VALUE")],
+    )
+}
+
+/// The membership a batch may publish to, or the refusal that says why there is none.
+///
+/// Both refusals are `422` rather than a batch that runs and reports nothing: an archived cohort
+/// and an empty one are states an operator has to *change*, and a `200` carrying zero results
+/// reads as "it worked" for a publish that reached no shop at all.
+async fn publishable_membership<Grp>(
+    groups: &Grp,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+) -> Result<Vec<StoreId>, Response>
+where
+    Grp: StoreGroupStore,
+{
+    let group = find_store_group(groups, tenant_id, group_id).await?;
+    if group.status == EntityStatus::Archived {
+        return Err(api_error(
+            ErrorStatus::Unprocessable,
+            "this store group is archived; restore it before publishing to it",
+        ));
+    }
+    let members = groups
+        .list_members(tenant_id, group_id)
+        .await
+        .map_err(|error| store_group_error_response(&error))?;
+    if members.is_empty() {
+        return Err(api_error(
+            ErrorStatus::Unprocessable,
+            "this store group has no members, so a publish to it would reach nobody",
+        ));
+    }
+    Ok(members)
+}
+
+/// Finds one group within its tenant, or the `404`/`503` that stands in for it.
+async fn find_store_group<Grp>(
+    groups: &Grp,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+) -> Result<StoreGroup, Response>
+where
+    Grp: StoreGroupStore,
+{
+    match groups.list_groups(tenant_id).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|row| row.record)
+            .find(|group| group.group_id == group_id)
+            .ok_or_else(|| not_found("store group")),
+        Err(error) => Err(store_group_error_response(&error)),
+    }
+}
+
+/// Assembles a batch and its per-store results into the report both the publish and the reads return.
+fn batch_report(
+    batch: &ConfigBatch,
+    finished_at_ms: Option<i64>,
+    results: &[BatchResult],
+) -> BatchReport {
+    let count = |wanted: BatchOutcome| results.iter().filter(|r| r.outcome == wanted).count();
+    BatchReport {
+        batch_id: batch.batch_id.to_string(),
+        group_id: batch.group_id.to_string(),
+        node: batch.node.clone(),
+        arguments: batch.arguments.clone(),
+        actor_email: batch.actor_email.clone(),
+        started_at_ms: batch.started_at_ms,
+        finished_at_ms,
+        applied: count(BatchOutcome::Applied),
+        skipped: count(BatchOutcome::Skipped),
+        failed: count(BatchOutcome::Failed),
+        results: results
+            .iter()
+            .map(|result| BatchResultView {
+                store_id: result.store_id.to_string(),
+                outcome: result.outcome.as_wire().to_owned(),
+                detail: result.detail.clone(),
+                config_version_id: result.version_id.clone(),
+                at_ms: result.at_ms,
+            })
+            .collect(),
+    }
+}
+
+/// How many of a group's batches a list returns when the caller names no limit.
+const DEFAULT_BATCH_HISTORY: u32 = 20;
+
+/// The most a caller may ask for in one page of batch history.
+const MAX_BATCH_HISTORY: u32 = 200;
+
+/// A `GET /admin/store-groups/{group_id}/batches` query.
+#[derive(Debug, Clone, Deserialize)]
+struct BatchHistoryQuery {
+    tenant_id: String,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups/{group_id}/batches",
+    params(
+        ("group_id" = String, Path, description = "The cohort whose history to read (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "How many batches, newest first (default 20, max 200)"),
+    ),
+    responses(
+        (status = 200, description = "The group's batches, newest first, each with its per-store \
+                                      outcomes. A member whose last batch was not `applied` is a \
+                                      store that is not running what its group runs"),
+        (status = 400, description = "An id is not a ULID, or limit is out of range", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin reads a group's batch history, each batch with every member's outcome.
+async fn admin_list_store_group_batches<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(group_id): Path<String>,
+    Query(query): Query<BatchHistoryQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, group_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("group_id", &group_id)]) {
+            Ok([tenant_id, group_id]) => (TenantId::new(tenant_id), StoreGroupId::new(group_id)),
+            Err(refusal) => return refusal,
+        };
+    let limit = query.limit.unwrap_or(DEFAULT_BATCH_HISTORY);
+    if limit == 0 || limit > MAX_BATCH_HISTORY {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("limit must be between 1 and {MAX_BATCH_HISTORY}"),
+            &[("limit", "OUT_OF_RANGE")],
+        );
+    }
+    let batches = match state.groups.list_batches(tenant_id, group_id, limit).await {
+        Ok(batches) => batches,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let mut reports = Vec::with_capacity(batches.len());
+    for batch in batches {
+        let results = match state.groups.batch_results(tenant_id, batch.batch_id).await {
+            Ok(results) => results,
+            Err(error) => return store_group_error_response(&error),
+        };
+        let finished = batch.finished_at_ms;
+        reports.push(batch_report(&batch, finished, &results));
+    }
+    (StatusCode::OK, Json(reports)).into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/store-groups/{group_id}/batches/{batch_id}",
+    params(
+        ("group_id" = String, Path, description = "The cohort the batch ran against (a 26-character ULID)"),
+        ("batch_id" = String, Path, description = "The batch (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The batch and an outcome for every member it reached"),
+        (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such batch on this group in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "store groups",
+)]
+/// A super-admin reads one batch and what it did at every member.
+async fn admin_read_store_group_batch<Grp, Reg, Cfg, A, C>(
+    State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path((group_id, batch_id)): Path<(String, String)>,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, group_id, batch_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("group_id", &group_id),
+        ("batch_id", &batch_id),
+    ]) {
+        Ok([tenant_id, group_id, batch_id]) => (
+            TenantId::new(tenant_id),
+            StoreGroupId::new(group_id),
+            ConfigBatchId::new(batch_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    // Read the group's history rather than the batch by id alone: it is what confines the lookup
+    // to the group in the path, so a batch id from a sibling cohort answers `404` and not somebody
+    // else's report.
+    let batches = match state
+        .groups
+        .list_batches(tenant_id, group_id, MAX_BATCH_HISTORY)
+        .await
+    {
+        Ok(batches) => batches,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let Some(batch) = batches.into_iter().find(|batch| batch.batch_id == batch_id) else {
+        return not_found("config batch");
+    };
+    let results = match state.groups.batch_results(tenant_id, batch_id).await {
+        Ok(results) => results,
+        Err(error) => return store_group_error_response(&error),
+    };
+    let finished = batch.finished_at_ms;
+    (
+        StatusCode::OK,
+        Json(batch_report(&batch, finished, &results)),
+    )
+        .into_response()
+}
+
 // --- People & access (`/admin/employees|roles|assignments`, ADR-0070) ---------------------------
 
 /// The collaborators the people routes need, stated independently of [`CloudApp`]: the people store
@@ -3856,6 +6157,38 @@ where
         })
 }
 
+/// Turns a capability-flag map into the config nodes a publish writes, refusing an unknown key.
+///
+/// Every key must be a known §10 capability flag — the console form only sends catalogue keys, and
+/// this keeps a typo from writing a stray boolean into the config document. Extracted so the batch
+/// fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) validates
+/// by the same rule as the single-store route rather than by a second copy of it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn capability_flag_nodes(
+    flags: &std::collections::BTreeMap<String, bool>,
+) -> Result<Vec<(String, serde_json::Value)>, Response> {
+    for key in flags.keys() {
+        if !pos_core::capability::Capability::ALL
+            .iter()
+            .any(|capability| capability.meta().key == key)
+        {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("unknown capability flag: {key}"),
+                &[("flags", "INVALID_ENUM_VALUE")],
+            ));
+        }
+    }
+    Ok(flags
+        .iter()
+        .map(|(key, value)| (key.clone(), serde_json::Value::Bool(*value)))
+        .collect())
+}
+
 /// Merges a store's capability flags into its Store config layer and versions it — the same
 /// load→merge→publish→version shape as the catalog publish, onto the top-level flag keys instead of a
 /// node. Rejects an unknown flag key (the form only sends catalogue keys). The §10 inter-flag rules run
@@ -3888,28 +6221,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    // Every key must be a known §10 capability flag — the form only sends catalogue keys, and this
-    // keeps a typo from writing a stray boolean into the config document.
-    for key in request.flags.keys() {
-        if !pos_core::capability::Capability::ALL
-            .iter()
-            .any(|capability| capability.meta().key == key)
-        {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                format!("unknown capability flag: {key}"),
-                &[("flags", "INVALID_ENUM_VALUE")],
-            );
-        }
-    }
-
     // Load the store's tree, set the flag keys on its Store layer (index 2), and re-publish that layer,
     // preserving the other Store-level keys (`menu`, `layout`, `permissions`).
-    let nodes: Vec<(String, serde_json::Value)> = request
-        .flags
-        .iter()
-        .map(|(key, value)| (key.clone(), serde_json::Value::Bool(*value)))
-        .collect();
+    let nodes = match capability_flag_nodes(&request.flags) {
+        Ok(nodes) => nodes,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -4230,6 +6547,31 @@ where
         })
 }
 
+/// Compiles a tenant's authored rates into the store's `tax` node, with the rate count for the trail.
+///
+/// A read, not a write: the publish composes the node from whatever the table holds now, so the
+/// version it was read at is nothing this path can use. Shared with the batch fan-out
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3) — the node is the
+/// same at every member, so a batch compiles it once.
+async fn tax_nodes<Tax>(
+    tax_rates: &Tax,
+    tenant_id: TenantId,
+) -> Result<(Vec<(String, serde_json::Value)>, usize), Response>
+where
+    Tax: TaxRateStore,
+{
+    let entries = match tax_rates.list_tax_rates(tenant_id).await {
+        Ok((entries, _version)) => entries,
+        Err(error) => return Err(tax_rate_error_response(&error)),
+    };
+    let count = entries.len();
+    let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
+        tracing::error!("could not serialise a tax rate table");
+        return Err(service_unavailable("tax-rate"));
+    };
+    Ok((vec![("tax".to_owned(), tax_value)], count))
+}
+
 /// Assembles a tenant's authored rates into a `TaxRateTable`, writes it as the store's `tax` node, and
 /// versions it — the same load→merge→publish→version shape as the other node publishes.
 async fn admin_publish_tax<Tax, Cfg, A, C>(
@@ -4261,20 +6603,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    // A read, not a write: the publish composes the `tax` node from whatever the table holds now, so
-    // the version it was read at is nothing this path can use.
-    let entries = match state.tax_rates.list_tax_rates(tenant_id).await {
-        Ok((entries, _version)) => entries,
-        Err(error) => return tax_rate_error_response(&error),
-    };
-    let Ok(tax_value) = serde_json::to_value(to_table(&entries)) else {
-        tracing::error!("could not serialise a tax rate table");
-        return service_unavailable("tax-rate");
-    };
-
     // Set the `tax` key on the store's Store layer (index 2) and re-publish it, preserving the other
     // Store-level keys (`menu`, `layout`, `permissions`, `floor`, capability flags).
-    let nodes = vec![("tax".to_owned(), tax_value)];
+    let (nodes, rate_count) = match tax_nodes(&state.tax_rates, tenant_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -4299,7 +6633,7 @@ where
             "store",
             &store_id.to_string(),
             None,
-            serde_json::to_value(entries.len()).ok(),
+            serde_json::to_value(rate_count).ok(),
         )
         .await;
         (
@@ -5081,12 +7415,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let enabled = match parse_known_tokens::<SalesChannel>("enabled", &request.enabled) {
-        Ok(tokens) => tokens,
+    let value = match channels_node(&request.enabled) {
+        Ok(value) => value,
         Err(refusal) => return refusal,
-    };
-    let Ok(value) = serde_json::to_value(PublishedChannels::new(enabled)) else {
-        return channels_serialize_unavailable();
     };
     publish_store_settings_node(
         &state,
@@ -5163,12 +7494,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let accepted = match parse_known_tokens::<PaymentMethod>("accepted", &request.accepted) {
-        Ok(tokens) => tokens,
+    let value = match tender_node(&request.accepted) {
+        Ok(value) => value,
         Err(refusal) => return refusal,
-    };
-    let Ok(value) = serde_json::to_value(PublishedTender::new(accepted)) else {
-        return channels_serialize_unavailable();
     };
     publish_store_settings_node(
         &state,
@@ -5255,16 +7583,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let node = match PublishedOrigins::new(&request.allowed) {
-        Ok(node) => node,
-        // The message names the entry and the rule it broke: the operator is fixing a value they
-        // typed, and a published origin is a configuration value, never a secret.
-        Err(refused) => {
-            return api_error(ErrorStatus::InvalidArgument, refused.to_string());
-        }
-    };
-    let Ok(value) = serde_json::to_value(node) else {
-        return channels_serialize_unavailable();
+    let value = match origins_node(&request.allowed) {
+        Ok(value) => value,
+        Err(refusal) => return refusal,
     };
     publish_store_settings_node(
         &state,
@@ -5276,6 +7597,128 @@ where
         value,
     )
     .await
+}
+
+// --- The settings-node compilers, shared with the batch fan-out (ADR-0122 §3) ------------------
+//
+// Each of these turns a request body into the one node value a publish writes, and each is called
+// from exactly two places: the single-store route above, and that node's `BatchNode` impl. Sharing
+// them is what makes ADR-0122 §3 true — a batch runs the *same* validation as the route it fans
+// out, so a value the console could not have published to one store cannot reach fifty either.
+
+/// Compiles the `channels` node: the sales channels a store answers.
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn channels_node(enabled: &[String]) -> Result<serde_json::Value, Response> {
+    let enabled = parse_known_tokens::<SalesChannel>("enabled", enabled)?;
+    serde_json::to_value(PublishedChannels::new(enabled))
+        .map_err(|_| channels_serialize_unavailable())
+}
+
+/// Compiles the `tender` node: the payment methods a store accepts.
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn tender_node(accepted: &[String]) -> Result<serde_json::Value, Response> {
+    let accepted = parse_known_tokens::<PaymentMethod>("accepted", accepted)?;
+    serde_json::to_value(PublishedTender::new(accepted))
+        .map_err(|_| channels_serialize_unavailable())
+}
+
+/// Compiles the `origins` node: the extra origins a store's edge answers (ADR-0111).
+///
+/// The refusal names the entry and the rule it broke: the operator is fixing a value they typed,
+/// and a published origin is a configuration value, never a secret.
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn origins_node(allowed: &[String]) -> Result<serde_json::Value, Response> {
+    let node = PublishedOrigins::new(allowed)
+        .map_err(|refused| api_error(ErrorStatus::InvalidArgument, refused.to_string()))?;
+    serde_json::to_value(node).map_err(|_| channels_serialize_unavailable())
+}
+
+/// Compiles the `vendors` node: a store's per-marketplace policies.
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn vendor_policies_node(
+    policies: Vec<PublishedVendorPolicy>,
+) -> Result<serde_json::Value, Response> {
+    if policies
+        .iter()
+        .any(|policy| policy.availability.is_unspecified() || policy.availability.is_unrecognised())
+    {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a vendor policy names an unknown availability (open/busy/closed)",
+            &[("policies", "INVALID_ENUM_VALUE")],
+        ));
+    }
+    serde_json::to_value(PublishedVendorPolicies::new(policies))
+        .map_err(|_| channels_serialize_unavailable())
+}
+
+/// The QR guardrails themselves, with the `(tenant, store)` a single-store publish also carries
+/// stripped off — which is precisely what makes this node batchable under ADR-0122 §4.
+#[derive(Debug, Clone, Deserialize)]
+struct QrGuardrailFields {
+    enabled: bool,
+    staff_confirmation_required: bool,
+    per_table_limit: u32,
+    rate_window_secs: u64,
+    business_hours: Option<QrBusinessHoursRequest>,
+}
+
+/// Compiles the `qr` node: whether QR ordering is on, and the guardrails around it (ADR-0116).
+#[expect(
+    clippy::result_large_err,
+    reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
+              batch fan-out refuses identically rather than by a second copy of the rule"
+)]
+fn qr_guardrail_node(fields: &QrGuardrailFields) -> Result<serde_json::Value, Response> {
+    let mut node = serde_json::json!({
+        "enabled": fields.enabled,
+        "staff_confirmation_required": fields.staff_confirmation_required,
+        "per_table_limit": fields.per_table_limit,
+        "rate_window_secs": fields.rate_window_secs,
+    });
+    if let Some(hours) = fields.business_hours.as_ref() {
+        let mut out_of_range: Vec<(&str, &str)> = Vec::with_capacity(2);
+        if hours.open_hour > 23 {
+            out_of_range.push(("open_hour", "OUT_OF_RANGE"));
+        }
+        if hours.close_hour > 23 {
+            out_of_range.push(("close_hour", "OUT_OF_RANGE"));
+        }
+        if !out_of_range.is_empty() {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "open_hour and close_hour must be in 0..=23",
+                &out_of_range,
+            ));
+        }
+        if let serde_json::Value::Object(map) = &mut node {
+            map.insert(
+                "business_hours".to_owned(),
+                serde_json::json!({
+                    "open_hour": hours.open_hour,
+                    "close_hour": hours.close_hour,
+                    "tz_offset_minutes": hours.tz_offset_minutes,
+                }),
+            );
+        }
+    }
+    Ok(node)
 }
 
 /// The `503` for the impossible case that a channels/tender node fails to serialise.
@@ -5374,38 +7817,16 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let mut node = serde_json::json!({
-        "enabled": request.enabled,
-        "staff_confirmation_required": request.staff_confirmation_required,
-        "per_table_limit": request.per_table_limit,
-        "rate_window_secs": request.rate_window_secs,
-    });
-    if let Some(hours) = request.business_hours {
-        let mut out_of_range: Vec<(&str, &str)> = Vec::with_capacity(2);
-        if hours.open_hour > 23 {
-            out_of_range.push(("open_hour", "OUT_OF_RANGE"));
-        }
-        if hours.close_hour > 23 {
-            out_of_range.push(("close_hour", "OUT_OF_RANGE"));
-        }
-        if !out_of_range.is_empty() {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "open_hour and close_hour must be in 0..=23",
-                &out_of_range,
-            );
-        }
-        if let serde_json::Value::Object(map) = &mut node {
-            map.insert(
-                "business_hours".to_owned(),
-                serde_json::json!({
-                    "open_hour": hours.open_hour,
-                    "close_hour": hours.close_hour,
-                    "tz_offset_minutes": hours.tz_offset_minutes,
-                }),
-            );
-        }
-    }
+    let node = match qr_guardrail_node(&QrGuardrailFields {
+        enabled: request.enabled,
+        staff_confirmation_required: request.staff_confirmation_required,
+        per_table_limit: request.per_table_limit,
+        rate_window_secs: request.rate_window_secs,
+        business_hours: request.business_hours,
+    }) {
+        Ok(node) => node,
+        Err(refusal) => return refusal,
+    };
     publish_store_settings_node(
         &state,
         &context,
@@ -5491,19 +7912,9 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    if request
-        .policies
-        .iter()
-        .any(|policy| policy.availability.is_unspecified() || policy.availability.is_unrecognised())
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "a vendor policy names an unknown availability (open/busy/closed)",
-            &[("policies", "INVALID_ENUM_VALUE")],
-        );
-    }
-    let Ok(value) = serde_json::to_value(PublishedVendorPolicies::new(request.policies)) else {
-        return channels_serialize_unavailable();
+    let value = match vendor_policies_node(request.policies) {
+        Ok(value) => value,
+        Err(refusal) => return refusal,
     };
     publish_store_settings_node(
         &state,
@@ -6931,6 +9342,81 @@ where
 /// them — the same load→compile→validate→write→version shape as [`admin_publish_menu`], onto the
 /// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
 /// backup): an invalid plan is a `422` with the violated rules, never a stored state.
+/// How big the plan a floor publish compiled was — for the audit trail, never the plan itself.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+struct FloorPublishSummary {
+    areas: usize,
+    tables: usize,
+    stations: usize,
+}
+
+/// Compiles one store's areas, tables, stations and routing into its `floor` and `stations` nodes.
+///
+/// Per store, like [`permissions_nodes`] and for the same reason: every shop's plan is its own. A
+/// batch ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4) calls this
+/// once per member — the instruction "recompile each of these shops' own floors" carries nothing
+/// store-specific even though every result does.
+///
+/// The §10 referential validation runs before anything is written, so the cloud never publishes a
+/// plan that names a station, backup, or area that does not exist.
+async fn floor_nodes<F>(
+    floor: &F,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<(Vec<(String, serde_json::Value)>, FloorPublishSummary), Response>
+where
+    F: AreaStore + TableStore + StationStore + RoutingRuleStore,
+{
+    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified. The
+    // version each row was read at is a writer's concern (ADR-0094); a compiled plan carries the
+    // floor, not the console's edit history, so the versions are dropped here.
+    let areas: Vec<Area> = match AreaStore::list(floor, tenant_id, store_id).await {
+        Ok(areas) => areas.into_iter().map(|area| area.record).collect(),
+        Err(error) => return Err(floor_error_response(&error)),
+    };
+    let tables: Vec<Table> = match TableStore::list(floor, tenant_id, store_id).await {
+        Ok(tables) => tables.into_iter().map(|table| table.record).collect(),
+        Err(error) => return Err(floor_error_response(&error)),
+    };
+    let stations: Vec<Station> = match StationStore::list(floor, tenant_id, store_id).await {
+        Ok(stations) => stations.into_iter().map(|station| station.record).collect(),
+        Err(error) => return Err(floor_error_response(&error)),
+    };
+    let rules = match RoutingRuleStore::list(floor, tenant_id, store_id).await {
+        Ok(rules) => rules,
+        Err(error) => return Err(floor_error_response(&error)),
+    };
+
+    let floor_plan = compile_floor(&areas, &tables);
+    let station_plan = compile_stations(&stations, &rules);
+
+    let mut violations = pos_core::floor::floor_violations(&floor_plan);
+    violations.extend(pos_core::floor::station_violations(&station_plan));
+    if !violations.is_empty() {
+        return Err(unprocessable_violations(&violations));
+    }
+
+    let summary = FloorPublishSummary {
+        areas: floor_plan.areas().len(),
+        tables: floor_plan.tables().count(),
+        stations: station_plan.stations().len(),
+    };
+    let (Ok(floor_value), Ok(stations_value)) = (
+        serde_json::to_value(&floor_plan),
+        serde_json::to_value(&station_plan),
+    ) else {
+        tracing::error!("could not serialise a compiled floor or station plan");
+        return Err(service_unavailable("floor"));
+    };
+    Ok((
+        vec![
+            ("floor".to_owned(), floor_value),
+            ("stations".to_owned(), stations_value),
+        ],
+        summary,
+    ))
+}
+
 async fn admin_publish_floor<F, Cfg, A, C>(
     State(state): State<FloorPublishState<F, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6961,51 +9447,12 @@ where
         Err(refusal) => return refusal,
     };
 
-    // Load the authoring rows. `list` is on all four seams, so each call is fully-qualified. The
-    // version each row was read at is a writer's concern (ADR-0094); a compiled plan carries the
-    // floor, not the console's edit history, so the versions are dropped here.
-    let areas: Vec<Area> = match AreaStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(areas) => areas.into_iter().map(|area| area.record).collect(),
-        Err(error) => return floor_error_response(&error),
-    };
-    let tables: Vec<Table> = match TableStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(tables) => tables.into_iter().map(|table| table.record).collect(),
-        Err(error) => return floor_error_response(&error),
-    };
-    let stations: Vec<Station> = match StationStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(stations) => stations.into_iter().map(|station| station.record).collect(),
-        Err(error) => return floor_error_response(&error),
-    };
-    let rules = match RoutingRuleStore::list(&state.floor, tenant_id, store_id).await {
-        Ok(rules) => rules,
-        Err(error) => return floor_error_response(&error),
-    };
-
-    let floor_plan = compile_floor(&areas, &tables);
-    let station_plan = compile_stations(&stations, &rules);
-
-    // The §10 referential validation, before anything is written — the cloud never publishes a plan
-    // that names a station, backup, or area that does not exist.
-    let mut violations = pos_core::floor::floor_violations(&floor_plan);
-    violations.extend(pos_core::floor::station_violations(&station_plan));
-    if !violations.is_empty() {
-        return unprocessable_violations(&violations);
-    }
-
-    let (Ok(floor_value), Ok(stations_value)) = (
-        serde_json::to_value(&floor_plan),
-        serde_json::to_value(&station_plan),
-    ) else {
-        tracing::error!("could not serialise a compiled floor or station plan");
-        return service_unavailable("floor");
-    };
-
     // Set the `floor` and `stations` keys on the store's Store layer (index 2) and re-publish it,
     // preserving the other Store-level keys (`menu`, `layout`, `permissions`, capability flags).
-    let nodes = vec![
-        ("floor".to_owned(), floor_value),
-        ("stations".to_owned(), stations_value),
-    ];
+    let (nodes, summary) = match floor_nodes(&state.floor, tenant_id, store_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -7032,9 +9479,9 @@ where
             None,
             Some(serde_json::json!({
                 "config_version_id": id.to_string(),
-                "area_count": floor_plan.areas().len(),
-                "table_count": floor_plan.tables().count(),
-                "station_count": station_plan.stations().len(),
+                "area_count": summary.areas,
+                "table_count": summary.tables,
+                "station_count": summary.stations,
             })),
         )
         .await;
@@ -12068,6 +14515,42 @@ fn unusable_reason_code(code: &ReasonCode) -> Response {
     )
 }
 
+/// Compiles a tenant's authored reason codes into the store's `reason_codes` node, with a summary.
+///
+/// A publish wants the records, not the versions the read saw: the node is assembled from what is
+/// authored now, and a conditional write against any one row would say nothing about the set. Both
+/// refusals here are the operator's to fix — an empty list, and an entry no action recognises —
+/// and they refuse the batch as a whole rather than one store, because neither depends on which
+/// store is being published to
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3).
+async fn reason_code_nodes<R>(
+    reason_codes: &R,
+    tenant_id: TenantId,
+) -> Result<(Vec<(String, serde_json::Value)>, ReasonCodePublishSummary), Response>
+where
+    R: ReasonCodeStore,
+{
+    let authored = match reason_codes.list(tenant_id).await {
+        Ok(rows) => records(rows),
+        Err(error) => return Err(reason_code_error_response(&error)),
+    };
+    if authored.is_empty() {
+        return Err(empty_reason_code_publish());
+    }
+    if let Some(unusable) = authored.iter().find(|code| {
+        code.applies_to.is_empty() || code.applies_to.iter().all(Open::is_unrecognised)
+    }) {
+        return Err(unusable_reason_code(&unusable.code));
+    }
+    let node = reason_codes_to_node(authored);
+    let summary = ReasonCodePublishSummary::of(&node);
+    let Ok(node_value) = serde_json::to_value(node) else {
+        tracing::error!("could not serialise a reason code node");
+        return Err(service_unavailable("reason codes"));
+    };
+    Ok((vec![("reason_codes".to_owned(), node_value)], summary))
+}
+
 #[utoipa::path(
     put,
     path = "/admin/config/reason-codes",
@@ -12124,30 +14607,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    // A publish wants the records, not the versions the read saw: the node is assembled from what is
-    // authored now, and a conditional write against any one row would say nothing about the set.
-    let authored = match state.reason_codes.list(tenant_id).await {
-        Ok(rows) => records(rows),
-        Err(error) => return reason_code_error_response(&error),
-    };
-    if authored.is_empty() {
-        return empty_reason_code_publish();
-    }
-    if let Some(unusable) = authored.iter().find(|code| {
-        code.applies_to.is_empty() || code.applies_to.iter().all(Open::is_unrecognised)
-    }) {
-        return unusable_reason_code(&unusable.code);
-    }
-    let node = reason_codes_to_node(authored);
-    let summary = ReasonCodePublishSummary::of(&node);
-    let Ok(node_value) = serde_json::to_value(node) else {
-        tracing::error!("could not serialise a reason code node");
-        return service_unavailable("reason codes");
-    };
-
     // Set the `reason_codes` key on the store's Store layer and re-publish it, preserving the other
     // Store-level keys (`menu`, `tax`, `campaigns`, `inventory`, `permissions`, `floor`, …).
-    let nodes = vec![("reason_codes".to_owned(), node_value)];
+    let (nodes, summary) = match reason_code_nodes(&state.reason_codes, tenant_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
     let id = match publish_config_nodes(
         &state.config_trees,
         &state.clock,
@@ -12619,6 +15084,35 @@ fn if_match_config(headers: &HeaderMap, current: Option<ConfigVersionId>) -> Res
 /// Assembles a tenant's authored inventory into a `PublishedInventory`, writes it as the store's
 /// `inventory` node, and versions it — the same load→merge→publish→version shape as the other node
 /// publishes.
+/// Compiles a tenant's authored inventory into the store's `inventory` node, with a summary.
+///
+/// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
+/// the node is the same at every member, so a batch compiles it once and writes it *N* times.
+async fn inventory_nodes<Inv>(
+    inventory: &Inv,
+    tenant_id: TenantId,
+) -> Result<(Vec<(String, serde_json::Value)>, InventoryPublishSummary), Response>
+where
+    Inv: InventoryStore,
+{
+    let (ingredients, recipes, suppliers) = match list_inventory_parts(inventory, tenant_id).await {
+        Ok(parts) => parts,
+        Err(error) => return Err(inventory_error_response(&error)),
+    };
+    let summary = InventoryPublishSummary {
+        ingredients: ingredients.len(),
+        recipes: recipes.len(),
+        suppliers: suppliers.len(),
+    };
+    let Ok(inventory_value) =
+        serde_json::to_value(inventory_to_node(ingredients, recipes, suppliers))
+    else {
+        tracing::error!("could not serialise an inventory node");
+        return Err(service_unavailable("inventory"));
+    };
+    Ok((vec![("inventory".to_owned(), inventory_value)], summary))
+}
+
 async fn admin_publish_inventory<Inv, Cfg, A, C>(
     State(state): State<ConfigInventoryState<Inv, Cfg, A, C>>,
     headers: HeaderMap,
@@ -12648,26 +15142,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let (ingredients, recipes, suppliers) =
-        match list_inventory_parts(&state.inventory, tenant_id).await {
-            Ok(parts) => parts,
-            Err(error) => return inventory_error_response(&error),
-        };
-    let summary = InventoryPublishSummary {
-        ingredients: ingredients.len(),
-        recipes: recipes.len(),
-        suppliers: suppliers.len(),
-    };
-    let Ok(inventory_value) =
-        serde_json::to_value(inventory_to_node(ingredients, recipes, suppliers))
-    else {
-        tracing::error!("could not serialise an inventory node");
-        return service_unavailable("inventory");
-    };
-
     // Set the `inventory` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys (`menu`, `tax`, `campaigns`, `permissions`, `floor`, capability flags).
-    let nodes = vec![("inventory".to_owned(), inventory_value)];
+    let (nodes, summary) = match inventory_nodes(&state.inventory, tenant_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -12767,6 +15247,29 @@ where
 /// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
 /// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
 /// publishes.
+/// Compiles a tenant's authored promotions into the store's `campaigns` node, with the count.
+///
+/// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
+/// the node is the same at every member, so a batch compiles it once and writes it *N* times.
+async fn campaigns_nodes<Camp>(
+    campaigns: &Camp,
+    tenant_id: TenantId,
+) -> Result<(Vec<(String, serde_json::Value)>, usize), Response>
+where
+    Camp: CampaignStore,
+{
+    let campaigns = match campaigns.list_campaigns(tenant_id).await {
+        Ok(campaigns) => records(campaigns),
+        Err(error) => return Err(campaign_error_response(&error)),
+    };
+    let count = campaigns.len();
+    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
+        tracing::error!("could not serialise a campaigns node");
+        return Err(service_unavailable("campaign"));
+    };
+    Ok((vec![("campaigns".to_owned(), campaigns_value)], count))
+}
+
 async fn admin_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -12796,18 +15299,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let campaigns = match state.campaigns.list_campaigns(tenant_id).await {
-        Ok(campaigns) => records(campaigns),
-        Err(error) => return campaign_error_response(&error),
-    };
-    let Ok(campaigns_value) = serde_json::to_value(campaigns_to_node(&campaigns)) else {
-        tracing::error!("could not serialise a campaigns node");
-        return service_unavailable("campaign");
-    };
-
     // Set the `campaigns` key on the store's Store layer (index 2) and re-publish it, preserving the
     // other Store-level keys (`menu`, `tax`, `permissions`, `floor`, capability flags).
-    let nodes = vec![("campaigns".to_owned(), campaigns_value)];
+    let (nodes, campaign_count) = match campaigns_nodes(&state.campaigns, tenant_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -12832,7 +15329,7 @@ where
             "store",
             &store_id.to_string(),
             None,
-            serde_json::to_value(campaigns.len()).ok(),
+            serde_json::to_value(campaign_count).ok(),
         )
         .await;
         (
@@ -15796,6 +18293,50 @@ where
     }
 }
 
+/// How many of a tenant's **active** items still point at a taxonomy row, for the archive guard.
+///
+/// # Why archiving needed a guard at all
+///
+/// Archiving a tax class or a category was an unconditional write, and the two ends of that were
+/// already disagreeing with each other in the tree: the console's item editor
+/// (`Items.tsx`) *rewrites* a dangling taxonomy reference when it next saves the item, so a
+/// reference to an archived class did not stay dangling so much as quietly become something else.
+/// A tax class is the expensive one — `pos_core::billing` raises `TaxRateNotConfigured` when no
+/// rate matches a line's class and channel, and the store learns that at the payment screen, with
+/// a customer waiting.
+///
+/// Counting only **active** items is the deliberate part. An archived item is already not sold, so
+/// its reference costs nothing and holding a tax class hostage to a retired item would make the
+/// guard the thing operators route around.
+async fn active_items_referencing<Cat>(
+    catalog: &Cat,
+    tenant_id: TenantId,
+    references: impl Fn(&CatalogItem) -> bool,
+) -> Result<usize, CatalogStoreError>
+where
+    Cat: CatalogStore,
+{
+    let rows = catalog.list_items(tenant_id).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.record)
+        .filter(|item| item.status == EntityStatus::Active && references(item))
+        .count())
+}
+
+/// The `422` an archive gets when active items still reference the row.
+///
+/// It names the count rather than the items: a class held by two hundred items is a different
+/// problem from one held by two, and an operator deciding what to do next needs the size before
+/// the list. The list itself is one search away on the Items screen, which is where the fix
+/// happens anyway.
+fn still_referenced(kind: &str, count: usize) -> Response {
+    unprocessable_violations(&[format!(
+        "this {kind} cannot be archived: {count} active {} still use it",
+        if count == 1 { "item" } else { "items" }
+    )])
+}
+
 /// A super-admin renames a tax class and/or sets its status.
 async fn admin_update_tax_class<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -15835,6 +18376,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.tax_class_id == tax_class_id
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("tax class", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -15991,6 +18544,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.item_category_id == Some(item_category_id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("category", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -16157,6 +18722,18 @@ where
         name: request.name,
         status,
     };
+    // Refuse the archive while active items still point here (see `active_items_referencing`).
+    if status == EntityStatus::Archived {
+        match active_items_referencing(&state.catalog, tenant_id, |item| {
+            item.item_subcategory_id == Some(item_subcategory_id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(count) => return still_referenced("sub-category", count),
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
         Err(refusal) => return refusal,
@@ -17072,6 +19649,23 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    // A parent that loops is refused here rather than at publish. The compiler still catches a
+    // cycle — it has to, the stored graph may already hold one — but by then the operator is
+    // several screens away from the dropdown that caused it, reading a `422` about a menu they were
+    // not editing. This is the read the check costs: the tenant's menus, only when a parent is set.
+    if let Some(parent) = parent_menu_id {
+        match state.catalog.list_menus(tenant_id).await {
+            Ok(rows) => {
+                let menus: Vec<Menu> = rows.into_iter().map(|row| row.record).collect();
+                if would_cycle(&menus, menu_id, parent) {
+                    return unprocessable_violations(&[format!(
+                        "menu {menu_id} cannot inherit from {parent}: that would make the inheritance chain loop"
+                    )]);
+                }
+            }
+            Err(error) => return catalog_error_response(&error),
+        }
+    }
     let record = Menu {
         menu_id,
         tenant_id,
@@ -17585,16 +20179,82 @@ struct PublishMenuRequest {
     menu_id: String,
 }
 
+/// Compiles a tenant's catalog into the `menu` and `layout` nodes one publish writes.
+///
+/// Both keys move together and neither names a store, which is what makes a menu the headline
+/// batchable node ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4):
+/// a batch compiles the book once and writes the identical document to every member.
+async fn menu_nodes<Cat>(
+    catalog: &Cat,
+    tenant_id: TenantId,
+    menu_id: MenuId,
+) -> Result<Vec<(String, serde_json::Value)>, Response>
+where
+    Cat: CatalogStore,
+{
+    // Load the tenant's authoring model. Placements are gathered across every menu; the compiler
+    // filters to the requested menu's inheritance chain, so extra rows are harmless.
+    // The compiler takes the authoring records themselves; the version each was read at is a
+    // writer's concern (ADR-0094) and would only be noise in a compiled book.
+    let items: Vec<CatalogItem> = match catalog.list_items(tenant_id).await {
+        Ok(items) => items.into_iter().map(|item| item.record).collect(),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
+    let menus: Vec<Menu> = match catalog.list_menus(tenant_id).await {
+        Ok(menus) => menus.into_iter().map(|menu| menu.record).collect(),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
+    let mut placements = Vec::new();
+    for menu in &menus {
+        match catalog.list_placements(tenant_id, menu.menu_id).await {
+            Ok(rows) => placements.extend(records(rows)),
+            Err(error) => return Err(catalog_error_response(&error)),
+        }
+    }
+
+    // Compile the price book. A refusal here is a configuration error the operator must fix, not a
+    // store failure — which is why a batch treats it as refusing the *batch* and not one member.
+    let book = match compile_menu(&items, &menus, &placements, menu_id) {
+        Ok(book) => book,
+        Err(error) => return Err(api_error(ErrorStatus::Unprocessable, error.to_string())),
+    };
+    let Ok(book_value) = serde_json::to_value(&book) else {
+        tracing::error!("could not serialise a compiled menu book");
+        return Err(service_unavailable("catalog"));
+    };
+
+    // Compile the presentation layout alongside the price book (ADR-0066): the display taxonomy plus
+    // the tenant's layout buttons resolve to a per-channel `LayoutBook`, delivered on a separate
+    // `layout` node so a button moving reprices nothing. The layout compiler is forgiving (a stale
+    // button is skipped), so this never fails a publish that the price compile accepted.
+    let display_categories: Vec<DisplayCategory> =
+        match catalog.list_display_categories(tenant_id).await {
+            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+            Err(error) => return Err(catalog_error_response(&error)),
+        };
+    let display_subcategories: Vec<DisplaySubcategory> =
+        match catalog.list_display_subcategories(tenant_id).await {
+            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+            Err(error) => return Err(catalog_error_response(&error)),
+        };
+    let layout_buttons = match catalog.list_layout_buttons(tenant_id).await {
+        Ok(rows) => records(rows),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
+    let layout = compile_layout_book(&display_categories, &display_subcategories, &layout_buttons);
+    let Ok(layout_value) = serde_json::to_value(&layout) else {
+        tracing::error!("could not serialise a compiled layout book");
+        return Err(service_unavailable("catalog"));
+    };
+    Ok(vec![
+        ("menu".to_owned(), book_value),
+        ("layout".to_owned(), layout_value),
+    ])
+}
+
 /// A super-admin publishes a menu to a store: compile the price book and the presentation layout →
 /// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes → version it
 /// through the config tree.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one publish is a single linear transaction — load items/menus/placements, compile the \
-              price book, load the display taxonomy and layout buttons, compile the layout, set both \
-              nodes on the Store layer and version it; splitting the load-compile-write flow would \
-              scatter the config-tree state the final publish needs"
-)]
 async fn admin_publish_menu<Cat, Cfg, A, C>(
     State(state): State<CatalogPublishState<Cat, Cfg, A, C>>,
     headers: HeaderMap,
@@ -17630,68 +20290,13 @@ where
         Err(refusal) => return refusal,
     };
 
-    // Load the tenant's authoring model. Placements are gathered across every menu; the compiler
-    // filters to the requested menu's inheritance chain, so extra rows are harmless.
-    // The compiler takes the authoring records themselves; the version each was read at is a
-    // writer's concern (ADR-0094) and would only be noise in a compiled book.
-    let items: Vec<CatalogItem> = match state.catalog.list_items(tenant_id).await {
-        Ok(items) => items.into_iter().map(|item| item.record).collect(),
-        Err(error) => return catalog_error_response(&error),
-    };
-    let menus: Vec<Menu> = match state.catalog.list_menus(tenant_id).await {
-        Ok(menus) => menus.into_iter().map(|menu| menu.record).collect(),
-        Err(error) => return catalog_error_response(&error),
-    };
-    let mut placements = Vec::new();
-    for menu in &menus {
-        match state.catalog.list_placements(tenant_id, menu.menu_id).await {
-            Ok(rows) => placements.extend(records(rows)),
-            Err(error) => return catalog_error_response(&error),
-        }
-    }
-
-    // Compile the price book. A refusal here is a configuration error the operator must fix, not a
-    // store failure.
-    let book = match compile_menu(&items, &menus, &placements, menu_id) {
-        Ok(book) => book,
-        Err(error) => return api_error(ErrorStatus::Unprocessable, error.to_string()),
-    };
-    let Ok(book_value) = serde_json::to_value(&book) else {
-        tracing::error!("could not serialise a compiled menu book");
-        return service_unavailable("catalog");
-    };
-
-    // Compile the presentation layout alongside the price book (ADR-0066): the display taxonomy plus
-    // the tenant's layout buttons resolve to a per-channel `LayoutBook`, delivered on a separate
-    // `layout` node so a button moving reprices nothing. The layout compiler is forgiving (a stale
-    // button is skipped), so this never fails a publish that the price compile accepted.
-    let display_categories: Vec<DisplayCategory> =
-        match state.catalog.list_display_categories(tenant_id).await {
-            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
-            Err(error) => return catalog_error_response(&error),
-        };
-    let display_subcategories: Vec<DisplaySubcategory> =
-        match state.catalog.list_display_subcategories(tenant_id).await {
-            Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
-            Err(error) => return catalog_error_response(&error),
-        };
-    let layout_buttons = match state.catalog.list_layout_buttons(tenant_id).await {
-        Ok(rows) => records(rows),
-        Err(error) => return catalog_error_response(&error),
-    };
-    let layout = compile_layout_book(&display_categories, &display_subcategories, &layout_buttons);
-    let Ok(layout_value) = serde_json::to_value(&layout) else {
-        tracing::error!("could not serialise a compiled layout book");
-        return service_unavailable("catalog");
-    };
-
     // Load the store's tree (or start one), set the `menu` and `layout` keys on its Store layer, and
     // re-publish that layer. The Store layer is index 2 in the Tenant→Brand→Store→Device order
     // (`ConfigLevel::ORDER`); writing the whole layer back preserves any other Store-level keys there.
-    let nodes = vec![
-        ("menu".to_owned(), book_value),
-        ("layout".to_owned(), layout_value),
-    ];
+    let nodes = match menu_nodes(&state.catalog, tenant_id, menu_id).await {
+        Ok(nodes) => nodes,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,
@@ -17791,6 +20396,67 @@ struct PublishPermissionsRequest {
     store_id: String,
 }
 
+/// Compiles one store's roster into its `permissions` node, with the staff count for the trail.
+///
+/// Unlike the other twelve batchable nodes this one is genuinely **per store**: the assignments and
+/// therefore the document differ at every member, so a batch calls this once per store rather than
+/// compiling once and fanning out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §4).
+/// The instruction is still store-agnostic — "recompile each of these shops' own rosters" — which
+/// is what makes it batchable at all.
+async fn permissions_nodes<P>(
+    people: &P,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<(Vec<(String, serde_json::Value)>, usize), Response>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore,
+{
+    // Load the domain the compiler needs. `list` is on two of P's traits, so the calls are
+    // fully-qualified to say which seam each one is.
+    let assignments = match AssignmentStore::list_for_store(people, tenant_id, store_id).await {
+        Ok(assignments) => assignments,
+        Err(error) => return Err(people_error_response(&error)),
+    };
+    // As with the floor, the compiler takes the authoring records; the version each was read at is
+    // a writer's concern (ADR-0094) and has no place in a published permissions document.
+    let employees: Vec<Employee> = match EmployeeStore::list(people, tenant_id).await {
+        Ok(employees) => employees
+            .into_iter()
+            .map(|employee| employee.record)
+            .collect(),
+        Err(error) => return Err(people_error_response(&error)),
+    };
+    let roles: Vec<RoleTemplate> = match RoleTemplateStore::list(people, tenant_id).await {
+        Ok(roles) => roles.into_iter().map(|role| role.record).collect(),
+        Err(error) => return Err(people_error_response(&error)),
+    };
+    // The stored PIN hash for each assigned employee, read only here (the trusted publish path) and
+    // never returned over the API. Deduplicated: a store assigns a person at most once, but reading
+    // by a set keeps it robust.
+    let mut pins = std::collections::BTreeMap::new();
+    for assignment in &assignments {
+        if pins.contains_key(&assignment.employee_id.to_string()) {
+            continue;
+        }
+        let hash = match EmployeeStore::pin_phc(people, tenant_id, assignment.employee_id).await {
+            Ok(hash) => hash,
+            Err(error) => return Err(people_error_response(&error)),
+        };
+        pins.insert(assignment.employee_id.to_string(), hash);
+    }
+
+    let document = compile_permissions(store_id, &employees, &roles, &assignments, &pins);
+    let staff_count = document.staff.len();
+    let Ok(document_value) = serde_json::to_value(&document) else {
+        tracing::error!("could not serialise a compiled permissions document");
+        return Err(service_unavailable("people"));
+    };
+    Ok((
+        vec![("permissions".to_owned(), document_value)],
+        staff_count,
+    ))
+}
+
 /// Compiles a store's people into its `permissions` config node and versions it through the config
 /// tree — the same load→compile→write→version shape as [`admin_publish_menu`], onto the `permissions`
 /// key instead of `menu`/`layout`. The PIN hash rides in the node (the edge verifies against it,
@@ -17825,52 +20491,12 @@ where
         Err(refusal) => return refusal,
     };
 
-    // Load the domain the compiler needs. `list` is on two of P's traits, so the calls are
-    // fully-qualified to say which seam each one is.
-    let assignments =
-        match AssignmentStore::list_for_store(&state.people, tenant_id, store_id).await {
-            Ok(assignments) => assignments,
-            Err(error) => return people_error_response(&error),
-        };
-    // As with the floor, the compiler takes the authoring records; the version each was read at is
-    // a writer's concern (ADR-0094) and has no place in a published permissions document.
-    let employees: Vec<Employee> = match EmployeeStore::list(&state.people, tenant_id).await {
-        Ok(employees) => employees
-            .into_iter()
-            .map(|employee| employee.record)
-            .collect(),
-        Err(error) => return people_error_response(&error),
-    };
-    let roles: Vec<RoleTemplate> = match RoleTemplateStore::list(&state.people, tenant_id).await {
-        Ok(roles) => roles.into_iter().map(|role| role.record).collect(),
-        Err(error) => return people_error_response(&error),
-    };
-    // The stored PIN hash for each assigned employee, read only here (the trusted publish path) and
-    // never returned over the API. Deduplicated: a store assigns a person at most once, but reading
-    // by a set keeps it robust.
-    let mut pins = std::collections::BTreeMap::new();
-    for assignment in &assignments {
-        if pins.contains_key(&assignment.employee_id.to_string()) {
-            continue;
-        }
-        let hash =
-            match EmployeeStore::pin_phc(&state.people, tenant_id, assignment.employee_id).await {
-                Ok(hash) => hash,
-                Err(error) => return people_error_response(&error),
-            };
-        pins.insert(assignment.employee_id.to_string(), hash);
-    }
-
-    let document = compile_permissions(store_id, &employees, &roles, &assignments, &pins);
-    let staff_count = document.staff.len();
-    let Ok(document_value) = serde_json::to_value(&document) else {
-        tracing::error!("could not serialise a compiled permissions document");
-        return service_unavailable("people");
-    };
-
     // Set the `permissions` key on the store's Store layer (index 2 in Tenant→Brand→Store→Device) and
     // re-publish that layer, preserving any other Store-level keys (`menu`, `layout`, …).
-    let nodes = vec![("permissions".to_owned(), document_value)];
+    let (nodes, staff_count) = match permissions_nodes(&state.people, tenant_id, store_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
 
     let id = match publish_config_nodes(
         &state.config_trees,

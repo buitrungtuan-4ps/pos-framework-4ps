@@ -97,6 +97,9 @@ const Inventory = lazy(() =>
 const ReasonCodes = lazy(() =>
   import("./screens/ReasonCodes").then((module) => ({ default: module.ReasonCodes })),
 );
+const StoreGroups = lazy(() =>
+  import("./screens/StoreGroups").then((module) => ({ default: module.StoreGroups })),
+);
 const Ota = lazy(() =>
   import("./screens/Ota").then((module) => ({ default: module.Ota })),
 );
@@ -175,6 +178,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   campaigns: Campaigns,
   inventory: Inventory,
   reasonCodes: ReasonCodes,
+  storeGroups: StoreGroups,
   channels: Channels,
   media: Media,
   layout: Layout,

@@ -121,6 +121,18 @@ export const SCREENS = {
     inPalette: true,
     icon: "plus-circle",
   },
+  // Store groups (ADR-0122): the named cohorts a tenant publishes to as one. Owner/admin only,
+  // matching the server — organising the estate and pushing configuration to a slice of it are
+  // both estate-level acts, not day-to-day authoring.
+  storeGroups: {
+    path: "/store-groups",
+    key: "nav.storeGroups",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "layers",
+  },
   catalog: {
     path: "/catalog",
     key: "nav.catalog",
@@ -360,8 +372,15 @@ export const NAV_GROUPS: readonly {
     key: "nav.group.estate",
     items: ["stores", "fleet", "devices", "activation", "ota", "reconcile"],
   },
-  // How one store behaves, in its own words rather than in JSON.
-  { key: "nav.group.settings", items: ["config", "storeSettings", "translations"] },
+  // How a store behaves, in its own words rather than in JSON — and, since ADR-0122, how a *set*
+  // of them is made to behave the same. Store groups sit here rather than under the estate for the
+  // reason the record gives: a group holds no configuration and changes no store's identity, it is
+  // the cohort a configuration change is delivered to. The estate group is about the boxes and
+  // their lifecycle; this one is about what runs on them.
+  {
+    key: "nav.group.settings",
+    items: ["config", "storeGroups", "storeSettings", "translations"],
+  },
   // Who and what may reach this console: console users, machine keys, and the endpoints it calls
   // out to. All three answer "who is allowed in, or out".
   { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks"] },

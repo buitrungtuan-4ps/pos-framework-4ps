@@ -289,6 +289,29 @@ jobs:
       - name: typecheck and build
         run: pnpm build
 
+      # The gate three deploy failures needed and did not have.
+      #
+      # `deploy/Dockerfile`'s dashboard stage copies `dashboard/` AND NOTHING ELSE, then runs
+      # `pnpm build`. So anything chained into that script may read only `dashboard/`. Twice now a
+      # check that reads `deploy/edge/*.ps1` has been chained in — added, removed in #228 to
+      # unblock the image, re-added in #269 to give the drift gate a home — and both times the
+      # break surfaced in a **production deploy**, because this job runs against a full checkout
+      # where the path resolves and the image is the only place it does not.
+      #
+      # This reproduces the image's condition exactly and cheaply: the same tree the Dockerfile
+      # copies, nothing above it, node_modules reused so there is no second install. It fails on
+      # any future script that reaches outside `dashboard/`, not just the two that already have.
+      - name: the image condition — pnpm build with only dashboard/ on disk
+        working-directory: .
+        run: |
+          set -euo pipefail
+          isolated="$(mktemp -d)"
+          cp -r dashboard "$isolated/dashboard"
+          test ! -e "$isolated/deploy" # the whole point: deploy/ is out of reach
+          cd "$isolated/dashboard"
+          pnpm build
+          echo "ok: the dashboard builds with nothing above it, so the cloud image will too"
+
   # ---------------------------------------------------------------------------
   # Licences and advisories. The other check that turns architecture into law:
   # unwinding a copyleft crate after it ships inside a binary is a legal problem,

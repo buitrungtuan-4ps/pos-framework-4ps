@@ -50,10 +50,56 @@ pub enum CompileError {
     /// The inheritance chain loops back on itself.
     #[error("menu inheritance forms a cycle at {0}")]
     InheritanceCycle(MenuId),
+    /// The menu being compiled, or one it inherits from, is archived.
+    ///
+    /// The compiler already omitted archived *items*, and the asymmetry was the defect: a menu an
+    /// operator had retired still compiled and still published, so "archived" meant something for
+    /// one entity in this model and nothing for the other. An archived ancestor is the worse half —
+    /// its prices are what a store special silently rests on, and quietly dropping them would take
+    /// items off a till with nothing said.
+    #[error("menu {0} is archived, so it cannot be published")]
+    ArchivedMenu(MenuId),
     /// A placement prices an item that is not in the catalog — never substitute, always refuse
     /// (the same rule the store's reprice follows for an unknown item).
     #[error("a placement references item {0}, which is not in the catalog")]
     UnknownItem(MenuItemId),
+}
+
+/// Whether re-parenting `menu_id` onto `proposed_parent` would make the inheritance chain loop.
+///
+/// The compiler already refuses a cycle, and that was the whole defence: a cycle was **authorable**
+/// from the Menus screen and only fatal later, at publish, as a `422` several screens away from the
+/// dropdown that caused it. An operator who set a parent got a saved menu and a working screen, and
+/// learned about it when a store failed to receive a book.
+///
+/// So the graph is checked at the write instead, and this is the pure half of that check. It walks
+/// upward from the proposed parent through the menus as they are *stored* — the only edge that
+/// changes is the one being proposed, and it is the walk's starting point — and answers yes if it
+/// reaches `menu_id`. A menu proposed as its own parent is the degenerate case and is caught by the
+/// same test on the first step.
+///
+/// The `seen` set is not belt-and-braces: the stored graph may *already* contain a cycle (this
+/// check did not exist until now), and a walk over one without a visited set does not return.
+#[must_use]
+pub fn would_cycle(menus: &[Menu], menu_id: MenuId, proposed_parent: MenuId) -> bool {
+    let parent_of: BTreeMap<MenuId, Option<MenuId>> = menus
+        .iter()
+        .map(|menu| (menu.menu_id, menu.parent_menu_id))
+        .collect();
+    let mut seen: BTreeSet<MenuId> = BTreeSet::new();
+    let mut current = Some(proposed_parent);
+    while let Some(id) = current {
+        if id == menu_id {
+            return true;
+        }
+        if !seen.insert(id) {
+            // A pre-existing loop that does not pass through `menu_id`. Not this edit's fault, and
+            // not this edit's refusal — the compiler still names it at publish.
+            return false;
+        }
+        current = parent_of.get(&id).copied().flatten();
+    }
+    false
 }
 
 /// Compiles one menu (with its inheritance chain) into a per-channel [`MenuBook`].
@@ -64,10 +110,15 @@ pub enum CompileError {
 /// (`available = false`), because the store distinguishes "not on the menu" from "on the menu, paused"
 /// — the latter is the operator's published floor, which live stock can only lower further.
 ///
+/// An archived **menu** is refused rather than omitted, and the asymmetry with archived items is
+/// deliberate: an item missing from a book is a menu that is still coherent, whereas a menu that is
+/// not there at all has no coherent compilation, and silently emitting an empty book would take a
+/// store's whole till layout away without a word.
+///
 /// # Errors
 ///
-/// [`CompileError`] when a menu or a parent is missing, the inheritance chain cycles, or a placement
-/// prices an item the catalog does not carry.
+/// [`CompileError`] when a menu or a parent is missing, any menu in the chain is archived, the
+/// inheritance chain cycles, or a placement prices an item the catalog does not carry.
 pub fn compile_menu(
     items: &[CatalogItem],
     menus: &[Menu],
@@ -88,6 +139,12 @@ pub fn compile_menu(
             return Err(CompileError::InheritanceCycle(id));
         }
         let menu = menu_by_id.get(&id).ok_or(CompileError::UnknownMenu(id))?;
+        // Every menu in the chain, not just the root. A store special inheriting from an archived
+        // brand menu is the case that matters: the special looks fine, and the prices it does not
+        // restate come from a menu nobody meant to be live.
+        if menu.status == EntityStatus::Archived {
+            return Err(CompileError::ArchivedMenu(id));
+        }
         chain.push(id);
         current = menu.parent_menu_id;
     }
@@ -303,7 +360,7 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use pos_proto::wire_enum::Open;
 
-    use super::{CompileError, compile_layout_book, compile_menu};
+    use super::{CompileError, compile_layout_book, compile_menu, would_cycle};
     use crate::catalog::{
         CatalogItem, ChannelPrice, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId,
         MenuPlacement,
@@ -683,5 +740,98 @@ mod tests {
             book.plan_for(SalesChannel::DineIn).is_empty(),
             "an archived display category drops its buttons"
         );
+    }
+
+    // --- an archived menu is refused, and a cycle is caught before it is stored ----------------
+
+    #[test]
+    fn an_archived_menu_is_refused_rather_than_compiled_empty() {
+        // The asymmetry this closes: archived *items* were already skipped, and an archived menu
+        // published anyway. An operator who retires a menu and then publishes it was, until now,
+        // shipping it.
+        let items = [item(1, "Margherita")];
+        let mut retired = menu(100, None);
+        retired.status = EntityStatus::Archived;
+        let placements = [placement(
+            100,
+            1,
+            vec![price(SalesChannel::DineIn, 100_000)],
+            true,
+        )];
+        assert_eq!(
+            compile_menu(&items, &[retired], &placements, menu_id(100)),
+            Err(CompileError::ArchivedMenu(menu_id(100)))
+        );
+    }
+
+    #[test]
+    fn an_archived_parent_is_refused_rather_than_silently_dropping_its_prices() {
+        // The worse half. The child looks live and compiles; the prices it does not restate come
+        // from the parent, so skipping an archived ancestor would take items off a till with
+        // nothing said anywhere.
+        let items = [item(1, "Margherita"), item(2, "Marinara")];
+        let mut parent = menu(100, None);
+        parent.status = EntityStatus::Archived;
+        let child = menu(101, Some(100));
+        let placements = [
+            placement(100, 1, vec![price(SalesChannel::DineIn, 100_000)], true),
+            placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
+        ];
+        assert_eq!(
+            compile_menu(&items, &[parent, child], &placements, menu_id(101)),
+            Err(CompileError::ArchivedMenu(menu_id(100)))
+        );
+    }
+
+    #[test]
+    fn an_active_chain_still_compiles() {
+        // The guard above must not refuse the ordinary case, which is the whole point of the
+        // inheritance model: a store special over a brand standard.
+        let items = [item(1, "Margherita"), item(2, "Marinara")];
+        let parent = menu(100, None);
+        let child = menu(101, Some(100));
+        let placements = [
+            placement(100, 1, vec![price(SalesChannel::DineIn, 100_000)], true),
+            placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
+        ];
+        let book = compile_menu(&items, &[parent, child], &placements, menu_id(101))
+            .expect("an all-active chain compiles");
+        for id in [item_id(1), item_id(2)] {
+            assert!(
+                book.catalog_for(SalesChannel::DineIn).get(id).is_some(),
+                "both the parent's and the child's placements reach the book"
+            );
+        }
+    }
+
+    #[test]
+    fn re_parenting_onto_a_descendant_is_a_cycle() {
+        // 100 <- 101 <- 102. Making 100 inherit from 102 closes the loop.
+        let menus = [menu(100, None), menu(101, Some(100)), menu(102, Some(101))];
+        assert!(would_cycle(&menus, menu_id(100), menu_id(102)));
+        assert!(would_cycle(&menus, menu_id(101), menu_id(102)));
+    }
+
+    #[test]
+    fn a_menu_proposed_as_its_own_parent_is_a_cycle() {
+        let menus = [menu(100, None)];
+        assert!(would_cycle(&menus, menu_id(100), menu_id(100)));
+    }
+
+    #[test]
+    fn re_parenting_onto_an_unrelated_menu_is_not_a_cycle() {
+        let menus = [menu(100, None), menu(101, Some(100)), menu(200, None)];
+        assert!(!would_cycle(&menus, menu_id(101), menu_id(200)));
+    }
+
+    #[test]
+    fn a_pre_existing_loop_elsewhere_does_not_hang_the_walk() {
+        // 200 and 201 already point at each other — data this check did not exist to prevent. The
+        // walk must terminate, and must not blame the edit being made.
+        let mut a = menu(200, Some(201));
+        let b = menu(201, Some(200));
+        a.parent_menu_id = Some(menu_id(201));
+        let menus = [menu(100, None), a, b];
+        assert!(!would_cycle(&menus, menu_id(100), menu_id(200)));
     }
 }

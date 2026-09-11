@@ -200,6 +200,10 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         // A store that does load them still prints ASCII the same way (ADR-0102).
         font_directories: Vec::new(),
         font_size_dots: 24,
+        // No archiving: the loop only starts behind a `cloud_url`, and this store has none. The
+        // interval is left at the default rather than zeroed, so the suite exercises the ordinary
+        // configuration and the `0` branch stays what an operator opts into (ADR-0124).
+        backup_interval_hours: 24,
     };
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
