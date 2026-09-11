@@ -16,7 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
+  printed `Started`, which only means the process was spawned. Every boot refusal `pos_cloud` has
+  runs after that point — a missing `internal_shared_secret`
+  ([ADR-0097](docs/adr/0097-internal-route-authentication.md)), an archive window that is not below
+  the subject window ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)) — and
+  `restart: unless-stopped` then loops the container quietly. A misconfigured box therefore showed
+  a green deploy and a dead back office, discoverable only by someone opening the console. The
+  workflow now polls `/health` for up to two minutes and fails with `docker compose ps` and the
+  last 120 lines of `pos_cloud` if it never answers, so the refusal names itself in the run log.
+
+  The probe runs inside the compose network rather than through Caddy: "is pos_cloud serving" and
+  "is the TLS posture right" are different failures and only the first is this step's business. It
+  borrows busybox `wget` from the `nats` service because the `pos_cloud` image is deliberately
+  command-free and the box was never assumed to carry an HTTP client.
 
 ---
 

@@ -92,6 +92,14 @@ over SSH, and runs [`bootstrap.sh`](../deploy/bootstrap.sh) on the box, which ge
 secret locally and brings the stack up. The run's log prints a **one-time super-admin setup token**
 once — copy it.
 
+The last step polls `/health` from inside the compose network until `pos_cloud` answers, for up to
+two minutes. This is the step that distinguishes a deploy from a green tick: Compose printing
+`Started` only means the process was spawned, and the cloud's boot refusals — a missing
+`internal_shared_secret` ([ADR-0097](adr/0097-internal-route-authentication.md)), an archive window that is
+not below the subject window ([ADR-0124](adr/0124-a-store-that-can-be-restored.md)) — happen after
+that point. If the run fails here, the log carries `docker compose ps` and the last 120 lines from
+`pos_cloud`; the refusal names the key to fix in `deploy/secrets/cloud.toml`.
+
 ## 4. Enrol yourself
 
 Open `https://<your DOMAIN>/` — Caddy has a real certificate by now. Enrol the first super-admin:
