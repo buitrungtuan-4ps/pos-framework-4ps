@@ -1206,10 +1206,12 @@ fn min_timestamp(a: Timestamp, b: Timestamp) -> Timestamp {
 
 #[cfg(test)]
 mod tests {
+    /// A fixed 16-byte salt, so a hashed fixture is deterministic. Tests only.
+    const SALT: &[u8] = b"a-fixed-test-slt";
+
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use argon2::password_hash::SaltString;
     use axum::http::header::COOKIE;
     use axum::http::{HeaderMap, HeaderValue, StatusCode};
     use axum::response::IntoResponse as _;
@@ -1242,8 +1244,7 @@ mod tests {
     }
 
     fn provisioned_credential() -> SuperAdminCredential {
-        let salt = SaltString::encode_b64(b"a-fixed-test-salt").expect("salt");
-        let phc = hash_password("a-strong-passphrase", &salt).expect("hash");
+        let phc = hash_password("a-strong-passphrase", SALT).expect("hash");
         SuperAdminCredential::new(phc, TotpSecret::new(TOTP_SEED.to_vec()))
     }
 

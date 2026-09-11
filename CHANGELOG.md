@@ -68,6 +68,31 @@ readable log and that a code read out of it actually pairs a device. This releas
 check runnable; it is not evidence that it passed. 1.0.0 is the version that carries the results.
 
 
+### Changed
+
+- **The dependency wave that could not be waved through: `argon2` 0.5 → 0.6.** Dependabot's bump
+  did not compile. `password-hash` 0.6 moved `SaltString` and `PasswordHash` into a new `phc`
+  crate, made `PasswordHasher` generic over its output, and **removed the salt argument from
+  `hash_password`** — an API redesign, not a rename, across twenty call sites in twelve files, all
+  of them in the super-admin password or employee PIN path.
+
+  The question an upgrade of a password hasher has to answer is not "does it compile" but **"does a
+  credential written by the old version still open the door"** — every stored super-admin password
+  and every employee PIN is a PHC string produced by 0.5.3. A hash was captured from that build
+  before the upgrade and pinned into `a_hash_written_by_the_previous_argon2_still_verifies`; it
+  verifies under 0.6, and a wrong password against it is still refused. **Nobody is locked out.**
+
+  Two things the migration changed for the better, and one it nearly got wrong. The seam now takes
+  a raw `&[u8]` salt, so the production callers stop round-tripping bytes through a `SaltString`
+  they only unwrapped again; verification reads the PHC string directly, so the parse-then-verify
+  dance is gone from both the cloud and the edge. The near-miss: a mechanical pass briefly gave the
+  edge's demo PIN helper a *fixed* salt — every PIN hashing to the same string — caught before it
+  was committed and now carrying a comment saying why it takes no salt argument.
+
+  Also in the wave: `blake2` 0.10 → 0.11 (the OTA signature path — `updater-minisign`'s six tests
+  pass unchanged), `base64` 0.22 → 0.23, `getrandom` 0.3 → 0.4, and the `cargo-minor` transitive
+  group. Those four needed no code change.
+
 ### Added
 
 - **A store's backups age out on their own, and the console says when it last backed up**

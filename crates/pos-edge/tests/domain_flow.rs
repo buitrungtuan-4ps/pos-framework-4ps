@@ -36,6 +36,9 @@ use printer_escpos::{Transport, TransportStatus, Unreachable};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+/// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
+const SALT: &[u8] = b"a-fixed-test-slt";
+
 /// The badge code + PIN seeded into the store's roster, and the employee they sign in as.
 const STAFF_CODE: &str = "C01";
 const STAFF_PIN: &str = "2468";
@@ -44,10 +47,9 @@ const STAFF_PIN: &str = "2468";
 /// recipe the offline-auth unit tests use.
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
-    use argon2::password_hash::{PasswordHasher, SaltString};
-    let salt = SaltString::encode_b64(b"fixed-test-salt!").expect("salt");
+    use argon2::password_hash::PasswordHasher as _;
     Argon2::default()
-        .hash_password(pin.as_bytes(), &salt)
+        .hash_password_with_salt(pin.as_bytes(), SALT)
         .expect("hash")
         .to_string()
 }
