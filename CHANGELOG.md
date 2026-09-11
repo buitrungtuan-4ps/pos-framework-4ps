@@ -16,8 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The command palette answers a screen reader, and the keyboard can see where it is.** The
+  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
+  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
+  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
+  missing when the highlight walked past the bottom of a long result list and left the screen.
+
 ### Changed
 
+- **The Layout screen stopped rescanning its item list once per button.** `itemName` and
+  `categoryName` did a linear `find` over the whole catalogue on every call, and the grid calls
+  them once per placed button — quadratic in a large menu. Both now read a `createMemo` `Map`, and
+  the per-channel button views (`channelButtons`, `positionedButtons`, `flowingButtons`,
+  `collisionCells`, `gridExtent`) became memos so a redraw does not refilter and resort. Behaviour
+  is unchanged: the same values, computed once per dependency change instead of once per read.
 - **`t()` returns a static message without going through ICU.** Most keys carry no `{argument}`,
   and parsing + formatting them per call was pure overhead. The fast path is guarded on two
   characters, both measured against `intl-messageformat` rather than assumed: `{`, which opens an
@@ -36,6 +50,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
   and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
   fix was accepted.
+- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
+  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
+  for none of those three, so the header costs nothing and closes them to anything that later ends
+  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
+
+### Security
+
+- **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
+  already caught, because `classify_ip` routes it through `to_ipv4_mapped()` before the v6 checks.
+  The deprecated IPv4-*compatible* form `::a.b.c.d` was not: `::169.254.169.254` has a zero first
+  segment, matches no v6 branch, and fell through to "public unicast" — so a webhook URL could be
+  registered against the cloud metadata endpoint and the delivery would be made. `classify_v6` now
+  recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
+  and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
+  fix was accepted.
+- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
+  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
+  for none of those three, so the header costs nothing and closes them to anything that later ends
+  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
 
 ---
 
@@ -86,6 +119,37 @@ checks that need a real machine have still not been run. [`docs/gate-register.md
 readable log and that a code read out of it actually pairs a device. This release is what makes that
 check runnable; it is not evidence that it passed. 1.0.0 is the version that carries the results.
 
+
+### Changed
+
+- **The dependency wave that could not be waved through: `argon2` 0.5 → 0.6.** Dependabot's bump
+  did not compile. `password-hash` 0.6 moved `SaltString` and `PasswordHash` into a new `phc`
+  crate, made `PasswordHasher` generic over its output, and **removed the salt argument from
+  `hash_password`** — an API redesign, not a rename, across twenty call sites in twelve files, all
+  of them in the super-admin password or employee PIN path.
+
+  The question an upgrade of a password hasher has to answer is not "does it compile" but **"does a
+  credential written by the old version still open the door"** — every stored super-admin password
+  and every employee PIN is a PHC string produced by 0.5.3. A hash was captured from that build
+  before the upgrade and pinned into `a_hash_written_by_the_previous_argon2_still_verifies`; it
+  verifies under 0.6, and a wrong password against it is still refused. **Nobody is locked out.**
+
+  Two things the migration changed for the better, and one it nearly got wrong. The seam now takes
+  a raw `&[u8]` salt, so the production callers stop round-tripping bytes through a `SaltString`
+  they only unwrapped again; verification reads the PHC string directly, so the parse-then-verify
+  dance is gone from both the cloud and the edge. The near-miss: a mechanical pass briefly gave the
+  edge's demo PIN helper a *fixed* salt — every PIN hashing to the same string — caught before it
+  was committed and now carrying a comment saying why it takes no salt argument.
+
+  Also in the wave: `blake2` 0.10 → 0.11 (the OTA signature path — `updater-minisign`'s six tests
+  pass unchanged), `base64` 0.22 → 0.23, `getrandom` 0.3 → 0.4, and the `cargo-minor` transitive
+  group. Those four needed no code change.
+
+  One bump in that group is deliberately held back: `flate2` stays at 1.1.9. 1.1.10 moves to
+  `miniz_oxide` 0.9, and `png` — which reaches the cloud through `image` — still pins `miniz_oxide`
+  0.8, so taking it would compile two copies of the same decompressor into every binary.
+  `cargo deny`'s duplicate ban caught it, and the ban is right: the fix belongs upstream in `png`,
+  not in a skip entry here. `flate2` moves when `png` does.
 
 ### Added
 

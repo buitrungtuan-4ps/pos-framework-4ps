@@ -31,6 +31,7 @@ export function CommandPalette() {
   const [query, setQuery] = createSignal("");
   const [active, setActive] = createSignal(0);
   let input: HTMLInputElement | undefined;
+  const optionRefs: HTMLButtonElement[] = [];
 
   const matches = () => {
     const needle = query().trim().toLowerCase();
@@ -75,6 +76,14 @@ export function CommandPalette() {
     }
   });
 
+  // Ensure active option is scrolled into view when index changes
+  createEffect(() => {
+    const idx = active();
+    if (open() && optionRefs[idx]) {
+      optionRefs[idx]?.scrollIntoView?.({ block: "nearest" });
+    }
+  });
+
   const onFieldKey = (event: KeyboardEvent) => {
     const items = matches();
     if (event.key === "ArrowDown") {
@@ -95,6 +104,9 @@ export function CommandPalette() {
   return (
     <Show when={open()}>
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("palette.placeholder")}
         class="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 pt-24"
         onClick={close}
       >
@@ -105,6 +117,10 @@ export function CommandPalette() {
           <input
             ref={input}
             type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="command-palette-results"
+            aria-autocomplete="list"
             aria-label={t("palette.placeholder")}
             placeholder={t("palette.placeholder")}
             value={query()}
@@ -119,12 +135,15 @@ export function CommandPalette() {
             when={matches().length > 0}
             fallback={<p class="px-4 py-3 text-sm text-ink-muted">{t("palette.empty")}</p>}
           >
-            <ul class="max-h-72 overflow-y-auto p-2">
+            <ul id="command-palette-results" role="listbox" class="max-h-72 overflow-y-auto p-2">
               <For each={matches()}>
                 {(item, index) => (
                   <li>
                     <button
+                      ref={(el) => (optionRefs[index()] = el)}
                       type="button"
+                      role="option"
+                      aria-selected={index() === active()}
                       onMouseEnter={() => setActive(index())}
                       onClick={() => go(item.href)}
                       class={`flex w-full items-center gap-2 rounded-token px-3 py-2 text-left text-base text-ink transition-colors ${

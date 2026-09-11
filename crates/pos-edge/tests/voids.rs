@@ -41,6 +41,9 @@ use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::{BillState, OrderLineState, SalesChannel};
 
+/// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
+const SALT: &[u8] = b"a-fixed-test-slt";
+
 /// The signed-in server: they may take an order, and their role does **not** grant a fired-line
 /// void. That is the whole point — a void they could do alone would not be a control.
 fn server() -> Actor {
@@ -91,10 +94,9 @@ const MANAGER_PIN: &str = "4417";
 /// An Argon2id PHC for a test PIN, on a fixed salt — the same helper the other edge suites use.
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
-    use argon2::password_hash::{PasswordHasher, SaltString};
-    let salt = SaltString::encode_b64(b"fixed-test-salt!").expect("salt");
+    use argon2::password_hash::PasswordHasher as _;
     Argon2::default()
-        .hash_password(pin.as_bytes(), &salt)
+        .hash_password_with_salt(pin.as_bytes(), SALT)
         .expect("hash")
         .to_string()
 }

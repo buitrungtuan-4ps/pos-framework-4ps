@@ -143,9 +143,10 @@ impl SuperAdminCredential {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthError, SuperAdminCredential};
+    /// A fixed 16-byte salt, so a hashed fixture is deterministic. Tests only.
+    const SALT: &[u8] = b"a-fixed-test-slt";
 
-    use argon2::password_hash::SaltString;
+    use super::{AuthError, SuperAdminCredential};
 
     use crate::auth::password::hash_password;
     use crate::auth::totp::{DIGITS, TotpSecret, code_at};
@@ -153,8 +154,7 @@ mod tests {
     const NOW: u64 = 1_700_000_000;
 
     fn credential() -> SuperAdminCredential {
-        let salt = SaltString::encode_b64(b"a-fixed-test-salt").expect("salt");
-        let phc = hash_password("a-strong-passphrase", &salt).expect("hash");
+        let phc = hash_password("a-strong-passphrase", SALT).expect("hash");
         SuperAdminCredential::new(phc, TotpSecret::new(b"12345678901234567890".to_vec()))
     }
 

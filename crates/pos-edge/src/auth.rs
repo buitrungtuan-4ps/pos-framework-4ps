@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use argon2::Argon2;
-use argon2::password_hash::{PasswordHash, PasswordVerifier};
+use argon2::password_hash::PasswordVerifier;
 use pos_ports::device_registry::DeviceSession;
 use pos_ports::error::PortError;
 use pos_proto::ids::{DeviceId, EmployeeId};
@@ -73,12 +73,11 @@ pub enum SignIn {
 /// corrupt synced hash must not become a way in.
 #[must_use]
 pub fn verify_pin(phc_hash: &str, pin: &str) -> bool {
-    match PasswordHash::new(phc_hash) {
-        Ok(parsed) => Argon2::default()
-            .verify_password(pin.as_bytes(), &parsed)
-            .is_ok(),
-        Err(_) => false,
-    }
+    // `PasswordVerifier<str>` parses the PHC string itself, so a malformed one is an `Err` here
+    // and becomes `false` — a corrupt synced hash must not become a way in.
+    Argon2::default()
+        .verify_password(pin.as_bytes(), phc_hash)
+        .is_ok()
 }
 
 /// Hashes a PIN into an Argon2id PHC string, for a fixture that needs a roster it can sign into.
@@ -93,16 +92,14 @@ pub fn verify_pin(phc_hash: &str, pin: &str) -> bool {
 #[cfg(feature = "demo-fixtures")]
 #[must_use]
 pub fn hash_pin(pin: &str) -> Option<String> {
-    use argon2::password_hash::rand_core::OsRng;
-    use argon2::password_hash::{PasswordHasher, SaltString};
+    use argon2::password_hash::PasswordHasher as _;
+    use argon2::password_hash::phc::PasswordHash;
 
-    let salt = SaltString::generate(&mut OsRng);
-    Some(
-        Argon2::default()
-            .hash_password(pin.as_bytes(), &salt)
-            .ok()?
-            .to_string(),
-    )
+    // No salt argument: `hash_password` draws a fresh one from the OS per call. A fixed salt here
+    // would make every employee's PIN hash to the same string for the same PIN, which is the whole
+    // point of a salt — so this call deliberately does not take one.
+    let hash: PasswordHash = Argon2::default().hash_password(pin.as_bytes()).ok()?;
+    Some(hash.to_string())
 }
 
 /// Per-employee failure tracking for the offline PIN lockout.
@@ -458,9 +455,12 @@ impl Sessions {
 
 #[cfg(test)]
 mod tests {
+    /// A fixed 16-byte salt, so a hashed fixture is deterministic. Tests only.
+    const SALT: &[u8] = b"a-fixed-test-slt";
+
     use super::{Lockout, MAX_FAILURES, SignIn, verify_pin};
     use argon2::Argon2;
-    use argon2::password_hash::{PasswordHasher, SaltString};
+    use argon2::password_hash::PasswordHasher as _;
     use pos_proto::ids::EmployeeId;
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
@@ -475,9 +475,8 @@ mod tests {
 
     /// A real Argon2id PHC hash of `pin`, computed with a fixed salt so the test needs no RNG.
     fn hash_of(pin: &str) -> String {
-        let salt = SaltString::encode_b64(b"fixed-test-salt!").expect("salt");
         Argon2::default()
-            .hash_password(pin.as_bytes(), &salt)
+            .hash_password_with_salt(pin.as_bytes(), SALT)
             .expect("hash")
             .to_string()
     }
