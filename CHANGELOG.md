@@ -16,6 +16,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The command palette answers a screen reader, and the keyboard can see where it is.** The
+  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
+  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
+  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
+  missing when the highlight walked past the bottom of a long result list and left the screen.
+
 ### Security
 
 - **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
