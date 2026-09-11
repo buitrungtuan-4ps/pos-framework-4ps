@@ -26,6 +26,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
   and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
   fix was accepted.
+- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
+  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
+  for none of those three, so the header costs nothing and closes them to anything that later ends
+  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
 
 ---
 

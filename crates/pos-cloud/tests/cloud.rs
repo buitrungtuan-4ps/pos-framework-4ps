@@ -9795,6 +9795,14 @@ async fn every_response_carries_the_admin_security_headers() {
             .expect("ascii"),
         "no-referrer"
     );
+    assert_eq!(
+        headers
+            .get("permissions-policy")
+            .expect("permissions-policy header")
+            .to_str()
+            .expect("ascii"),
+        "camera=(), microphone=(), geolocation=()"
+    );
     let csp = headers
         .get("content-security-policy")
         .expect("a CSP header")
