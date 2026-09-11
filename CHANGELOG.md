@@ -16,6 +16,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The command palette answers a screen reader, and the keyboard can see where it is.** The
+  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
+  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
+  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
+  missing when the highlight walked past the bottom of a long result list and left the screen.
+
 ### Changed
 
 - **The Layout screen stopped rescanning its item list once per button.** `itemName` and
@@ -35,6 +43,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
   and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
   fix was accepted.
+- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
+  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
+  for none of those three, so the header costs nothing and closes them to anything that later ends
+  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
 
 ---
 
