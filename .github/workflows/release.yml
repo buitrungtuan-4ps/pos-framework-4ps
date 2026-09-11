@@ -412,3 +412,13 @@ jobs:
               --title "pos-edge ${TAG}" \
               --notes "Signed edge build for ${TAG}. Verify each artifact with its \`.minisig\` against the trusted minisign public key (see docs/release-runbook.md); the edge does the same before it installs an update (ADR-0047)."
           fi
+          # A 0.x line promises nothing about stability (semver §4), and the CHANGELOG's
+          # "Why 0.10 and not 1.0" says exactly why this one does not: the gates that need real
+          # hardware have not been run. Someone landing on the release page should see that
+          # without having to read the version string for it. Set after create/upload so a
+          # re-run onto an existing release still marks it, and cleared above 0.x so the first
+          # 1.0.0 does not inherit the flag.
+          case "${TAG}" in
+            v0.*) gh release edit "${TAG}" --prerelease ;;
+            *)    gh release edit "${TAG}" --prerelease=false ;;
+          esac
