@@ -16,59 +16,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-### Added
-
-- **The command palette answers a screen reader, and the keyboard can see where it is.** The
-  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
-  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
-  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
-  missing when the highlight walked past the bottom of a long result list and left the screen.
-
-### Changed
-
-- **The Layout screen stopped rescanning its item list once per button.** `itemName` and
-  `categoryName` did a linear `find` over the whole catalogue on every call, and the grid calls
-  them once per placed button — quadratic in a large menu. Both now read a `createMemo` `Map`, and
-  the per-channel button views (`channelButtons`, `positionedButtons`, `flowingButtons`,
-  `collisionCells`, `gridExtent`) became memos so a redraw does not refilter and resort. Behaviour
-  is unchanged: the same values, computed once per dependency change instead of once per read.
-- **`t()` returns a static message without going through ICU.** Most keys carry no `{argument}`,
-  and parsing + formatting them per call was pure overhead. The fast path is guarded on two
-  characters, both measured against `intl-messageformat` rather than assumed: `{`, which opens an
-  argument, and `''`, which is ICU's escape for a literal apostrophe — `It''s` formats to `It's`,
-  so returning it raw would be a silent mistranslation. A lone apostrophe (`don't`) is literal in
-  ICU and keeps the fast path. No catalogue entry contains `''` today; the guard is there so the
-  first one that does cannot break quietly.
-
-### Security
-
-- **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
-  already caught, because `classify_ip` routes it through `to_ipv4_mapped()` before the v6 checks.
-  The deprecated IPv4-*compatible* form `::a.b.c.d` was not: `::169.254.169.254` has a zero first
-  segment, matches no v6 branch, and fell through to "public unicast" — so a webhook URL could be
-  registered against the cloud metadata endpoint and the delivery would be made. `classify_v6` now
-  recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
-  and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
-  fix was accepted.
-- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
-  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
-  for none of those three, so the header costs nothing and closes them to anything that later ends
-  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
-
-### Security
-
-- **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
-  already caught, because `classify_ip` routes it through `to_ipv4_mapped()` before the v6 checks.
-  The deprecated IPv4-*compatible* form `::a.b.c.d` was not: `::169.254.169.254` has a zero first
-  segment, matches no v6 branch, and fell through to "public unicast" — so a webhook URL could be
-  registered against the cloud metadata endpoint and the delivery would be made. `classify_v6` now
-  recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
-  and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
-  fix was accepted.
-- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
-  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
-  for none of those three, so the header costs nothing and closes them to anything that later ends
-  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
+Nothing yet.
 
 ---
 
@@ -118,6 +66,57 @@ checks that need a real machine have still not been run. [`docs/gate-register.md
 §6 is the list, and **P11 is the one that matters most** — that a headless Windows store produces a
 readable log and that a code read out of it actually pairs a device. This release is what makes that
 check runnable; it is not evidence that it passed. 1.0.0 is the version that carries the results.
+
+### Fixed
+
+- **A 0.x release now publishes as a pre-release.** `release.yml` created every GitHub Release as
+  a full one, so `v0.10.0` would have sat on the releases page looking as finished as a 1.0 —
+  while the CHANGELOG two paragraphs up explains that the hardware gates have not been run. The
+  workflow now marks any `v0.*` tag as a pre-release, and explicitly clears the flag above 0.x so
+  the first `1.0.0` does not inherit it.
+- **`.Jules/` and `.jules/` were two directories differing only in case.** Agent memory notes
+  landed in both. On Linux they coexist; on any macOS or Windows checkout the filesystem folds
+  them together and git reports a working tree it cannot clean. Folded into `.jules/`. Nothing in
+  the build referenced either path.
+
+### Added
+
+- **The command palette answers a screen reader, and the keyboard can see where it is.** The
+  overlay gains `role="dialog"`, the input `role="combobox"`, the results `role="listbox"` with
+  `role="option"` and `aria-selected` per row — so the active choice is announced rather than only
+  drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
+  missing when the highlight walked past the bottom of a long result list and left the screen.
+
+### Changed
+
+- **The Layout screen stopped rescanning its item list once per button.** `itemName` and
+  `categoryName` did a linear `find` over the whole catalogue on every call, and the grid calls
+  them once per placed button — quadratic in a large menu. Both now read a `createMemo` `Map`, and
+  the per-channel button views (`channelButtons`, `positionedButtons`, `flowingButtons`,
+  `collisionCells`, `gridExtent`) became memos so a redraw does not refilter and resort. Behaviour
+  is unchanged: the same values, computed once per dependency change instead of once per read.
+- **`t()` returns a static message without going through ICU.** Most keys carry no `{argument}`,
+  and parsing + formatting them per call was pure overhead. The fast path is guarded on two
+  characters, both measured against `intl-messageformat` rather than assumed: `{`, which opens an
+  argument, and `''`, which is ICU's escape for a literal apostrophe — `It''s` formats to `It's`,
+  so returning it raw would be a silent mistranslation. A lone apostrophe (`don't`) is literal in
+  ICU and keeps the fast path. No catalogue entry contains `''` today; the guard is there so the
+  first one that does cannot break quietly.
+
+### Security
+
+- **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
+  already caught, because `classify_ip` routes it through `to_ipv4_mapped()` before the v6 checks.
+  The deprecated IPv4-*compatible* form `::a.b.c.d` was not: `::169.254.169.254` has a zero first
+  segment, matches no v6 branch, and fell through to "public unicast" — so a webhook URL could be
+  registered against the cloud metadata endpoint and the delivery would be made. `classify_v6` now
+  recognises the `::a.b.c.d` shape and hands it to `classify_v4`, which already knows 169.254/16
+  and 127/8. Found by a scanning bot, verified by reading the fall-through on `main` before the
+  fix was accepted.
+- **A `Permissions-Policy` response header on the console surface.** `camera=(), microphone=(),
+  geolocation=()` joins the existing `nosniff` / `DENY` / `no-referrer` / CSP set. The console asks
+  for none of those three, so the header costs nothing and closes them to anything that later ends
+  up embedded. Asserted in `every_response_carries_the_admin_security_headers`, beside its siblings.
 
 
 ### Changed
