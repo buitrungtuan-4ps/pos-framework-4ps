@@ -24,6 +24,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   drawn. Arrow-key navigation now calls `scrollIntoView({ block: "nearest" })`, which is what was
   missing when the highlight walked past the bottom of a long result list and left the screen.
 
+### Changed
+
+- **The Layout screen stopped rescanning its item list once per button.** `itemName` and
+  `categoryName` did a linear `find` over the whole catalogue on every call, and the grid calls
+  them once per placed button — quadratic in a large menu. Both now read a `createMemo` `Map`, and
+  the per-channel button views (`channelButtons`, `positionedButtons`, `flowingButtons`,
+  `collisionCells`, `gridExtent`) became memos so a redraw does not refilter and resort. Behaviour
+  is unchanged: the same values, computed once per dependency change instead of once per read.
+
 ### Security
 
 - **SSRF vetting blocked IPv4-mapped IPv6 but not IPv4-compatible IPv6.** `::ffff:127.0.0.1` was
