@@ -41,14 +41,21 @@ pub(crate) async fn serve(uri: Uri) -> Response {
     (StatusCode::NOT_FOUND, "no UI is embedded in this build").into_response()
 }
 
-/// Builds a response with the right content type. The MIME comes from the extension via
-/// [`mime_for`], which returns a `&'static str`, so the header value is infallible.
+/// Builds a response with the right content type and security headers. The MIME comes from the extension
+/// via [`mime_for`], which returns a `&'static str`, so the header value is infallible.
 fn respond(path: &str, bytes: Vec<u8>) -> Response {
     (
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(mime_for(path)),
-        )],
+        [
+            (
+                header::CONTENT_TYPE,
+                HeaderValue::from_static(mime_for(path)),
+            ),
+            (
+                header::X_CONTENT_TYPE_OPTIONS,
+                HeaderValue::from_static("nosniff"),
+            ),
+            (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+        ],
         bytes,
     )
         .into_response()
