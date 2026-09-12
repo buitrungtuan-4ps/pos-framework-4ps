@@ -98,7 +98,8 @@ export function Translations() {
     return [...set].sort();
   });
 
-  const keys = () => Object.keys(grid()).sort();
+  // Memoize sorted keys array to prevent repeated Object.keys().sort() executions on every render/access.
+  const keys = createMemo(() => Object.keys(grid()).sort());
 
   const cell = (key: string, locale: string): string => grid()[key]?.[locale] ?? "";
 
@@ -106,17 +107,33 @@ export function Translations() {
   const incomplete = (key: string): boolean =>
     locales().some((locale) => cell(key, locale).trim() === "");
 
-  const shownKeys = () => (missingOnly() ? keys().filter(incomplete) : keys());
+  // Memoize filtered shown keys list based on missingOnly toggle and grid/locales changes.
+  const shownKeys = createMemo(() => (missingOnly() ? keys().filter(incomplete) : keys()));
 
-  // Per-locale completion: non-empty cells over the number of keys, as a whole percent.
-  const completion = (locale: string): number => {
-    const all = keys();
-    if (all.length === 0) {
-      return 100;
+  // Pre-calculate per-locale completion percentages in a single memoized lookup table O(K * L)
+  // to avoid O(K) array filtering per header cell on every re-render.
+  const completionMap = createMemo(() => {
+    const allKeys = keys();
+    const map = new Map<string, number>();
+    if (allKeys.length === 0) {
+      for (const code of locales()) {
+        map.set(code, 100);
+      }
+      return map;
     }
-    const filled = all.filter((key) => cell(key, locale).trim() !== "").length;
-    return Math.round((filled / all.length) * 100);
-  };
+    for (const code of locales()) {
+      let filled = 0;
+      for (const key of allKeys) {
+        if ((grid()[key]?.[code] ?? "").trim() !== "") {
+          filled += 1;
+        }
+      }
+      map.set(code, Math.round((filled / allKeys.length) * 100));
+    }
+    return map;
+  });
+
+  const completion = (locale: string): number => completionMap().get(locale) ?? 100;
 
   const setCell = (key: string, locale: string, value: string) => {
     const current = grid();
