@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
+  `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
+  ensuring focused items remain visible within scrollable lists during arrow key traversal.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
