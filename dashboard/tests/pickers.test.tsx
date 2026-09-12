@@ -107,11 +107,19 @@ describe("the single-choice picker", () => {
     expect(screen.getAllByRole("option")).toHaveLength(ITEMS.length);
   });
 
-  it("takes the keyboard: down to the second row, Enter to choose it", () => {
+  it("takes the keyboard: down to the second row, Enter to choose it, and scrolls active item into view", () => {
     const { onChange } = mount();
     fireEvent.click(trigger());
     const search = screen.getByRole("combobox");
+    const options = screen.getAllByRole("option");
+    const scrollSpy = vi.fn();
+    if (options[1]) {
+      options[1].scrollIntoView = scrollSpy;
+    }
+
     fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+
     fireEvent.keyDown(search, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("i2");
   });
@@ -198,11 +206,19 @@ describe("the multi-choice picker", () => {
     expect([...values()]).toEqual(["i1", "i3"]);
   });
 
-  it("toggles the active row on Enter, so the whole control works without a mouse", () => {
+  it("toggles the active row on Enter, so the whole control works without a mouse, and scrolls active item into view", () => {
     const { values } = mount([]);
     const search = screen.getByRole("combobox");
+    const options = screen.getAllByRole("option");
+    const scrollSpy = vi.fn();
+    if (options[2]) {
+      options[2].scrollIntoView = scrollSpy;
+    }
+
     fireEvent.keyDown(search, { key: "ArrowDown" });
     fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+
     fireEvent.keyDown(search, { key: "Enter" });
     expect([...values()]).toEqual(["i3"]);
   });
