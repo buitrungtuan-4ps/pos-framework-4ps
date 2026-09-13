@@ -149,11 +149,22 @@ pub fn compile_menu(
         current = menu.parent_menu_id;
     }
 
+    // Group placements by menu_id first to avoid O(chain_depth * placements) scanning.
+    let mut placements_by_menu: BTreeMap<MenuId, Vec<&MenuPlacement>> = BTreeMap::new();
+    for placement in placements {
+        placements_by_menu
+            .entry(placement.menu_id)
+            .or_default()
+            .push(placement);
+    }
+
     // Resolve each item to its most-specific placement: the requested menu wins over an ancestor.
     let mut resolved: BTreeMap<MenuItemId, &MenuPlacement> = BTreeMap::new();
     for menu_id in &chain {
-        for placement in placements.iter().filter(|p| p.menu_id == *menu_id) {
-            resolved.entry(placement.menu_item_id).or_insert(placement);
+        if let Some(menu_placements) = placements_by_menu.get(menu_id) {
+            for placement in menu_placements {
+                resolved.entry(placement.menu_item_id).or_insert(placement);
+            }
         }
     }
 
