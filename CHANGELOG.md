@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The notification bell and dropdown carry ARIA labels and popup roles.** Added `aria-haspopup="true"` to the NotificationBell trigger and `role="region"` with `aria-label` to the history popup in `dashboard/src/components/Toast.tsx` for screen-reader accessibility.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
