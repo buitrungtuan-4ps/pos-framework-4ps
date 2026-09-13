@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
