@@ -39,6 +39,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   borrows busybox `wget` from the `nats` service because the `pos_cloud` image is deliberately
   command-free and the box was never assumed to carry an HTTP client.
 
+### Security
+
+- **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
+  `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
+  (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.
+
 ---
 
 ## [0.10.0] — 2026-09-11
