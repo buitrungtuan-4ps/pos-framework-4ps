@@ -18,6 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The notification bell and dropdown carry ARIA labels and popup roles.** Added `aria-haspopup="true"` to the NotificationBell trigger and `role="region"` with `aria-label` to the history popup in `dashboard/src/components/Toast.tsx` for screen-reader accessibility.
 - **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
   `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
   ensuring focused items remain visible within scrollable lists during arrow key traversal.

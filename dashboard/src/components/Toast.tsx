@@ -77,6 +77,7 @@ export function NotificationBell() {
         type="button"
         aria-label={t("notifications.open")}
         aria-expanded={open()}
+        aria-haspopup="true"
         onClick={() => setOpen((value) => !value)}
         class="flex min-h-touch items-center gap-1 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
       >
@@ -88,7 +89,11 @@ export function NotificationBell() {
         </Show>
       </button>
       <Show when={open()}>
-        <div class="absolute right-0 z-30 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay">
+        <div
+          role="region"
+          aria-label={t("notifications.open")}
+          class="absolute right-0 z-30 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay"
+        >
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("notifications.open")}</span>
             <button
