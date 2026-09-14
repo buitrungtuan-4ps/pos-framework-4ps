@@ -125,18 +125,17 @@ pub fn base32_encode(input: &[u8]) -> String {
     out
 }
 
-/// Compares two strings in time independent of their contents (given equal length), so a remote
-/// guesser cannot learn a correct prefix of the setup token from response timing. Unequal lengths
-/// short-circuit — the token's length is fixed and not itself a secret.
+/// Compares two strings in constant time independent of both contents and length differences,
+/// preventing timing side-channel attacks from leaking setup token prefixes or length information.
 #[must_use]
 pub fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut diff = 0_u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= *x ^ *y;
+    let max_len = a.len().max(b.len());
+    let mut diff = (a.len() ^ b.len()).min(1) as u8;
+    for i in 0..max_len {
+        let byte_a = a.get(i).copied().unwrap_or(0);
+        let byte_b = b.get(i).copied().unwrap_or(0);
+        diff |= byte_a ^ byte_b;
     }
     diff == 0
 }
