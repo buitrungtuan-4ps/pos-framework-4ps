@@ -295,7 +295,31 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         return classify_v4(Ipv4Addr::new(a, b, c, d));
     }
 
-    let [first, second, ..] = segments;
+    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`).
+    if segments[0] == 0x0064
+        && segments[1] == 0xff9b
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0
+        && segments[5] == 0
+    {
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    }
+
+    let [first, second, third, ..] = segments;
+
+    // 6to4 IPv6 prefix (`2002:WWXX:YYZZ::`): embeds IPv4 address WW.XX.YY.ZZ.
+    if first == 0x2002 {
+        let a = (second >> 8) as u8;
+        let b = (second & 0xff) as u8;
+        let c = (third >> 8) as u8;
+        let d = (third & 0xff) as u8;
+        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    }
+
     if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
     } else if first & 0xfe00 == 0xfc00 {
@@ -486,6 +510,36 @@ mod tests {
             classify_ip(ip("::169.254.169.254")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // NAT64 well-known prefix smuggling cases (`64:ff9b::a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("64:ff9b::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b::169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // 6to4 prefix smuggling cases (`2002:WWXX:YYZZ::`).
+        assert_eq!(
+            classify_ip(ip("2002:7f00:0001::")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2002:7f00:0001::"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2002:a9fe:a9fe::")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2002:a9fe:a9fe::"),
                 ForbiddenReason::LinkLocal
             ))
         );
