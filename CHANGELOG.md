@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Optimized menu placement resolution in `compile_menu`.** Pre-grouped placements by `menu_id` using `BTreeMap` in `pos-cloud`'s `catalog_compiler`, reducing resolution lookup complexity from $O(\text{chain\_depth} \times \text{placements})$ to $O(\text{placements} \log \text{menus})$.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
