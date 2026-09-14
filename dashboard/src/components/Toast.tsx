@@ -93,7 +93,8 @@ export function NotificationBell() {
             <span class="text-sm font-semibold text-ink">{t("notifications.open")}</span>
             <button
               type="button"
-              class="text-sm text-ink-muted transition-colors hover:text-ink"
+              class="text-sm text-ink-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={history().length === 0}
               onClick={() => setHistory([])}
             >
               {t("notifications.clear")}
