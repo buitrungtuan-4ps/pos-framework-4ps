@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
+  `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
+  ensuring focused items remain visible within scrollable lists during arrow key traversal.
+
 ### Changed
 
 - **Memoized menu item lookups and layout categories in Order screen.** Reduced grid assembly and item lookup from $O(M \cdot N)$ linear scans to $O(M + N)$ using a `createMemo` `Map` lookup in `ui/src/screens/Order.tsx`.
