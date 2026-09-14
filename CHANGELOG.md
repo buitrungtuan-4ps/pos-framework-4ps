@@ -16,12 +16,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-### Security
-
-- **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
-  `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
-  (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.
-
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
@@ -38,6 +32,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   "is the TLS posture right" are different failures and only the first is this step's business. It
   borrows busybox `wget` from the `nats` service because the `pos_cloud` image is deliberately
   command-free and the box was never assumed to carry an HTTP client.
+
+### Security
+
+- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
+- **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
+  `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
+  (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.
 
 ---
 
