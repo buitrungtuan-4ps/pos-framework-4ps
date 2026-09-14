@@ -1,0 +1,4 @@
+## 2026-09-15 - [SSRF IPv6 Translation Bypass]
+**Vulnerability:** Webhook destinations could potentially bypass SSRF IPv6 checks when hostnames/IPs were provided using IPv6 translation prefixes such as NAT64 (`64:ff9b::/96`) or 6to4 (`2002::/16`), allowing embedded private/loopback IPv4 addresses (like `127.0.0.1` or `169.254.169.254`) to fall through unclassified.
+**Learning:** IPv6 address classification must account for all mechanisms that embed IPv4 addresses (such as IPv4-mapped, IPv4-compatible, NAT64, and 6to4 prefixes), translating the embedded IPv4 bytes back into IPv4 classification logic before deciding if a destination address is safe.
+**Prevention:** When classifying IPv6 addresses for SSRF/network safety, explicitly check and extract embedded IPv4 addresses for well-known translation prefixes (`64:ff9b::`, `2002::`, `::ffff:`, `::`) and evaluate them through `classify_v4`.
