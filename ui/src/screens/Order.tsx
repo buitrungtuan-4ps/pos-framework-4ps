@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
@@ -94,19 +94,25 @@ export function Order() {
       closeVoid();
     });
 
-  // Only categories that still have something to sell. A category whose every button names an item
-  // the price book no longer carries would otherwise draw as an empty heading — the console arranged
-  // it before the item was withdrawn, and a heading with nothing under it reads as a fault.
-  const arranged = () =>
+  // Pre-index menu items by ID using createMemo to allow O(1) lookups instead of O(N) linear scans.
+  const menuItemMap = createMemo(
+    () => new Map(state.menu.map((item) => [item.menu_item_id, item])),
+  );
+
+  // Layout names the item; the price book prices it; the two meet only at the id (ADR-0066).
+  // Uses O(1) hash map lookup instead of O(N) state.menu.some(...).
+  const priced = (button: LayoutButton) => menuItemMap().has(button.menu_item_id);
+
+  // Only categories that still have something to sell. Memoized to prevent re-filtering layout
+  // categories on every access/re-render, reducing overall layout grid assembly complexity from
+  // O(M * N) to O(M + N) where M is layout buttons count and N is menu items count.
+  const arranged = createMemo(() =>
     state.layout.filter(
       (category) =>
         category.buttons.some(priced) ||
         category.subcategories.some((subcategory) => subcategory.buttons.some(priced)),
-    );
-
-  // Layout names the item; the price book prices it; the two meet only at the id (ADR-0066).
-  const priced = (button: LayoutButton) =>
-    state.menu.some((item) => item.menu_item_id === button.menu_item_id);
+    ),
+  );
 
   const sellButton = (item: MenuItemResponse, caption: string) => (
     <button
@@ -124,10 +130,10 @@ export function Order() {
   );
 
   // An arranged button carries the caption the console wrote; the price comes from the price book, so
-  // there is never a second price that can disagree with it. A button naming an item the price book
-  // does not carry draws nothing rather than an unpriceable tap.
+  // there is never a second price that can disagree with it. Uses O(1) hash map lookup instead of
+  // O(N) state.menu.find(...).
   const arrangedButton = (button: LayoutButton) => {
-    const item = state.menu.find((entry) => entry.menu_item_id === button.menu_item_id);
+    const item = menuItemMap().get(button.menu_item_id);
     return <Show when={item}>{(found) => sellButton(found(), button.label)}</Show>;
   };
 

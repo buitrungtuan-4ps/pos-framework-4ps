@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Memoized menu item lookups and layout categories in Order screen.** Reduced grid assembly and item lookup from $O(M \cdot N)$ linear scans to $O(M + N)$ using a `createMemo` `Map` lookup in `ui/src/screens/Order.tsx`.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
