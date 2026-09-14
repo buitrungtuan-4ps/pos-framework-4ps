@@ -74,6 +74,23 @@ async fn the_root_serves_the_embedded_ui() {
         "index.html should be served as HTML, got {content_type:?}"
     );
 
+    assert_eq!(
+        response
+            .headers()
+            .get("x-content-type-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("nosniff"),
+        "assets should carry x-content-type-options: nosniff"
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("x-frame-options")
+            .and_then(|value| value.to_str().ok()),
+        Some("DENY"),
+        "assets should carry x-frame-options: DENY"
+    );
+
     let bytes = response
         .into_body()
         .collect()
