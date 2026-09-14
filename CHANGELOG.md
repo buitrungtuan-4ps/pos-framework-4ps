@@ -18,6 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Memoized menu item lookups and layout categories in Order screen.** Reduced grid assembly and item lookup from $O(M \cdot N)$ linear scans to $O(M + N)$ using a `createMemo` `Map` lookup in `ui/src/screens/Order.tsx`.
 - **Optimized menu placement resolution in `compile_menu`.** Pre-grouped placements by `menu_id` using `BTreeMap` in `pos-cloud`'s `catalog_compiler`, reducing resolution lookup complexity from $O(\text{chain\_depth} \times \text{placements})$ to $O(\text{placements} \log \text{menus})$.
 
 ### Fixed
