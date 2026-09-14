@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Hardened constant-time comparison for first-boot enrolment setup token.** `constant_time_eq` in
+  `pos-cloud`'s enrolment auth module was updated to avoid early returns on length mismatches,
+  preventing timing side-channel leaks of setup token prefix or length information.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
