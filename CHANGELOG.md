@@ -25,6 +25,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Notification history clear action is disabled when empty.** The "Clear all" button in the console's notification bell is now visually and functionally disabled when there are no notification items in history.
+
 - **Memoized sorted keys and completion rates in the translation editor.** `dashboard/src/screens/Translations.tsx`
   pre-calculates locale completion percentages in a single memoized lookup table and memoizes sorted keys to avoid
   redundant $O(K \times L)$ evaluations on keystrokes in large grids.

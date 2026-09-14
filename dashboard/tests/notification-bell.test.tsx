@@ -1,19 +1,27 @@
+// The notification bell, on the properties its markup has to hold: the trigger announces itself as
+// a popup button so a screen reader says what pressing it does, the panel it opens is a landmark
+// rather than an anonymous box, and the clear control is dead while there is nothing to clear — a
+// button that looks live and does nothing reads as a fault.
+//
+// Order matters in this file. The history lives in a module-level signal that outlives `cleanup`,
+// so every assertion about an empty history runs before anything raises a toast.
+
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { NotificationBell } from "../src/components/Toast";
+import { NotificationBell, toast } from "../src/components/Toast";
 
 afterEach(cleanup);
 
-describe("NotificationBell component accessibility & interaction", () => {
-  it("renders button with correct ARIA accessibility attributes", () => {
+describe("the notification bell", () => {
+  it("names itself a popup trigger, and starts collapsed", () => {
     render(() => <NotificationBell />);
     const button = screen.getByRole("button", { name: "Notifications" });
     expect(button.getAttribute("aria-haspopup")).toBe("true");
     expect(button.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("expands history list and updates aria-expanded attribute when clicked", async () => {
+  it("opens a labelled region, and says so on the trigger", async () => {
     render(() => <NotificationBell />);
     const button = screen.getByRole("button", { name: "Notifications" });
 
@@ -22,7 +30,32 @@ describe("NotificationBell component accessibility & interaction", () => {
       expect(button.getAttribute("aria-expanded")).toBe("true");
     });
 
-    const region = screen.getByRole("region", { name: "Notifications" });
-    expect(region).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeTruthy();
+  });
+
+  it("disables the clear control while the history is empty", () => {
+    render(() => <NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+
+    const clear = screen.getByRole("button", { name: "Clear all" }) as HTMLButtonElement;
+    expect(clear.disabled).toBe(true);
+  });
+
+  it("enables the clear control once something arrives, and empties the list on click", async () => {
+    toast.ok("Test notification message");
+
+    render(() => <NotificationBell />);
+    fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
+
+    const clear = screen.getByRole("button", { name: "Clear all" }) as HTMLButtonElement;
+    expect(clear.disabled).toBe(false);
+    expect(screen.getByText("Test notification message")).toBeTruthy();
+
+    fireEvent.click(clear);
+
+    await waitFor(() => {
+      expect(clear.disabled).toBe(true);
+    });
+    expect(screen.getByText("No notifications yet.")).toBeTruthy();
   });
 });
