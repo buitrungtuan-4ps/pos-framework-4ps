@@ -16,11 +16,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
+  `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
+  ensuring focused items remain visible within scrollable lists during arrow key traversal.
+
 ### Changed
 
 - **Memoized sorted keys and completion rates in the translation editor.** `dashboard/src/screens/Translations.tsx`
   pre-calculates locale completion percentages in a single memoized lookup table and memoizes sorted keys to avoid
   redundant $O(K \times L)$ evaluations on keystrokes in large grids.
+
+- **Memoized menu item lookups and layout categories in Order screen.** Reduced grid assembly and item lookup from $O(M \cdot N)$ linear scans to $O(M + N)$ using a `createMemo` `Map` lookup in `ui/src/screens/Order.tsx`.
+- **Optimized menu placement resolution in `compile_menu`.** Pre-grouped placements by `menu_id` using `BTreeMap` in `pos-cloud`'s `catalog_compiler`, reducing resolution lookup complexity from $O(\text{chain\_depth} \times \text{placements})$ to $O(\text{placements} \log \text{menus})$.
 
 ### Fixed
 
@@ -41,6 +50,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
   `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
   (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.

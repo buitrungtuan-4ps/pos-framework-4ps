@@ -4,6 +4,12 @@
 
 **Action:** In SolidJS table headers with aggregated stats per column, compute all column statistics in a single `createMemo` lookup map instead of calling $O(K)$ array filter functions inside JSX `<For each={columns}>`.
 
+## 2026-04-01 - Pre-grouping placements in Rust catalog compilation
+
+**Learning:** When resolving hierarchical inheritance chains (e.g. menu overrides), linear scanning of placements for each node in the inheritance chain causes $O(\text{chain\_depth} \times \text{placements})$ iterations. Pre-grouping placements by `menu_id` into a lookup map reduces iteration overhead to $O(\text{placements} \log \text{menus} + \text{chain\_depth})$.
+
+**Action:** When walking parent/child hierarchy chains over relational collections in Rust, pre-group child items by parent key into a BTreeMap/HashMap prior to the hierarchy traversal.
+
 ## 2026-03-31 - Memoizing Grid Cell Map in SolidJS Layout Editor
 
 **Learning:** In SolidJS, un-memoized getters that compute matrix cells via nested loop filters (`for row ... for col ... array.filter(...)`) re-evaluate on every access/re-render, causing $O(R \cdot C \cdot N)$ runtime complexity (~20,000 iterations for 20x20 grid with 50 items). Using `createMemo` with an $O(N)$ Map grouping cuts iteration count to $O(N + R \cdot C)$ (~450 operations).

@@ -308,6 +308,7 @@ export function ComboboxField(props: {
   const [active, setActive] = createSignal(0);
   let root: HTMLDivElement | undefined;
   let search: HTMLInputElement | undefined;
+  const optionRefs: HTMLLIElement[] = [];
 
   const shown = createMemo(() => {
     const needle = query().trim();
@@ -349,6 +350,13 @@ export function ComboboxField(props: {
   createEffect(() => {
     if (open()) {
       queueMicrotask(() => search?.focus());
+    }
+  });
+
+  createEffect(() => {
+    const idx = active();
+    if (open() && optionRefs[idx]) {
+      optionRefs[idx]?.scrollIntoView?.({ block: "nearest" });
     }
   });
 
@@ -421,6 +429,7 @@ export function ComboboxField(props: {
                 <For each={shown()}>
                   {(option, index) => (
                     <li
+                      ref={(el) => (optionRefs[index()] = el)}
                       role="option"
                       aria-selected={option.value === props.value}
                       class={`cursor-pointer px-3 py-2 text-sm ${
@@ -494,6 +503,7 @@ export function MultiComboboxField(props: {
   const listId = createUniqueId();
   const [query, setQuery] = createSignal("");
   const [active, setActive] = createSignal(0);
+  const optionRefs: HTMLLIElement[] = [];
 
   const shown = createMemo(() => {
     const needle = query().trim();
@@ -501,6 +511,13 @@ export function MultiComboboxField(props: {
       return props.options;
     }
     return props.options.filter((option) => matchesQuery(option, needle));
+  });
+
+  createEffect(() => {
+    const idx = active();
+    if (optionRefs[idx]) {
+      optionRefs[idx]?.scrollIntoView?.({ block: "nearest" });
+    }
   });
 
   // The chosen options in the order the *option list* has them, not the order they were clicked, so
@@ -591,6 +608,7 @@ export function MultiComboboxField(props: {
             <For each={shown()}>
               {(option, index) => (
                 <li
+                  ref={(el) => (optionRefs[index()] = el)}
                   role="option"
                   aria-selected={props.values.includes(option.value)}
                   class={`flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-ink ${
