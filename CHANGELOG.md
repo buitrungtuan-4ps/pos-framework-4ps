@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
+  `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
+  (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.
+
 ### Fixed
 
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
