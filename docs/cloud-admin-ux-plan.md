@@ -1263,6 +1263,66 @@ be done, in which order, and what makes each step green.
 | D7 | Step-budget ceilings | Console ceilings **4 / 6 / 3** (create / publish / find) are set in PR-8, when the kit has made them reachable; the gate reports until then. |
 | D8 | Where a scheduled publish is converted to an instant | **On the cloud**, from the store's published `locale.timezone` and `business_date_cutoff` (option O2). Edge-side conversion (O3) is deferred to the B·W7 line of the roadmap. |
 
+### The clarifications behind five of the decisions
+
+Five of the eight were not a plain "agree with the recommendation"; the owner asked a question
+first, and the answer is what the decision rests on. Recorded here so the decision can be
+re-read with its reason, not only its outcome. The questions were asked in Vietnamese and are
+paraphrased.
+
+**D1 — "This is a POS core framework: keep the colours generic so anyone can use it, and do
+not centre it on one brand."** Agreed, and it goes further than the recommendation (which had
+been to keep the brand red as primary). The primary button becomes a neutral ink; red is kept
+for warnings and destructive actions only. The brand colour becomes one token, `--accent`, that
+each fork sets for itself and that is used on the logo, the focus ring and the selected nav
+tint — never on a button. The framework default for it is a quiet blue-grey. This is what
+`docs/ui-ux.md` already promised: per-tenant branding means changing tokens, not components.
+PR-2 splits `--primary` from `--accent`; the buttons on all 32 screens follow automatically.
+
+**D2 — "Which typeface covers the most countries? This is a core framework."** Noto Sans, the
+family built for exactly that purpose ("no tofu": no empty box in any script). Self-host the
+Latin, Latin-extended, Vietnamese, Cyrillic and Greek subsets in three weights (about 150 kB);
+`unicode-range` means the browser downloads only the scripts on screen. Each country module
+brings its own script pack when it needs one — Thai, Devanagari, Arabic, each 50–150 kB, loaded
+only when the console or a store uses that locale. CJK is not bundled (several MB per weight);
+it falls back to the system font (Yu Gothic, Hiragino, Noto CJK on Android), whose Latin glyphs
+are close enough to Noto not to jar. Noto Sans has tabular numerals, which the tables and KPIs
+lack today. Inter was not chosen because it covers Latin, Cyrillic, Greek and Vietnamese only —
+no Thai, no Indic, no Arabic — a dead end for a framework that already ships VN, JP and IN
+modules.
+
+**D5 — "Why does it not refresh itself? Why a Refresh button at all?"** The owner is right: the
+button should not exist. It exists because thirty screens each hand-wrote their own data
+loading and none re-reads after a save. The fix is at the root: after every Save or Publish the
+screen re-reads exactly what it changed; the live screens (Fleet, Alerts, OTA, the hub)
+revalidate when the tab regains focus and every 30–60 seconds. Result: no Refresh button
+anywhere, and no interim "fold them into one icon" step. Plan change: the resource helper does
+not wait for PR-6; it lands with PR-3, screen by screen — whichever screen is touched loses its
+Refresh button at the same time.
+
+**D7 — "What is counting clicks for?"** It is a gate in CI, not a reporting metric. The
+repository already has a script that measures seven core admin flows
+([ADR-0109](adr/0109-counting-the-taps-an-operator-makes.md)). Once a ceiling is set, anyone who adds an
+"Are you sure?" box to the price-change flow turns the build red immediately — daily work
+cannot get slower by degrees without anyone noticing. Today the ceilings are empty, so the
+script only prints the counts. The real question is therefore only "when to set the numbers".
+Answer: in PR-8, after `PublishBar` and releases have actually shortened the flows; set now,
+every publish flow would be red for the reason this wave already knows. Expected ceilings
+4 / 6 / 3 (create / publish / find).
+
+**D8 — "Does a scheduled publish follow each store's edge machine, or the cloud's config for
+that edge's timestamp?"** The cloud, not the edge clock. Today the cloud holds one absolute
+instant typed by the admin on the admin's machine; at that instant it activates the new
+version, and the edge pulls it within 30 seconds with no notion of time of its own. The
+decision (option O2): the admin enters "00:00 local" or "start of business day"; the cloud
+converts it per store using the timezone already declared for that store in Store settings
+(`locale.timezone` and `business_date_cutoff`), so each store gets its own instant; the cloud
+activates at that instant; the edge pulls as usual. The edge machine's clock takes no part —
+deliberately, because a machine clock can be wrong, and a store that is offline at that moment
+still receives the right version when it reconnects. The later option (O3), where the edge
+switches on its own clock even while offline, needs the edge to hold two versions at once and
+touches an architectural rule; it is deferred to the B·W7 line of the roadmap.
+
 ## 4w.1 What the run found — the twenty findings, by kind
 
 Three kinds, because they need three different fixes and the order below depends on telling
