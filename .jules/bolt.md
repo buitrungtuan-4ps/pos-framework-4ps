@@ -1,3 +1,9 @@
+## 2026-04-01 - Memoizing Keys & Locale Completion Map in SolidJS Translations Editor
+
+**Learning:** In SolidJS table components rendering matrix-like translation grids ($K$ keys $\times$ $L$ locales), un-memoized getters for key sorting (`Object.keys().sort()`) and per-locale completion calculations (`keys().filter(...)` per header column) re-execute $O(L \cdot K)$ string checks on every input stroke or re-render. Pre-building a `completionMap` with `createMemo` in a single $O(K \cdot L)$ pass and memoizing sorted `keys` prevents redundant array sorting/filtering and removes render stutter on large grids.
+
+**Action:** In SolidJS table headers with aggregated stats per column, compute all column statistics in a single `createMemo` lookup map instead of calling $O(K)$ array filter functions inside JSX `<For each={columns}>`.
+
 ## 2026-04-01 - Pre-grouping placements in Rust catalog compilation
 
 **Learning:** When resolving hierarchical inheritance chains (e.g. menu overrides), linear scanning of placements for each node in the inheritance chain causes $O(\text{chain\_depth} \times \text{placements})$ iterations. Pre-grouping placements by `menu_id` into a lookup map reduces iteration overhead to $O(\text{placements} \log \text{menus} + \text{chain\_depth})$.
