@@ -788,7 +788,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.upLabel}
                 disabled={index() === 0}
-                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
+                class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() - 1)}
               >
                 <span aria-hidden="true">▲</span>
@@ -797,7 +797,7 @@ export function ReorderList<T>(props: {
                 type="button"
                 aria-label={props.downLabel}
                 disabled={index() === props.items.length - 1}
-                class="text-ink-muted transition-colors hover:text-ink disabled:opacity-30"
+                class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:opacity-30"
                 onClick={() => props.onReorder(index(), index() + 1)}
               >
                 <span aria-hidden="true">▼</span>
