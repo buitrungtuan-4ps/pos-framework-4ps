@@ -7,20 +7,38 @@
 // office and never published leaves the till charging the old one, and nothing on either screen says
 // so.
 //
-// # This gate measures; it does not yet rule
+// # This gate rules
 //
-// §6's two-and-three-tap rule is about a till in service, and applying it unchanged to a back-office
-// console would be a number picked to look strict rather than one anybody had argued for. So a task
-// here declares `budget: null` until a ceiling is *decided*, and the script:
+// It did not, at first. §6's two-and-three-tap rule is about a till in service, and applying it
+// unchanged to a back-office console would have been a number picked to look strict rather than one
+// anybody had argued for — so every task declared `budget: null`, the script printed the measured
+// cost, and the ceilings were left to be set from that evidence. They are set now (roadmap-v3
+// **D7**), and the script:
 //
 //  * **fails** when a declared tap cannot be resolved against the source — the flow was renamed,
 //    moved or deleted and this file did not follow. That is the drift the ui/ gate catches, and it is
 //    worth catching here from the first commit.
-//  * **fails** when a task with a real budget exceeds it.
-//  * **reports** the measured cost of every task, so the ceiling can be set from evidence.
+//  * **fails** when a task exceeds its budget.
 //
-// Setting a ceiling is then a one-line change per task. Until then this file's honest description is
-// *a verified map of the console's core flows, with their measured cost*.
+// # Where the numbers come from, and where they part company with D7
+//
+// D7 expected **4 / 6 / 3** (create / publish / find). Two flows do not fit under those, and the
+// reason is written into their notes below rather than discovered again later:
+//
+//  * **Provisioning is 5, not 4.** The wizard's three steps are a dependency order — the store must
+//    exist before a key can be scoped to it, and the key must exist before the installer can embed
+//    it. The only way to reach 4 is to stop scoping the key to the store.
+//  * **The price change is 7, not 6.** Six of the seven are catalog navigation and the edit itself;
+//    the seventh is **Publish**, which is the whole reason this flow is measured. Dropping to 6 means
+//    publishing on save, which is the safeguard, not the overhead. (It was 8 until the publish card
+//    started following the menu you opened — that was the removable tap, and it is gone.)
+//
+// So the ceilings here are each flow's **measured cost**, which makes this a no-regression ratchet:
+// nobody can add a tap to a core flow without turning the build red and having to argue the new
+// number into this file. That is D7's stated purpose — "daily work cannot get slower by degrees
+// without anyone noticing" — and it is the half a round 4/6/3 would have bought at the price of
+// being unsatisfiable without undoing a safeguard. Where a flow already sits at or under D7's
+// number, the ratchet *is* D7's number.
 //
 // # What a "tap" is here
 //
@@ -53,13 +71,14 @@ import ts from "typescript";
 
 const SRC = fileURLToPath(new URL("../src", import.meta.url));
 
-// The console's core flows. `budget` is `null` where no ceiling has been decided yet — see the note
-// at the top of this file; `steps` is what the flow costs today, resolved against the source.
+// The console's core flows. `budget` is the decided ceiling and `steps` is what the flow costs
+// today, resolved against the source; where the two differ from D7's expected 4 / 6 / 3, the note
+// says why — see the top of this file.
 const TASKS = [
   {
     task: "Change an item's price on a menu and publish it to the store",
-    budget: null,
-    note: "The flow Q7 exists to measure. The last two steps are the operational risk: a price saved and not published leaves the till charging the old one, and neither screen says so. Any proposal to shorten this should shorten the *first* six, not merge the publish into the save.",
+    budget: 7,
+    note: "The flow Q7 exists to measure, and D7's publish ceiling of 6 does not fit it — see the top of this file. The last step is the operational risk: a price saved and not published leaves the till charging the old one, and neither screen says so. Any proposal to shorten this should shorten the *first* six, not merge the publish into the save. It was eight until `openMenuDetail` started selecting the opened menu in the publish card, which removed the one tap that was asking the operator to say twice which menu they were working on.",
     steps: [
       { nav: "catalog" },
       { file: "screens/catalog/CatalogShell.tsx", action: "setTab" },
@@ -67,20 +86,19 @@ const TASKS = [
       { file: "screens/catalog/Menus.tsx", action: "openEditPlacement" },
       { file: "screens/catalog/Menus.tsx", action: "setChannelAmount" },
       { file: "screens/catalog/Menus.tsx", action: "savePlacement" },
-      { file: "screens/catalog/Menus.tsx", action: "setPublishMenu" },
       { file: "screens/catalog/Menus.tsx", action: "doPublish" },
     ],
   },
   {
     task: "Check whether a shop is online",
-    budget: null,
-    note: "One click, because the store overview is the tenant-scoped index (ADR-0099). It was five screens before that, which is the whole argument for the hub.",
+    budget: 1,
+    note: "One click, because the store overview is the tenant-scoped index (ADR-0099). It was five screens before that, which is the whole argument for the hub. D7's find ceiling is 3; this sits at 1 and the ceiling holds it there, because the hub is the reason a second click would be a regression rather than a cost.",
     steps: [{ nav: "storeHub" }],
   },
   {
     task: "Provision a new store and get its installer",
-    budget: null,
-    note: "Five, and none of them is removable: the wizard is not in the sidebar (this gate caught that), so it is reached through Stores, and inside it the store must exist before a key can be scoped to it and the key must exist before the installer can embed it. The wizard's three steps are the dependency order, not a form split for looks.",
+    budget: 5,
+    note: "Five, and none of them is removable: the wizard is not in the sidebar (this gate caught that), so it is reached through Stores, and inside it the store must exist before a key can be scoped to it and the key must exist before the installer can embed it. The wizard's three steps are the dependency order, not a form split for looks. That is the one flow D7's create ceiling of 4 cannot hold without unscoping the key from its store, which is why the ceiling here is 5.",
     steps: [
       { nav: "stores" },
       { link: { from: "stores", to: "newStore" } },
@@ -91,7 +109,7 @@ const TASKS = [
   },
   {
     task: "Replace a store's machine and get its files back",
-    budget: null,
+    budget: 4,
     note: "Four, and the middle two are the point rather than overhead: the drawer opens without writing anything (so reading what a dead machine costs cannot mint a credential), and the key is issued deliberately, because it is a new secret and the old one keeps working until somebody revokes it. It was unbounded before this flow existed — the only way to get an installer for an existing store was to create a second store — so the honest comparison is not four against three, it is four against reading a generator's source.",
     steps: [
       { nav: "stores" },
@@ -102,7 +120,7 @@ const TASKS = [
   },
   {
     task: "Publish one menu to a whole cohort of shops",
-    budget: null,
+    budget: 4,
     note: "Four, against 3N for the same change made shop by shop — 150 taps at fifty shops, of which 147 are repetition (ADR-0122). The two pickers in the middle are the instruction itself and are not removable: which cohort, and what to send it. What this number does not show is the half the record is actually about — the fourth tap answers with an outcome per shop, where fifty separate publishes answered fifty times and nobody counted.",
     steps: [
       { nav: "storeGroups" },
@@ -113,13 +131,13 @@ const TASKS = [
   },
   {
     task: "Acknowledge a firing alert",
-    budget: null,
+    budget: 2,
     note: "Two. Acknowledging from the list rather than from a detail drawer is what keeps it at two — the drawer offers the same action for someone who opened it to read the detail first.",
     steps: [{ nav: "alerts" }, { screen: "alerts", action: "acknowledge" }],
   },
   {
     task: "Turn a capability off for a store and publish it",
-    budget: null,
+    budget: 3,
     note: "Three. Same shape as the price flow and the same risk: the change is authored and then published, and only the published half reaches the till.",
     steps: [
       { nav: "config" },
@@ -388,7 +406,7 @@ const failures = [];
 for (const { task, budget, steps } of TASKS) {
   if (budget !== null && steps.length > budget) {
     failures.push(
-      `"${task}" takes ${steps.length} clicks but its budget is ${budget} — cut a step, or make the case for raising the budget in docs/ui-ux.md §6`,
+      `"${task}" takes ${steps.length} clicks but its budget is ${budget} — cut a step, or argue the new number into this task's \`note\` (docs/cloud-admin-ux-plan.md D7)`,
     );
   }
   for (const [index, step] of steps.entries()) {
@@ -408,16 +426,18 @@ if (failures.length > 0) {
 }
 
 const clicks = TASKS.reduce((total, { steps }) => total + steps.length, 0);
-const ruled = TASKS.filter(({ budget }) => budget !== null).length;
+const unruled = TASKS.filter(({ budget }) => budget === null);
 console.log(
-  `step-budget: ok — ${TASKS.length} console flows, ${clicks} clicks, every one resolved to a real handler.`,
+  `step-budget: ok — ${TASKS.length} console flows, ${clicks} clicks, every one resolved to a real handler and inside its ceiling.`,
 );
 for (const { task, budget, steps } of TASKS) {
-  const against = budget === null ? "(no ceiling decided yet)" : `/${budget}`;
-  console.log(`  ${steps.length}${budget === null ? " " : against} ${task} ${budget === null ? against : ""}`.trimEnd());
+  const against = budget === null ? " (no ceiling decided yet)" : `/${budget}`;
+  console.log(`  ${steps.length}${budget === null ? "" : against} ${task}${budget === null ? against : ""}`);
 }
-if (ruled === 0) {
+// `budget: null` stays legal so a flow added tomorrow can be measured before it is ruled — that is
+// how these seven got their numbers. It is a state to leave, not to live in, so the run says so.
+if (unruled.length > 0) {
   console.log(
-    "  No ceiling has been decided for any console flow yet — this run is the measurement Q7 asked for.",
+    `  ${unruled.length} flow(s) still measure without ruling; decide a ceiling from the count above.`,
   );
 }

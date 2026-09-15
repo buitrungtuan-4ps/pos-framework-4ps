@@ -58,6 +58,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console's step budget stopped reporting and started refusing** (Wave 4 PR-8, decision D7).
+  Seven core admin flows have had their click count measured in CI since Q7 with no ceiling attached,
+  so a flow could get slower a tap at a time and the build stayed green. Each now carries a ceiling,
+  and it is that flow's measured cost: adding a tap to changing a price, provisioning a store or
+  publishing to a cohort turns the build red, and the new number has to be argued into the file
+  beside the flow it belongs to.
+  - **Changing a price is one tap shorter.** The publish card on Catalog → Menus now starts on the
+    menu you just opened instead of asking a second time which menu you meant, taking the flow from
+    eight taps to seven. The picker is still there and still yours to change — it simply no longer
+    starts empty.
+  - Two flows sit above the round **4 / 6 / 3** the plan expected, and deliberately: provisioning is
+    five because a key cannot be scoped to a store that does not exist yet, and the price change is
+    seven because the seventh tap is **Publish**, which is the safeguard the flow is measured to
+    protect. Both are written up in `docs/cloud-admin-ux-plan.md` D7 and in the gate's own notes.
+
 - **Notification history clear action is disabled when empty.** The "Clear all" button in the console's notification bell is now visually and functionally disabled when there are no notification items in history.
 
 - **Memoized sorted keys and completion rates in the translation editor.** `dashboard/src/screens/Translations.tsx`
