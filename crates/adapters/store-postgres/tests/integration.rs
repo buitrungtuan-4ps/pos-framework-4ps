@@ -7892,6 +7892,13 @@ mod reason_code_timestamps {
     /// The reason code this test authors. A ULID, because that is what the id column holds.
     const ID: &str = "01J0000000000000000000000A";
 
+    /// 2020-01-01, in Unix milliseconds — the floor a projected timestamp has to clear.
+    ///
+    /// Milliseconds and seconds differ by a factor of a thousand, and the only check that separates
+    /// them is one against a real clock: this date sits comfortably below any run of this suite and
+    /// far above what a seconds-valued cast would produce for any date this decade.
+    const Y2020_MS: i64 = 1_577_836_800_000;
+
     /// An authored record, shaped like the wire one but assembled here so the test crate needs no
     /// dependency on the cloud's types — the adapter treats `doc` as opaque JSON either way.
     fn doc(code: &str) -> String {
@@ -7920,11 +7927,6 @@ mod reason_code_timestamps {
             let listed = reason_codes.fetch(TENANT_A).await.expect("list");
             let written = listed.first().expect("the row just inserted").updated_at_ms;
 
-            // Milliseconds, not seconds: the two differ by a factor of a thousand, and the only
-            // check that separates them is one against a real clock. 2020-01-01 is comfortably
-            // below any run of this suite and far above what a seconds-valued cast would produce
-            // for any date this decade.
-            const Y2020_MS: i64 = 1_577_836_800_000;
             assert!(
                 written > Y2020_MS,
                 "the projection is milliseconds since the epoch, not seconds: {written}"
