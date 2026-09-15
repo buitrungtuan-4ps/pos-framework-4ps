@@ -1245,7 +1245,7 @@ dashboard `pnpm build` green, 200 tests / 30 files.
 | --- | --- |
 | PR-1 · What the console says wrong | **Delivered** — V10 V11 V12 V13 V15 V17, F1 F2 F3 F12; 216 tests / 34 files |
 | PR-2 · Visual foundation | **Delivered** — D1 D2 D3, V1 V2 V3 V7; 218 tests / 34 files |
-| PR-3 · The kit, completed | **Delivered** — D5 D6, V16 V19 V20; 229 tests / 36 files. Five of the planned components; see the delivery note below for the four that moved to PR-4/PR-6 |
+| PR-3 · The kit, completed | **Delivered** — D5 D6, V16 V20, and V19 on the Stores table; 229 tests / 36 files. Five of the planned components; see the delivery note below for the four that moved to PR-4/PR-6 |
 | PR-4 | Next |
 | PR-5 … PR-8 | Planned, in the order below |
 
@@ -1476,9 +1476,11 @@ printed beside it). A component library that ships ahead of its screens is a lib
 so they land with their callers rather than as speculative exports.
 
 Also deferred, deliberately: `DataTable`'s `density: compact` and its card mode below `md` (V9,
-V18), and moving `TechnicalDetails` into the row kebab (V14). All three are changes to the table
-every list screen already renders, and PR-6 rewrites how those screens read their data — doing both
-at once would put a layout change and a data-flow change in the same diff. They go with PR-6.
+V18), moving `TechnicalDetails` into the row kebab (V14), and the rest of the `RowActions` sweep —
+**V19 is applied to the Stores table here, not to the other ~25**, which is where the plan's "~25
+tables" line lands. All four are changes to the table every list screen already renders, and PR-6
+rewrites how those screens read their data — doing both at once would put a layout change and a
+data-flow change in the same diff. They go with PR-6.
 
 `createAdminResource` is on Alerts only. The helper is the deliverable here; the migration is
 per-screen and explicitly PR-6's, as §Sequencing already said.
