@@ -461,6 +461,7 @@
   "channels.publishOrigins": "Công bố origin",
   "channels.publishQr": "Phát hành ràng buộc QR",
   "channels.publishTender": "Phát hành phương thức thanh toán",
+  "channels.publishTo": "Phát hành đến {store}.",
   "channels.publishVendors": "Phát hành chính sách đối tác",
   "channels.published": "Đã phát hành kênh tới {store}.",
   "channels.qrCloseHour": "Giờ đóng cửa (0–23)",

@@ -124,6 +124,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **Channels says where the shop stands for each of the five things it publishes (Wave 4 · PR-6c-3,
+  F13).** Tax rates and Channels onto `createAdminResource`; Channels adopts `PublishBar` five times.
+
+  The worry going in was that a screen publishing five config nodes needed a new kind of control,
+  and that five bars stacked up would read as clutter. The screen answered it: Channels already had
+  five separate publish buttons, one per section, because `channels`, `tender`, `qr`, `vendors` and
+  `origins` are five genuinely distinct nodes with five publish dates. So each button is replaced by
+  the bar that says more, where it already was. No new layout, and the operator can now see that
+  their QR guardrails went out on Tuesday while their tender list is still waiting.
+
+  Both screens prime editable forms from their reads, so the read and the draft are two states
+  rather than one: the resource holds what the store is running, the form holds what the operator
+  has typed over it. Priming on each read keeps today's behaviour — a re-read after a save or a
+  `412` replaces the draft, which is the whole point of reloading after a conflict.
+
+  Tax rates also closes a gate inconsistency it had been carrying since PR-5b: it adopted the
+  publish bar then but never got the resource helper, so it sat in one of `kit-adoption.test.ts`'s
+  two lists and not the other.
+
 - **Six operational screens re-read what they change (Wave 4 · PR-6c-2, D5).** Audit, Fleet,
   Layout, Inventory, Campaigns and Store groups onto `createAdminResource`. Inventory adopts
   `PublishBar`.
