@@ -39,6 +39,7 @@ use store_postgres::{
     TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
 };
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
+use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
 use crate::archive::{ArchiveStore, ArchiveStoreError, ExpiredArchive, StoreArchive};
@@ -128,6 +129,17 @@ use crate::registry::{
 use crate::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderStatus, PendingOrder, QueuedOrderPayload,
     StoreOutcome,
+};
+// "Release" means two unrelated things in this cloud, and this is the one file that holds both. The
+// OTA seam above is a version of the *software* — a signed edge binary and its artifact
+// ([ADR-0048](../../../docs/adr/0048-ota-rollouts.md)). This one is a set of config nodes going out
+// to a set of shops ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+// The config seam is aliased rather than the OTA one because the OTA name was here first; both are
+// spelled out at every use below, so nothing here reads as "the release store" without saying which.
+use crate::releases::{
+    NewRelease as NewConfigRelease, Release as ConfigRelease, ReleaseMoment as ConfigReleaseMoment,
+    ReleaseStatus as ConfigReleaseStatus, ReleaseStore as ConfigReleaseStore,
+    ReleaseStoreError as ConfigReleaseStoreError,
 };
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::scheduling::{
@@ -2991,6 +3003,115 @@ impl ScheduledPublishStore for PostgresScheduledPublishes {
             .await
             .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
         rows.into_iter().map(scheduled_from_row).collect()
+    }
+}
+
+// --- Releases (ADR-0125) ------------------------------------------------------------------------
+
+/// Rehydrates a stored release row into the seam's domain type.
+///
+/// The moment is reconstructed from the three columns rather than stored as one, and the
+/// reconstruction is where the two kinds stay distinguishable: a wall-clock release carries a local
+/// date and time whose instants live per store on its pairs; an instant release carries one moment
+/// for the fleet. A row with neither is a `draft` nobody has timed yet, which is an ordinary state —
+/// a release across nine nodes and forty stores is assembled over minutes.
+///
+/// A half-written wall clock (a date and no time, or the reverse) reads as *untimed* rather than as
+/// a guess, because guessing midnight would schedule a publish at an hour nobody chose.
+fn release_from_row(row: ReleaseRow) -> Result<ConfigRelease, ConfigReleaseStoreError> {
+    let tenant_id = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(|_ignored| ConfigReleaseStoreError::new("a release has a non-ULID tenant"))?;
+    let moment = match (row.wall_clock_date, row.wall_clock_time, row.instant_at_ms) {
+        (Some(date), Some(time), _) => Some(ConfigReleaseMoment::WallClock { date, time }),
+        (_, _, Some(at_ms)) => Some(ConfigReleaseMoment::Instant(at_ms)),
+        _ => None,
+    };
+    Ok(ConfigRelease {
+        id: row.id,
+        tenant_id,
+        name: row.name,
+        status: ConfigReleaseStatus::from_wire(&row.status),
+        target_group_id: row.target_group_id,
+        moment,
+        created_by: row.created_by,
+        created_at_ms: row.created_at_ms,
+        updated_at_ms: row.updated_at_ms,
+    })
+}
+
+impl ConfigReleaseStore for PostgresConfigReleases {
+    async fn create(&self, release: &NewConfigRelease) -> Result<(), ConfigReleaseStoreError> {
+        let tenant = release.tenant_id.to_string();
+        // The moment splits back into the columns it is stored as. A draft with no moment writes
+        // three nulls, which is what "not timed yet" looks like on the way back in too.
+        let (wall_clock_date, wall_clock_time, instant_at_ms) = match &release.moment {
+            Some(ConfigReleaseMoment::WallClock { date, time }) => {
+                (Some(date.clone()), Some(time.clone()), None)
+            }
+            Some(ConfigReleaseMoment::Instant(at_ms)) => (None, None, Some(*at_ms)),
+            None => (None, None, None),
+        };
+        let row = NewReleaseRow {
+            id: &release.id,
+            tenant_id: &tenant,
+            name: &release.name,
+            // Every release starts as a draft, whatever it was given: nothing fires until an
+            // operator says so (ADR-0125 §4).
+            status: ConfigReleaseStatus::Draft.as_wire(),
+            target_group_id: release.target_group_id.as_deref(),
+            wall_clock_date: wall_clock_date.as_deref(),
+            wall_clock_time: wall_clock_time.as_deref(),
+            instant_at_ms,
+            created_by: &release.created_by,
+        };
+        self.create(&row)
+            .await
+            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))
+    }
+
+    async fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<ConfigRelease>, ConfigReleaseStoreError> {
+        let rows = self
+            .list_for_tenant(&tenant_id.to_string())
+            .await
+            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+        rows.into_iter().map(release_from_row).collect()
+    }
+
+    async fn fetch_one(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+    ) -> Result<Option<ConfigRelease>, ConfigReleaseStoreError> {
+        let row = self
+            .fetch_one(&tenant_id.to_string(), id)
+            .await
+            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+        row.map(release_from_row).transpose()
+    }
+
+    async fn set_status(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+        status: ConfigReleaseStatus,
+    ) -> Result<bool, ConfigReleaseStoreError> {
+        self.set_status(&tenant_id.to_string(), id, status.as_wire())
+            .await
+            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))
+    }
+
+    async fn in_flight(&self) -> Result<Vec<ConfigRelease>, ConfigReleaseStoreError> {
+        let rows = self
+            .in_flight()
+            .await
+            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+        rows.into_iter().map(release_from_row).collect()
     }
 }
 

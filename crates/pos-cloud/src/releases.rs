@@ -38,10 +38,12 @@
 //! [`ReleaseMoment::Instant`] needs no locale at all, which is the escape hatch for a store being set
 //! up.
 
+use core::future::Future;
+
 use pos_core::business_date::{StoreTimeZone, resolve_local_time};
 
 use crate::config_tree::prerequisites_for;
-use pos_proto::ids::StoreId;
+use pos_proto::ids::{StoreId, TenantId};
 
 /// Where a release stands. Derived from its pairs, stored so a list read need not aggregate.
 ///
@@ -247,6 +249,106 @@ pub fn resolve_for_stores(moment: &ReleaseMoment, stores: &[TargetStore]) -> Vec
             outcome: resolve_moment(moment, store),
         })
         .collect()
+}
+
+/// A release to create. Its pairs are written separately, as scheduled publishes carrying its id.
+#[derive(Debug, Clone)]
+pub struct NewRelease {
+    /// The row's id (a ULID string), server-minted.
+    pub id: String,
+    /// The tenant.
+    pub tenant_id: TenantId,
+    /// What the operator called it — "Tết 2027", not a ULID.
+    pub name: String,
+    /// The cohort it was aimed at, or `None` for an explicit store list.
+    ///
+    /// Recorded for the report only. The concrete stores live on the pairs, because a group is
+    /// expanded at schedule time (ADR-0125 §3): a store added to the cohort on Friday must not
+    /// silently receive a Monday menu nobody checked it against.
+    pub target_group_id: Option<String>,
+    /// When it goes out, or `None` for a draft nobody has timed yet.
+    pub moment: Option<ReleaseMoment>,
+    /// The admin who created it, for the audit trail.
+    pub created_by: String,
+}
+
+/// A stored release.
+#[derive(Debug, Clone)]
+pub struct Release {
+    /// The id.
+    pub id: String,
+    /// The tenant.
+    pub tenant_id: TenantId,
+    /// The operator's name for it.
+    pub name: String,
+    /// Where it stands — the roll-up of its pairs, stored so a list read need not aggregate.
+    pub status: ReleaseStatus,
+    /// The cohort it was aimed at, if any.
+    pub target_group_id: Option<String>,
+    /// When it goes out, or `None` for a draft with no time yet.
+    pub moment: Option<ReleaseMoment>,
+    /// The admin who created it.
+    pub created_by: String,
+    /// When it was created, Unix milliseconds.
+    pub created_at_ms: i64,
+    /// When its row last changed, Unix milliseconds.
+    pub updated_at_ms: i64,
+}
+
+/// Persists and reads releases.
+///
+/// Only the identity and the roll-up: the pairs are [`crate::scheduling::ScheduledPublish`] rows
+/// carrying a `release_id`, read through that seam's `list_for_release`. Splitting them is what keeps
+/// a release from becoming a second publish path (ADR-0125 §1) — this store cannot write a config
+/// version and has no way to try.
+pub trait ReleaseStore {
+    /// Creates a release. Its pairs are scheduled separately.
+    fn create(
+        &self,
+        release: &NewRelease,
+    ) -> impl Future<Output = Result<(), ReleaseStoreError>> + Send;
+
+    /// A tenant's releases, newest first, for the console's list.
+    fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<Release>, ReleaseStoreError>> + Send;
+
+    /// One release, or `None` — an absence, not a failure: an operator following a stale link is an
+    /// ordinary thing to do.
+    fn fetch_one(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<Release>, ReleaseStoreError>> + Send;
+
+    /// Moves a release to `status`. Returns whether a release with that id existed in the tenant.
+    fn set_status(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+        status: ReleaseStatus,
+    ) -> impl Future<Output = Result<bool, ReleaseStoreError>> + Send;
+
+    /// Every release still scheduled or applying, across all tenants.
+    ///
+    /// What the activator re-tallies after a pass. Fleet-wide and read as the trusted pool owner, the
+    /// same posture as the due read it follows — a per-tenant loop would make the roll-up cost scale
+    /// with the tenant count rather than with the work actually in flight.
+    fn in_flight(&self) -> impl Future<Output = Result<Vec<Release>, ReleaseStoreError>> + Send;
+}
+
+/// A failure of the release store itself.
+#[derive(Debug, thiserror::Error)]
+#[error("the release store failed: {0}")]
+pub struct ReleaseStoreError(String);
+
+impl ReleaseStoreError {
+    /// Wraps a message (for the server's log).
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
 }
 
 /// The order a release's nodes must be applied in, so the set satisfies its own prerequisites.

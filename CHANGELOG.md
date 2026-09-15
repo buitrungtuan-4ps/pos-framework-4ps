@@ -124,6 +124,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **A release can be stored, listed and moved through its states (Wave 4 · PR-7c, F8/F10).** The
+  `ReleaseStore` seam in `pos-cloud`, its store-postgres adapter over the `releases` table, and the
+  fleet-wide in-flight scan the activator will re-tally from. No routes and no console yet.
+
+  The seam holds the identity and the roll-up only — it cannot write a config version and has no
+  statement that tries. A release's *writes* are the scheduled-publish rows carrying its id, and
+  keeping the two apart is what stops a release becoming a second publish path.
+
+  The moment is stored as three nullable columns rather than one, because the two kinds are not the
+  same shape and only one of them is safe at a store whose timezone nobody recorded: a wall-clock
+  release is refused there by name, an instant release is not. Collapsing them would make that
+  refusal unmakeable. A row with neither reads as a draft nobody has timed yet, and a half-written
+  wall clock reads as untimed rather than as a guess — guessing midnight would schedule a publish at
+  an hour nobody chose.
+
+  **"Release" now means two unrelated things in this tree** — a version of the software (ADR-0048's
+  OTA artifact) and a set of config nodes going out to a set of shops (ADR-0125). The new adapter is
+  `PostgresConfigReleases` and the one file that imports both seams spells out which is which, rather
+  than one of them winning and the reader having to remember. Renaming the OTA type to match belongs
+  in its own change.
+
 - **A release applies in dependency order, and a pair that fails says so on its own row (Wave 4 · PR-7b, F9).**
   The activator groups each pass's due rows by `(release, store)` and applies each group in
   prerequisite order, so a release carrying both `tax` and `menu` satisfies its own prerequisite

@@ -811,6 +811,16 @@ impl PostgresStore {
         crate::scheduling::PostgresScheduledPublishes::new(self.pool.clone())
     }
 
+    /// The config-release store over this pool
+    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    ///
+    /// Holds the identity and the roll-up only; a release's writes are the `scheduled_publishes` rows
+    /// carrying its id, read through [`Self::scheduled_publishes`].
+    #[must_use]
+    pub fn config_releases(&self) -> crate::config_releases::PostgresConfigReleases {
+        crate::config_releases::PostgresConfigReleases::new(self.pool.clone())
+    }
+
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps
     /// current ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
     ///
