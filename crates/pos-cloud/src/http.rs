@@ -25769,7 +25769,10 @@ struct ReleaseView {
     release_id: String,
     tenant_id: String,
     name: String,
-    status: &'static str,
+    /// Serialised as the enum, not as `as_wire()`: `as_wire` is the **stored** token (`SCHEDULED`),
+    /// and every other status on this surface reaches the console `snake_case`. Two spellings for one
+    /// concept is two branches in the console's type for no gain.
+    status: ReleaseStatus,
     target_group_id: Option<String>,
     /// The operator's local date, for a wall-clock release. Null for an instant release.
     wall_clock_date: Option<String>,
@@ -25794,7 +25797,7 @@ impl ReleaseView {
             release_id: release.id.clone(),
             tenant_id: release.tenant_id.to_string(),
             name: release.name.clone(),
-            status: release.status.as_wire(),
+            status: release.status,
             target_group_id: release.target_group_id.clone(),
             wall_clock_date,
             wall_clock_time,
@@ -25816,7 +25819,8 @@ struct ReleasePairView {
     pair_id: String,
     store_id: String,
     node: String,
-    status: &'static str,
+    /// The same spelling `GET /admin/config/scheduled` already gives this exact row.
+    status: ScheduledPublishStatus,
     effective_at_ms: i64,
     applied_version_id: Option<String>,
     failure: Option<String>,
@@ -26720,7 +26724,7 @@ where
                 pair_id: pair.id,
                 store_id: pair.store_id.to_string(),
                 node: pair.node_key,
-                status: pair.status.as_wire(),
+                status: pair.status,
                 effective_at_ms: pair.effective_at_ms,
                 applied_version_id: pair.applied_version_id,
                 failure: pair.failure,

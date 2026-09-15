@@ -22933,7 +22933,7 @@ async fn draft_a_release(router: &axum::Router, cookie: &str, tenant: &str, grou
     assert_eq!(created.status(), StatusCode::CREATED);
     let body = json_body(created).await;
     assert_eq!(
-        body["status"], "DRAFT",
+        body["status"], "draft",
         "a new release is not yet scheduled"
     );
     body["release_id"].as_str().expect("release_id").to_owned()
@@ -22993,7 +22993,7 @@ async fn one_wall_clock_release_becomes_one_instant_per_store_timezone() {
         .expect("route the schedule");
     assert_eq!(scheduled_response.status(), StatusCode::OK);
     let report = json_body(scheduled_response).await;
-    assert_eq!(report["release"]["status"], "SCHEDULED");
+    assert_eq!(report["release"]["status"], "scheduled");
 
     let pairs = report["pairs"].as_array().expect("pairs");
     assert_eq!(pairs.len(), 2, "one pair per (node, store)");
@@ -23158,7 +23158,7 @@ async fn an_instant_release_needs_no_timezone_and_cancels_back_to_a_draft() {
         .expect("route the cancel");
     assert_eq!(cancelled.status(), StatusCode::OK);
     let report = json_body(cancelled).await;
-    assert_eq!(report["pairs"][0]["status"], "CANCELLED");
+    assert_eq!(report["pairs"][0]["status"], "cancelled");
 }
 
 #[tokio::test]
