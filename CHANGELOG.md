@@ -117,7 +117,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   which the read reports as "published, when is not recorded" rather than as "never published" —
   the distinction the whole feature turns on.
 - **A menu can no longer be published to a store with no tax table (F7).** The batch path has
-  refused this since store groups landed ([ADR-0122](docs/adr/0122-store-groups-and-batch-publish.md)
+  refused this since store groups landed ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)
   §7); the single-store path did not, so the same menu a batch would skip published happily from the
   Menus screen and produced a shop that boots, syncs, shows the menu, takes the order, and raises
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names

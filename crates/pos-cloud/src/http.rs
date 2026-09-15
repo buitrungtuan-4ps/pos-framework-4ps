@@ -4072,7 +4072,7 @@ where
     }
 }
 
-/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-store-groups-and-batch-publish.md) §7.
+/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7.
 ///
 /// One table, read by both publish paths. The batch path had these rules from the day store groups
 /// landed; the single-store path did not, so the same menu that a batch would *skip* for want of a
@@ -14938,7 +14938,7 @@ where
     Err(version_mismatch())
 }
 
-/// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../docs/adr/0122-store-groups-and-batch-publish.md) §7, finding **F7**).
+/// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**).
 ///
 /// Checked against the **effective** document — every layer merged — because that is what the store
 /// receives: a `tax` node inherited from the tenant layer satisfies a menu's prerequisite exactly as
