@@ -12,10 +12,13 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { CatalogItem, RoutingRule, Station } from "../api/types";
+import type { RoutingRule, Station } from "../api/types";
 import { t } from "../i18n";
-import { onScopedContext, RequireContext } from "../lib/scoped";
-import { actingAdmin, storeId, tenantId } from "../state/session";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
+import { actingAdmin, storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
   Button,
@@ -34,17 +37,37 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  PublishBar,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
 export function Stations() {
-  const [stations, setStations] = createSignal<Station[] | null>(null);
-  const [rules, setRules] = createSignal<RoutingRule[]>([]);
-  const [items, setItems] = createSignal<CatalogItem[]>([]);
+  // The three reads in one state: stations, the rules that name them, and the items the rules point
+  // at. Useless apart — a rules table with raw ULIDs where station and item names belong is worse
+  // than no table — so they load and fail together.
+  const plan = createAdminResource(
+    async (tenant, store) => {
+      const [stations, rules, items] = await Promise.all([
+        api.listStations(tenant, store),
+        api.listRoutingRules(tenant, store),
+        api.listItems(tenant),
+      ]);
+      return { stations, rules, items };
+    },
+    { scope: "store" },
+  );
+  const stations = () => plan.value()?.stations ?? null;
+  const rules = () => plan.value()?.rules ?? [];
+  const items = () => plan.value()?.items ?? [];
+  // The form's own refusals — a blank name, a sort that is not a number. Kept apart from the read's
+  // refusal (`failureOf`) because they are different failures with different fixes: one is the
+  // operator's to correct, the other is not theirs at all.
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [savedAtMs, setSavedAtMs] = createSignal<number | null>(null);
+  const published = usePublishedNodes();
 
   // console.floor.manage → owner/admin (mirrors the backend role set; the server re-checks).
   const canManage = () => {
@@ -76,38 +99,13 @@ export function Stations() {
       const message = t("stations.stale");
       setError(message);
       toast.error(message);
-      await load();
+      await plan.refetch();
       return;
     }
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };
-
-  const load = async () => {
-    if (!storeId()) {
-      return;
-    }
-    setError("");
-    setBusy(true);
-    try {
-      const [loadedStations, loadedRules, loadedItems] = await Promise.all([
-        api.listStations(tenantId(), storeId()),
-        api.listRoutingRules(tenantId(), storeId()),
-        api.listItems(tenantId()),
-      ]);
-      setStations(loadedStations);
-      setRules(loadedRules);
-      setItems(loadedItems);
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the store changes — never with an empty context (F0).
-  onScopedContext("store", () => void load());
 
   const stationName_ = (id: string) =>
     stations()?.find((station) => station.station_id === id)?.name ?? id;
@@ -163,7 +161,8 @@ export function Stations() {
         toast.ok(t("stations.stationCreated"));
       }
       setStationOpen(false);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -191,7 +190,8 @@ export function Stations() {
       );
       setPendingStationArchive(null);
       toast.ok(doneMessage);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -222,7 +222,8 @@ export function Stations() {
       setRuleItem("");
       setRuleSort("");
       toast.ok(t("stations.ruleCreated"));
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -240,7 +241,8 @@ export function Stations() {
       await api.removeRoutingRule(tenantId(), rule.rule_id);
       setPendingRuleRemove(null);
       toast.ok(t("stations.ruleRemoved"));
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -253,6 +255,7 @@ export function Stations() {
     try {
       await api.publishFloor(tenantId(), storeId());
       toast.ok(t("stations.published"));
+      await published.refresh();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -319,6 +322,9 @@ export function Stations() {
       <PageHeader title={t("stations.title")} description={t("stations.description")} />
       <RequireContext need="store">
         <div class="flex flex-col gap-6">
+          <Show when={failureOf(plan)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
           <Card
@@ -330,9 +336,6 @@ export function Stations() {
                     {t("stations.addStation")}
                   </Button>
                 </Show>
-                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.refresh")}
-                </Button>
               </div>
             }
           >
@@ -480,11 +483,15 @@ export function Stations() {
             <div class="flex flex-col gap-3">
               <p class="text-sm text-ink-muted">{t("stations.publishHint")}</p>
               <Show when={canManage()}>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publish()}>
-                    {t("stations.publishAction")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("stations.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("stations")}
+                  editedAtMs={savedAtMs()}
+                  describe={describePublish}
+                  publishLabel={t("stations.publishAction")}
+                  busy={busy()}
+                  onPublish={() => void publish()}
+                />
               </Show>
             </div>
           </Card>

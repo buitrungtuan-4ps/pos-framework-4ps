@@ -21,7 +21,10 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -38,6 +41,7 @@ import {
   DataTable,
   EmptyState,
   FormPanel,
+  PublishBar,
   TechnicalDetails,
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -59,9 +63,14 @@ const ACTION_LABEL: Record<ReasonAction, MessageKey> = {
 };
 
 export function ReasonCodes() {
-  const [rows, setRows] = createSignal<ReasonCode[] | null>(null);
-  const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
+  // The tenant's authored list. Tenant-scoped, so the read never runs with an empty context (F0).
+  const codes = createAdminResource((tenant) => api.listReasonCodes(tenant), { scope: "tenant" });
+  const rows = () => codes.value();
+  // What a save last wrote, so the publish bar can say whether the store already has it. Within the
+  // session only: a `ReasonCode` carries no `updated_at`, and inventing one would be a claim the
+  // screen cannot see (the same call PR-5b made on Tax rates).
+  const [savedAtMs, setSavedAtMs] = createSignal<number | null>(null);
+  const published = usePublishedNodes();
 
   // Three independent lifecycles, so publishing does not disable the editor and retiring one row
   // does not grey out the rest of the table (ADR-0121 §3). The editor's subject is the whole row,
@@ -81,29 +90,12 @@ export function ReasonCodes() {
   // now holds offers no reason for them. Empty is the healthy answer; null means it has not run.
   const [uncovered, setUncovered] = createSignal<ReasonAction[] | null>(null);
 
-  const load = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      setRows(await api.listReasonCodes(tenantId()));
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // A conditional write can be refused because somebody else saved first (ADR-0094's `412`). Every
   // edit here sends an `etag`, so the screen invites that refusal and owes the reader a sentence
   // naming what changed plus a reload; `withStaleReload` does both and hands the refusal back for
   // `run` to keep beside the form.
   const conditional = <T,>(write: () => Promise<T>) =>
-    withStaleReload(write, load, t("reasonCodes.stale"));
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+    withStaleReload(write, () => codes.refetch(), t("reasonCodes.stale"));
 
   const openCreate = () => {
     setCode("");
@@ -163,14 +155,14 @@ export function ReasonCodes() {
       .then((saved) => {
         if (saved) {
           toast.ok(t("reasonCodes.saved"));
-          void load();
+          void codes.refetch();
+          setSavedAtMs(Date.now());
         }
       });
   };
 
   /** Retire or restore in place: `active` is a field, so it goes through the same version check. */
   const setStanding = async (row: ReasonCode, standing: boolean) => {
-    setError("");
     setFlipping(row.id);
     try {
       await conditional(() =>
@@ -183,11 +175,10 @@ export function ReasonCodes() {
         }),
       );
       toast.ok(standing ? t("reasonCodes.restored") : t("reasonCodes.retired"));
-      await load();
+      setSavedAtMs(Date.now());
+      await codes.refetch();
     } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
+      toast.error(apiMessage(caught));
     } finally {
       setFlipping("");
     }
@@ -201,7 +192,8 @@ export function ReasonCodes() {
     void deletion.run(() => api.deleteReasonCode(tenantId(), row.id)).then((deleted) => {
       if (deleted) {
         toast.ok(t("reasonCodes.deleted"));
-        void load();
+        void codes.refetch();
+          setSavedAtMs(Date.now());
       } else {
         // The confirm stays open carrying the refusal; a page banner would say it twice.
         toast.error(deletion.error());
@@ -217,10 +209,10 @@ export function ReasonCodes() {
         const result = await api.publishReasonCodes(tenantId(), storeId());
         setUncovered(result.uncovered_actions);
         toast.ok(t("reasonCodes.published", { count: String(result.active) }));
+        await published.refresh();
       })
-      .then((published) => {
-        if (!published) {
-          setError(publishing.error());
+      .then((ok) => {
+        if (!ok) {
           toast.error(publishing.error());
         }
       });
@@ -283,14 +275,13 @@ export function ReasonCodes() {
           actions={
             <div class="flex gap-2">
               <Button onClick={openCreate}>{t("reasonCodes.new")}</Button>
-              <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
             </div>
           }
         >
           <p class="mb-3 text-sm text-ink-muted">{t("reasonCodes.retireHint")}</p>
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={failureOf(codes)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={rows()}>
             {(loaded) => (
               <DataTable
@@ -330,19 +321,19 @@ export function ReasonCodes() {
 
         <Card title={t("reasonCodes.publishTitle")}>
           <p class="mb-3 text-sm text-ink-muted">{t("reasonCodes.publishHint")}</p>
-          <Show
-            when={storeId()}
-            fallback={<p class="text-sm text-ink-muted">{t("reasonCodes.publishNeedsStore")}</p>}
-          >
-            <div class="flex flex-col gap-3">
-              <p class="text-sm text-ink">
-                {t("reasonCodes.publishTo", { store: storeName() })}
-              </p>
-              <div>
-                <Button disabled={publishing.saving()} onClick={publish}>
-                  {t("reasonCodes.publish")}
-                </Button>
-              </div>
+          <div class="flex flex-col gap-3">
+            <PublishBar
+              label={t("reasonCodes.publishTo", { store: storeName() })}
+              publishedAtMs={published.publishedAtMs("reason_codes")}
+              editedAtMs={savedAtMs()}
+              describe={describePublish}
+              publishLabel={t("reasonCodes.publish")}
+              busy={publishing.saving()}
+              disabled={!storeId()}
+              disabledReason={t("reasonCodes.publishNeedsStore")}
+              onPublish={publish}
+            />
+            <Show when={storeId()}>
               <Show when={uncovered()}>
                 {(gaps) => (
                   <Show
@@ -366,8 +357,8 @@ export function ReasonCodes() {
                   </Show>
                 )}
               </Show>
-            </div>
-          </Show>
+            </Show>
+          </div>
         </Card>
 
         <FormPanel

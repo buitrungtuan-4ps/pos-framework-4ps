@@ -14,8 +14,11 @@ import { api, ApiError } from "../api/client";
 import type { Area, FloorTable, TableQrToken } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
-import { onScopedContext, RequireContext } from "../lib/scoped";
-import { actingAdmin, storeId, tenantId } from "../state/session";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
+import { actingAdmin, storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
   Button,
@@ -35,16 +38,33 @@ import {
   Drawer,
   EmptyState,
   FormPanel,
+  PublishBar,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
 export function Floor() {
-  const [areas, setAreas] = createSignal<Area[] | null>(null);
-  const [tables, setTables] = createSignal<FloorTable[]>([]);
+  // Areas and the tables that sit in them: one state, because a table list that cannot name its
+  // area is a list of orphans. Store-scoped, so the read never runs with an empty context (F0).
+  const plan = createAdminResource(
+    async (tenant, store) => {
+      const [areas, tables] = await Promise.all([
+        api.listAreas(tenant, store),
+        api.listTables(tenant, store),
+      ]);
+      return { areas, tables };
+    },
+    { scope: "store" },
+  );
+  const areas = () => plan.value()?.areas ?? null;
+  const tables = () => plan.value()?.tables ?? [];
+  // The form's own refusals — a blank area name, seats that are not a number, a grid cell out of
+  // range. Separate from the read's refusal, which is not the operator's to fix.
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [savedAtMs, setSavedAtMs] = createSignal<number | null>(null);
+  const published = usePublishedNodes();
 
   // console.floor.manage → owner/admin (mirrors the backend role set; the server re-checks).
   const canManage = () => {
@@ -91,36 +111,14 @@ export function Floor() {
       const message = t("floor.stale");
       setError(message);
       toast.error(message);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
       return;
     }
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };
-
-  const load = async () => {
-    if (!storeId()) {
-      return;
-    }
-    setError("");
-    setBusy(true);
-    try {
-      const [loadedAreas, loadedTables] = await Promise.all([
-        api.listAreas(tenantId(), storeId()),
-        api.listTables(tenantId(), storeId()),
-      ]);
-      setAreas(loadedAreas);
-      setTables(loadedTables);
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the store changes — never with an empty context (F0).
-  onScopedContext("store", () => void load());
 
   const areaName = (id: string) =>
     areas()?.find((area) => area.area_id === id)?.name ?? id;
@@ -137,7 +135,8 @@ export function Floor() {
     await areaCrud.run(async () => {
       await api.createArea(tenantId(), storeId(), name);
       toast.ok(t("floor.areaCreated"));
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     });
   };
 
@@ -153,7 +152,8 @@ export function Floor() {
       setEditingArea("");
       setAreaDraft("");
       toast.ok(t("floor.areaRenamed"));
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -171,7 +171,8 @@ export function Floor() {
       await api.updateArea(area.area_id, tenantId(), { name: area.name, status }, area.etag);
       setPendingAreaArchive(null);
       toast.ok(doneMessage);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -259,7 +260,8 @@ export function Floor() {
         toast.ok(t("floor.tableCreated"));
       }
       setTableOpen(false);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -289,7 +291,8 @@ export function Floor() {
       );
       setPendingTableArchive(null);
       toast.ok(doneMessage);
-      await load();
+      setSavedAtMs(Date.now());
+      await plan.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -302,6 +305,7 @@ export function Floor() {
     try {
       await api.publishFloor(tenantId(), storeId());
       toast.ok(t("floor.published"));
+      await published.refresh();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -434,6 +438,9 @@ export function Floor() {
       <PageHeader title={t("floor.title")} description={t("floor.description")} />
       <RequireContext need="store">
         <div class="flex flex-col gap-6">
+          <Show when={failureOf(plan)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
           <Card
@@ -560,11 +567,15 @@ export function Floor() {
             <div class="flex flex-col gap-3">
               <p class="text-sm text-ink-muted">{t("floor.publishHint")}</p>
               <Show when={canManage()}>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publish()}>
-                    {t("floor.publishAction")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("floor.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("floor")}
+                  editedAtMs={savedAtMs()}
+                  describe={describePublish}
+                  publishLabel={t("floor.publishAction")}
+                  busy={busy()}
+                  onPublish={() => void publish()}
+                />
               </Show>
             </div>
           </Card>
