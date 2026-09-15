@@ -35,3 +35,30 @@ pub use tree::{
     ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, DEFAULT_K, PublishedVersion, SyncOutcome,
 };
 pub use validate::{CapabilityValidator, ConfigValidator, StructuralValidator};
+
+/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7.
+///
+/// One table, read by every publish path. The batch path had these rules from the day store groups
+/// landed; the single-store path did not, so the same menu that a batch would *skip* for want of a
+/// tax table published happily from the Menus screen and produced a shop that boots, syncs, shows
+/// the menu, takes the order, and raises `TaxRateNotConfigured` at the payment screen (finding
+/// **F7**). Two paths with two answers is the bug; one table is the fix.
+///
+/// A release is the third reader, and the one that made the table's *order* matter as well as its
+/// contents ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6): a
+/// release carrying both `tax` and `menu` satisfies its own prerequisite only if the activator
+/// applies them in dependency order. It lives here rather than beside any one of its readers so
+/// that adding a rule cannot reach two of the three.
+///
+/// §7 seeds it with exactly the rules below and says the rest are added as nodes acquire
+/// dependencies.
+pub const NODE_PREREQUISITES: &[(&str, &[&str])] = &[("menu", &["tax", "locale"])];
+
+/// What `node` must already be published before it can be, or an empty slice.
+#[must_use]
+pub fn prerequisites_for(node: &str) -> &'static [&'static str] {
+    NODE_PREREQUISITES
+        .iter()
+        .find(|(key, _)| *key == node)
+        .map_or(&[], |(_, needs)| *needs)
+}

@@ -83,6 +83,12 @@ pub struct NewScheduledPublish {
     pub effective_at_ms: i64,
     /// The admin who scheduled it (id string), for the audit trail.
     pub created_by: String,
+    /// The release this pair belongs to, or `None` for a standalone schedule.
+    ///
+    /// `None` is ADR-0077's original shape and stays exactly as it was: the per-store campaign
+    /// schedule is not a release and does not become one
+    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    pub release_id: Option<String>,
 }
 
 /// A stored scheduled publish.
@@ -106,6 +112,15 @@ pub struct ScheduledPublish {
     pub created_at_ms: i64,
     /// The config version it published as, once applied.
     pub applied_version_id: Option<String>,
+    /// The release this pair belongs to, or `None` for a standalone schedule.
+    pub release_id: Option<String>,
+    /// Why it last failed to apply, or `None`.
+    ///
+    /// Recorded on the row rather than only logged, because a release's `partial` is *derived* from
+    /// its pairs (ADR-0125 §4) and a failure nobody can read is a release that reports itself as
+    /// still trying. A row that fails stays `Pending` and is retried; the text is the most recent
+    /// reason, not a history.
+    pub failure: Option<String>,
 }
 
 /// Persists and reads scheduled publishes.
@@ -148,6 +163,24 @@ pub trait ScheduledPublishStore {
         id: &str,
         version_id: &str,
     ) -> impl Future<Output = Result<(), ScheduledPublishError>> + Send;
+
+    /// Records why a publish last failed. The row stays pending and is retried on the next pass.
+    ///
+    /// Separate from [`mark_applied`](ScheduledPublishStore::mark_applied) because a failure is not
+    /// a terminal state here: the activator retries, and what an operator needs meanwhile is the
+    /// reason, on the row, where the release's report reads it.
+    fn mark_failed(
+        &self,
+        id: &str,
+        failure: &str,
+    ) -> impl Future<Output = Result<(), ScheduledPublishError>> + Send;
+
+    /// Every pair of one release, for the node × store report.
+    fn list_for_release(
+        &self,
+        tenant_id: TenantId,
+        release_id: &str,
+    ) -> impl Future<Output = Result<Vec<ScheduledPublish>, ScheduledPublishError>> + Send;
 }
 
 /// A failure of the scheduled-publish store itself.
@@ -245,9 +278,52 @@ where
     }
 }
 
-/// One activator pass: applies every publish whose time has come. A row that fails to apply is logged
-/// and left pending to retry on the next tick, so one bad snapshot never blocks the others. Returns
-/// how many were applied.
+/// Due rows, reordered so each `(release, store)` group applies in dependency order.
+///
+/// The store's `due` read sorts by effective time, which is the right order for unrelated rows and
+/// the wrong one within a release: a Tết release carrying both `tax` and `menu` gives them the same
+/// instant, and applying them as they were typed publishes the menu against last year's tax table
+/// until the next write lands ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)
+/// §6).
+///
+/// Grouped by `(release, store)` rather than by release alone, because the prerequisite is a fact
+/// about one store's config tree: Ginza's `menu` waits on Ginza's `tax`, not on Hanoi's. Rows with no
+/// release keep their `due` order untouched — ADR-0077's standalone schedules are one node each and
+/// have nothing to order against.
+fn in_dependency_order(due: Vec<ScheduledPublish>) -> Vec<ScheduledPublish> {
+    let mut standalone: Vec<ScheduledPublish> = Vec::new();
+    // Insertion-ordered, so groups keep the `due` order they arrived in and the pass stays
+    // deterministic for a reader comparing two runs.
+    let mut groups: Vec<((String, StoreId), Vec<ScheduledPublish>)> = Vec::new();
+    for row in due {
+        let Some(release_id) = row.release_id.clone() else {
+            standalone.push(row);
+            continue;
+        };
+        let key = (release_id, row.store_id);
+        if let Some((_, rows)) = groups.iter_mut().find(|(existing, _)| *existing == key) {
+            rows.push(row);
+        } else {
+            groups.push((key, vec![row]));
+        }
+    }
+    let mut ordered = standalone;
+    for (_, rows) in groups {
+        let nodes: Vec<String> = rows.iter().map(|row| row.node_key.clone()).collect();
+        for node in crate::releases::order_for_release(&nodes) {
+            // `position` rather than `find`, so a release that names the same node twice applies
+            // both rather than the first one twice.
+            if let Some(at) = rows.iter().position(|row| row.node_key == node) {
+                ordered.push(rows[at].clone());
+            }
+        }
+    }
+    ordered
+}
+
+/// One activator pass: applies every publish whose time has come. A row that fails to apply records
+/// why on itself and is left pending to retry on the next tick, so one bad snapshot never blocks the
+/// others. Returns how many were applied.
 async fn pass<S, Cfg>(scheduled: &S, config_trees: &Cfg, now_ms: i64) -> Result<usize, String>
 where
     S: ScheduledPublishStore,
@@ -258,7 +334,7 @@ where
         .await
         .map_err(|error| error.to_string())?;
     let mut applied = 0_usize;
-    for publish in due {
+    for publish in in_dependency_order(due) {
         match apply_one(config_trees, &publish, now_ms).await {
             Ok(version_id) => {
                 if let Err(error) = scheduled
@@ -275,6 +351,12 @@ where
             }
             Err(error) => {
                 tracing::error!(%error, id = %publish.id, node = %publish.node_key, "a scheduled publish failed to apply; left pending to retry");
+                // The reason goes on the row as well as into the log, because a release's report is
+                // read from its pairs and a failure only the server can see is a release that looks
+                // like it is still trying.
+                if let Err(recording) = scheduled.mark_failed(&publish.id, &error).await {
+                    tracing::error!(error = %recording, id = %publish.id, "could not record why a scheduled publish failed");
+                }
             }
         }
     }
@@ -367,6 +449,8 @@ mod tests {
                 status: ScheduledPublishStatus::Pending,
                 created_at_ms: 0,
                 applied_version_id: None,
+                release_id: publish.release_id.clone(),
+                failure: None,
             });
             Ok(())
         }
@@ -431,9 +515,40 @@ mod tests {
                 if row.id == id && row.status == ScheduledPublishStatus::Pending {
                     row.status = ScheduledPublishStatus::Applied;
                     row.applied_version_id = Some(version_id.to_owned());
+                    // The real adapter clears the column on success, so a row that failed once and
+                    // then landed does not keep explaining itself. A fake that only set it would let
+                    // a stale-reason bug pass.
+                    row.failure = None;
                 }
             }
             Ok(())
+        }
+
+        async fn mark_failed(&self, id: &str, failure: &str) -> Result<(), ScheduledPublishError> {
+            let mut rows = self.rows.lock().expect("lock");
+            for row in rows.iter_mut() {
+                if row.id == id && row.status == ScheduledPublishStatus::Pending {
+                    row.failure = Some(failure.to_owned());
+                }
+            }
+            Ok(())
+        }
+
+        async fn list_for_release(
+            &self,
+            tenant_id: TenantId,
+            release_id: &str,
+        ) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+            Ok(self
+                .rows
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| {
+                    row.tenant_id == tenant_id && row.release_id.as_deref() == Some(release_id)
+                })
+                .cloned()
+                .collect())
         }
     }
 
@@ -454,6 +569,7 @@ mod tests {
             node_value: serde_json::json!({ "campaigns": [] }),
             effective_at_ms,
             created_by: "admin-1".to_owned(),
+            release_id: None,
         }
     }
 
@@ -511,6 +627,20 @@ mod tests {
     #[derive(Default)]
     struct FakeConfigTrees {
         states: Mutex<Vec<(TenantId, StoreId, crate::config_tree::ConfigTreeState)>>,
+        /// When set, every `save` reports a lost race. That is the shape of a real failure the
+        /// activator is built to survive — the row stays pending and the next pass retries — and it
+        /// is the one a test can produce without a broken snapshot.
+        refuse_saves: bool,
+    }
+
+    impl FakeConfigTrees {
+        /// A tree store whose every write loses the race.
+        fn failing() -> Self {
+            Self {
+                states: Mutex::default(),
+                refuse_saves: true,
+            }
+        }
     }
 
     impl ConfigTreeStore for FakeConfigTrees {
@@ -540,6 +670,9 @@ mod tests {
             state: &crate::config_tree::ConfigTreeState,
             _expected: Option<&crate::version::Version>,
         ) -> Result<crate::version::UpdateOutcome, crate::config_tree::ConfigStoreError> {
+            if self.refuse_saves {
+                return Ok(crate::version::UpdateOutcome::VersionMismatch);
+            }
             let mut states = self.states.lock().expect("lock");
             states.retain(|(t, s, _)| !(*t == tenant && *s == store));
             states.push((tenant, store, state.clone()));
@@ -606,6 +739,97 @@ mod tests {
                 .await
                 .expect("second pass"),
             0
+        );
+    }
+    /// A release pair, for the ordering tests. Same instant for every node, which is the case that
+    /// makes ordering load-bearing: `due` sorts by effective time and a release gives them all one.
+    fn release_row(node: &str, release: Option<&str>, store_seed: u128) -> ScheduledPublish {
+        ScheduledPublish {
+            id: format!("{}-{node}", release.unwrap_or("solo")),
+            tenant_id: tenant(),
+            store_id: StoreId::new(Ulid::from_u128(store_seed)),
+            node_key: node.to_owned(),
+            node_value: serde_json::json!({}),
+            effective_at_ms: 1_000,
+            status: ScheduledPublishStatus::Pending,
+            created_at_ms: 0,
+            applied_version_id: None,
+            release_id: release.map(str::to_owned),
+            failure: None,
+        }
+    }
+
+    #[test]
+    fn a_pass_applies_a_release_tax_before_its_menu() {
+        // The failure: `due` sorts by effective time, a release gives every pair the same instant,
+        // and the menu therefore lands whenever it happened to be typed — against last year's tax
+        // table until the next write.
+        let due = vec![
+            release_row("menu", Some("tet"), 2),
+            release_row("tax", Some("tet"), 2),
+        ];
+        let ordered = super::in_dependency_order(due);
+        let nodes: Vec<&str> = ordered.iter().map(|row| row.node_key.as_str()).collect();
+        assert_eq!(nodes, vec!["tax", "menu"]);
+    }
+
+    #[test]
+    fn the_prerequisite_is_per_store_not_per_release() {
+        // Ginza's menu waits on Ginza's tax, not on Hanoi's: the prerequisite is a fact about one
+        // store's config tree. Grouping by release alone would let one store's tax satisfy another
+        // store's menu and publish a menu against a table that shop does not hold.
+        let due = vec![
+            release_row("menu", Some("tet"), 2),
+            release_row("tax", Some("tet"), 3),
+        ];
+        let ordered = super::in_dependency_order(due);
+        assert_eq!(ordered.len(), 2, "no pair is dropped");
+        // Neither store carries both, so neither is held back — each applies on its own terms.
+        for row in &ordered {
+            assert_eq!(row.release_id.as_deref(), Some("tet"));
+        }
+    }
+
+    #[test]
+    fn a_standalone_schedule_keeps_the_order_the_store_gave_it() {
+        // ADR-0077's per-store schedule is one node at a time and has nothing to order against;
+        // reordering it would be a behaviour change this slice has no reason to make.
+        let due = vec![
+            release_row("menu", None, 2),
+            release_row("campaigns", None, 2),
+        ];
+        let ordered = super::in_dependency_order(due);
+        let nodes: Vec<&str> = ordered.iter().map(|row| row.node_key.as_str()).collect();
+        assert_eq!(nodes, vec!["menu", "campaigns"]);
+    }
+
+    #[tokio::test]
+    async fn a_publish_that_cannot_apply_records_why_on_its_own_row() {
+        // A failure only the server log can see is a release that reports itself as still trying.
+        // The row stays pending — the activator retries — but it now says what went wrong.
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::failing();
+        scheduled
+            .schedule(&new_publish("doomed-1", 1_000))
+            .await
+            .expect("schedule");
+
+        let applied = super::pass(&scheduled, &config_trees, 5_000)
+            .await
+            .expect("a pass whose writes all fail is not itself a failure");
+        assert_eq!(applied, 0);
+
+        let rows = scheduled
+            .list_for_store(tenant(), store())
+            .await
+            .expect("list");
+        let row = rows
+            .first()
+            .expect("the row is still pending, to be retried");
+        assert_eq!(row.status, ScheduledPublishStatus::Pending);
+        assert!(
+            row.failure.is_some(),
+            "the reason is on the row, where a release's report reads it"
         );
     }
 }

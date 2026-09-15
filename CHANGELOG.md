@@ -124,6 +124,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **A release applies in dependency order, and a pair that fails says so on its own row (Wave 4 · PR-7b, F9).**
+  The activator groups each pass's due rows by `(release, store)` and applies each group in
+  prerequisite order, so a release carrying both `tax` and `menu` satisfies its own prerequisite
+  rather than only claiming to. Grouped per store, not per release: Ginza's menu waits on Ginza's
+  tax, not on Hanoi's.
+
+  This matters because every pair of a release shares one instant, and the store's due read sorts by
+  instant — so before this, a Tết release published its menu whenever it happened to be typed, and
+  against last year's tax table until the next write landed. ADR-0077's standalone schedules are one
+  node each and keep the order they were given.
+
+  The prerequisite table moved from `http.rs` to `config_tree`, because a release is its third
+  reader and the first that needs its *order* as well as its contents. It was already one table read
+  by two paths; a table beside any one of three readers is a table the other two drift from.
+
+  A publish that cannot apply now records why on its row. It stays pending and is retried, as
+  before, but the reason is readable: a release's `partial` is derived from its pairs, and a failure
+  only the server log can see is a release that reports itself as still trying. A row that recovers
+  stops explaining itself — `mark_applied` clears the column, and the Postgres test pins that as
+  well as the failure.
+
 - **A release is one decision and many writes: the record, the schema and the clock (Wave 4 · PR-7a, F8/F9/F10/F17/D8).**
   [ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md), migration `0064_releases.sql`,
   and `pos-cloud`'s `releases` module. No routes and no console yet — this is the decision and the

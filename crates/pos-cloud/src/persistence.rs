@@ -2916,6 +2916,8 @@ fn scheduled_from_row(row: ScheduledPublishRow) -> Result<ScheduledPublish, Sche
         status: ScheduledPublishStatus::from_wire(&row.status),
         created_at_ms: row.created_at_ms,
         applied_version_id: row.applied_version_id,
+        release_id: row.release_id,
+        failure: row.failure,
     })
 }
 
@@ -2934,6 +2936,7 @@ impl ScheduledPublishStore for PostgresScheduledPublishes {
             node_value_json: &node_value_json,
             effective_at_ms: publish.effective_at_ms,
             created_by: &publish.created_by,
+            release_id: publish.release_id.as_deref(),
         };
         self.schedule(&row)
             .await
@@ -2970,6 +2973,24 @@ impl ScheduledPublishStore for PostgresScheduledPublishes {
         self.mark_applied(id, version_id)
             .await
             .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn mark_failed(&self, id: &str, failure: &str) -> Result<(), ScheduledPublishError> {
+        self.mark_failed(id, failure)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))
+    }
+
+    async fn list_for_release(
+        &self,
+        tenant_id: TenantId,
+        release_id: &str,
+    ) -> Result<Vec<ScheduledPublish>, ScheduledPublishError> {
+        let rows = self
+            .list_for_release(&tenant_id.to_string(), release_id)
+            .await
+            .map_err(|error| ScheduledPublishError::new(error.to_string()))?;
+        rows.into_iter().map(scheduled_from_row).collect()
     }
 }
 

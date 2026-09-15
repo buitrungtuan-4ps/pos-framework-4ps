@@ -39,6 +39,8 @@
 //! up.
 
 use pos_core::business_date::{StoreTimeZone, resolve_local_time};
+
+use crate::config_tree::prerequisites_for;
 use pos_proto::ids::StoreId;
 
 /// Where a release stands. Derived from its pairs, stored so a list read need not aggregate.
@@ -247,6 +249,53 @@ pub fn resolve_for_stores(moment: &ReleaseMoment, stores: &[TargetStore]) -> Vec
         .collect()
 }
 
+/// The order a release's nodes must be applied in, so the set satisfies its own prerequisites.
+///
+/// This is the half of [ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7
+/// that only a release needs. The batch and single publishes read the prerequisite table to *refuse*
+/// a `menu` at a store with no `tax`; a release carrying both is not refusable — it brings its own
+/// prerequisite — but it is only true that it does if the activator writes `tax` first. Applied in
+/// the operator's typing order, a Tết release would publish a menu against last year's tax table for
+/// however long the next write took.
+///
+/// A stable topological sort over `NODE_PREREQUISITES`, which is a handful of rules over a handful
+/// of nodes: a node goes after every prerequisite that is *also in this release* (one that is not is
+/// either already published, and the refusal check has passed it, or missing, and the refusal check
+/// has stopped it). Input order is otherwise preserved, so two unrelated nodes stay where the
+/// operator put them and the report reads as the release was written.
+///
+/// Termination does not depend on the table being acyclic: each pass must place at least one node or
+/// the remainder is appended as given. A cycle in the prerequisites would be a bug in the table
+/// rather than in a release, and a release that refuses to apply is worse than one that applies a
+/// cyclic pair in input order.
+#[must_use]
+pub fn order_for_release(nodes: &[String]) -> Vec<String> {
+    let mut remaining: Vec<&String> = nodes.iter().collect();
+    let mut ordered: Vec<String> = Vec::with_capacity(nodes.len());
+    while !remaining.is_empty() {
+        let placed_before = ordered.len();
+        let mut next: Vec<&String> = Vec::with_capacity(remaining.len());
+        for node in remaining {
+            let waiting = prerequisites_for(node).iter().any(|needed| {
+                !ordered.iter().any(|done| done == needed) && nodes.iter().any(|row| row == needed)
+            });
+            if waiting {
+                next.push(node);
+            } else {
+                ordered.push(node.clone());
+            }
+        }
+        if ordered.len() == placed_before {
+            // Nothing could be placed: the remainder depends on itself. Append it as given rather
+            // than loop, and let the table's own tests be where a cycle is caught.
+            ordered.extend(next.into_iter().cloned());
+            break;
+        }
+        remaining = next;
+    }
+    ordered
+}
+
 /// The roll-up a release's state is derived from: how many of its pairs have settled, and how.
 ///
 /// Stored on the release so a list read need not aggregate, but computed here so the stored value and
@@ -289,8 +338,8 @@ pub fn status_from_tally(tally: PairTally) -> ReleaseStatus {
 #[cfg(test)]
 mod tests {
     use super::{
-        PairTally, ReleaseMoment, ReleaseStatus, ResolveRefusal, TargetStore, resolve_for_stores,
-        resolve_moment, status_from_tally,
+        PairTally, ReleaseMoment, ReleaseStatus, ResolveRefusal, TargetStore, order_for_release,
+        resolve_for_stores, resolve_moment, status_from_tally,
     };
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
@@ -398,6 +447,54 @@ mod tests {
             2,
             "both gaps are reported, not just the first"
         );
+    }
+
+    #[test]
+    fn a_release_applies_its_own_prerequisites_first() {
+        // The failure this closes: a Tết release carrying both, applied in typing order, publishes
+        // the menu against last year's tax table until the next write lands.
+        let nodes = vec![
+            "menu".to_owned(),
+            "campaigns".to_owned(),
+            "tax".to_owned(),
+            "locale".to_owned(),
+        ];
+        let ordered = order_for_release(&nodes);
+        let at = |name: &str| {
+            ordered
+                .iter()
+                .position(|node| node == name)
+                .unwrap_or_else(|| panic!("{name} is missing from {ordered:?}"))
+        };
+        assert!(at("tax") < at("menu"), "{ordered:?}");
+        assert!(at("locale") < at("menu"), "{ordered:?}");
+        assert_eq!(ordered.len(), nodes.len(), "no node is dropped");
+    }
+
+    #[test]
+    fn a_prerequisite_the_release_does_not_carry_does_not_hold_it_back() {
+        // `tax` is not in this release, so it is either already published — the refusal check let
+        // this through — or missing, and the refusal check stopped it. Either way the ordering has
+        // nothing to wait for, and a `menu` alone must not be held behind a node nobody is sending.
+        let nodes = vec!["menu".to_owned()];
+        assert_eq!(order_for_release(&nodes), vec!["menu".to_owned()]);
+    }
+
+    #[test]
+    fn unrelated_nodes_keep_the_order_they_were_written_in() {
+        // The report reads as the release was written, so an operator can check it against what
+        // they typed.
+        let nodes = vec![
+            "reason_codes".to_owned(),
+            "stations".to_owned(),
+            "floor".to_owned(),
+        ];
+        assert_eq!(order_for_release(&nodes), nodes);
+    }
+
+    #[test]
+    fn an_empty_release_orders_to_nothing() {
+        assert!(order_for_release(&[]).is_empty());
     }
 
     #[test]
