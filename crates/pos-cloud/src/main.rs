@@ -273,6 +273,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // The scheduled-publish activator (ADR-0077, Track M3): applies effective-dated publishes (the
     // Tết-menu case) when their time arrives, through the same config tree the immediate publishes use.
+    // It also settles releases (ADR-0125): a release's state is the roll-up of these same rows, so the
+    // loop that applies them is the one that re-derives it.
     let scheduled_publish_interval = Duration::from_secs(config.scheduled_publish_interval_secs);
     tracing::info!(
         interval_secs = config.scheduled_publish_interval_secs,
@@ -281,6 +283,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let scheduled_publish_task = tokio::spawn(pos_cloud::scheduling::run(
         store.scheduled_publishes(),
         store.config_trees(),
+        store.config_releases(),
         store.task_health(),
         SystemClock,
         scheduled_publish_interval,
