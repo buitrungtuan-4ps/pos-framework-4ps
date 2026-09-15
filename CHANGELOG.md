@@ -18,6 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **ReorderList buttons carry focus-visible outlines.** Added `focus-visible:outline-2 focus-visible:outline-accent rounded-token` to up/down buttons in `dashboard/src/components/kit.tsx` for keyboard focus visibility.
 - **The notification bell and dropdown carry ARIA labels and popup roles.** Added `aria-haspopup="true"` to the NotificationBell trigger and `role="region"` with `aria-label` to the history popup in `dashboard/src/components/Toast.tsx` for screen-reader accessibility.
 - **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
   `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
@@ -53,7 +54,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
-- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
+- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying SIIT IPv4-translated (`::ffff:0:a.b.c.d`), local NAT64 (`64:ff9b:1::/48`), ISATAP (`::5efe:a.b.c.d`), well-known NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
   `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
   (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.
