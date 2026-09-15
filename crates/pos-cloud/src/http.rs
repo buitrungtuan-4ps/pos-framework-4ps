@@ -213,6 +213,15 @@ use crate::registry::{
     StoreRecord, TenantRecord,
 };
 use crate::retention::{RetentionError, SubjectStore};
+// `release` is an overloaded word in this tree: `crate::ota` already exports a `ReleaseStore` for
+// signed edge artifacts, and this file imports it. These are config releases (ADR-0125) — a named
+// set of config publishes — so they are aliased at this one import rather than renamed in their own
+// module, where the plain spelling is the right one. Renaming the OTA pair is its own change.
+use crate::releases::{
+    NewRelease as NewConfigRelease, Release as ConfigRelease, ReleaseMoment, ReleaseStatus,
+    ReleaseStore as ConfigReleaseStore, ReleaseStoreError as ConfigReleaseStoreError,
+    ResolveRefusal, TargetStore, resolve_for_stores,
+};
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
@@ -25710,6 +25719,1019 @@ fn rollup_error_response(error: &RollupError) -> Response {
         ErrorStatus::Unavailable,
         "the dashboard is temporarily unavailable",
     )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Config releases — one decision, many writes (ADR-0125)
+// ---------------------------------------------------------------------------------------------
+//
+// A Tết menu is not one node. It is a menu, the tax rates it prices against, the campaigns that
+// discount it, the reason codes the staff void it with, and the layout that shows it — to forty
+// stores, all switching on together. These routes name that set, time it, expand it, and report it.
+//
+// The path is `/admin/config-releases`, not `/admin/releases`, because `/admin/releases` is already
+// the OTA artifact upload (R2, ADR-0088) — signed edge binaries, a different thing with the same
+// English name. Two routers claiming one path is an axum panic at start-up, so the collision had to
+// be resolved one way or the other; qualifying the newcomer is the change that breaks nothing, and
+// renaming the OTA pair (`ota::PostgresReleases`, `ota::ReleaseStore` and those two routes together)
+// is its own change, with its own edit to `docs/release-runbook.md`.
+//
+// They write **no config versions of their own**. Scheduling a release expands to one
+// `scheduled_publishes` row per `(node, store)` pair carrying the release's id, and ADR-0077's
+// existing activator applies them (ADR-0125 §1). Everything here is bookkeeping over writes that
+// already had a home — which is why the handlers live in this file beside the batch publish they
+// borrow their node table and cohort rules from, rather than in a module of their own.
+
+/// The collaborators the release routes need.
+///
+/// Seven, and each earns its place: `releases` holds the identity and the roll-up, `scheduled` holds
+/// the pairs, `groups` expands a cohort, `registry` says which stores exist and are active,
+/// `config_trees` reads each store's published `locale` for its timezone, `nodes` snapshots each node
+/// once, and `admin`/`clock`/`audit` are the surface's usual three.
+#[derive(Clone)]
+struct ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C> {
+    releases: Rel,
+    scheduled: Sch,
+    groups: Grp,
+    registry: Reg,
+    config_trees: Cfg,
+    /// The node kinds a release may carry — the very same table a batch publish uses, so a node
+    /// cannot be publishable through a release and not directly (ADR-0125 §1).
+    nodes: Arc<Vec<Arc<dyn BatchNode>>>,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// A release on the wire.
+#[derive(Debug, Clone, Serialize)]
+struct ReleaseView {
+    release_id: String,
+    tenant_id: String,
+    name: String,
+    /// Serialised as the enum, not as `as_wire()`: `as_wire` is the **stored** token (`SCHEDULED`),
+    /// and every other status on this surface reaches the console `snake_case`. Two spellings for one
+    /// concept is two branches in the console's type for no gain.
+    status: ReleaseStatus,
+    target_group_id: Option<String>,
+    /// The operator's local date, for a wall-clock release. Null for an instant release.
+    wall_clock_date: Option<String>,
+    wall_clock_time: Option<String>,
+    /// The single instant, for a release timed in UTC. Null for a wall-clock release.
+    instant_at_ms: Option<i64>,
+    created_by: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+impl ReleaseView {
+    fn of(release: &ConfigRelease) -> Self {
+        let (wall_clock_date, wall_clock_time, instant_at_ms) = match &release.moment {
+            Some(ReleaseMoment::WallClock { date, time }) => {
+                (Some(date.clone()), Some(time.clone()), None)
+            }
+            Some(ReleaseMoment::Instant(at_ms)) => (None, None, Some(*at_ms)),
+            None => (None, None, None),
+        };
+        Self {
+            release_id: release.id.clone(),
+            tenant_id: release.tenant_id.to_string(),
+            name: release.name.clone(),
+            status: release.status,
+            target_group_id: release.target_group_id.clone(),
+            wall_clock_date,
+            wall_clock_time,
+            instant_at_ms,
+            created_by: release.created_by.clone(),
+            created_at_ms: release.created_at_ms,
+            updated_at_ms: release.updated_at_ms,
+        }
+    }
+}
+
+/// One `(node, store)` cell of the report — F9's whole point.
+///
+/// `failure` is why the pair last could not apply. A pair that failed is still `PENDING`: the
+/// activator retries it, and what an operator needs meanwhile is the reason, not a status that
+/// pretends the attempt never happened.
+#[derive(Debug, Clone, Serialize)]
+struct ReleasePairView {
+    pair_id: String,
+    store_id: String,
+    node: String,
+    /// The same spelling `GET /admin/config/scheduled` already gives this exact row.
+    status: ScheduledPublishStatus,
+    effective_at_ms: i64,
+    applied_version_id: Option<String>,
+    failure: Option<String>,
+}
+
+/// A release and the grid of its pairs.
+#[derive(Debug, Clone, Serialize)]
+struct ReleaseReport {
+    release: ReleaseView,
+    pairs: Vec<ReleasePairView>,
+}
+
+/// A `POST /admin/releases` body: the name, the cohort, and the moment. No nodes — those arrive at
+/// schedule time, with the store list, because both are snapshotted then (ADR-0125 §3).
+#[derive(Debug, Clone, Deserialize)]
+struct CreateReleaseRequest {
+    tenant_id: String,
+    name: String,
+    /// The cohort this release is aimed at, recorded for the report. Optional: a release may name
+    /// its stores explicitly at schedule time instead.
+    #[serde(default)]
+    target_group_id: Option<String>,
+    /// The operator's local date and time — "Monday 04:00, local". Converted to one instant per
+    /// store at schedule time (ADR-0125 §2).
+    #[serde(default)]
+    wall_clock_date: Option<String>,
+    #[serde(default)]
+    wall_clock_time: Option<String>,
+    /// A single instant instead, for a release timed in UTC. The escape hatch for a store being set
+    /// up: it needs no published `locale` and is always available.
+    #[serde(default)]
+    instant_at_ms: Option<i64>,
+}
+
+/// One node of a release, and the arguments its plan needs — the same pair a batch publish takes.
+#[derive(Debug, Clone, Deserialize)]
+struct ReleaseNodeRequest {
+    node: String,
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// A `POST /admin/releases/{release_id}/schedule` body.
+#[derive(Debug, Clone, Deserialize)]
+struct ScheduleReleaseRequest {
+    tenant_id: String,
+    /// The nodes to carry, in any order — the activator applies them in dependency order per store.
+    nodes: Vec<ReleaseNodeRequest>,
+    /// The stores, explicitly. Omitted, the release's `target_group_id` is expanded instead.
+    #[serde(default)]
+    store_ids: Option<Vec<String>>,
+}
+
+/// A body carrying nothing but the tenant — what `cancel` needs, since the id is in the path.
+#[derive(Debug, Clone, Deserialize)]
+struct ReleaseTenantRequest {
+    tenant_id: String,
+}
+
+/// The tenant a release read is scoped to.
+#[derive(Debug, Clone, Deserialize)]
+struct ReleaseTenantQuery {
+    tenant_id: String,
+}
+
+/// Builds the releases sub-router ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+///
+/// Reads sit behind [`ConsolePermission::Read`]; every write sits behind
+/// [`ConsolePermission::PublishConfig`], because scheduling a release *is* scheduling publishes and
+/// there is no weaker thing it could be.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "seven collaborators plus the clock and the audit recorder, and each is a seam the \
+              caller chooses: the release identity, the pairs, the cohort, the registry, the config \
+              tree, the node table, and the admin store. Bundling them into a struct would move the \
+              same list one line up and hide which of them `main.rs` is wiring"
+)]
+pub fn config_release_router<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    releases: Rel,
+    scheduled: Sch,
+    groups: Grp,
+    registry: Reg,
+    config_trees: Cfg,
+    nodes: Vec<Arc<dyn BatchNode>>,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config-releases",
+            get(admin_list_releases::<Rel, Sch, Grp, Reg, Cfg, A, C>)
+                .post(admin_create_release::<Rel, Sch, Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/config-releases/{release_id}",
+            get(admin_read_release::<Rel, Sch, Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/config-releases/{release_id}/schedule",
+            post(admin_schedule_release::<Rel, Sch, Grp, Reg, Cfg, A, C>),
+        )
+        .route(
+            "/admin/config-releases/{release_id}/cancel",
+            post(admin_cancel_release::<Rel, Sch, Grp, Reg, Cfg, A, C>),
+        )
+        .with_state(ReleaseState {
+            releases,
+            scheduled,
+            groups,
+            registry,
+            config_trees,
+            nodes: Arc::new(nodes),
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// The `503` a release persistence failure becomes.
+fn release_error_response(error: &ConfigReleaseStoreError) -> Response {
+    tracing::error!(%error, "a release operation failed");
+    api_error(
+        ErrorStatus::Unavailable,
+        "releases are temporarily unavailable",
+    )
+}
+
+/// Reads the moment from a create request, or says why it is not one.
+///
+/// Three columns rather than one, and the reason is the refusal that only exists because of them:
+/// only an *instant* release is safe at a store whose timezone nobody has published, and collapsing
+/// the two forms into one field would make that refusal unmakeable on read.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the route returns, the same \
+              shape the other route helpers carry"
+)]
+fn moment_from_request(request: &CreateReleaseRequest) -> Result<Option<ReleaseMoment>, Response> {
+    let wall_clock = match (&request.wall_clock_date, &request.wall_clock_time) {
+        (Some(date), Some(time)) => Some(ReleaseMoment::WallClock {
+            date: date.clone(),
+            time: time.clone(),
+        }),
+        (None, None) => None,
+        _ => {
+            return Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a wall-clock moment needs both wall_clock_date and wall_clock_time",
+                &[("wall_clock_time", "REQUIRED")],
+            ));
+        }
+    };
+    match (wall_clock, request.instant_at_ms) {
+        (Some(_), Some(_)) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a release is timed either in each store's own clock or at one instant, not both",
+            &[("instant_at_ms", "CONFLICT")],
+        )),
+        (Some(moment), None) => Ok(Some(moment)),
+        (None, Some(at_ms)) => Ok(Some(ReleaseMoment::Instant(at_ms))),
+        (None, None) => Ok(None),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/config-releases",
+    responses(
+        (status = 201, description = "The release exists as a draft. It carries no nodes and no \
+                                      pairs yet; `/schedule` adds both"),
+        (status = 400, description = "An id is not a ULID, the name is empty, or the moment is \
+                                      half-given (a date without a time) or doubly-given (a \
+                                      wall-clock time and an instant)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config releases",
+)]
+/// A super-admin names a release, aims it, and times it. Nothing is scheduled yet.
+///
+/// A draft, deliberately: a release across nine nodes and forty stores is assembled over minutes,
+/// and half-assembled must not fire (ADR-0125 §4). The nodes and the concrete store list arrive at
+/// `/schedule`, which is also when the snapshot is taken.
+async fn admin_create_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateReleaseRequest>,
+) -> Response
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let name = request.name.trim().to_owned();
+    if name.is_empty() {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a release needs a name an operator will recognise in a month",
+            &[("name", "REQUIRED")],
+        );
+    }
+    if let Some(group_id) = &request.target_group_id
+        && let Err(refusal) = parse_ulid_fields([("target_group_id", group_id)])
+    {
+        return refusal;
+    }
+    let moment = match moment_from_request(&request) {
+        Ok(moment) => moment,
+        Err(refusal) => return refusal,
+    };
+
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    let Some(id) = mint_ulid(now_ms) else {
+        return service_unavailable("releases");
+    };
+    let release = NewConfigRelease {
+        id: id.to_string(),
+        tenant_id,
+        name: name.clone(),
+        target_group_id: request.target_group_id.clone(),
+        moment: moment.clone(),
+        created_by: context.admin.id.clone(),
+    };
+    if let Err(error) = state.releases.create(&release).await {
+        return release_error_response(&error);
+    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "release.created",
+        "release",
+        &release.id,
+        None,
+        Some(serde_json::json!({ "name": name })),
+    )
+    .await;
+    (
+        StatusCode::CREATED,
+        Json(ReleaseView::of(&ConfigRelease {
+            id: release.id,
+            tenant_id,
+            name,
+            status: ReleaseStatus::Draft,
+            target_group_id: request.target_group_id,
+            moment,
+            created_by: context.admin.id,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        })),
+    )
+        .into_response()
+}
+
+/// Resolves a release's target to concrete, publishable store ids.
+///
+/// Explicit ids are checked against the tenant's registry rather than trusted, for the reason
+/// ADR-0122 gives for membership: an id that names nothing sits in the release forever and reports
+/// as un-applied at every read — a release quietly one store short of what the operator believes.
+async fn release_target_stores<Grp, Reg>(
+    groups: &Grp,
+    registry: &Reg,
+    tenant_id: TenantId,
+    target_group_id: Option<&str>,
+    explicit: Option<&[String]>,
+) -> Result<Vec<StoreId>, Response>
+where
+    Grp: StoreGroupStore,
+    Reg: RegistryStore,
+{
+    if let Some(ids) = explicit {
+        if ids.is_empty() {
+            return Err(api_error(
+                ErrorStatus::Unprocessable,
+                "this release names no stores, so it would reach nobody",
+            ));
+        }
+        let known = match registry.list_stores(tenant_id).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| (row.record.store_id, row.record.status))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            Err(error) => return Err(registry_error_response(&error)),
+        };
+        let mut stores = Vec::with_capacity(ids.len());
+        for id in ids {
+            let store_id = match parse_ulid_fields([("store_ids", id)]) {
+                Ok([parsed]) => StoreId::new(parsed),
+                Err(refusal) => return Err(refusal),
+            };
+            match known.get(&store_id) {
+                None => {
+                    return Err(api_error(
+                        ErrorStatus::Unprocessable,
+                        format!("store {store_id} is not in this tenant's registry"),
+                    ));
+                }
+                Some(EntityStatus::Archived) => {
+                    return Err(api_error(
+                        ErrorStatus::Unprocessable,
+                        format!("store {store_id} is archived; restore it before releasing to it"),
+                    ));
+                }
+                Some(_) => stores.push(store_id),
+            }
+        }
+        return Ok(stores);
+    }
+    let Some(group_id) = target_group_id else {
+        return Err(api_error(
+            ErrorStatus::Unprocessable,
+            "this release has no target: name a store group when creating it, or store_ids here",
+        ));
+    };
+    let group_id = match parse_ulid_fields([("target_group_id", group_id)]) {
+        Ok([parsed]) => StoreGroupId::new(parsed),
+        Err(refusal) => return Err(refusal),
+    };
+    publishable_membership(groups, tenant_id, group_id).await
+}
+
+/// Reads each target store's published `locale.timezone`, for the wall-clock conversion.
+///
+/// A store with no `locale` node comes back with `None`, which is not an error here: an instant
+/// release needs no timezone at all, and only [`resolve_for_stores`] knows whether this release is
+/// one. The refusal, when it comes, names the store.
+async fn release_target_timezones<Cfg>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    stores: &[StoreId],
+) -> Result<Vec<TargetStore>, Response>
+where
+    Cfg: ConfigTreeStore,
+{
+    let mut targets = Vec::with_capacity(stores.len());
+    for store_id in stores {
+        let locale = read_store_node(config_trees, tenant_id, *store_id, "locale").await?;
+        targets.push(TargetStore {
+            store_id: *store_id,
+            timezone: locale
+                .get("timezone")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        });
+    }
+    Ok(targets)
+}
+
+/// Turns every refusal into one `422` naming every store it could not time.
+///
+/// Every store, not the first: a forty-store release that reported one gap per attempt would take
+/// forty round trips to become schedulable, and an operator fixing timezones wants the list.
+fn unresolvable_moment(refusals: &[(StoreId, ResolveRefusal)]) -> Response {
+    let named: Vec<String> = refusals
+        .iter()
+        .map(|(store_id, refusal)| format!("{store_id}: {refusal}"))
+        .collect();
+    api_error(
+        ErrorStatus::Unprocessable,
+        format!(
+            "this release cannot be timed at {} of its stores — {}",
+            refusals.len(),
+            named.join("; ")
+        ),
+    )
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/config-releases/{release_id}/schedule",
+    params(("release_id" = String, Path, description = "The draft to schedule")),
+    responses(
+        (status = 200, description = "The release is scheduled, and the body is its node × store \
+                                      report. Every pair is `PENDING` until its instant arrives"),
+        (status = 400, description = "An id is not a ULID, or the node is not one of the batchable \
+                                      kinds", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such release in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The release is not a draft, has no moment, carries no nodes, \
+                                      names no reachable store, cannot be timed at one or more \
+                                      stores (each named), is missing a prerequisite node at one or \
+                                      more stores, or carries an instruction that will not compile. \
+                                      **Nothing is written** — a half-written release is the \
+                                      half-published Tết this record exists to prevent", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release, schedule, group, registry or config store is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config releases",
+)]
+/// A super-admin schedules a draft: the snapshot, the store list and the per-store instants are all
+/// taken here, and the pairs are written.
+///
+/// Nothing is written until everything has resolved. A store that cannot be timed, a node that will
+/// not compile, a prerequisite a store is missing — each refuses the whole release, because a
+/// half-written release is exactly the half-published Tết this record exists to prevent.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one ordered gauntlet, and the order is the record's: settle the instruction, expand \
+              the target, resolve every instant, check every prerequisite, compile every node — and \
+              only then write. Splitting it into helpers would let a future edit move a write above \
+              a check, which is the half-published Tết ADR-0125 exists to prevent"
+)]
+async fn admin_schedule_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(release_id): Path<String>,
+    Json(request): Json<ScheduleReleaseRequest>,
+) -> Response
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let release = match state.releases.fetch_one(tenant_id, &release_id).await {
+        Ok(Some(release)) => release,
+        Ok(None) => return not_found("release"),
+        Err(error) => return release_error_response(&error),
+    };
+    if release.status != ReleaseStatus::Draft {
+        return api_error(
+            ErrorStatus::Unprocessable,
+            "this release has already been scheduled; cancel it and make another",
+        );
+    }
+    let Some(moment) = release.moment.clone() else {
+        return api_error(
+            ErrorStatus::Unprocessable,
+            "this release has no moment; give it a wall-clock time or an instant before scheduling",
+        );
+    };
+    if request.nodes.is_empty() {
+        return api_error(
+            ErrorStatus::Unprocessable,
+            "this release carries no nodes, so scheduling it would publish nothing",
+        );
+    }
+
+    // Settle the instruction before anything is read per store: an unknown node is the request's own
+    // mistake and would be the same answer at every shop.
+    let mut carried: Vec<(Arc<dyn BatchNode>, &serde_json::Value)> =
+        Vec::with_capacity(request.nodes.len());
+    for asked in &request.nodes {
+        let Some(node) = state
+            .nodes
+            .iter()
+            .find(|candidate| candidate.key() == asked.node)
+        else {
+            return unknown_batch_node(&state.nodes, &asked.node);
+        };
+        carried.push((Arc::clone(node), &asked.arguments));
+    }
+
+    let stores = match release_target_stores(
+        &state.groups,
+        &state.registry,
+        tenant_id,
+        release.target_group_id.as_deref(),
+        request.store_ids.as_deref(),
+    )
+    .await
+    {
+        Ok(stores) => stores,
+        Err(refusal) => return refusal,
+    };
+    let targets = match release_target_timezones(&state.config_trees, tenant_id, &stores).await {
+        Ok(targets) => targets,
+        Err(refusal) => return refusal,
+    };
+
+    // One wall-clock time is one instant per timezone: a fleet spanning Ho Chi Minh City and Tokyo
+    // has a two-hour spread, and this is where it is written down (ADR-0125 §2).
+    let resolved = resolve_for_stores(&moment, &targets);
+    let refusals: Vec<(StoreId, ResolveRefusal)> = resolved
+        .iter()
+        .filter_map(|store| match &store.outcome {
+            Err(refusal) => Some((store.store_id, refusal.clone())),
+            Ok(_) => None,
+        })
+        .collect();
+    if !refusals.is_empty() {
+        return unresolvable_moment(&refusals);
+    }
+
+    // The schedule-time half of ADR-0125 §6. A prerequisite the release carries itself is satisfied
+    // by the release — the activator applies them in dependency order — so only the ones it does not
+    // carry are read from the store.
+    let carried_keys: Vec<&str> = carried.iter().map(|(node, _)| node.key()).collect();
+    for (node, _) in &carried {
+        for needed in prerequisites_for(node.key()) {
+            if carried_keys.contains(needed) {
+                continue;
+            }
+            for store_id in &stores {
+                match read_store_node(&state.config_trees, tenant_id, *store_id, needed).await {
+                    Ok(serde_json::Value::Null) => {
+                        return api_error(
+                            ErrorStatus::Unprocessable,
+                            format!(
+                                "store {store_id} has no `{needed}` node, which `{}` needs; publish \
+                                 one to it or carry `{needed}` in this release",
+                                node.key()
+                            ),
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(refusal) => return refusal,
+                }
+            }
+        }
+    }
+
+    // Compile each node once for the tenant, then once per store. A refusal here is the
+    // instruction's own — a menu that will not compile — and refuses the release rather than being
+    // recorded at every shop.
+    let mut pairs: Vec<(StoreId, String, serde_json::Value)> = Vec::new();
+    for (node, arguments) in &carried {
+        let plan = match node.plan(tenant_id, arguments).await {
+            Ok(plan) => plan,
+            Err(refusal) => return refusal,
+        };
+        for store_id in &stores {
+            match plan.compile_for(*store_id).await {
+                Ok(compiled) => {
+                    for (key, value) in compiled {
+                        pairs.push((*store_id, key, value));
+                    }
+                }
+                Err(refusal) => return refusal,
+            }
+        }
+    }
+
+    let instants: std::collections::BTreeMap<StoreId, i64> = resolved
+        .iter()
+        .filter_map(|store| store.outcome.as_ref().ok().map(|at| (store.store_id, *at)))
+        .collect();
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    let mut written = 0_usize;
+    for (store_id, node_key, node_value) in pairs {
+        let Some(effective_at_ms) = instants.get(&store_id).copied() else {
+            // Unreachable: every store resolved above or the release was refused. Recorded rather
+            // than unwrapped, because the alternative is a panic in a request handler.
+            tracing::error!(%store_id, release = %release_id, "a release pair has no instant");
+            return service_unavailable("releases");
+        };
+        let Some(pair_id) = mint_ulid(now_ms) else {
+            return service_unavailable("releases");
+        };
+        let publish = NewScheduledPublish {
+            id: pair_id.to_string(),
+            tenant_id,
+            store_id,
+            node_key,
+            node_value,
+            effective_at_ms,
+            created_by: context.admin.id.clone(),
+            release_id: Some(release_id.clone()),
+        };
+        if let Err(error) = state.scheduled.schedule(&publish).await {
+            // Some pairs are already written. They are visible in the report and the release stays
+            // `draft`, which is the honest state for a set that never fully landed — and cancelling
+            // it withdraws what did get written.
+            tracing::error!(%error, release = %release_id, written, "a release pair could not be scheduled");
+            return scheduled_error_response(&error);
+        }
+        written += 1;
+    }
+
+    if let Err(error) = state
+        .releases
+        .set_status(tenant_id, &release_id, ReleaseStatus::Scheduled)
+        .await
+    {
+        return release_error_response(&error);
+    }
+    // One audit row for the decision, beside the per-publish rows the activator's writes will add:
+    // "who decided to ship Tết" has one answer and "when did Ginza get it" has forty (ADR-0125 §7).
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "release.scheduled",
+        "release",
+        &release_id,
+        None,
+        Some(serde_json::json!({
+            "nodes": carried_keys,
+            "stores": stores.len(),
+            "pairs": written,
+        })),
+    )
+    .await;
+    release_report_response(&state, tenant_id, &release_id).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/config-releases/{release_id}/cancel",
+    params(("release_id" = String, Path, description = "The release to withdraw")),
+    responses(
+        (status = 200, description = "The still-pending pairs are cancelled and the body is the \
+                                      report. Applied pairs are left alone — they are config \
+                                      versions now"),
+        (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such release in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The release has already started applying; roll back the \
+                                      versions it published instead (ADR-0095)", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release or schedule store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config releases",
+)]
+/// A super-admin withdraws a release that has not started applying.
+///
+/// Only before `applying`, because once a pair has published there is nothing to cancel — an applied
+/// write is a config version, and the way back is ADR-0095's version history, not a release-shaped
+/// undo (ADR-0125 §4). Cancelling withdraws the still-pending pairs and leaves any applied ones
+/// alone, which is the shape the roll-up reads as `partial`.
+async fn admin_cancel_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(release_id): Path<String>,
+    Json(request): Json<ReleaseTenantRequest>,
+) -> Response
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let release = match state.releases.fetch_one(tenant_id, &release_id).await {
+        Ok(Some(release)) => release,
+        Ok(None) => return not_found("release"),
+        Err(error) => return release_error_response(&error),
+    };
+    if matches!(
+        release.status,
+        ReleaseStatus::Applying | ReleaseStatus::Applied | ReleaseStatus::Partial
+    ) {
+        return api_error(
+            ErrorStatus::Unprocessable,
+            "this release has already started applying; roll back the versions it published instead",
+        );
+    }
+    let pairs = match state
+        .scheduled
+        .list_for_release(tenant_id, &release_id)
+        .await
+    {
+        Ok(pairs) => pairs,
+        Err(error) => return scheduled_error_response(&error),
+    };
+    let mut cancelled = 0_usize;
+    for pair in &pairs {
+        if pair.status != ScheduledPublishStatus::Pending {
+            continue;
+        }
+        match state.scheduled.cancel(tenant_id, &pair.id).await {
+            Ok(true) => cancelled += 1,
+            Ok(false) => {}
+            Err(error) => return scheduled_error_response(&error),
+        }
+    }
+    let settled = if cancelled == 0 && pairs.is_empty() {
+        // Never scheduled. It goes back to nothing rather than to a terminal state that would claim
+        // pairs it does not have.
+        ReleaseStatus::Draft
+    } else {
+        ReleaseStatus::Partial
+    };
+    if let Err(error) = state
+        .releases
+        .set_status(tenant_id, &release_id, settled)
+        .await
+    {
+        return release_error_response(&error);
+    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "release.cancelled",
+        "release",
+        &release_id,
+        None,
+        Some(serde_json::json!({ "cancelled_pairs": cancelled })),
+    )
+    .await;
+    release_report_response(&state, tenant_id, &release_id).await
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/config-releases",
+    params(("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)")),
+    responses(
+        (status = 200, description = "The tenant's releases, newest first, each with its stored \
+                                      roll-up state"),
+        (status = 400, description = "tenant_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config releases",
+)]
+/// The tenant's releases, newest first.
+async fn admin_list_releases<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ReleaseTenantQuery>,
+) -> Response
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    match state.releases.list_for_tenant(tenant_id).await {
+        Ok(rows) => {
+            let views: Vec<ReleaseView> = rows.iter().map(ReleaseView::of).collect();
+            Json(serde_json::json!({ "releases": views })).into_response()
+        }
+        Err(error) => release_error_response(&error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/config-releases/{release_id}",
+    params(
+        ("release_id" = String, Path, description = "The release to report on"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The release and one row per (node, store) pair, each with its \
+                                      status, its instant, the version it published as, and why it \
+                                      last failed. Snapshotted node values are deliberately not \
+                                      returned"),
+        (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No such release in this tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release or schedule store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config releases",
+)]
+/// One release and the node × store grid of its pairs — finding F9's answer.
+async fn admin_read_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    State(state): State<ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>>,
+    headers: HeaderMap,
+    Path(release_id): Path<String>,
+    Query(query): Query<ReleaseTenantQuery>,
+) -> Response
+where
+    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    release_report_response(&state, tenant_id, &release_id).await
+}
+
+/// Assembles the release-and-pairs answer the three routes that return a release share.
+///
+/// The pairs carry no `node_value`: a release's report is read by a screen showing forty rows, and a
+/// snapshotted menu per row is both enormous and, for a priced node, T2 material this read has no
+/// reason to hand out.
+async fn release_report_response<Rel, Sch, Grp, Reg, Cfg, A, C>(
+    state: &ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    release_id: &str,
+) -> Response
+where
+    Rel: ConfigReleaseStore,
+    Sch: ScheduledPublishStore,
+{
+    let release = match state.releases.fetch_one(tenant_id, release_id).await {
+        Ok(Some(release)) => release,
+        Ok(None) => return not_found("release"),
+        Err(error) => return release_error_response(&error),
+    };
+    let pairs = match state
+        .scheduled
+        .list_for_release(tenant_id, release_id)
+        .await
+    {
+        Ok(pairs) => pairs,
+        Err(error) => return scheduled_error_response(&error),
+    };
+    Json(ReleaseReport {
+        release: ReleaseView::of(&release),
+        pairs: pairs
+            .into_iter()
+            .map(|pair| ReleasePairView {
+                pair_id: pair.id,
+                store_id: pair.store_id.to_string(),
+                node: pair.node_key,
+                status: pair.status,
+                effective_at_ms: pair.effective_at_ms,
+                applied_version_id: pair.applied_version_id,
+                failure: pair.failure,
+            })
+            .collect(),
+    })
+    .into_response()
 }
 
 #[cfg(test)]

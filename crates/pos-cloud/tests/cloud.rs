@@ -22656,3 +22656,672 @@ async fn the_archive_routes_are_a_stores_own_door() {
         .expect("route the neighbour's ask");
     assert_eq!(confined.status(), StatusCode::FORBIDDEN);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Config releases (ADR-0125): one decision, many writes
+// ---------------------------------------------------------------------------------------------
+
+/// The release identity and roll-up, in memory.
+#[derive(Clone, Default)]
+struct FakeConfigReleases {
+    rows: Arc<Mutex<Vec<pos_cloud::releases::Release>>>,
+}
+
+impl pos_cloud::releases::ReleaseStore for FakeConfigReleases {
+    async fn create(
+        &self,
+        release: &pos_cloud::releases::NewRelease,
+    ) -> Result<(), pos_cloud::releases::ReleaseStoreError> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .push(pos_cloud::releases::Release {
+                id: release.id.clone(),
+                tenant_id: release.tenant_id,
+                name: release.name.clone(),
+                status: pos_cloud::releases::ReleaseStatus::Draft,
+                target_group_id: release.target_group_id.clone(),
+                moment: release.moment.clone(),
+                created_by: release.created_by.clone(),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            });
+        Ok(())
+    }
+
+    async fn list_for_tenant(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<pos_cloud::releases::Release>, pos_cloud::releases::ReleaseStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn fetch_one(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+    ) -> Result<Option<pos_cloud::releases::Release>, pos_cloud::releases::ReleaseStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant_id && row.id == id)
+            .cloned())
+    }
+
+    async fn set_status(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+        status: pos_cloud::releases::ReleaseStatus,
+    ) -> Result<bool, pos_cloud::releases::ReleaseStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows
+            .iter_mut()
+            .find(|row| row.tenant_id == tenant_id && row.id == id)
+        else {
+            return Ok(false);
+        };
+        row.status = status;
+        Ok(true)
+    }
+
+    async fn in_flight(
+        &self,
+    ) -> Result<Vec<pos_cloud::releases::Release>, pos_cloud::releases::ReleaseStoreError> {
+        Ok(Vec::new())
+    }
+}
+
+/// The pair rows, in memory.
+#[derive(Clone, Default)]
+struct FakeScheduledPublishes {
+    rows: Arc<Mutex<Vec<pos_cloud::scheduling::ScheduledPublish>>>,
+}
+
+impl pos_cloud::scheduling::ScheduledPublishStore for FakeScheduledPublishes {
+    async fn schedule(
+        &self,
+        publish: &pos_cloud::scheduling::NewScheduledPublish,
+    ) -> Result<(), pos_cloud::scheduling::ScheduledPublishError> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .push(pos_cloud::scheduling::ScheduledPublish {
+                id: publish.id.clone(),
+                tenant_id: publish.tenant_id,
+                store_id: publish.store_id,
+                node_key: publish.node_key.clone(),
+                node_value: publish.node_value.clone(),
+                effective_at_ms: publish.effective_at_ms,
+                status: pos_cloud::scheduling::ScheduledPublishStatus::Pending,
+                created_at_ms: 0,
+                applied_version_id: None,
+                release_id: publish.release_id.clone(),
+                failure: None,
+            });
+        Ok(())
+    }
+
+    async fn due(
+        &self,
+        _now_ms: i64,
+    ) -> Result<
+        Vec<pos_cloud::scheduling::ScheduledPublish>,
+        pos_cloud::scheduling::ScheduledPublishError,
+    > {
+        Ok(Vec::new())
+    }
+
+    async fn list_for_store(
+        &self,
+        _tenant_id: TenantId,
+        _store_id: StoreId,
+    ) -> Result<
+        Vec<pos_cloud::scheduling::ScheduledPublish>,
+        pos_cloud::scheduling::ScheduledPublishError,
+    > {
+        Ok(Vec::new())
+    }
+
+    async fn cancel(
+        &self,
+        tenant_id: TenantId,
+        id: &str,
+    ) -> Result<bool, pos_cloud::scheduling::ScheduledPublishError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant_id == tenant_id
+                && row.id == id
+                && row.status == pos_cloud::scheduling::ScheduledPublishStatus::Pending
+        }) else {
+            return Ok(false);
+        };
+        row.status = pos_cloud::scheduling::ScheduledPublishStatus::Cancelled;
+        Ok(true)
+    }
+
+    async fn mark_applied(
+        &self,
+        _id: &str,
+        _version_id: &str,
+    ) -> Result<(), pos_cloud::scheduling::ScheduledPublishError> {
+        Ok(())
+    }
+
+    async fn mark_failed(
+        &self,
+        _id: &str,
+        _failure: &str,
+    ) -> Result<(), pos_cloud::scheduling::ScheduledPublishError> {
+        Ok(())
+    }
+
+    async fn list_for_release(
+        &self,
+        tenant_id: TenantId,
+        release_id: &str,
+    ) -> Result<
+        Vec<pos_cloud::scheduling::ScheduledPublish>,
+        pos_cloud::scheduling::ScheduledPublishError,
+    > {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| {
+                row.tenant_id == tenant_id && row.release_id.as_deref() == Some(release_id)
+            })
+            .cloned()
+            .collect())
+    }
+}
+
+/// The console surface a release test needs, over the same node table `main.rs` builds.
+fn config_release_app(
+    admin: FakeAdmin,
+    releases: FakeConfigReleases,
+    scheduled: FakeScheduledPublishes,
+    groups: FakeStoreGroups,
+    registry: FakeRegistry,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::config_release_router(
+        releases,
+        scheduled,
+        groups,
+        registry,
+        config_trees,
+        http::batch_nodes(
+            FakeCatalog::default(),
+            FakeTaxRates::default(),
+            FakeCampaigns,
+            FakeInventory::default(),
+            FakeReasonCodes::default(),
+            FakePeople::default(),
+            FakeFloor::default(),
+        ),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// Gives a store a published `locale` carrying `timezone`, which is what a wall-clock release reads.
+fn seed_timezone(
+    config_trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    timezone: Option<&str>,
+) {
+    let locale = timezone.map_or_else(
+        || serde_json::json!({ "currency_code": "VND" }),
+        |zone| serde_json::json!({ "currency_code": "VND", "timezone": zone }),
+    );
+    config_trees.rows.lock().expect("lock").insert(
+        (tenant_id, store_id),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    serde_json::json!({ "locale": locale }),
+                    serde_json::json!({}),
+                ],
+                history: Vec::new(),
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+}
+
+/// Creates a draft aimed at `group_id` with a Monday-04:00 wall-clock moment, and returns its id.
+async fn draft_a_release(router: &axum::Router, cookie: &str, tenant: &str, group: &str) -> String {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config-releases",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Tết 2027",
+                "target_group_id": group,
+                "wall_clock_date": "2027-02-08",
+                "wall_clock_time": "04:00",
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert_eq!(
+        body["status"], "draft",
+        "a new release is not yet scheduled"
+    );
+    body["release_id"].as_str().expect("release_id").to_owned()
+}
+
+#[tokio::test]
+async fn one_wall_clock_release_becomes_one_instant_per_store_timezone() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let saigon = StoreId::new(Ulid::from_u128(31));
+    let tokyo = StoreId::new(Ulid::from_u128(32));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, saigon, true);
+    seed_store(&registry, tenant_id, tokyo, true);
+
+    let config_trees = FakeConfigTrees::default();
+    seed_timezone(&config_trees, tenant_id, saigon, Some("Asia/Ho_Chi_Minh"));
+    seed_timezone(&config_trees, tenant_id, tokyo, Some("Asia/Tokyo"));
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(41));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Tết cohort".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[saigon, tokyo],
+    );
+
+    let scheduled = FakeScheduledPublishes::default();
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeConfigReleases::default(),
+        scheduled.clone(),
+        groups,
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let group = group_id.as_ulid().to_string();
+    let release_id = draft_a_release(&router, &cookie, &tenant, &group).await;
+
+    let scheduled_response = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/schedule"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "nodes": [{ "node": "campaigns", "arguments": {} }],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the schedule");
+    assert_eq!(scheduled_response.status(), StatusCode::OK);
+    let report = json_body(scheduled_response).await;
+    assert_eq!(report["release"]["status"], "scheduled");
+
+    let pairs = report["pairs"].as_array().expect("pairs");
+    assert_eq!(pairs.len(), 2, "one pair per (node, store)");
+    let instant_at = |store: StoreId| -> i64 {
+        pairs
+            .iter()
+            .find(|pair| pair["store_id"] == store.to_string())
+            .and_then(|pair| pair["effective_at_ms"].as_i64())
+            .expect("an instant for the store")
+    };
+    // "Monday 04:00, local" is not a time — it is one instant per timezone, and Tokyo (UTC+9)
+    // reaches its 04:00 exactly two hours before Ho Chi Minh City (UTC+7). This is finding F17.
+    assert_eq!(
+        instant_at(saigon) - instant_at(tokyo),
+        2 * 60 * 60 * 1_000,
+        "the fleet's switchover is two hours wide, and the release says so"
+    );
+}
+
+#[tokio::test]
+async fn a_store_with_no_published_timezone_refuses_a_wall_clock_release_by_name() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let timed = StoreId::new(Ulid::from_u128(33));
+    let untimed = StoreId::new(Ulid::from_u128(34));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, timed, true);
+    seed_store(&registry, tenant_id, untimed, true);
+
+    let config_trees = FakeConfigTrees::default();
+    seed_timezone(&config_trees, tenant_id, timed, Some("Asia/Ho_Chi_Minh"));
+    seed_timezone(&config_trees, tenant_id, untimed, None);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(42));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Half-provisioned".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[timed, untimed],
+    );
+
+    let scheduled = FakeScheduledPublishes::default();
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeConfigReleases::default(),
+        scheduled.clone(),
+        groups,
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let group = group_id.as_ulid().to_string();
+    let release_id = draft_a_release(&router, &cookie, &tenant, &group).await;
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/schedule"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "nodes": [{ "node": "campaigns", "arguments": {} }],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the schedule");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        message.contains(&untimed.to_string()),
+        "the refusal names the store that cannot be timed, not just that one exists: {message}"
+    );
+    // The half-provisioned shop is the whole point of refusing rather than defaulting: quietly
+    // assuming UTC would put a Vietnamese publish in the middle of dinner service.
+    assert!(
+        scheduled.rows.lock().expect("lock").is_empty(),
+        "a refused release writes no pairs at all, not even for the store that resolved"
+    );
+}
+
+#[tokio::test]
+async fn an_instant_release_needs_no_timezone_and_cancels_back_to_a_draft() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let being_set_up = StoreId::new(Ulid::from_u128(35));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, being_set_up, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_timezone(&config_trees, tenant_id, being_set_up, None);
+
+    let scheduled = FakeScheduledPublishes::default();
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeConfigReleases::default(),
+        scheduled.clone(),
+        FakeStoreGroups::default(),
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config-releases",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Opening day",
+                "instant_at_ms": 1_800_000_000_000_i64,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let release_id = json_body(created).await["release_id"]
+        .as_str()
+        .expect("release_id")
+        .to_owned();
+
+    // No group on the draft, so the store list comes with the schedule — which is also when it is
+    // snapshotted (ADR-0125 §3).
+    let ok = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/schedule"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "nodes": [{ "node": "campaigns", "arguments": {} }],
+                "store_ids": [being_set_up.as_ulid().to_string()],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the schedule");
+    assert_eq!(
+        ok.status(),
+        StatusCode::OK,
+        "an instant release is the escape hatch for a store whose locale nobody has published"
+    );
+    let report = json_body(ok).await;
+    assert_eq!(report["pairs"].as_array().expect("pairs").len(), 1);
+    assert_eq!(report["pairs"][0]["effective_at_ms"], 1_800_000_000_000_i64);
+
+    let cancelled = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/cancel"),
+            &serde_json::json!({ "tenant_id": tenant }),
+            &cookie,
+        ))
+        .await
+        .expect("route the cancel");
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let report = json_body(cancelled).await;
+    assert_eq!(report["pairs"][0]["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn a_release_carrying_a_menu_without_its_tax_is_refused_before_anything_is_written() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let store_id = StoreId::new(Ulid::from_u128(36));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+    let config_trees = FakeConfigTrees::default();
+    // A published locale (so the moment resolves) but no `tax`, which `menu` requires (ADR-0122 §7).
+    seed_timezone(&config_trees, tenant_id, store_id, Some("Asia/Tokyo"));
+
+    let scheduled = FakeScheduledPublishes::default();
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeConfigReleases::default(),
+        scheduled.clone(),
+        FakeStoreGroups::default(),
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config-releases",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Menu only",
+                "wall_clock_date": "2027-02-08",
+                "wall_clock_time": "04:00",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    let release_id = json_body(created).await["release_id"]
+        .as_str()
+        .expect("release_id")
+        .to_owned();
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/config-releases/{release_id}/schedule"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "nodes": [{ "node": "menu", "arguments": { "menu_id": Ulid::from_u128(51).to_string() } }],
+                "store_ids": [store_id.as_ulid().to_string()],
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the schedule");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        message.contains("tax"),
+        "the refusal names the node the store is missing: {message}"
+    );
+    // Told now, while the operator can fix it — the schedule-time half of ADR-0125 §6. The fire-time
+    // half is the activator's, because a tax class archived on Sunday is a real sequence.
+    assert!(scheduled.rows.lock().expect("lock").is_empty());
+}
+
+#[tokio::test]
+async fn a_release_report_shows_only_its_own_pairs() {
+    let tenant_id = TenantId::new(Ulid::from_u128(7));
+    let store_id = StoreId::new(Ulid::from_u128(37));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_timezone(&config_trees, tenant_id, store_id, Some("Asia/Tokyo"));
+
+    let scheduled = FakeScheduledPublishes::default();
+    let router = config_release_app(
+        provisioned_admin(),
+        FakeConfigReleases::default(),
+        scheduled.clone(),
+        FakeStoreGroups::default(),
+        registry,
+        config_trees,
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+
+    let mut ids = Vec::new();
+    for name in ["First", "Second"] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/config-releases",
+                &serde_json::json!({
+                    "tenant_id": tenant,
+                    "name": name,
+                    "instant_at_ms": 1_800_000_000_000_i64,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the create");
+        let id = json_body(created).await["release_id"]
+            .as_str()
+            .expect("release_id")
+            .to_owned();
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                &format!("/admin/config-releases/{id}/schedule"),
+                &serde_json::json!({
+                    "tenant_id": tenant,
+                    "nodes": [{ "node": "campaigns", "arguments": {} }],
+                    "store_ids": [store_id.as_ulid().to_string()],
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the schedule");
+        assert_eq!(response.status(), StatusCode::OK);
+        ids.push(id);
+    }
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config-releases?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(listed).await["releases"]
+            .as_array()
+            .expect("releases")
+            .len(),
+        2
+    );
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/config-releases/{}?tenant_id={tenant}", ids[0]),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    let report = json_body(read).await;
+    let pairs = report["pairs"].as_array().expect("pairs");
+    assert_eq!(
+        pairs.len(),
+        1,
+        "the report is one release's, not the tenant's"
+    );
+    // The snapshot is deliberately not on the wire: a forty-row grid carrying forty menus is both
+    // enormous and, for a priced node, T2 material this read has no reason to hand out.
+    assert!(pairs[0].get("node_value").is_none());
+}

@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A release is one decision and many writes** ([ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md),
+  Wave 4 PR-7; findings F8 / F9 / F10 / F17, decision D8). A Tết menu is not one node — it is a
+  menu, the tax rates it prices against, the campaigns that discount it, the reason codes the staff
+  void it with, and the layout that shows it, at forty stores, switching on together. The cloud can
+  now name that set, aim it at a store group or an explicit store list, time it, schedule it, cancel
+  it, and report it node × store.
+  - `POST /admin/config-releases` creates a draft; `/schedule` snapshots each node, expands the
+    cohort to concrete stores, resolves the moment, and writes one `scheduled_publishes` pair per
+    (node, store); `/cancel` withdraws the still-pending pairs; `GET` lists and reports.
+  - **"Monday 04:00 at each store" is one instant per timezone.** The cloud converts the operator's
+    wall-clock time from each store's published `locale.timezone`, so a fleet spanning Ho Chi Minh
+    City and Tokyo can be *shown* the two-hour spread it is committing to. A store with no published
+    locale is **refused by name** rather than defaulted to UTC, which would put a Vietnamese publish
+    in the middle of dinner service; a release given a plain instant needs no locale at all.
+  - A release writes no config versions of its own: the existing ADR-0077 activator applies its
+    pairs, now in per-store dependency order, and re-derives the release's state from them.
+  - **Upgrade note:** migration `0064_releases.sql` is additive — a new `releases` table, plus
+    nullable `release_id` and `failure` columns on `scheduled_publishes`. A row with no release id
+    is exactly today's behaviour, so the per-store campaign schedule is unchanged. The surface is
+    `/admin/config-releases`, **not** `/admin/releases`, which is the OTA artifact upload
+    (ADR-0088) and is untouched.
 - **ReorderList buttons carry focus-visible outlines.** Added `focus-visible:outline-2 focus-visible:outline-accent rounded-token` to up/down buttons in `dashboard/src/components/kit.tsx` for keyboard focus visibility.
 - **The notification bell and dropdown carry ARIA labels and popup roles.** Added `aria-haspopup="true"` to the NotificationBell trigger and `role="region"` with `aria-label` to the history popup in `dashboard/src/components/Toast.tsx` for screen-reader accessibility.
 - **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and

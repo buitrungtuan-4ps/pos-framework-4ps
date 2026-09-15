@@ -27,6 +27,7 @@ use crate::config_tree::{
     CapabilityValidator, ConfigError, ConfigLevel, ConfigTree, ConfigTreeStore,
 };
 use crate::health::{TaskHealthStore, tick_detail};
+use crate::releases::{PairTally, ReleaseStatus, ReleaseStore, status_from_tally};
 use crate::version::UpdateOutcome;
 
 /// The canonical name of the scheduled-publish activator loop, for task-health reporting.
@@ -310,10 +311,18 @@ fn in_dependency_order(due: Vec<ScheduledPublish>) -> Vec<ScheduledPublish> {
     let mut ordered = standalone;
     for (_, rows) in groups {
         let nodes: Vec<String> = rows.iter().map(|row| row.node_key.clone()).collect();
+        // Each ordered name takes a row that has not been placed yet. Matching on the node alone
+        // would hand the same row back for a group naming one node twice — one row applied twice
+        // and the other silently dropped — which is a shape the ordering must not be able to
+        // create, however unreachable the schedule route makes it.
+        let mut placed = vec![false; rows.len()];
         for node in crate::releases::order_for_release(&nodes) {
-            // `position` rather than `find`, so a release that names the same node twice applies
-            // both rather than the first one twice.
-            if let Some(at) = rows.iter().position(|row| row.node_key == node) {
+            if let Some(at) = rows
+                .iter()
+                .enumerate()
+                .position(|(at, row)| !placed[at] && row.node_key == node)
+            {
+                placed[at] = true;
                 ordered.push(rows[at].clone());
             }
         }
@@ -321,13 +330,109 @@ fn in_dependency_order(due: Vec<ScheduledPublish>) -> Vec<ScheduledPublish> {
     ordered
 }
 
+/// How one release's pairs stand, counted from their rows.
+///
+/// A pair that *failed* to apply is still `Pending` — the activator retries it, and the reason sits
+/// in `failure` for the report to read — so it is counted as pending here, not as a loss. What
+/// counts against a release is a pair that will never publish, which is a cancelled one
+/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §5: cancelling
+/// withdraws the still-pending rows and leaves the applied ones alone, and that shape is a
+/// `partial`).
+fn tally_pairs(pairs: &[ScheduledPublish]) -> PairTally {
+    let mut tally = PairTally {
+        pending: 0,
+        applied: 0,
+        failed: 0,
+    };
+    for pair in pairs {
+        match pair.status {
+            ScheduledPublishStatus::Pending => tally.pending += 1,
+            ScheduledPublishStatus::Applied => tally.applied += 1,
+            ScheduledPublishStatus::Cancelled => tally.failed += 1,
+        }
+    }
+    tally
+}
+
+/// Re-derives every in-flight release's state from its own pairs, and records the ones that moved.
+///
+/// The release row's `status` is a stored roll-up, not a second source of truth: it exists so the
+/// console's list does not have to aggregate N × M pair rows per release, and this is the one writer
+/// that keeps it honest. Derived rather than asserted, so a release cannot claim `applied` while a
+/// pair of its own says otherwise ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)
+/// §4).
+///
+/// Only forward. A release `in_flight` with no pairs at all derives as `draft`, and writing that back
+/// would un-schedule a release an operator has already approved — it is a bug in whatever emptied the
+/// pairs, so it is logged and the row is left alone rather than quietly rewound.
+///
+/// A release whose roll-up cannot be read or written is logged and skipped, not propagated: the pass
+/// that applied the publishes has already succeeded, and failing it here would re-apply nothing and
+/// report the activator as broken.
+async fn settle_releases<S, R>(scheduled: &S, releases: &R) -> Result<usize, String>
+where
+    S: ScheduledPublishStore,
+    R: ReleaseStore,
+{
+    let in_flight = releases
+        .in_flight()
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut moved = 0_usize;
+    for release in in_flight {
+        let pairs = match scheduled
+            .list_for_release(release.tenant_id, &release.id)
+            .await
+        {
+            Ok(pairs) => pairs,
+            Err(error) => {
+                tracing::error!(%error, release = %release.id, "could not read a release's pairs to settle it");
+                continue;
+            }
+        };
+        let derived = status_from_tally(tally_pairs(&pairs));
+        if derived == release.status {
+            continue;
+        }
+        if derived == ReleaseStatus::Draft {
+            tracing::error!(
+                release = %release.id,
+                "an in-flight release has no pairs; leaving its recorded state alone"
+            );
+            continue;
+        }
+        match releases
+            .set_status(release.tenant_id, &release.id, derived)
+            .await
+        {
+            Ok(true) => {
+                tracing::info!(release = %release.id, status = derived.as_wire(), "a release moved state");
+                moved += 1;
+            }
+            Ok(false) => {
+                tracing::warn!(release = %release.id, "a release vanished while being settled");
+            }
+            Err(error) => {
+                tracing::error!(%error, release = %release.id, "could not record a release's new state");
+            }
+        }
+    }
+    Ok(moved)
+}
+
 /// One activator pass: applies every publish whose time has come. A row that fails to apply records
 /// why on itself and is left pending to retry on the next tick, so one bad snapshot never blocks the
 /// others. Returns how many were applied.
-async fn pass<S, Cfg>(scheduled: &S, config_trees: &Cfg, now_ms: i64) -> Result<usize, String>
+async fn pass<S, Cfg, R>(
+    scheduled: &S,
+    config_trees: &Cfg,
+    releases: &R,
+    now_ms: i64,
+) -> Result<usize, String>
 where
     S: ScheduledPublishStore,
     Cfg: ConfigTreeStore,
+    R: ReleaseStore,
 {
     let due = scheduled
         .due(now_ms)
@@ -360,15 +465,24 @@ where
             }
         }
     }
+    // After the writes, not before: a release's state is derived from its pairs, so it is read once
+    // they have settled. A release whose last pair applied on this very pass reaches `applied` in
+    // the same tick rather than looking like it is still going until the next one.
+    settle_releases(scheduled, releases).await?;
     Ok(applied)
 }
 
 /// Runs the scheduled-publish activator until `shutdown` resolves. Each tick applies every publish
-/// whose effective time has arrived and records its own health — the same supervised-loop shape as the
-/// retention and alert loops.
-pub async fn run<S, Cfg, Th, C>(
+/// whose effective time has arrived, re-derives every in-flight release's state from its pairs, and
+/// records its own health — the same supervised-loop shape as the retention and alert loops.
+///
+/// It stays one loop. A release is bookkeeping over rows this activator already walks
+/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §1), so a second
+/// loop would only add a way for the two to disagree about what has published.
+pub async fn run<S, Cfg, R, Th, C>(
     scheduled: S,
     config_trees: Cfg,
+    releases: R,
     task_health: Th,
     clock: C,
     interval: Duration,
@@ -376,13 +490,20 @@ pub async fn run<S, Cfg, Th, C>(
 ) where
     S: ScheduledPublishStore + Sync,
     Cfg: ConfigTreeStore + Sync,
+    R: ReleaseStore + Sync,
     Th: TaskHealthStore + Sync,
     C: ClockSource,
 {
     tokio::pin!(shutdown);
     loop {
         let now = clock.now();
-        let detail = match pass(&scheduled, &config_trees, now.as_milliseconds_since_epoch()).await
+        let detail = match pass(
+            &scheduled,
+            &config_trees,
+            &releases,
+            now.as_milliseconds_since_epoch(),
+        )
+        .await
         {
             Ok(applied) => {
                 if applied > 0 {
@@ -428,6 +549,120 @@ mod tests {
         ScheduledPublishStore,
     };
     use crate::config_tree::ConfigTreeStore;
+    use crate::releases::{
+        NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
+    };
+
+    #[derive(Default)]
+    struct FakeReleases {
+        rows: Mutex<Vec<Release>>,
+    }
+
+    impl FakeReleases {
+        /// A release already scheduled, so the roll-up has something in flight to settle.
+        fn scheduled(id: &str, tenant_id: TenantId) -> Self {
+            Self {
+                rows: Mutex::new(vec![Release {
+                    id: id.to_owned(),
+                    tenant_id,
+                    name: "Tết".to_owned(),
+                    status: ReleaseStatus::Scheduled,
+                    target_group_id: None,
+                    moment: Some(ReleaseMoment::Instant(5_000)),
+                    created_by: "admin".to_owned(),
+                    created_at_ms: 0,
+                    updated_at_ms: 0,
+                }]),
+            }
+        }
+
+        fn status_of(&self, id: &str) -> Option<ReleaseStatus> {
+            self.rows
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| row.status)
+        }
+    }
+
+    impl ReleaseStore for FakeReleases {
+        async fn create(&self, release: &NewRelease) -> Result<(), ReleaseStoreError> {
+            self.rows.lock().expect("lock").push(Release {
+                id: release.id.clone(),
+                tenant_id: release.tenant_id,
+                name: release.name.clone(),
+                status: ReleaseStatus::Draft,
+                target_group_id: release.target_group_id.clone(),
+                moment: release.moment.clone(),
+                created_by: release.created_by.clone(),
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            });
+            Ok(())
+        }
+
+        async fn list_for_tenant(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<Release>, ReleaseStoreError> {
+            Ok(self
+                .rows
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.tenant_id == tenant_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn fetch_one(
+            &self,
+            tenant_id: TenantId,
+            id: &str,
+        ) -> Result<Option<Release>, ReleaseStoreError> {
+            Ok(self
+                .rows
+                .lock()
+                .expect("lock")
+                .iter()
+                .find(|row| row.tenant_id == tenant_id && row.id == id)
+                .cloned())
+        }
+
+        async fn set_status(
+            &self,
+            tenant_id: TenantId,
+            id: &str,
+            status: ReleaseStatus,
+        ) -> Result<bool, ReleaseStoreError> {
+            let mut rows = self.rows.lock().expect("lock");
+            let Some(row) = rows
+                .iter_mut()
+                .find(|row| row.tenant_id == tenant_id && row.id == id)
+            else {
+                return Ok(false);
+            };
+            row.status = status;
+            Ok(true)
+        }
+
+        async fn in_flight(&self) -> Result<Vec<Release>, ReleaseStoreError> {
+            Ok(self
+                .rows
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| {
+                    matches!(
+                        row.status,
+                        ReleaseStatus::Scheduled | ReleaseStatus::Applying
+                    )
+                })
+                .cloned()
+                .collect())
+        }
+    }
 
     #[derive(Default)]
     struct FakeScheduled {
@@ -714,7 +949,7 @@ mod tests {
             .expect("schedule");
 
         // Run one pass at a time past the effective instant.
-        let applied = super::pass(&scheduled, &config_trees, 5_000)
+        let applied = super::pass(&scheduled, &config_trees, &FakeReleases::default(), 5_000)
             .await
             .expect("pass");
         assert_eq!(applied, 1);
@@ -735,7 +970,7 @@ mod tests {
         // The row is now applied and out of the due set, so a second pass is a no-op.
         assert!(scheduled.due(5_000).await.expect("due").is_empty());
         assert_eq!(
-            super::pass(&scheduled, &config_trees, 5_000)
+            super::pass(&scheduled, &config_trees, &FakeReleases::default(), 5_000)
                 .await
                 .expect("second pass"),
             0
@@ -771,6 +1006,22 @@ mod tests {
         let ordered = super::in_dependency_order(due);
         let nodes: Vec<&str> = ordered.iter().map(|row| row.node_key.as_str()).collect();
         assert_eq!(nodes, vec!["tax", "menu"]);
+    }
+
+    #[test]
+    fn a_group_naming_one_node_twice_keeps_both_rows() {
+        // Not a shape the schedule route can produce — a release writes one row per (node, store) —
+        // but the ordering must not be the thing that loses a row if one ever arrives.
+        let due = vec![
+            release_row("tax", Some("tet"), 2),
+            ScheduledPublish {
+                id: "tet-tax-again".to_owned(),
+                ..release_row("tax", Some("tet"), 2)
+            },
+        ];
+        let ordered = super::in_dependency_order(due);
+        let ids: Vec<&str> = ordered.iter().map(|row| row.id.as_str()).collect();
+        assert_eq!(ids, vec!["tet-tax", "tet-tax-again"]);
     }
 
     #[test]
@@ -814,7 +1065,7 @@ mod tests {
             .await
             .expect("schedule");
 
-        let applied = super::pass(&scheduled, &config_trees, 5_000)
+        let applied = super::pass(&scheduled, &config_trees, &FakeReleases::default(), 5_000)
             .await
             .expect("a pass whose writes all fail is not itself a failure");
         assert_eq!(applied, 0);
@@ -831,5 +1082,135 @@ mod tests {
             row.failure.is_some(),
             "the reason is on the row, where a release's report reads it"
         );
+    }
+
+    /// A pair belonging to a release: one node at one shop, which is the shape a release fans out to.
+    ///
+    /// Each pair gets its own store, because that is what a release is — the same node at N shops —
+    /// and because two pairs naming one node at one store is a set a release cannot produce.
+    fn release_publish(
+        id: &str,
+        release: &str,
+        store_seed: u128,
+        effective_at_ms: i64,
+    ) -> NewScheduledPublish {
+        NewScheduledPublish {
+            store_id: StoreId::new(Ulid::from_u128(store_seed)),
+            release_id: Some(release.to_owned()),
+            ..new_publish(id, effective_at_ms)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_release_reaches_applied_on_the_pass_that_lands_its_last_pair() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::default();
+        let releases = FakeReleases::scheduled("tet", tenant());
+        for (id, shop) in [("tet-ginza", 1_u128), ("tet-hanoi", 2)] {
+            scheduled
+                .schedule(&release_publish(id, "tet", shop, 1_000))
+                .await
+                .expect("schedule");
+        }
+
+        super::pass(&scheduled, &config_trees, &releases, 5_000)
+            .await
+            .expect("pass");
+
+        assert_eq!(
+            releases.status_of("tet"),
+            Some(ReleaseStatus::Applied),
+            "the roll-up is read after the writes, so a release settles in the same tick its last \
+             pair lands rather than looking like it is still going until the next one"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_release_with_a_pair_still_waiting_is_applying_not_applied() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::default();
+        let releases = FakeReleases::scheduled("tet", tenant());
+        scheduled
+            .schedule(&release_publish("tet-now", "tet", 1, 1_000))
+            .await
+            .expect("schedule the ripe pair");
+        scheduled
+            .schedule(&release_publish("tet-later", "tet", 2, 9_000))
+            .await
+            .expect("schedule the pair whose instant has not come");
+
+        super::pass(&scheduled, &config_trees, &releases, 5_000)
+            .await
+            .expect("pass");
+
+        // The distinction the state exists for: 360 writes are not instantaneous, and a console
+        // showing `scheduled` while the activator is halfway through is lying to an operator who
+        // may be watching a switchover (ADR-0125 §4).
+        assert_eq!(releases.status_of("tet"), Some(ReleaseStatus::Applying));
+    }
+
+    #[tokio::test]
+    async fn a_release_whose_pair_was_cancelled_after_another_applied_is_partial() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::default();
+        let releases = FakeReleases::scheduled("tet", tenant());
+        scheduled
+            .schedule(&release_publish("tet-ginza", "tet", 1, 1_000))
+            .await
+            .expect("schedule");
+        scheduled
+            .schedule(&release_publish("tet-hanoi", "tet", 2, 1_000))
+            .await
+            .expect("schedule");
+        assert!(
+            scheduled
+                .cancel(tenant(), "tet-hanoi")
+                .await
+                .expect("cancel"),
+            "one shop is pulled out before the release fires"
+        );
+
+        super::pass(&scheduled, &config_trees, &releases, 5_000)
+            .await
+            .expect("pass");
+
+        // Not `applied`, which would hide the shop that did not take it, and not `failed`, which
+        // would hide the one that did. At forty stores the operator needs the two that are missing.
+        assert_eq!(releases.status_of("tet"), Some(ReleaseStatus::Partial));
+    }
+
+    #[tokio::test]
+    async fn a_failed_pair_keeps_its_release_going_rather_than_ending_it() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::failing();
+        let releases = FakeReleases::scheduled("tet", tenant());
+        scheduled
+            .schedule(&release_publish("tet-a", "tet", 1, 1_000))
+            .await
+            .expect("schedule");
+
+        super::pass(&scheduled, &config_trees, &releases, 5_000)
+            .await
+            .expect("pass");
+
+        // A pair that could not apply stays pending and is retried, so the release is still
+        // waiting — not `partial`. `partial` is terminal, and calling a retry terminal would tell
+        // an operator to go and fix by hand something the next tick is about to do.
+        assert_eq!(releases.status_of("tet"), Some(ReleaseStatus::Scheduled));
+    }
+
+    #[tokio::test]
+    async fn an_in_flight_release_with_no_pairs_keeps_the_state_it_was_given() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::default();
+        let releases = FakeReleases::scheduled("tet", tenant());
+
+        super::pass(&scheduled, &config_trees, &releases, 5_000)
+            .await
+            .expect("pass");
+
+        // An empty tally derives as `draft`, and writing that back would un-schedule a release an
+        // operator has already approved. The roll-up only moves a release forward.
+        assert_eq!(releases.status_of("tet"), Some(ReleaseStatus::Scheduled));
     }
 }

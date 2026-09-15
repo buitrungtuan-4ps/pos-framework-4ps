@@ -10,6 +10,380 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/admin/config-releases": {
+      "get": {
+        "tags": [
+          "config releases"
+        ],
+        "summary": "The tenant's releases, newest first.",
+        "operationId": "admin_list_releases",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's releases, newest first, each with its stored roll-up state"
+          },
+          "400": {
+            "description": "tenant_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "config releases"
+        ],
+        "summary": "A super-admin names a release, aims it, and times it. Nothing is scheduled yet.",
+        "description": "A draft, deliberately: a release across nine nodes and forty stores is assembled over minutes,\nand half-assembled must not fire (ADR-0125 §4). The nodes and the concrete store list arrive at\n`/schedule`, which is also when the snapshot is taken.",
+        "operationId": "admin_create_release",
+        "responses": {
+          "201": {
+            "description": "The release exists as a draft. It carries no nodes and no pairs yet; `/schedule` adds both"
+          },
+          "400": {
+            "description": "An id is not a ULID, the name is empty, or the moment is half-given (a date without a time) or doubly-given (a wall-clock time and an instant)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/config-releases/{release_id}": {
+      "get": {
+        "tags": [
+          "config releases"
+        ],
+        "summary": "One release and the node × store grid of its pairs — finding F9's answer.",
+        "operationId": "admin_read_release",
+        "parameters": [
+          {
+            "name": "release_id",
+            "in": "path",
+            "description": "The release to report on",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release and one row per (node, store) pair, each with its status, its instant, the version it published as, and why it last failed. Snapshotted node values are deliberately not returned"
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such release in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release or schedule store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/config-releases/{release_id}/cancel": {
+      "post": {
+        "tags": [
+          "config releases"
+        ],
+        "summary": "A super-admin withdraws a release that has not started applying.",
+        "description": "Only before `applying`, because once a pair has published there is nothing to cancel — an applied\nwrite is a config version, and the way back is ADR-0095's version history, not a release-shaped\nundo (ADR-0125 §4). Cancelling withdraws the still-pending pairs and leaves any applied ones\nalone, which is the shape the roll-up reads as `partial`.",
+        "operationId": "admin_cancel_release",
+        "parameters": [
+          {
+            "name": "release_id",
+            "in": "path",
+            "description": "The release to withdraw",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The still-pending pairs are cancelled and the body is the report. Applied pairs are left alone — they are config versions now"
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such release in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The release has already started applying; roll back the versions it published instead (ADR-0095)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release or schedule store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/config-releases/{release_id}/schedule": {
+      "post": {
+        "tags": [
+          "config releases"
+        ],
+        "summary": "A super-admin schedules a draft: the snapshot, the store list and the per-store instants are all\ntaken here, and the pairs are written.",
+        "description": "Nothing is written until everything has resolved. A store that cannot be timed, a node that will\nnot compile, a prerequisite a store is missing — each refuses the whole release, because a\nhalf-written release is exactly the half-published Tết this record exists to prevent.",
+        "operationId": "admin_schedule_release",
+        "parameters": [
+          {
+            "name": "release_id",
+            "in": "path",
+            "description": "The draft to schedule",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release is scheduled, and the body is its node × store report. Every pair is `PENDING` until its instant arrives"
+          },
+          "400": {
+            "description": "An id is not a ULID, or the node is not one of the batchable kinds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such release in this tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The release is not a draft, has no moment, carries no nodes, names no reachable store, cannot be timed at one or more stores (each named), is missing a prerequisite node at one or more stores, or carries an instruction that will not compile. **Nothing is written** — a half-written release is the half-published Tết this record exists to prevent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The release, schedule, group, registry or config store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/config/reason-codes": {
       "put": {
         "tags": [
@@ -1899,6 +2273,10 @@
     {
       "name": "auth",
       "description": "Two-factor sign-in, the session it issues, and the second-factor levers (ADR-0034, ADR-0060). Everything else on this surface stands behind the session these routes establish."
+    },
+    {
+      "name": "config releases",
+      "description": "A release is one decision and many writes (ADR-0125): a named set of config publishes, aimed at a cohort or an explicit store list, timed once — in each store's own clock or at a single instant. Scheduling one expands it to a `scheduled_publishes` row per (node, store) pair, which ADR-0077's activator applies. These routes write no config versions of their own."
     },
     {
       "name": "store groups",
