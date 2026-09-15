@@ -34,6 +34,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     in the middle of dinner service; a release given a plain instant needs no locale at all.
   - A release writes no config versions of its own: the existing ADR-0077 activator applies its
     pairs, now in per-store dependency order, and re-derives the release's state from them.
+  - **The console has a publish centre.** A new **Releases** screen (Settings group) lists a tenant's
+    releases with the moment each goes out, drafts a new one, schedules it over a picked set of
+    nodes, cancels one that has not started applying, and shows the node × store grid with the
+    reason any pair last could not apply. It says "Monday 04:00, each shop's own clock" rather than
+    converting to one timestamp, because converting would be the console deciding which shop's clock
+    is the real one.
   - **Upgrade note:** migration `0064_releases.sql` is additive — a new `releases` table, plus
     nullable `release_id` and `failure` columns on `scheduled_publishes`. A row with no release id
     is exactly today's behaviour, so the per-store campaign schedule is unchanged. The surface is

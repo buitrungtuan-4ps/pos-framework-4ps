@@ -82,6 +82,9 @@ import type {
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
+  Release,
+  ReleaseNode,
+  ReleaseReport,
   ScheduledPublish,
   ScheduledPublishCreated,
   Store,
@@ -1278,6 +1281,60 @@ export const api = {
     requestVoid(
       "DELETE",
       `/admin/config/scheduled/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
+  // Config releases (ADR-0125, Track Wave 4 PR-7): a name over a set of publishes — nodes × stores,
+  // timed once. `createRelease` makes a draft and writes nothing else; `scheduleRelease` is the whole
+  // decision, and a refusal from it writes nothing at all. The path is `config-releases` and not
+  // `releases` because `/admin/releases` is the OTA artifact upload, a different thing with the same
+  // English name.
+  listReleases: (tenantId: string) =>
+    requestJson<{ releases: Release[] }>(
+      "GET",
+      `/admin/config-releases?${tenantQuery(tenantId)}`,
+    ).then((body) => body.releases),
+  readRelease: (tenantId: string, releaseId: string) =>
+    requestJson<ReleaseReport>(
+      "GET",
+      `/admin/config-releases/${encodeURIComponent(releaseId)}?${tenantQuery(tenantId)}`,
+    ),
+  createRelease: (
+    tenantId: string,
+    name: string,
+    moment: {
+      targetGroupId?: string;
+      wallClockDate?: string;
+      wallClockTime?: string;
+      instantAtMs?: number;
+    },
+  ) =>
+    requestJson<Release>("POST", "/admin/config-releases", {
+      tenant_id: tenantId,
+      name,
+      ...(moment.targetGroupId ? { target_group_id: moment.targetGroupId } : {}),
+      ...(moment.wallClockDate ? { wall_clock_date: moment.wallClockDate } : {}),
+      ...(moment.wallClockTime ? { wall_clock_time: moment.wallClockTime } : {}),
+      ...(moment.instantAtMs === undefined ? {} : { instant_at_ms: moment.instantAtMs }),
+    }),
+  scheduleRelease: (
+    tenantId: string,
+    releaseId: string,
+    nodes: readonly ReleaseNode[],
+    storeIds?: readonly string[],
+  ) =>
+    requestJson<ReleaseReport>(
+      "POST",
+      `/admin/config-releases/${encodeURIComponent(releaseId)}/schedule`,
+      {
+        tenant_id: tenantId,
+        nodes,
+        ...(storeIds ? { store_ids: storeIds } : {}),
+      },
+    ),
+  cancelRelease: (tenantId: string, releaseId: string) =>
+    requestJson<ReleaseReport>(
+      "POST",
+      `/admin/config-releases/${encodeURIComponent(releaseId)}/cancel`,
+      { tenant_id: tenantId },
     ),
   // Channels & payments (ADR-0080, Track M7). Per-store settings nodes read and published through the
   // config tree behind console.config.publish; an absent node (null) means "no restriction". The edge

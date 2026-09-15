@@ -133,6 +133,18 @@ export const SCREENS = {
     inPalette: true,
     icon: "layers",
   },
+  // Config releases (ADR-0125): the named sets of publishes a tenant ships as one decision. Beside
+  // store groups and behind the same roles, because aiming a set of publishes at a cohort and
+  // deciding what the cohort is are the same estate-level act.
+  releases: {
+    path: "/releases",
+    key: "nav.releases",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "calendar-clock",
+  },
   catalog: {
     path: "/catalog",
     key: "nav.catalog",
@@ -379,7 +391,7 @@ export const NAV_GROUPS: readonly {
   // their lifecycle; this one is about what runs on them.
   {
     key: "nav.group.settings",
-    items: ["config", "storeGroups", "storeSettings", "translations"],
+    items: ["config", "storeGroups", "releases", "storeSettings", "translations"],
   },
   // Who and what may reach this console: console users, machine keys, and the endpoints it calls
   // out to. All three answer "who is allowed in, or out".

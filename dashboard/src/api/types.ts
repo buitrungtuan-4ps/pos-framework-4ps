@@ -496,6 +496,67 @@ export interface ScheduledPublishCreated {
   readonly effective_at_ms: number;
 }
 
+/**
+ * Where a config release stands (`ReleaseStatus`, ADR-0125 §4).
+ *
+ * `partial` is the one the record exists for: N × M writes fail individually, and at forty stores an
+ * operator needs the two shops that did not take it, not a red cross over the fleet. There is no
+ * `rolled_back` — an applied write is a config version, and the way back is its version history.
+ */
+export type ReleaseStatus = "draft" | "scheduled" | "applying" | "applied" | "partial";
+
+/**
+ * A config release: a name over a set of publishes, aimed at a cohort or a store list, timed once.
+ *
+ * The moment is two shapes and never both. `wall_clock_date`/`wall_clock_time` is what the operator
+ * said in local terms ("Monday 04:00"), which the cloud converts to one instant *per store* from
+ * that store's published timezone — a fleet spanning Ho Chi Minh City and Tokyo has a two-hour
+ * spread. `instant_at_ms` is a single UTC instant instead, which needs no published locale and is
+ * the escape hatch for a store still being set up.
+ */
+export interface Release {
+  readonly release_id: string;
+  readonly tenant_id: string;
+  readonly name: string;
+  readonly status: ReleaseStatus;
+  readonly target_group_id: string | null;
+  readonly wall_clock_date: string | null;
+  readonly wall_clock_time: string | null;
+  readonly instant_at_ms: number | null;
+  readonly created_by: string;
+  readonly created_at_ms: number;
+  readonly updated_at_ms: number;
+}
+
+/**
+ * One (node, store) cell of a release's report.
+ *
+ * `failure` is why it last could not apply. A pair that failed is still `pending`: the activator
+ * retries it, and what an operator needs meanwhile is the reason, not a status that pretends the
+ * attempt never happened. The snapshotted node value is deliberately not on the wire.
+ */
+export interface ReleasePair {
+  readonly pair_id: string;
+  readonly store_id: string;
+  readonly node: string;
+  readonly status: ScheduledPublishStatus;
+  readonly effective_at_ms: number;
+  readonly applied_version_id: string | null;
+  readonly failure: string | null;
+}
+
+/** A release and the node × store grid of its pairs — the answer to "did Ginza get the new tax table". */
+export interface ReleaseReport {
+  readonly release: Release;
+  readonly pairs: readonly ReleasePair[];
+}
+
+/** One node of a release, and the arguments its compiler needs — the same pair a batch publish takes. */
+export interface ReleaseNode {
+  readonly node: string;
+  readonly arguments: Json;
+}
+
 /** A quantity in thousandths of a unit (`Quantity`) — 1.5 kg is `{ milli: 1500 }`. */
 export interface Quantity {
   readonly milli: number;
