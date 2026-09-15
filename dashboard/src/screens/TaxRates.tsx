@@ -26,9 +26,11 @@ import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, CellField, PageHeader } from "../components/ui";
-import { EmptyState } from "../components/kit";
+import { EmptyState, PublishBar } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
 
 /** The already-defined per-channel labels (shared with the Catalog price editor). */
 const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
@@ -116,6 +118,15 @@ export function TaxRates() {
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+
+  // When the store last had each node published to it, and when *this* screen last wrote rates.
+  //
+  // `savedAtMs` is within-session only, and deliberately so: a `TaxRate` carries no `updated_at`,
+  // so the honest alternatives were to add one to the wire or to say nothing. This says what it can
+  // actually see — "you saved at 14:32 and the last publish was 14:28" — and says nothing when it
+  // cannot, which is the same rule the rest of this console follows about not inventing facts.
+  const published = usePublishedNodes();
+  const [savedAtMs, setSavedAtMs] = createSignal<number | null>(null);
   // The version the grid was read at, or `null` for a tenant that has never saved rates (ADR-0095).
   const [version, setVersion] = createSignal<string | null>(null);
 
@@ -236,6 +247,7 @@ export function TaxRates() {
       // Re-read rather than trusting the save's own `ETag`: the next edit has to be made against
       // what is stored, and the reload is one request either way.
       await load();
+      setSavedAtMs(Date.now());
       toast.ok(t("taxRates.saved"));
     } catch (caught) {
       await fail(caught);
@@ -250,6 +262,8 @@ export function TaxRates() {
     try {
       await api.publishTax(tenantId(), storeId());
       toast.ok(t("taxRates.published", { store: storeName() }));
+      await published.refresh();
+      setSavedAtMs(null);
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -343,18 +357,19 @@ export function TaxRates() {
               <Button disabled={busy() || anyBreakdownProblem()} onClick={() => void save()}>
                 {t("action.save")}
               </Button>
-              <Button
-                variant="secondary"
-                disabled={busy() || !storeId()}
-                onClick={() => void publish()}
-              >
-                {t("taxRates.publish")}
-              </Button>
-              <span class="text-sm text-ink-muted">
-                <Show when={storeId()} fallback={t("taxRates.publishNeedsStore")}>
-                  {t("taxRates.publishTo", { store: storeName() })}
-                </Show>
-              </span>
+            </div>
+            <div class="mt-4">
+              <PublishBar
+                label={t("taxRates.publishTo", { store: storeName() })}
+                publishedAtMs={published.publishedAtMs("tax")}
+                editedAtMs={savedAtMs()}
+                describe={describePublish}
+                publishLabel={t("taxRates.publish")}
+                busy={busy()}
+                disabled={!storeId()}
+                disabledReason={t("taxRates.publishNeedsStore")}
+                onPublish={() => void publish()}
+              />
             </div>
           </Show>
         </Card>
