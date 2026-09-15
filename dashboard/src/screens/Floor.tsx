@@ -13,6 +13,7 @@ import { createSignal, Show } from "solid-js";
 import { api, ApiError } from "../api/client";
 import type { Area, FloorTable, TableQrToken } from "../api/types";
 import { t } from "../i18n";
+import { useEntityCrud } from "../lib/entity-crud";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
@@ -22,6 +23,7 @@ import {
   CellField,
   PageHeader,
   SelectField,
+  Skeleton,
   StatusBadge,
   TextField,
 } from "../components/ui";
@@ -32,6 +34,7 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  FormPanel,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -50,7 +53,15 @@ export function Floor() {
   };
 
   // New area + inline rename (mirrors Stores).
+  // One lifecycle for the area being added (ADR-0121 §3). The panel it drives replaces the "Add
+  // area" card that stood open under the area table on every visit (§6, decision D4).
+  const areaCrud = useEntityCrud<Area>();
   const [newAreaName, setNewAreaName] = createSignal("");
+
+  const openCreateArea = () => {
+    setNewAreaName("");
+    areaCrud.create();
+  };
   const [editingArea, setEditingArea] = createSignal("");
   const [areaDraft, setAreaDraft] = createSignal("");
   const [pendingAreaArchive, setPendingAreaArchive] = createSignal<Area | null>(null);
@@ -118,20 +129,16 @@ export function Floor() {
   const createArea = async () => {
     const name = newAreaName().trim();
     if (!name) {
-      setError(t("floor.areaNameRequired"));
+      areaCrud.refuse(t("floor.areaNameRequired"));
       return;
     }
-    setBusy(true);
-    try {
+    // `run` closes on success and keeps the panel open, carrying the refusal, on failure — the
+    // operator's typing is the only copy of what they meant (ADR-0121 §4).
+    await areaCrud.run(async () => {
       await api.createArea(tenantId(), storeId(), name);
-      setNewAreaName("");
       toast.ok(t("floor.areaCreated"));
       await load();
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const saveAreaName = async (area: Area) => {
@@ -432,15 +439,13 @@ export function Floor() {
           <Card
             title={t("floor.areas")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <Show when={canManage()}>
+                {/* Add sits in the header of the list it adds to (ADR-0121 §6). */}
+                <Button onClick={openCreateArea}>{t("floor.addArea")}</Button>
+              </Show>
             }
           >
-            <Show
-              when={areas()}
-              fallback={<p class="text-sm text-ink-muted">{t("floor.loadHint")}</p>}
-            >
+            <Show when={areas()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
               {(loaded) => (
                 <DataTable
                   columns={areaColumns()}
@@ -489,22 +494,6 @@ export function Floor() {
               )}
             </Show>
           </Card>
-
-          <Show when={canManage()}>
-            <Card title={t("floor.addArea")}>
-              <div class="flex flex-col gap-4">
-                <TextField
-                  label={t("floor.areaName")}
-                  value={newAreaName()}
-                  onInput={setNewAreaName}
-                  placeholder={t("floor.areaNamePlaceholder")}
-                />
-                <Button disabled={busy()} onClick={() => void createArea()}>
-                  {t("action.create")}
-                </Button>
-              </div>
-            </Card>
-          </Show>
 
           <Card
             title={t("floor.tables")}
@@ -626,7 +615,24 @@ export function Floor() {
           </Card>
         </div>
 
-        <Drawer
+        <FormPanel
+        crud={areaCrud}
+        as="modal"
+        createTitle={t("floor.addArea")}
+        editTitle={t("floor.addArea")}
+        submitLabel={t("action.create")}
+        onSubmit={() => void createArea()}
+        dirty={() => newAreaName().trim() !== ""}
+      >
+        <TextField
+          label={t("floor.areaName")}
+          value={newAreaName()}
+          onInput={setNewAreaName}
+          placeholder={t("floor.areaNamePlaceholder")}
+        />
+      </FormPanel>
+
+      <Drawer
           open={tableOpen()}
           title={tableDraftId() ? t("floor.editTable") : t("floor.addTable")}
           closeLabel={t("action.close")}

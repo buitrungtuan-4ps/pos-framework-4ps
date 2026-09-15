@@ -126,18 +126,14 @@ export function Stores() {
 
   // --- stores -----------------------------------------------------------------------------------
 
-  const openCreateStore = () => {
-    setStoreName("");
-    setStoreBrand("");
-    storeCrud.create();
-  };
-
   const openEditStore = (row: Store) => {
     setStoreName(row.name);
     setStoreBrand(row.brand_id ?? "");
     storeCrud.edit(row);
   };
 
+  // Rename and re-brand only; the wizard creates (D4). `subject()` is therefore always the row
+  // being edited, and a missing one is a bug rather than the create case it used to mean.
   const submitStore = () => {
     const name = storeName().trim();
     if (!name) {
@@ -145,22 +141,23 @@ export function Stores() {
       return;
     }
     const editingRow = storeCrud.subject();
+    if (!editingRow) {
+      return;
+    }
     void storeCrud
       .run(() =>
         conditional(() =>
-          editingRow
-            ? api.updateStore(
-                editingRow.store_id,
-                tenantId(),
-                { name, status: editingRow.status, brandId: storeBrand() || null },
-                editingRow.etag,
-              )
-            : api.createStore(tenantId(), name, storeBrand() || undefined),
+          api.updateStore(
+            editingRow.store_id,
+            tenantId(),
+            { name, status: editingRow.status, brandId: storeBrand() || null },
+            editingRow.etag,
+          ),
         ),
       )
       .then((saved) => {
         if (saved) {
-          void settled(editingRow ? t("stores.renamed") : t("stores.created"));
+          void settled(t("stores.renamed"));
         }
       });
   };
@@ -460,10 +457,16 @@ export function Stores() {
       <PageHeader title={t("stores.title")} description={t("stores.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
+          {/* The organisation row, narrowed (V4). It carried four controls of equal weight above the
+              store list — a name field, Save, Archive and Restore — so the first thing on the screen
+              an operator opens to look at their shops was an offer to archive the whole tenant.
+              Renaming stays in the open, because that is what the row is for; archiving and
+              restoring go behind the same kebab a store row uses, where a destructive verb reads as
+              a deliberate choice rather than a button to lean on. */}
           <Show when={tenant()}>
             {(current) => (
               <Card title={t("stores.organisation")}>
-                <div class="flex flex-wrap items-end gap-4">
+                <div class="flex flex-wrap items-end gap-3">
                   <div class="grow">
                     <TextField
                       label={t("stores.organisationName")}
@@ -483,26 +486,32 @@ export function Stores() {
                   >
                     {tenantCrud.saving() ? t("common.saving") : t("action.save")}
                   </Button>
-                  <Show
-                    when={current().status === "archived"}
-                    fallback={
-                      <Button
-                        variant="danger-ghost"
-                        disabled={tenantCrud.saving()}
-                        onClick={() => tenantCrud.confirm(current())}
-                      >
-                        {t("stores.archive")}
-                      </Button>
-                    }
-                  >
-                    <Button
-                      variant="secondary"
-                      disabled={tenantCrud.saving()}
-                      onClick={() => void setTenantStatus("active")}
+                  <RowActions label={t("stores.organisationActions")}>
+                    <Show
+                      when={current().status === "archived"}
+                      fallback={
+                        <Button
+                          variant="danger-ghost"
+                          size="sm"
+                          class="justify-start"
+                          disabled={tenantCrud.saving()}
+                          onClick={() => tenantCrud.confirm(current())}
+                        >
+                          {t("stores.archive")}
+                        </Button>
+                      }
                     >
-                      {t("stores.restore")}
-                    </Button>
-                  </Show>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="justify-start"
+                        disabled={tenantCrud.saving()}
+                        onClick={() => void setTenantStatus("active")}
+                      >
+                        {t("stores.restore")}
+                      </Button>
+                    </Show>
+                  </RowActions>
                 </div>
                 <Show when={tenantCrud.error()}>
                   {(message) => (
@@ -524,15 +533,18 @@ export function Stores() {
             title={t("stores.list")}
             actions={
               <div class="flex gap-2">
-                {/* Add sits in the header of the list it adds to (ADR-0121 §6). This screen carries
-                    three sections, so the section header is where it belongs; a single button on the
-                    `PageHeader` could not say which list it meant. */}
-                <Button onClick={openCreateStore}>{t("stores.create")}</Button>
+                {/* One way to create a store, and it is the wizard (decision D4). This header used
+                    to offer two: a panel that wrote the registry row and stopped, and the wizard
+                    beside it. The panel's store could not trade — no key, no installer — and
+                    nothing on the screen said which button to press. The wizard's own second step
+                    already offers "skip the key", so the short path survives; it just is not a
+                    second button that looks like the first. Add still sits in the header of the
+                    list it adds to (ADR-0121 §6). */}
                 <A
                   href={screenHref("newStore", tenantId(), "")}
-                  class="inline-flex min-h-touch items-center justify-center rounded-token border border-line bg-surface-raised px-4 text-base font-medium text-ink"
+                  class="inline-flex h-10 items-center justify-center rounded-token bg-primary px-3.5 text-base font-medium text-primary-ink transition hover:brightness-95"
                 >
-                  {t("wizard.open")}
+                  {t("stores.create")}
                 </A>
               </div>
             }
@@ -648,12 +660,14 @@ export function Stores() {
           </Card>
         </div>
 
+        {/* Edit only — creating a store is the wizard's (D4), so `createTitle` names the same
+            thing rather than a second create path this panel no longer opens for. */}
         <FormPanel
           crud={storeCrud}
           as="modal"
-          createTitle={t("stores.create")}
+          createTitle={t("stores.edit")}
           editTitle={t("stores.edit")}
-          submitLabel={storeCrud.mode() === "editing" ? t("action.save") : t("action.create")}
+          submitLabel={t("action.save")}
           onSubmit={submitStore}
           dirty={() => storeName().trim() !== (storeCrud.subject()?.name ?? "")}
         >

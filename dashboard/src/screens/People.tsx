@@ -13,6 +13,7 @@ import { createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
 import { t } from "../i18n";
+import { useEntityCrud } from "../lib/entity-crud";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
@@ -22,6 +23,7 @@ import {
   CheckboxField,
   PageHeader,
   SelectField,
+  Skeleton,
   StatusBadge,
   TextField,
 } from "../components/ui";
@@ -33,6 +35,7 @@ import {
   Drawer,
   EmptyState,
   FormField,
+  FormPanel,
   Modal,
   TechnicalDetails,
 } from "../components/kit";
@@ -61,9 +64,18 @@ export function People() {
     return role === "owner" || role === "admin";
   };
 
-  // New employee.
+  // New employee. One lifecycle per entity type (ADR-0121 §3); the panel it drives replaces the
+  // card that used to stand open under the roster asking for a code and a name nobody had come to
+  // type (§6, decision D4).
+  const employeeCrud = useEntityCrud<Employee>();
   const [newCode, setNewCode] = createSignal("");
   const [newName, setNewName] = createSignal("");
+
+  const openCreateEmployee = () => {
+    setNewCode("");
+    setNewName("");
+    employeeCrud.create();
+  };
 
   // PIN reset (a Modal over one employee).
   const [pinFor, setPinFor] = createSignal<Employee | null>(null);
@@ -182,23 +194,18 @@ export function People() {
     const code = newCode().trim();
     const name = newName().trim();
     if (!code || !name) {
-      setError(t("people.codeNameRequired"));
+      employeeCrud.refuse(t("people.codeNameRequired"));
       return;
     }
-    setBusy(true);
-    try {
+    // `run` closes the panel on success and keeps it open, carrying the refusal, on failure — the
+    // operator's typing is the only copy of what they meant (ADR-0121 §4).
+    await employeeCrud.run(async () => {
       await api.createEmployee(tenantId(), code, name);
-      setNewCode("");
-      setNewName("");
       toast.ok(t("people.employeeCreated"));
       // Back to the first page: the roster is newest-first by default, so the person just added is
       // at the top of it and nowhere near wherever the operator was paged to.
       await reloadRoster();
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const savePin = async () => {
@@ -527,15 +534,14 @@ export function People() {
           <Card
             title={t("people.employees")}
             actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
+              <Show when={canManage()}>
+                {/* Add sits in the header of the list it adds to (ADR-0121 §6), where the old
+                    "Add employee" card sat underneath it asking for a code and a name of nobody. */}
+                <Button onClick={openCreateEmployee}>{t("people.addEmployee")}</Button>
+              </Show>
             }
           >
-            <Show
-              when={roster()}
-              fallback={<p class="text-sm text-ink-muted">{t("people.loadHint")}</p>}
-            >
+            <Show when={roster()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
               {(loaded) => (
                 // Server-paged, server-searched and server-sorted (ADR-0098, #299). This screen used
                 // to hold the tenant's whole roster for three readers at once; the other two are
@@ -616,28 +622,6 @@ export function People() {
               )}
             </Show>
           </Card>
-
-          <Show when={canManage()}>
-            <Card title={t("people.addEmployee")}>
-              <div class="flex flex-col gap-4">
-                <TextField
-                  label={t("people.code")}
-                  value={newCode()}
-                  onInput={setNewCode}
-                  placeholder={t("people.codePlaceholder")}
-                />
-                <TextField
-                  label={t("people.name")}
-                  value={newName()}
-                  onInput={setNewName}
-                  placeholder={t("people.namePlaceholder")}
-                />
-                <Button disabled={busy()} onClick={() => void createEmployee()}>
-                  {t("action.create")}
-                </Button>
-              </div>
-            </Card>
-          </Show>
 
           <Card
             title={t("people.roles")}
@@ -810,7 +794,30 @@ export function People() {
           </Card>
         </div>
 
-        <Modal
+        <FormPanel
+        crud={employeeCrud}
+        as="modal"
+        createTitle={t("people.addEmployee")}
+        editTitle={t("people.addEmployee")}
+        submitLabel={t("action.create")}
+        onSubmit={() => void createEmployee()}
+        dirty={() => newCode().trim() !== "" || newName().trim() !== ""}
+      >
+        <TextField
+          label={t("people.code")}
+          value={newCode()}
+          onInput={setNewCode}
+          placeholder={t("people.codePlaceholder")}
+        />
+        <TextField
+          label={t("people.name")}
+          value={newName()}
+          onInput={setNewName}
+          placeholder={t("people.namePlaceholder")}
+        />
+      </FormPanel>
+
+      <Modal
           open={pinFor() !== null}
           title={t("people.setPinTitle")}
           closeLabel={t("action.close")}

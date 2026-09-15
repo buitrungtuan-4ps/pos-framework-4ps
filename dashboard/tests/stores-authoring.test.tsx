@@ -9,8 +9,13 @@
 //
 // A screen test rather than a kit test because both are emergent: they come from how Stores wires
 // the kit up, and a future edit could put a form back on the page without touching `FormPanel`.
+//
+// Wave 4 · PR-4 adds the other half of §6, decision D4: **there is one way to create a store and it
+// is the wizard**. The header's button is a link now, and the panel this file exercises is the edit
+// panel — so what is pinned below is that the create path leaves the screen and the edit path still
+// asks before it writes.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { MemoryRouter, Route } from "@solidjs/router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -36,6 +41,7 @@ const listStores = vi.fn();
 const listBrands = vi.fn();
 const listTenants = vi.fn();
 const createStore = vi.fn();
+const updateStore = vi.fn();
 const createBrand = vi.fn();
 
 vi.mock("../src/api/client", () => ({
@@ -45,12 +51,28 @@ vi.mock("../src/api/client", () => ({
     listTenants: () => listTenants(),
     createStore: (...args: unknown[]) => createStore(...args),
     createBrand: (...args: unknown[]) => createBrand(...args),
-    updateStore: vi.fn(),
+    updateStore: (...args: unknown[]) => updateStore(...args),
     updateBrand: vi.fn(),
     updateTenant: vi.fn(),
   },
   ApiError: class ApiError extends Error {},
 }));
+
+/**
+ * Open the store row's edit panel.
+ *
+ * Scoped to the row that names the store, because the brands table below carries its own Edit: the
+ * row's verbs sit behind a kebab now (Wave 4 · PR-3, V19), so the click is one step further in and
+ * "the first Edit on the page" stopped being an answer.
+ */
+function openEdit() {
+  const row = screen.getByText(STORE.name).closest("tr");
+  if (!row) {
+    throw new Error("the store row is not on the page");
+  }
+  fireEvent.click(within(row).getByRole("button", { name: "Actions" }));
+  fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+}
 
 function mountStores() {
   return render(() => (
@@ -83,17 +105,17 @@ describe("authoring a store", () => {
     expect(screen.queryByLabelText("Brand name")).toBeNull();
   });
 
-  it("opens the store form from the list header, and closes it again", async () => {
+  // D4. The screen offered two: a panel that wrote the registry row and stopped, and the wizard
+  // beside it. A store created by the panel had no key and no installer, so it could not trade, and
+  // nothing on the screen said so.
+  it("sends 'Create a store' to the wizard rather than opening a second create form", async () => {
     mountStores();
     await waitFor(() => expect(screen.getByText(STORE.name)).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Create a store" }));
-
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(screen.getByLabelText("Name")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
+    const create = screen.getByRole("link", { name: "Create a store" });
+    expect(create.getAttribute("href")).toBe(`/t/${TENANT.tenant_id}/stores/new`);
+    // And there is no second button that looks like it.
+    expect(screen.queryByRole("button", { name: "Create a store" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -109,29 +131,33 @@ describe("authoring a store", () => {
   it("refuses an empty name in the panel rather than calling the API", async () => {
     mountStores();
     await waitFor(() => expect(screen.getByText(STORE.name)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Create a store" }));
+    openEdit();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    const panel = screen.getByRole("dialog");
+    fireEvent.input(screen.getByLabelText("Name"), { target: { value: "  " } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
 
-    expect(createStore).not.toHaveBeenCalled();
+    expect(updateStore).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
-  it("creates a store with the brand chosen in the same form", async () => {
-    createStore.mockResolvedValue({});
+  it("renames and re-brands a store from the same panel, carrying its version", async () => {
+    updateStore.mockResolvedValue({});
     mountStores();
     await waitFor(() => expect(screen.getByText(STORE.name)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Create a store" }));
+    openEdit();
 
+    const panel = screen.getByRole("dialog");
     fireEvent.input(screen.getByLabelText("Name"), { target: { value: "4P's Ben Thanh" } });
     fireEvent.change(screen.getByLabelText("Brand"), { target: { value: BRAND.brand_id } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
-      expect(createStore).toHaveBeenCalledWith(
+      expect(updateStore).toHaveBeenCalledWith(
+        STORE.store_id,
         TENANT.tenant_id,
-        "4P's Ben Thanh",
-        BRAND.brand_id,
+        { name: "4P's Ben Thanh", status: "active", brandId: BRAND.brand_id },
+        STORE.etag,
       ),
     );
   });

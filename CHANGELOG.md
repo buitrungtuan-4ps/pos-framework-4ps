@@ -104,6 +104,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Five emoji became icons (V7).** The nav toggle, the palette's search button, the notification
   bell, the media placeholder and the subject-request warning rendered as a different picture on
   every operating system; `icons.tsx` gains `bell`, `menu` and `search`.
+- **One way to create a store, and it is the wizard (Wave 4 · PR-4, D4).** The Stores screen offered
+  two buttons side by side: a panel that wrote the registry row and stopped, and the guided wizard.
+  A store made by the panel had no key and no installer, so it could not sync or trade, and nothing
+  on the screen said which button to press. The panel is gone — it is the edit panel now — and the
+  wizard's own short path is named for what it does: "Skip the key — create the record only", with a
+  line saying the store exists but cannot trade until a key is issued from its row.
+- **People and Floor stopped asking for input nobody had come to give (V4, ADR-0121 §6).** Both
+  carried an "Add employee" / "Add area" card standing open beneath their tables on every visit —
+  the owner's original report, which the U3 gate had been letting through because it stood down as
+  soon as a screen had any panel anywhere. Both are `FormPanel`s opened from the list header now,
+  both screens lose the Refresh button D5 removed elsewhere, and `authoring-controls.test.ts` gained
+  a check that reads a `Card`'s message key: a title naming an add or a create, on a card holding a
+  field, fails the build.
+- **The organisation row no longer leads with "Archive".** Four controls of equal weight sat above
+  the store list, so the first thing on the screen an operator opens to look at their shops was an
+  offer to archive the whole tenant. Renaming stays in the open; archiving and restoring move behind
+  the same kebab a store row uses.
 - **Refresh buttons are gone, and the screens that had them re-read for themselves (D5).** A button
   labelled "Refresh" is the screen admitting it does not know when its own data went stale. Alerts,
   Stores, API keys, Webhooks, Devices and Translations lose theirs; Alerts — the one live screen of
