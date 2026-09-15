@@ -9,15 +9,9 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type {
-  CatalogItem,
-  ItemCategory,
-  ItemSort,
-  ItemSubcategory,
-  TaxClass,
-} from "../../api/types";
+import type { CatalogItem, ItemSort } from "../../api/types";
 import { LOCALES, localeName, t } from "../../i18n";
-import { onScopedContext } from "../../lib/scoped";
+import { createAdminResource, failureOf } from "../../lib/resource";
 import { actingAdmin, tenantId } from "../../state/session";
 import { Banner, Button, Card, SelectField, TextField } from "../../components/ui";
 import {
@@ -41,19 +35,57 @@ import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
 const PAGE_SIZE = 25;
 
 export function CatalogItems() {
-  const [items, setItems] = createSignal<readonly CatalogItem[] | null>(null);
-  const [total, setTotal] = createSignal(0);
+  // The window the operator is looking at. A view parameter, not load state: the read closure
+  // below reads it, so moving the pager is `setOffset` then `refetch` (the Media precedent).
   const [offset, setOffset] = createSignal(0);
   // The applied search, and the text being typed. They differ so a keystroke does not fire a read.
   const [search, setSearch] = createSignal("");
   const [searchDraft, setSearchDraft] = createSignal("");
   const [sort, setSort] = createSignal<ItemSort>("newest");
   const [descending, setDescending] = createSignal(false);
-  const [taxClasses, setTaxClasses] = createSignal<TaxClass[]>([]);
-  const [categories, setCategories] = createSignal<ItemCategory[]>([]);
-  const [subcategories, setSubcategories] = createSignal<ItemSubcategory[]>([]);
-  const [error, setError] = createSignal("");
+  // Write-in-flight only; the read's own refusal is `failureOf` below.
   const [busy, setBusy] = createSignal(false);
+
+  // One read: the item page, and the three taxonomies the table needs to name what is in it. The
+  // taxonomy reads stay unpaged — they fill the drawer's selects and resolve an id to a label, so
+  // each needs its whole (small) set, and a page that arrived without them renders ULIDs.
+  // The tenant whose catalogue the view parameters below describe. A page-four offset and a search
+  // for one organisation's product mean nothing in another, so the read resets them when the tenant
+  // changes — here rather than in a second context gate, which would race the resource's own and
+  // cost two reads per switch.
+  let describing = "";
+  const catalogue = createAdminResource(
+    async (tenant) => {
+      if (tenant !== describing) {
+        describing = tenant;
+        setOffset(0);
+        setSearch("");
+        setSearchDraft("");
+      }
+      const [page, taxClasses, categories, subcategories] = await Promise.all([
+        api.listItemsPage(
+          tenant,
+          { limit: PAGE_SIZE, offset: offset() },
+          {
+            q: search().trim() || undefined,
+            sort: sort(),
+            order: descending() ? "desc" : "asc",
+          },
+        ),
+        api.listTaxClasses(tenant),
+        api.listItemCategories(tenant),
+        api.listItemSubcategories(tenant),
+      ]);
+      return { page, taxClasses, categories, subcategories };
+    },
+    { scope: "tenant" },
+  );
+
+  const items = () => catalogue.value()?.page.items ?? null;
+  const total = () => catalogue.value()?.page.total ?? 0;
+  const taxClasses = () => catalogue.value()?.taxClasses ?? [];
+  const categories = () => catalogue.value()?.categories ?? [];
+  const subcategories = () => catalogue.value()?.subcategories ?? [];
 
   // Create drawer.
   const [creating, setCreating] = createSignal(false);
@@ -84,66 +116,39 @@ export function CatalogItems() {
   const activeSubcategories = () =>
     subcategories().filter((row) => row.status === "active" && row.item_category_id === newCategory());
 
-  const load = async (from = offset()) => {
-    setError("");
-    setBusy(true);
-    try {
-      // The three taxonomy reads stay unpaged: they fill the create/edit drawer's selects and
-      // resolve an id to a label in the table, so each needs its whole (small) set.
-      const [page, loadedTaxClasses, loadedCategories, loadedSubcategories] = await Promise.all([
-        api.listItemsPage(
-          tenantId(),
-          { limit: PAGE_SIZE, offset: from },
-          {
-            q: search().trim() || undefined,
-            sort: sort(),
-            order: descending() ? "desc" : "asc",
-          },
-        ),
-        api.listTaxClasses(tenantId()),
-        api.listItemCategories(tenantId()),
-        api.listItemSubcategories(tenantId()),
-      ]);
-      // A page empty from somewhere other than the start means the matching set shrank under the
-      // pager — a narrowed search, or an item just archived off the last page. Step back rather than
-      // showing an empty table over a non-zero count.
-      if (page.items.length === 0 && from > 0) {
-        await load(Math.max(0, from - PAGE_SIZE));
+  /**
+   * Move the pager and read that window, stepping back off a window that no longer exists.
+   *
+   * A page that comes back empty from somewhere other than the start means the matching set shrank
+   * under the pager — a narrowed search, or an item just archived off the last page. Walking back
+   * beats showing an empty table over a non-zero count, which reads as "your catalogue is gone".
+   * The walk is bounded: each step halves the offset towards zero, and zero is allowed to be empty.
+   */
+  const show = async (from: number): Promise<void> => {
+    let at = Math.max(0, from);
+    for (;;) {
+      setOffset(at);
+      await catalogue.refetch();
+      const page = catalogue.value()?.page;
+      if (at === 0 || page === undefined || page.items.length > 0) {
         return;
       }
-      setItems(page.items);
-      setTotal(page.total);
-      setOffset(page.offset);
-      setTaxClasses(loadedTaxClasses);
-      setCategories(loadedCategories);
-      setSubcategories(loadedSubcategories);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
+      at = Math.max(0, at - PAGE_SIZE);
     }
   };
 
   /** Applies the typed search and returns to the first page — a page-four offset means nothing now. */
   const applySearch = () => {
     setSearch(searchDraft());
-    void load(0);
+    void show(0);
   };
 
   /** Re-reads the set in a new order, from its first page. */
   const applySort = (field: string, wantsDescending: boolean) => {
     setSort(field as ItemSort);
     setDescending(wantsDescending);
-    void load(0);
+    void show(0);
   };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0). A tenant switch
-  // starts at the first page and drops the search: neither means anything in another tenant.
-  onScopedContext("tenant", () => {
-    setSearch("");
-    setSearchDraft("");
-    void load(0);
-  });
 
   const openCreate = () => {
     setNewName("");
@@ -172,7 +177,7 @@ export function CatalogItems() {
       });
       toast.ok(t("catalog.itemCreated"));
       setCreating(false);
-      await load();
+      await show(offset());
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -208,13 +213,13 @@ export function CatalogItems() {
         imageRef: fields.imageRef !== undefined ? fields.imageRef : item.image_ref,
         status: fields.status ?? item.status,
       }, item.etag);
-      await load();
+      await show(offset());
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await show(offset());
       }
       return false;
     } finally {
@@ -314,7 +319,10 @@ export function CatalogItems() {
 
   return (
     <div class="flex flex-col gap-6">
-      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+      {/* A refusal is its own state, not an empty table (D5). */}
+      <Show when={failureOf(catalogue)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
 
       <Card
         title={t("catalog.items")}
@@ -327,9 +335,6 @@ export function CatalogItems() {
             </Show>
             <Button disabled={busy()} onClick={openCreate}>
               {t("catalog.createItem")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
             </Button>
           </div>
         }
@@ -359,7 +364,7 @@ export function CatalogItems() {
               onClick={() => {
                 setSearchDraft("");
                 setSearch("");
-                void load(0);
+                void show(0);
               }}
             >
               {t("action.clear")}
@@ -377,7 +382,7 @@ export function CatalogItems() {
               rows={loaded()}
               pageSize={PAGE_SIZE}
               serverTotal={total()}
-              onPage={(next) => void load(next)}
+              onPage={(next) => void show(next)}
               onSort={applySort}
               empty={<EmptyState title={t("catalog.itemsEmpty")} />}
               actionsHeader={t("common.actions")}

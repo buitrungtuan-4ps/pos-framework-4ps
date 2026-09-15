@@ -8,7 +8,7 @@ import { createSignal, Show } from "solid-js";
 import { api } from "../../api/client";
 import type { TaxClass } from "../../api/types";
 import { t } from "../../i18n";
-import { onScopedContext } from "../../lib/scoped";
+import { createAdminResource, failureOf } from "../../lib/resource";
 import { tenantId } from "../../state/session";
 import { Banner, Button, Card, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
@@ -16,8 +16,11 @@ import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogTaxClasses() {
-  const [rows, setRows] = createSignal<TaxClass[] | null>(null);
-  const [error, setError] = createSignal("");
+  // The tenant's tax classes. Tenant-scoped, so the read never runs with an empty context (F0),
+  // and it re-runs on a tenant switch without the screen arranging it.
+  const classes = createAdminResource((tenant) => api.listTaxClasses(tenant), { scope: "tenant" });
+  // Write-in-flight only. The read's own refusal is `failureOf` below; conflating the two is what
+  // made a failed save look like a screen that could not load.
   const [busy, setBusy] = createSignal(false);
 
   const [creating, setCreating] = createSignal(false);
@@ -25,21 +28,6 @@ export function CatalogTaxClasses() {
 
   const [editing, setEditing] = createSignal<TaxClass | null>(null);
   const [draftName, setDraftName] = createSignal("");
-
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      setRows(await api.listTaxClasses(tenantId()));
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   const openCreate = () => {
     setNewName("");
@@ -57,7 +45,7 @@ export function CatalogTaxClasses() {
       await api.createTaxClass(tenantId(), name);
       toast.ok(t("catalog.taxClassCreated"));
       setCreating(false);
-      await load();
+      await classes.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -80,13 +68,13 @@ export function CatalogTaxClasses() {
         name,
         status: fields.status ?? row.status,
       }, row.etag);
-      await load();
+      await classes.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await classes.refetch();
       }
       return false;
     } finally {
@@ -136,7 +124,11 @@ export function CatalogTaxClasses() {
 
   return (
     <div class="flex flex-col gap-6">
-      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+      {/* A refusal is its own state, not an empty table: a role that cannot read the classes has
+          not been told there are none (D5). */}
+      <Show when={failureOf(classes)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
 
       <Card
         title={t("catalog.taxClasses")}
@@ -145,14 +137,11 @@ export function CatalogTaxClasses() {
             <Button disabled={busy()} onClick={openCreate}>
               {t("action.create")}
             </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
           </div>
         }
       >
         <Show
-          when={rows()}
+          when={classes.value()}
           fallback={<p class="text-sm text-ink-muted">{t("catalog.loadHint")}</p>}
         >
           {(loaded) => (

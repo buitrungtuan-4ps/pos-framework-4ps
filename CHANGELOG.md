@@ -124,6 +124,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **The catalogue's five screens re-read what they change (Wave 4 · PR-6c, D5/F13).** Items, Menus,
+  Modifiers, Tax classes and Taxonomy onto `createAdminResource`, and their Refresh buttons go with
+  it. Each was reading two to four lists into separate signals; each is now one state, because the
+  halves are not independent — a placement table that got items but not menus renders a ULID where a
+  product name belongs, which is worse than saying the read failed. Items keeps its pager: the
+  offset is a view parameter the read closure reads, and a window that no longer exists walks back
+  towards the first page rather than showing an empty table over a non-zero count.
+
+  Menus adopts `PublishBar`. It keeps its menu picker, because unlike every other node "the menu" is
+  a choice among several and the bar has no opinion about which — the bar says where the shop
+  stands, the picker says what to send.
+
+  Two gates were wrong and are fixed with it. `kit-adoption.test.ts` had grown **two** `describe`
+  blocks for the same rule with two different lists, so the older one's pin asserted nothing; they
+  are one list now. And the step budget only recognised the four DOM handlers as taps, so a screen
+  that handed its action to a kit component — a confirm dialog, a pager, the publish bar — silently
+  un-declared a flow step. It now sees through the kit's own `onClick`, which is the point of having
+  a kit.
+
 - **A reason code says when it was last edited, and the answer survives a reload (Wave 4, F13).**
   Every one of these tables has carried an `updated_at` since the day it was created, and not one
   read ever returned it. So the publish bar — whose whole job is "is what I am looking at newer than

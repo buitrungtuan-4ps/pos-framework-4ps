@@ -389,6 +389,7 @@
   "catalog.publishMenu": "Menu to publish",
   "catalog.publishStore": "Store (from the top bar)",
   "catalog.publishStoreNone": "Choose a store in the top bar first.",
+  "catalog.publishTo": "Publishes to {store}.",
   "catalog.published": "Published to the store as version {version}.",
   "catalog.remove": "Remove",
   "catalog.removePlacementMessage": "The item's placement and its prices in this menu are removed. The item itself stays in the catalog.",

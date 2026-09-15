@@ -10,7 +10,7 @@ import { createSignal, Show } from "solid-js";
 import { api } from "../../api/client";
 import type { ItemCategory, ItemSubcategory } from "../../api/types";
 import { t } from "../../i18n";
-import { onScopedContext } from "../../lib/scoped";
+import { createAdminResource, failureOf } from "../../lib/resource";
 import { tenantId } from "../../state/session";
 import { Banner, Button, Card, SelectField, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
@@ -18,9 +18,20 @@ import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogTaxonomy() {
-  const [categories, setCategories] = createSignal<ItemCategory[] | null>(null);
-  const [subcategories, setSubcategories] = createSignal<ItemSubcategory[] | null>(null);
-  const [error, setError] = createSignal("");
+  // Categories and sub-categories as one state. A sub-category names its parent, so the two halves
+  // arriving separately means a table that can render a parent id but not a parent name.
+  const taxonomy = createAdminResource(
+    async (tenant) => {
+      const [categories, subcategories] = await Promise.all([
+        api.listItemCategories(tenant),
+        api.listItemSubcategories(tenant),
+      ]);
+      return { categories, subcategories };
+    },
+    { scope: "tenant" },
+  );
+  const categories = () => taxonomy.value()?.categories ?? null;
+  const subcategories = () => taxonomy.value()?.subcategories ?? null;
   const [busy, setBusy] = createSignal(false);
 
   // Category create/edit drawers.
@@ -41,25 +52,6 @@ export function CatalogTaxonomy() {
     (categories() ?? []).find((row) => row.item_category_id === id)?.name ?? id;
   const activeCategories = () => (categories() ?? []).filter((row) => row.status === "active");
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      const [loadedCategories, loadedSubcategories] = await Promise.all([
-        api.listItemCategories(tenantId()),
-        api.listItemSubcategories(tenantId()),
-      ]);
-      setCategories(loadedCategories);
-      setSubcategories(loadedSubcategories);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   // --- categories ---
 
@@ -79,7 +71,7 @@ export function CatalogTaxonomy() {
       await api.createItemCategory(tenantId(), name);
       toast.ok(t("catalog.categoryCreated"));
       setCreatingCategory(false);
-      await load();
+      await taxonomy.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -102,13 +94,13 @@ export function CatalogTaxonomy() {
         name,
         status: fields.status ?? row.status,
       }, row.etag);
-      await load();
+      await taxonomy.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await taxonomy.refetch();
       }
       return false;
     } finally {
@@ -164,7 +156,7 @@ export function CatalogTaxonomy() {
       await api.createItemSubcategory(tenantId(), newSubcategoryParent(), name);
       toast.ok(t("catalog.subcategoryCreated"));
       setCreatingSubcategory(false);
-      await load();
+      await taxonomy.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -188,13 +180,13 @@ export function CatalogTaxonomy() {
         name,
         status: fields.status ?? row.status,
       }, row.etag);
-      await load();
+      await taxonomy.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await taxonomy.refetch();
       }
       return false;
     } finally {
@@ -265,7 +257,10 @@ export function CatalogTaxonomy() {
 
   return (
     <div class="flex flex-col gap-6">
-      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+      {/* A refusal is its own state, not an empty table (D5). */}
+      <Show when={failureOf(taxonomy)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
 
       <Card
         title={t("catalog.categories")}
@@ -273,9 +268,6 @@ export function CatalogTaxonomy() {
           <div class="flex flex-wrap gap-2">
             <Button disabled={busy()} onClick={openCreateCategory}>
               {t("action.create")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
             </Button>
           </div>
         }

@@ -389,6 +389,7 @@
   "catalog.publishMenu": "Thực đơn cần phát hành",
   "catalog.publishStore": "Cửa hàng (từ thanh trên cùng)",
   "catalog.publishStoreNone": "Hãy chọn một cửa hàng ở thanh trên cùng trước.",
+  "catalog.publishTo": "Phát hành đến {store}.",
   "catalog.published": "Đã phát hành tới cửa hàng, phiên bản {version}.",
   "catalog.remove": "Xóa",
   "catalog.removePlacementMessage": "Vị trí món và các mức giá của nó trong thực đơn này sẽ bị gỡ. Bản thân món vẫn còn trong danh mục.",
