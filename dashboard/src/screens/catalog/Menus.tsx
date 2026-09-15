@@ -10,9 +10,7 @@ import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
 import type {
-  CatalogItem,
   ChannelPrice,
-  Country,
   ETag,
   Menu,
   MenuPlacement,
@@ -22,7 +20,9 @@ import type {
 import { SALES_CHANNELS } from "../../api/types";
 import { t } from "../../i18n";
 import { formatMoney } from "../../lib/format";
-import { onScopedContext } from "../../lib/scoped";
+import { describePublish } from "../../lib/publish-copy";
+import { usePublishedNodes } from "../../lib/published";
+import { createAdminResource, failureOf } from "../../lib/resource";
 import { storeId, storeName, tenantId } from "../../state/session";
 import {
   Banner,
@@ -41,16 +41,14 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  PublishBar,
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { CHANNEL_LABEL, emptyPriceSheet, errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogMenus() {
-  const [menus, setMenus] = createSignal<Menu[] | null>(null);
-  const [items, setItems] = createSignal<CatalogItem[]>([]);
-  const [countries, setCountries] = createSignal<Country[]>([]);
-  const [error, setError] = createSignal("");
+  // Write-in-flight only; the read's own refusal is `failureOf` below.
   const [busy, setBusy] = createSignal(false);
 
   const [selectedMenu, setSelectedMenu] = createSignal("");
@@ -120,45 +118,38 @@ export function CatalogMenus() {
     return [...codes].sort((a, b) => a.localeCompare(b));
   };
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      // `listItems` and not `listItemsPage`, deliberately, and this is the one place in the console
-      // where that is a considered choice rather than an oversight.
-      //
-      // Two things read this list, and they want opposite shapes. The placement picker wants a
-      // window — but it is a `ComboboxField` now, which builds its options only when it is opened
-      // and filters them in the browser against every locale's name, so a held list costs nothing
-      // per render and answers a keystroke with no round-trip. The placements *table* wants the
-      // opposite: it renders `menu_item_id` for every row and has to turn each one into a name, and
-      // a placement can point at any item in the master, so a window would show ULIDs for whatever
-      // fell outside it.
-      //
-      // The real fix is for `list_placements` to return the item's name with the placement, which
-      // removes the coupling entirely and lets the picker be served. That is a read-model change in
-      // `pos-cloud` and it is not in this slice; until then the honest trade is one bounded fetch on
-      // screen entry over a table that cannot name its own rows.
-      const [loadedMenus, loadedItems, loadedCountries] = await Promise.all([
-        api.listMenus(tenantId()),
-        api.listItems(tenantId()),
+  // The screen's top level: the menu tree, the item master, and the country list. One read, because
+  // the table names a menu's parent and a placement's item, and a half-arrived set renders ULIDs.
+  //
+  // `listItems` and not `listItemsPage`, deliberately, and this is the one place in the console
+  // where that is a considered choice rather than an oversight.
+  //
+  // Two things read this list, and they want opposite shapes. The placement picker wants a window —
+  // but it is a `ComboboxField` now, which builds its options only when it is opened and filters
+  // them in the browser against every locale's name, so a held list costs nothing per render and
+  // answers a keystroke with no round-trip. The placements *table* wants the opposite: it renders
+  // `menu_item_id` for every row and has to turn each one into a name, and a placement can point at
+  // any item in the master, so a window would show ULIDs for whatever fell outside it.
+  //
+  // The real fix is for `list_placements` to return the item's name with the placement, which
+  // removes the coupling entirely and lets the picker be served. That is a read-model change in
+  // `pos-cloud` and it is not in this slice; until then the honest trade is one bounded fetch on
+  // screen entry over a table that cannot name its own rows.
+  const catalogue = createAdminResource(
+    async (tenant) => {
+      const [menus, items, countries] = await Promise.all([
+        api.listMenus(tenant),
+        api.listItems(tenant),
         api.listCountries(),
       ]);
-      setMenus(loadedMenus);
-      setItems(loadedItems);
-      setCountries(loadedCountries);
-      if (selectedMenu()) {
-        await loadMenuDetail(selectedMenu());
-      }
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+      return { menus, items, countries };
+    },
+    { scope: "tenant" },
+  );
+  const published = usePublishedNodes();
+  const menus = () => catalogue.value()?.menus ?? null;
+  const items = () => catalogue.value()?.items ?? [];
+  const countries = () => catalogue.value()?.countries ?? [];
 
   const loadMenuDetail = async (menuId: string) => {
     const [loadedPlacements, loadedSections] = await Promise.all([
@@ -167,6 +158,20 @@ export function CatalogMenus() {
     ]);
     setPlacements(loadedPlacements);
     setSections(loadedSections);
+  };
+
+  /**
+   * Re-read the lists and, when a menu is open, that menu's own placements and sections.
+   *
+   * What a mutation calls. The detail is a second read keyed on a *selection* rather than on the
+   * console's context, so it is not a resource of its own: nothing re-runs it when the tenant
+   * changes, because a menu id from one organisation means nothing in the next.
+   */
+  const reload = async (): Promise<void> => {
+    await catalogue.refetch();
+    if (selectedMenu()) {
+      await loadMenuDetail(selectedMenu());
+    }
   };
 
   const openMenuDetail = async (menuId: string) => {
@@ -201,7 +206,7 @@ export function CatalogMenus() {
       await api.createMenu(tenantId(), name, newMenuParent() || undefined);
       toast.ok(t("catalog.menuCreated"));
       setCreatingMenu(false);
-      await load();
+      await reload();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -225,13 +230,13 @@ export function CatalogMenus() {
         parentMenuId: fields.parentMenuId === undefined ? menu.parent_menu_id : fields.parentMenuId,
         status: fields.status ?? menu.status,
       }, menu.etag);
-      await load();
+      await reload();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await reload();
       }
       return false;
     } finally {
@@ -597,6 +602,8 @@ export function CatalogMenus() {
     try {
       const result = await api.publishMenu(tenantId(), storeId(), publishMenu());
       toast.ok(t("catalog.published", { version: result.config_version_id }));
+      // The bar reads the store's node dates, so it only stops saying "stale" once re-read.
+      await published.refresh();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -681,7 +688,10 @@ export function CatalogMenus() {
 
   return (
     <div class="flex flex-col gap-6">
-      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+      {/* A refusal is its own state, not an empty table (D5). */}
+      <Show when={failureOf(catalogue)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
 
       <Card
         title={t("catalog.menus")}
@@ -689,9 +699,6 @@ export function CatalogMenus() {
           <div class="flex flex-wrap gap-2">
             <Button disabled={busy()} onClick={openCreateMenu}>
               {t("catalog.createMenu")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
             </Button>
           </div>
         }
@@ -808,28 +815,28 @@ export function CatalogMenus() {
       <Card title={t("catalog.publish")}>
         <div class="flex flex-col gap-4">
           <p class="text-sm text-ink-muted">{t("catalog.publishHint")}</p>
-          <div class="grid gap-4 md:grid-cols-2 md:items-end">
-            <SelectField
-              label={t("catalog.publishMenu")}
-              value={publishMenu()}
-              options={(menus() ?? [])
-                .filter((menu) => menu.status === "active")
-                .map((menu) => ({ value: menu.menu_id, label: menu.name }))}
-              onChange={setPublishMenu}
-              placeholder={t("catalog.chooseMenu")}
-            />
-            <div>
-              <span class="mb-1 block text-sm font-medium text-ink">{t("catalog.publishStore")}</span>
-              <p class="min-h-touch rounded-token border border-line bg-surface-raised px-3 py-2 text-base text-ink">
-                {storeName() || t("catalog.publishStoreNone")}
-              </p>
-            </div>
-          </div>
-          <div>
-            <Button disabled={busy() || !storeId()} onClick={() => void doPublish()}>
-              {t("action.publish")}
-            </Button>
-          </div>
+          {/* The picker stays: unlike every other node, "the menu" is a choice among several, and
+              the bar has no opinion about which. It says where the shop stands; this says what to
+              send. */}
+          <SelectField
+            label={t("catalog.publishMenu")}
+            value={publishMenu()}
+            options={(menus() ?? [])
+              .filter((menu) => menu.status === "active")
+              .map((menu) => ({ value: menu.menu_id, label: menu.name }))}
+            onChange={setPublishMenu}
+            placeholder={t("catalog.chooseMenu")}
+          />
+          <PublishBar
+            label={t("catalog.publishTo", { store: storeName() })}
+            publishedAtMs={published.publishedAtMs("menu")}
+            describe={describePublish}
+            publishLabel={t("action.publish")}
+            busy={busy()}
+            disabled={!storeId()}
+            disabledReason={t("catalog.publishStoreNone")}
+            onPublish={() => void doPublish()}
+          />
         </div>
       </Card>
 

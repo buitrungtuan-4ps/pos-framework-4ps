@@ -8,9 +8,9 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type { CatalogItem, ModifierGroup } from "../../api/types";
+import type { ModifierGroup } from "../../api/types";
 import { t } from "../../i18n";
-import { onScopedContext } from "../../lib/scoped";
+import { createAdminResource, failureOf } from "../../lib/resource";
 import { tenantId } from "../../state/session";
 import {
   Banner,
@@ -25,9 +25,22 @@ import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
 
 export function CatalogModifiers() {
-  const [groups, setGroups] = createSignal<ModifierGroup[] | null>(null);
-  const [items, setItems] = createSignal<CatalogItem[]>([]);
-  const [error, setError] = createSignal("");
+  // Groups and the item master as one state, not two. A group's members are item ids, so a table
+  // drawn from groups that arrived without items shows ULIDs where product names belong — worse
+  // than no table. One read means the screen is either able to name everything or says why not.
+  const catalogue = createAdminResource(
+    async (tenant) => {
+      const [groups, items] = await Promise.all([
+        api.listModifierGroups(tenant),
+        api.listItems(tenant),
+      ]);
+      return { groups, items };
+    },
+    { scope: "tenant" },
+  );
+  const groups = () => catalogue.value()?.groups ?? null;
+  const items = () => catalogue.value()?.items ?? [];
+  // Write-in-flight only; the read's refusal is `failureOf` below.
   const [busy, setBusy] = createSignal(false);
 
   // Create drawer — a group's full shape is authored here.
@@ -41,26 +54,6 @@ export function CatalogModifiers() {
   // Edit drawer — rename only; the rule, members and attachments re-ship unchanged (monolith parity).
   const [editing, setEditing] = createSignal<ModifierGroup | null>(null);
   const [draftName, setDraftName] = createSignal("");
-
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      const [loadedGroups, loadedItems] = await Promise.all([
-        api.listModifierGroups(tenantId()),
-        api.listItems(tenantId()),
-      ]);
-      setGroups(loadedGroups);
-      setItems(loadedItems);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   const openCreate = () => {
     setNewName("");
@@ -94,7 +87,7 @@ export function CatalogModifiers() {
       });
       toast.ok(t("catalog.modifierGroupCreated"));
       setCreating(false);
-      await load();
+      await catalogue.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -121,13 +114,13 @@ export function CatalogModifiers() {
         attachedItemIds: group.attached_item_ids,
         status: fields.status ?? group.status,
       }, group.etag);
-      await load();
+      await catalogue.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await catalogue.refetch();
       }
       return false;
     } finally {
@@ -194,7 +187,10 @@ export function CatalogModifiers() {
 
   return (
     <div class="flex flex-col gap-6">
-      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+      {/* A refusal is its own state, not an empty table (D5). */}
+      <Show when={failureOf(catalogue)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
 
       <Card
         title={t("catalog.modifierGroups")}
@@ -202,9 +198,6 @@ export function CatalogModifiers() {
           <div class="flex flex-wrap gap-2">
             <Button disabled={busy()} onClick={openCreate}>
               {t("action.create")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
             </Button>
           </div>
         }

@@ -266,7 +266,26 @@ function componentFiles() {
  * `void` and the arrow are plumbing. Collecting call targets sees through any depth of wrapper.
  */
 function tapActions(path, text) {
-  const handlers = new Set(["onClick", "onSubmit", "onChange", "onInput"]);
+  // The four DOM handlers, plus the kit props that *are* taps one indirection away.
+  //
+  // Every name in the second group is wired to a real `onClick` inside `components/kit.tsx` — the
+  // confirm dialog's two buttons, the pager's arrows, the reorder arrows, a tab, the publish bar's
+  // button. A screen that hands its handler to one of those has written a tap; the gate could not
+  // see it, so adopting a kit component silently un-declared a flow step. That is backwards: the
+  // kit exists so screens stop hand-rolling these controls.
+  const handlers = new Set([
+    "onClick",
+    "onSubmit",
+    "onChange",
+    "onInput",
+    "onCancel",
+    "onConfirm",
+    "onOffset",
+    "onPage",
+    "onPublish",
+    "onReorder",
+    "onSelect",
+  ]);
   const actions = new Set();
   const collectCalls = (node) => {
     if (ts.isCallExpression(node)) {
