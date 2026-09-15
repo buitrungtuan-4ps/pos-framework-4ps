@@ -21629,6 +21629,11 @@ impl CampaignStore for FakeCampaigns {
 
 /// The console surface a batch test needs: the catalog to author a menu with, the group routes,
 /// and the batch registry over the same seams `main.rs` builds it from.
+///
+/// The generic preview (F11) is merged here rather than in a helper of its own, and for the reason
+/// it exists: it compiles through the *same* node table the batch does, so a test that publishes
+/// through the batch and then previews the same node is asking the one question worth asking — do
+/// the two agree?
 fn store_group_app(
     admin: FakeAdmin,
     groups: FakeStoreGroups,
@@ -21654,6 +21659,21 @@ fn store_group_app(
         .merge(http::store_group_router(
             groups,
             registry,
+            config_trees.clone(),
+            http::batch_nodes(
+                catalog.clone(),
+                FakeTaxRates::default(),
+                FakeCampaigns,
+                FakeInventory::default(),
+                FakeReasonCodes::default(),
+                FakePeople::default(),
+                FakeFloor::default(),
+            ),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::config_preview_router(
             config_trees,
             http::batch_nodes(
                 catalog,
@@ -21666,7 +21686,6 @@ fn store_group_app(
             ),
             admin,
             clock(),
-            Arc::new(NoopAuditRecorder),
         ))
 }
 
@@ -22167,6 +22186,201 @@ async fn a_batch_publish_needs_a_session() {
         .await
         .expect("route the batch publish");
     assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The generic publish preview (roadmap-v3 F11)
+// ---------------------------------------------------------------------------------------------
+
+/// The preview of a node nobody has published yet is the whole node, against no version.
+#[tokio::test]
+async fn a_preview_of_an_unpublished_node_is_the_whole_node_against_no_version() {
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let store_id = StoreId::new(Ulid::from_u128(11));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+    let config_trees = FakeConfigTrees::default();
+
+    let router = store_group_app(
+        provisioned_admin(),
+        FakeStoreGroups::default(),
+        registry,
+        config_trees.clone(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+
+    let previewed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/preview",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "store_id": store_id.as_ulid().to_string(),
+                "node": "menu",
+                "arguments": { "menu_id": menu_id },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let preview = json_body(previewed).await;
+
+    assert_eq!(preview["node"], "menu");
+    assert!(
+        preview["from_version_id"].is_null(),
+        "a store with no tree has no version to diff against: {preview}"
+    );
+    assert_eq!(preview["unchanged"], false);
+    assert!(
+        preview["diff"]["menu"].is_object(),
+        "the diff carries the node the publish would write: {preview}"
+    );
+
+    // The point of a dry run: it left nothing behind.
+    assert!(
+        config_trees
+            .rows
+            .lock()
+            .expect("lock")
+            .get(&(tenant_id, store_id))
+            .is_none(),
+        "previewing wrote a config tree for a store that had none"
+    );
+}
+
+/// The assertion the whole route exists for: the preview compiles what the publish writes, so
+/// previewing the same node straight after publishing it says nothing would change.
+#[tokio::test]
+async fn a_preview_taken_after_the_publish_says_nothing_would_change() {
+    let tenant_id = TenantId::new(Ulid::from_u128(2));
+    let store_id = StoreId::new(Ulid::from_u128(21));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+    let config_trees = FakeConfigTrees::default();
+    seed_menu_prerequisites(&config_trees, tenant_id, store_id);
+
+    let group_id = StoreGroupId::new(Ulid::from_u128(31));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "One shop".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[store_id],
+    );
+
+    let router = store_group_app(
+        provisioned_admin(),
+        groups,
+        registry,
+        config_trees,
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant,
+        "store_id": store_id.as_ulid().to_string(),
+        "node": "menu",
+        "arguments": { "menu_id": menu_id.clone() },
+    });
+
+    let before = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/config/preview", &body, &cookie))
+        .await
+        .expect("route the first preview");
+    assert_eq!(before.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(before).await["unchanged"],
+        false,
+        "the menu is not published yet, so the preview has something to show"
+    );
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "node": "menu",
+                "arguments": { "menu_id": menu_id },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(json_body(published).await["applied"], 1);
+
+    let after = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/config/preview", &body, &cookie))
+        .await
+        .expect("route the second preview");
+    assert_eq!(after.status(), StatusCode::OK);
+    let preview = json_body(after).await;
+    assert_eq!(
+        preview["unchanged"], true,
+        "the preview compiled a different document from the publish it previews: {preview}"
+    );
+    assert_eq!(preview["diff"], serde_json::json!({}));
+    assert!(
+        preview["from_version_id"].is_string(),
+        "the diff now has a published version to be computed against: {preview}"
+    );
+}
+
+/// A node the registry does not carry is the request's own mistake, and the refusal names the ones
+/// that are carried rather than leaving the caller to guess.
+#[tokio::test]
+async fn a_node_the_registry_does_not_carry_is_refused_by_name() {
+    let tenant_id = TenantId::new(Ulid::from_u128(3));
+    let store_id = StoreId::new(Ulid::from_u128(31));
+
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, store_id, true);
+
+    let router = store_group_app(
+        provisioned_admin(),
+        FakeStoreGroups::default(),
+        registry,
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/preview",
+            &serde_json::json!({
+                "tenant_id": tenant_id.as_ulid().to_string(),
+                "store_id": store_id.as_ulid().to_string(),
+                // Per-store by definition (ADR-0122 §4), so there is no tenant-wide document to
+                // compile and no preview to give.
+                "node": "locale",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    let message = body["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains("locale") && message.contains("menu"),
+        "the refusal names what was asked for and what is on offer: {message}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

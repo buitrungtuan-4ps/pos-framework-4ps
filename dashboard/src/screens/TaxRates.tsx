@@ -30,7 +30,7 @@ import { Banner, Button, Card, CellField, PageHeader } from "../components/ui";
 import { EmptyState, PublishBar } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
-import { addToRelease, describePublish } from "../lib/publish-copy";
+import { addToRelease, describePublish, previewNode } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 
 /** The already-defined per-channel labels (shared with the Catalog price editor). */
@@ -370,6 +370,7 @@ export function TaxRates() {
                 label={t("taxRates.publishTo", { store: storeName() })}
                 publishedAtMs={published.publishedAtMs("tax")}
                 addToRelease={addToRelease("tax", tenantId())}
+                preview={previewNode("tax", tenantId(), storeId())}
                 editedAtMs={savedAtMs()}
                 describe={describePublish}
                 publishLabel={t("taxRates.publish")}

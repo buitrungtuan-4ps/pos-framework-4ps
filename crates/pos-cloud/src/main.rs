@@ -573,6 +573,25 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // The generic publish preview (roadmap-v3 F11): what publishing one node to one store would
+        // change, computed and thrown away. It compiles through the same node table the batch and
+        // the release use, so a preview cannot compile its node differently from the publish it is
+        // previewing — which is the only way a dry run is worth anything. No audit recorder,
+        // because it writes nothing.
+        .merge(http::config_preview_router(
+            store.config_trees(),
+            http::batch_nodes(
+                store.catalog(),
+                store.tax_rates(),
+                store.campaigns(),
+                store.inventory(),
+                store.reason_codes(),
+                store.people(),
+                store.floor(),
+            ),
+            store.admin(),
+            SystemClock,
+        ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
         // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
         // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.

@@ -754,6 +754,20 @@ export interface CampaignPreview {
 }
 
 /**
+ * What `POST /admin/config/preview` answers with (roadmap-v3 **F11**): the same dry run the
+ * campaigns preview always gave, for any node the cloud's node registry can compile.
+ *
+ * The same shape as {@link CampaignPreview} plus the node it was asked about, so a screen with
+ * several publish bars — Channels has four — can tell one answer from another.
+ */
+export interface NodePreview {
+  readonly node: string;
+  readonly from_version_id: string | null;
+  readonly diff: Json;
+  readonly unchanged: boolean;
+}
+
+/**
  * One compiled country module from `GET /admin/countries` (ADR-0074, Track M4) — read-only master
  * data: the code, human name, currency, preferred language, number format, and default retention
  * period. Feeds the currency picker and locale surfaces. `GET /admin/locales` returns the content

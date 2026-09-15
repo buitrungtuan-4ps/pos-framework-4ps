@@ -23,7 +23,7 @@ import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
-import { addToRelease, describePublish } from "../lib/publish-copy";
+import { addToRelease, describePublish, previewNode } from "../lib/publish-copy";
 import { lastEditedMs, usePublishedNodes } from "../lib/published";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
@@ -324,6 +324,7 @@ export function ReasonCodes() {
               label={t("reasonCodes.publishTo", { store: storeName() })}
               publishedAtMs={published.publishedAtMs("reason_codes")}
               addToRelease={addToRelease("reason_codes", tenantId())}
+              preview={previewNode("reason_codes", tenantId(), storeId())}
               editedAtMs={lastEdited()}
               describe={describePublish}
               publishLabel={t("reasonCodes.publish")}

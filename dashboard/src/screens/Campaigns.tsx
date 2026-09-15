@@ -17,7 +17,6 @@ import {
   type CampaignConditions,
   type CampaignInput,
   type CampaignKind,
-  type CampaignPreview,
   type ETag,
   type SalesChannel,
   type ScheduledPublish,
@@ -177,8 +176,7 @@ export function Campaigns() {
   const [voucherTotal, setVoucherTotal] = createSignal(0);
   const [mintedVouchers, setMintedVouchers] = createSignal<Voucher[]>([]);
 
-  // Publish / preview / schedule.
-  const [preview, setPreview] = createSignal<CampaignPreview | null>(null);
+  // Publish / schedule.
   const [scheduleAt, setScheduleAt] = createSignal("");
   const [pendingCancel, setPendingCancel] = createSignal<ScheduledPublish | null>(null);
 
@@ -433,14 +431,18 @@ export function Campaigns() {
     }
   };
 
+  // The bar's dry run (F11). Through the generic node preview rather than the campaigns-only route
+  // that shipped with ADR-0077: the generic one compiles through the same node table the publish
+  // does, so it cannot answer for a different document than the button beside it writes.
   const runPreview = async () => {
-    setBusy(true);
+    if (!storeId()) {
+      return null;
+    }
     try {
-      setPreview(await api.previewCampaigns(tenantId(), storeId()));
+      return await api.previewNode(tenantId(), storeId(), "campaigns");
     } catch (caught) {
       await fail(caught);
-    } finally {
-      setBusy(false);
+      return null;
     }
   };
 
@@ -448,7 +450,6 @@ export function Campaigns() {
     setBusy(true);
     try {
       const result = await api.publishCampaigns(tenantId(), storeId());
-      setPreview(null);
       toast.ok(t("campaigns.published", { store: storeName(), version: result.config_version_id }));
       await published.refresh();
     } catch (caught) {
@@ -617,11 +618,7 @@ export function Campaigns() {
                   describe={describePublish}
                   publishLabel={t("campaigns.publish")}
                   busy={busy()}
-                  preview={
-                    <Button variant="secondary" disabled={busy()} onClick={() => void runPreview()}>
-                      {t("campaigns.preview")}
-                    </Button>
-                  }
+                  preview={runPreview}
                   onPublish={() => void publish()}
                 />
 
@@ -890,41 +887,6 @@ export function Campaigns() {
                 <p class="text-sm text-ink-muted">
                   {t("campaigns.voucherTotal", { count: String(voucherTotal()) })}
                 </p>
-              </div>
-            )}
-          </Show>
-        </Modal>
-
-        {/* Preview modal */}
-        <Modal
-          open={preview() !== null}
-          title={t("campaigns.previewTitle")}
-          closeLabel={t("action.close")}
-          onClose={() => setPreview(null)}
-          footer={
-            <Button disabled={busy()} onClick={() => void publish()}>
-              {t("campaigns.publish")}
-            </Button>
-          }
-        >
-          <Show when={preview()}>
-            {(result) => (
-              <div class="flex flex-col gap-3">
-                <p class="text-sm text-ink-muted">
-                  {result().from_version_id
-                    ? t("campaigns.previewFrom", { version: result().from_version_id ?? "" })
-                    : t("campaigns.previewFirst")}
-                </p>
-                <Show
-                  when={!result().unchanged}
-                  fallback={<Banner tone="ok" message={t("campaigns.previewUnchanged")} />}
-                >
-                  <div class="overflow-x-auto rounded-token border border-line bg-surface-raised p-3">
-                    <pre class="whitespace-pre text-sm text-ink">
-                      {JSON.stringify(result().diff, null, 2)}
-                    </pre>
-                  </div>
-                </Show>
               </div>
             )}
           </Show>

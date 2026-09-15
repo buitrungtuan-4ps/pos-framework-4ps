@@ -16,6 +16,7 @@ import {
   Show,
 } from "solid-js";
 
+import type { NodePreview } from "../api/types";
 import { t } from "../i18n";
 import type { EntityCrud } from "../lib/entity-crud";
 import { useEscape } from "../lib/escape";
@@ -1087,6 +1088,90 @@ export function publishState(
  * `describe` turns a state into the screen's own words, so every message key stays in the screen and
  * every rule stays here.
  */
+/**
+ * **Preview**, beside Publish: what this publish would change, before it changes it (F11).
+ *
+ * The console had exactly one of these — campaigns — and every other publish button committed
+ * blind. This is the generic one, and it is not exported: a bar is where a publish happens, so
+ * {@link PublishBar} mounts it from its own `preview` prop and a screen adds a dry run by handing
+ * over one function. The dialog's own **Publish** is the bar's, because an operator who has just
+ * read the diff saying yes to it should not have to find the button again.
+ *
+ * `load` is the screen's own call, because only the screen knows the node's arguments. It returns
+ * `null` when there is nothing to preview yet — no store chosen, no menu picked — and the dialog
+ * stays shut. A failure is the screen's to report through `toast`, in its own words, for the same
+ * reason its publish failures are: the kit carries no messages of its own beyond these generic ones.
+ *
+ * The diff is rendered as the merge patch the cloud computed, not prose. An operator reading
+ * "menu.items.0.price: 45000" is reading the document the shop will receive, which is the thing
+ * worth checking; a summary would be this component's opinion of it.
+ */
+function PublishPreview(props: {
+  load: () => Promise<NodePreview | null>;
+  /** Blocked for the same reasons Publish is — no store, no permission, a write in flight. */
+  disabled?: boolean;
+  /** Publish, from inside the dialog: the operator has just read the diff and is saying yes to it. */
+  publishLabel: string;
+  onPublish: () => void;
+}) {
+  const [preview, setPreview] = createSignal<NodePreview | null>(null);
+  const [loading, setLoading] = createSignal(false);
+  const run = async () => {
+    setLoading(true);
+    try {
+      setPreview(await props.load());
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <>
+      <Button variant="secondary" disabled={props.disabled || loading()} onClick={() => void run()}>
+        {loading() ? t("publish.previewLoading") : t("publish.preview")}
+      </Button>
+      <Modal
+        open={preview() !== null}
+        title={t("publish.previewTitle")}
+        closeLabel={t("action.close")}
+        onClose={() => setPreview(null)}
+        footer={
+          <Button
+            disabled={props.disabled}
+            onClick={() => {
+              setPreview(null);
+              props.onPublish();
+            }}
+          >
+            {props.publishLabel}
+          </Button>
+        }
+      >
+        <Show when={preview()}>
+          {(result) => (
+            <div class="flex flex-col gap-3">
+              <p class="text-sm text-ink-muted">
+                {result().from_version_id
+                  ? t("publish.previewFrom", { version: result().from_version_id ?? "" })
+                  : t("publish.previewFirst")}
+              </p>
+              <Show
+                when={!result().unchanged}
+                fallback={<Banner tone="ok" message={t("publish.previewUnchanged")} />}
+              >
+                <div class="overflow-x-auto rounded-token border border-line bg-surface-raised p-3">
+                  <pre class="whitespace-pre text-sm text-ink">
+                    {JSON.stringify(result().diff, null, 2)}
+                  </pre>
+                </div>
+              </Show>
+            </div>
+          )}
+        </Show>
+      </Modal>
+    </>
+  );
+}
+
 export function PublishBar(props: {
   /** What is being published, in the operator's words — "Tax rates", "The menu". */
   label: string;
@@ -1102,8 +1187,14 @@ export function PublishBar(props: {
   disabled?: boolean;
   /** Why it is disabled, said out loud rather than left to a greyed button. */
   disabledReason?: string;
-  /** A diff or a summary the screen can show before the write (Campaigns and Config have one). */
-  preview?: JSX.Element;
+  /**
+   * The dry run this bar offers before the write (roadmap-v3 **F11**).
+   *
+   * The screen's own call, because only it knows the node's arguments; it returns `null` when there
+   * is nothing to preview yet, and reports its own failures through `toast`. Set it and the bar
+   * grows a **Preview changes** button beside Publish; leave it unset and the bar is what it was.
+   */
+  preview?: () => Promise<NodePreview | null>;
   /**
    * A way to put this node into a release instead of publishing it now
    * ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md), L1).
@@ -1142,6 +1233,16 @@ export function PublishBar(props: {
               </a>
             )}
           </Show>
+          <Show when={props.preview}>
+            {(load) => (
+              <PublishPreview
+                load={load()}
+                disabled={props.busy || props.disabled}
+                publishLabel={props.publishLabel}
+                onPublish={() => props.onPublish()}
+              />
+            )}
+          </Show>
           <Button disabled={props.busy || props.disabled} onClick={() => props.onPublish()}>
             {props.publishLabel}
           </Button>
@@ -1150,7 +1251,6 @@ export function PublishBar(props: {
       <Show when={props.disabled && props.disabledReason}>
         {(reason) => <p class="text-sm text-ink-muted">{reason()}</p>}
       </Show>
-      <Show when={props.preview}>{(preview) => <div>{preview()}</div>}</Show>
     </div>
   );
 }

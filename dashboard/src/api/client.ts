@@ -62,6 +62,7 @@ import type {
   Menu,
   MenuPlacement,
   MenuSection,
+  NodePreview,
   ModifierGroup,
   PermissionInfo,
   RecoveryCodesResponse,
@@ -1256,6 +1257,10 @@ export const api = {
     ),
   // Preview the merge patch a campaigns publish would apply (no version minted, nothing saved), then
   // publish, or schedule the snapshot to publish at a future instant (the Tết-menu case).
+  //
+  // `previewCampaigns` is the node-specific route that shipped with ADR-0077; `previewNode` below is
+  // the generic one every publish bar uses now (F11). The old route stays served — a fork may be
+  // calling it — but no console screen does.
   previewCampaigns: (tenantId: string, storeId: string) =>
     requestJson<CampaignPreview>("POST", "/admin/config/campaigns/preview", {
       tenant_id: tenantId,
@@ -1271,6 +1276,26 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
       effective_at_ms: effectiveAtMs,
+    }),
+  /**
+   * What publishing `node` to this store would change, computed and thrown away (F11).
+   *
+   * `args` is that node's own publish body minus the `(tenant, store)` — `{ menu_id }` for `menu`,
+   * the authored document for the form-driven nodes, nothing at all for the ones compiled from
+   * tenant-wide authoring. The cloud compiles it through the same node table the batch publish and
+   * the release use, so what comes back is the document the Publish button would write.
+   *
+   * `unknown` rather than `Json`, like every other body on this client: what a screen hands over is
+   * the same typed value its publish call sends (`QrGuardrails`, a `VendorPolicy[]`), and those are
+   * interfaces without an index signature. Narrowing the seam would make every caller cast, which
+   * is a cast that proves nothing.
+   */
+  previewNode: (tenantId: string, storeId: string, node: string, args?: unknown) =>
+    requestJson<NodePreview>("POST", "/admin/config/preview", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      node,
+      arguments: args ?? {},
     }),
   listScheduled: (tenantId: string, storeId: string) =>
     requestJson<ScheduledPublish[]>(

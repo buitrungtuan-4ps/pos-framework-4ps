@@ -24,7 +24,7 @@ import {
   type VendorPolicy,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
-import { describePublish } from "../lib/publish-copy";
+import { describePublish, previewNode } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -362,6 +362,7 @@ export function Channels() {
                   describe={describePublish}
                   publishLabel={t("channels.publishChannels")}
                   busy={busy()}
+                  preview={previewNode("channels", tenantId(), storeId(), { enabled: channels() })}
                   onPublish={() => void publishChannels()}
                 />
               </div>
@@ -390,6 +391,7 @@ export function Channels() {
                   describe={describePublish}
                   publishLabel={t("channels.publishTender")}
                   busy={busy()}
+                  preview={previewNode("tender", tenantId(), storeId(), { accepted: tender() })}
                   onPublish={() => void publishTender()}
                 />
               </div>
@@ -458,6 +460,7 @@ export function Channels() {
                   describe={describePublish}
                   publishLabel={t("channels.publishQr")}
                   busy={busy()}
+                  preview={previewNode("qr", tenantId(), storeId(), buildQr() ?? {})}
                   onPublish={() => void publishQr()}
                 />
               </div>
@@ -531,6 +534,12 @@ export function Channels() {
                   describe={describePublish}
                   publishLabel={t("channels.publishVendors")}
                   busy={busy()}
+                  preview={previewNode("vendor_policies", tenantId(), storeId(), {
+                    policies: vendors().map((policy) => ({
+                      ...policy,
+                      prep_minutes: Number(policy.prep_minutes),
+                    })),
+                  })}
                   onPublish={() => void publishVendors()}
                 />
               </div>

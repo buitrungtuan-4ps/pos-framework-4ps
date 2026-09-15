@@ -56,6 +56,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
   ensuring focused items remain visible within scrollable lists during arrow key traversal.
 
+### Added
+
+- **Every publish bar can show what the publish would change, before it changes it**
+  (Wave 4 PR-8, finding F11). `POST /admin/config/preview` compiles a node for one store and returns
+  the merge patch a publish of it would apply — minting no version, saving nothing, auditing nothing
+  because it changes nothing. Campaigns had this since ADR-0077 and no other node did, so fifteen
+  publish buttons committed blind.
+  - It compiles through the **same node table** the cohort publish (ADR-0122) and the release
+    (ADR-0125) use, which is the only reason a dry run is worth reading: a preview cannot compile
+    its node differently from the publish it previews, because it is not a second copy of it.
+  - In the console, **Preview changes** sits beside Publish on tax rates, reason codes, inventory,
+    the floor plan, campaigns, the menu, capabilities, channels, tender, QR guardrails and vendor
+    policies, and the dialog carries its own Publish so reading the diff and saying yes is one
+    gesture. `locale` and `store_profile` have no preview and no button: they are per-store by
+    definition, so there is no tenant-wide document to compile.
+  - `POST /admin/config/campaigns/preview` is untouched and still served for anything calling it;
+    the console now uses the generic route.
+
 ### Changed
 
 - **The console's step budget stopped reporting and started refusing** (Wave 4 PR-8, decision D7).
