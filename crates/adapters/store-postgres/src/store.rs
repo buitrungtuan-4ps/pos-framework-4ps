@@ -227,6 +227,12 @@ const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql")
 const MIGRATION_0062: &str = include_str!("../migrations/0062_store_archives.sql");
 const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expiry.sql");
 
+/// Releases: one decision, many writes
+/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)). The table holds the
+/// identity and the roll-up; the writes themselves stay `scheduled_publishes` rows, which gain a
+/// nullable `release_id` so ADR-0077's per-store schedule keeps working unchanged.
+const MIGRATION_0064: &str = include_str!("../migrations/0064_releases.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -537,6 +543,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0063)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0064)
             .await
             .map_err(unavailable)
     }

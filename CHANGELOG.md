@@ -124,6 +124,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **A release is one decision and many writes: the record, the schema and the clock (Wave 4 · PR-7a, F8/F9/F10/F17/D8).**
+  [ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md), migration `0064_releases.sql`,
+  and `pos-cloud`'s `releases` module. No routes and no console yet — this is the decision and the
+  foundation it stands on.
+
+  A Tết menu is not one node: it is a menu, the tax rates it prices against, the campaigns that
+  discount it, the reason codes the staff void it with, and the layout that shows it, at forty
+  stores. That was eighty separate publishes with no name above them, no report across them, and no
+  way to cancel the set.
+
+  A release does not become a second publish path. Creating one expands to one scheduled-publish row
+  per (node, store) pair — ADR-0077's table and its activator, which the module header already said
+  were node-agnostic — and the release holds the identity, the state and the report.
+
+  The half that needed new code is the clock. "Monday 04:00 at each store" is not a time; it is one
+  instant per timezone, and a fleet spanning Ho Chi Minh City and Tokyo has a two-hour spread that
+  nothing converted. The cloud now resolves it per store from the store's published `locale`
+  timezone, at schedule time so the operator can be shown the instants they are committing to. A
+  store that has published no locale is **refused by name** rather than defaulted to UTC, because
+  "04:00 at this store" has no meaning where nobody recorded where the shop is — and assuming UTC
+  would put a Vietnamese publish in the middle of dinner service. A release given a plain instant
+  needs no locale and is always available.
+
+  Five states, and `partial` is the one the record exists for: N × M writes fail individually, and
+  at forty stores an operator needs the two shops that did not take it, not a red cross over the
+  fleet. A release with no pairs reads as `draft`, not as a success.
+
 - **The last three authoring screens re-read what they change, and say where the shop stands (Wave 4 · PR-6c-4, D5/F13).**
   Config, Store settings and Campaigns onto `createAdminResource`, and Config's Refresh button goes
   with it. All three are form-priming screens rather than tables, so the read and the draft stay
