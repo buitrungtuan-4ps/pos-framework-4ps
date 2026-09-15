@@ -744,6 +744,7 @@
   "floor.publish": "Publish the floor",
   "floor.publishAction": "Publish to store",
   "floor.publishHint": "Publishing compiles this store's areas and tables — and its kitchen stations and routing — into the floor plan the store applies. Publish after changing the layout.",
+  "floor.publishTo": "Publishes to {store}.",
   "floor.published": "Published to the store.",
   "floor.qr": "Table QR sheet",
   "floor.qrEmpty": "No active tables to print.",

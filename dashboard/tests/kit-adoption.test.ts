@@ -66,6 +66,28 @@ describe("every component the kit exports", () => {
   });
 });
 
+describe("a screen that publishes a config node", () => {
+  // F13: thirteen publish controls, no two alike, and not one saying whether the thing in front of
+  // the operator was already on the shop floor. The list grows as each screen adopts `PublishBar`;
+  // stating it as a list rather than "every screen that calls `api.publish*`" is deliberate, for
+  // the same reason as the Refresh list below — a gate that fails on the screens still waiting
+  // would have to be disabled.
+  const ADOPTED = [
+    "screens/TaxRates.tsx",
+    "screens/ReasonCodes.tsx",
+    "screens/Stations.tsx",
+    "screens/Floor.tsx",
+  ];
+
+  it("renders the shared publish bar, so it says where the shop stands", () => {
+    const missing = ADOPTED.filter((name) => {
+      const entry = Object.entries(sources).find(([path]) => path.endsWith(name));
+      return entry === undefined || !entry[1].includes("<PublishBar");
+    });
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("a screen whose Refresh button has gone", () => {
   // Two groups, and the difference matters when reading this list. The first six dropped the button
   // in PR-3 by hand-writing a `load()` and calling it after each mutation: the *behaviour* D5 asks
@@ -87,6 +109,9 @@ describe("a screen whose Refresh button has gone", () => {
     "screens/MySessions.tsx",
     "screens/Admins.tsx",
     "screens/Activation.tsx",
+    "screens/ReasonCodes.tsx",
+    "screens/Stations.tsx",
+    "screens/Floor.tsx",
   ];
 
   it("has no Refresh button, because it re-reads what it changes", () => {

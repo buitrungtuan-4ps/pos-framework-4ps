@@ -124,6 +124,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **The store's operational nodes say whether the shop already has them (Wave 4 · PR-6b, F13/D5).**
+  Reason codes, Stations and Floor take the two edits that touch the same lines in one pass: the
+  read onto `createAdminResource`, and the publish control onto the shared `PublishBar`. As on Tax
+  rates, "edited at" is within-session — none of these records carries an `updated_at`, and
+  inventing one would be a claim the screen cannot see.
+
+  Stations and Floor had one `error` signal doing two jobs: the read's refusal and the form's own
+  ("a station needs a name", "seats must be a number"). Those are different failures with different
+  fixes — one is the operator's to correct, the other is not theirs at all — so the read's refusal
+  moved to `failureOf` and the signal kept the validation it was always also holding. Both screens'
+  several reads became one state each, for the reason the others did: a rules table with raw ULIDs
+  where station and item names belong is worse than no table.
+
 - **Five screens onto the read that knows its own context (Wave 4 · PR-6, D5).** Media, Reconcile,
   My sessions, Admins and Activation. Reconcile stops hand-rolling a thirty-second poll with its own
   `setInterval` and in-flight guard — it asks for an interval and for focus revalidation, which is

@@ -744,6 +744,7 @@
   "floor.publish": "Xuất bản sơ đồ",
   "floor.publishAction": "Xuất bản cho cửa hàng",
   "floor.publishHint": "Việc xuất bản biên dịch các khu vực và bàn — cùng các trạm bếp và định tuyến — thành sơ đồ mà cửa hàng áp dụng. Hãy xuất bản sau khi thay đổi bố cục.",
+  "floor.publishTo": "Phát hành đến {store}.",
   "floor.published": "Đã xuất bản cho cửa hàng.",
   "floor.qr": "Bảng QR bàn",
   "floor.qrEmpty": "Không có bàn hoạt động nào để in.",

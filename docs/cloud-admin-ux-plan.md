@@ -1584,16 +1584,18 @@ pair. The six PR-3 counted as migrated had dropped their Refresh button by hand-
   `failureOf` lands with them (a screen cannot narrow `state()` inline, so without it every caller
   repeats the same re-check to reach the message), and the orphan gate widens from
   `components/kit.tsx` to `lib/` — the gap the helper itself walked through.
-- **PR-6b — the screens an operator authors on.** The catalog set, Inventory, Campaigns, Layout,
-  Stations, Store groups, Reason codes, Tax rates, Config, Fleet, Ota, Reports, Audit. These adopt
-  `PublishBar` in the same pass (PR-5b left twelve waiting), because both edits touch the same
-  lines, and they carry the table work PR-3 deferred: `Toolbar`, the rest of the `RowActions`
-  sweep, `DataTable` compact density and card mode (V9, V18), `TechnicalDetails` into the kebab
-  (V14).
+- **PR-6b — the store's operational nodes.** Reason codes, Stations, Floor. Read and publish
+  control together, because both edits touch the same lines.
+- **PR-6c — the rest of the authoring screens.** The catalog set, Inventory, Campaigns, Layout,
+  Store groups, Channels, Config, Store settings, People, Fleet, Audit. Same two edits each, plus
+  the table work PR-3 deferred: `Toolbar`, the rest of the `RowActions` sweep, `DataTable` compact
+  density and card mode (V9, V18), `TechnicalDetails` into the kebab (V14).
 
-Two screens need a judgement rather than a migration, and they are called out so they are not done
-by reflex: **Reports**' Refresh is really "run this date range" and wants a name, not a deletion;
-**Ota** primes three forms from three reads, so its reads have side effects a plain swap would drop.
+Three screens need a judgement rather than a migration, and they are called out so they are not
+done by reflex: **Reports**' Refresh is really "run this date range" and wants a name, not a
+deletion; **Ota** primes three forms from three reads, so its reads have side effects a plain swap
+would drop; **People**'s roster is paged, debounced and sequence-numbered by hand, so the swap has
+to preserve an ordering guard the helper provides differently.
 
 1. Every screen onto `createAdminResource`; the last Refresh buttons go with them.
 2. Gates: no `t("action.refresh")` on a migrated screen; no `createSignal` for load / error state in
