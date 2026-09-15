@@ -32,10 +32,21 @@ pub struct ReasonCodeRow {
     /// `xmin` as text — the row's version (ADR-0094), carried on the read so a caller can hand it
     /// back to [`update_at`](PostgresReasonCodes::update_at). Opaque above this adapter.
     pub version: String,
+    /// When the row was last written, in Unix milliseconds.
+    ///
+    /// The column has been on the table since migration 0060 and no read ever returned it, so the
+    /// console could not tell an operator whether what is on their screen is newer than what the
+    /// shop is running — the question the publish bar asks (Wave 4 · PR-5b, F13).
+    pub updated_at_ms: i64,
 }
 
 /// The columns every read returns, in a stable order matching [`reason_code_row`].
-const REASON_CODE_COLUMNS: &str = "entity_id, doc::text, xmin::text";
+///
+/// `updated_at` crosses as epoch milliseconds rather than a `timestamptz`, matching the convention
+/// the media reads already use: one integer the console can hand to `Intl.DateTimeFormat`, with no
+/// timezone to lose on the way.
+const REASON_CODE_COLUMNS: &str =
+    "entity_id, doc::text, xmin::text, (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint";
 
 /// The reason-code store over a shared pool. Built by
 /// [`PostgresStore::reason_codes`](crate::PostgresStore::reason_codes).
@@ -208,5 +219,6 @@ fn reason_code_row(row: &tokio_postgres::Row) -> ReasonCodeRow {
         entity_id: row.get(0),
         doc_json: row.get(1),
         version: row.get(2),
+        updated_at_ms: row.get(3),
     }
 }

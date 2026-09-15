@@ -22,6 +22,34 @@ import { storeId, tenantId } from "../state/session";
 const EMPTY: ConfigNodes = { current_version_id: null, nodes: [] };
 
 /**
+ * The newest `updated_at_ms` across a collection, or `null` when none of it carries one.
+ *
+ * What a publish bar compares its publish date against. A collection is what a config node is
+ * compiled from — every reason code, every station — so "when was this last edited" is the newest
+ * edit in the set, not any one row's.
+ *
+ * `null` rather than `0` for an empty or date-less collection, because those two mean different
+ * things and the bar treats them differently: `null` is "cannot tell", which suppresses the
+ * staleness claim entirely, while `0` would be an instant in 1970 and therefore always older than
+ * the publish — a confident "published" that happens to be right for the wrong reason.
+ */
+export function lastEditedMs(
+  rows: readonly { readonly updated_at_ms?: number }[] | null | undefined,
+): number | null {
+  if (!rows) {
+    return null;
+  }
+  let newest: number | null = null;
+  for (const row of rows) {
+    const at = row.updated_at_ms;
+    if (at !== undefined && (newest === null || at > newest)) {
+      newest = at;
+    }
+  }
+  return newest;
+}
+
+/**
  * Which nodes the cloud has published that the store is not yet running (finding **F4**).
  *
  * A store holds **one** config version, so "is this store up to date" has always been answerable —

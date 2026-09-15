@@ -20684,7 +20684,7 @@ impl ReasonCodeStore for FakeReasonCodes {
         }
         rows.push((
             tenant_id,
-            Versioned::new(reason_code.clone(), version.clone()),
+            Versioned::edited(reason_code.clone(), version.clone(), NOW_MS),
         ));
         Ok(CreateOutcome::Created(version))
     }
@@ -20708,6 +20708,9 @@ impl ReasonCodeStore for FakeReasonCodes {
         }
         row.record = reason_code.clone();
         row.etag = version.clone();
+        // The real adapter's `updated_at` moves on every write; a fake that stamped only on create
+        // would let a read-path bug that pins the create instant pass.
+        row.updated_at_ms = Some(NOW_MS);
         Ok(UpdateOutcome::Updated(version))
     }
 
@@ -21090,6 +21093,53 @@ async fn a_viewer_reads_the_reason_codes_and_cannot_author_them() {
         StatusCode::FORBIDDEN,
         "authoring is behind console.reason_codes.manage — Owner and Admin only, because \
          removing a reason or adding a vague catch-all is how the fraud control gets defeated"
+    );
+}
+
+/// The list carries when each entry was last written, so the console can tell the operator whether
+/// what is on their screen is newer than what the shop is running.
+///
+/// Every one of these tables has had an `updated_at` since it was created and not one read returned
+/// it, so the publish bar had to approximate from a within-session signal that forgot on reload — an
+/// operator who edited yesterday and came back today was told the store was up to date (Wave 4).
+///
+/// Asserted on the wire rather than on the seam because the field's whole job is to leave the
+/// process: a `Versioned` that holds the instant and a response that drops it would pass every
+/// test above this one.
+#[tokio::test]
+async fn the_reason_code_list_says_when_each_entry_was_last_written() {
+    let router = reason_code_app(
+        provisioned_admin(),
+        FakeReasonCodes::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/reason-codes",
+            &reason_code_body(&tenant, "WASTE", &["REASON_ACTION_VOID_LINE"], true),
+            &cookie,
+        ))
+        .await
+        .expect("route the create");
+    assert_eq!(created.status(), StatusCode::CREATED);
+
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/reason-codes?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let rows = json_body(listed).await;
+    let first = &rows.as_array().expect("an array")[0];
+    assert!(
+        first["updated_at_ms"].as_i64().is_some_and(|at| at > 0),
+        "the row carries the instant it was written, in Unix milliseconds: {first}"
     );
 }
 

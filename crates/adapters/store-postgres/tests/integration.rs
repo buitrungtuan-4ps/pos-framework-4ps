@@ -143,7 +143,7 @@ impl EventStoreHarness for StoreHarness {
                  catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
                  employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
                  inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-                 role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+                 reason_codes, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
              store_liveness, stores, \
                  subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
@@ -194,7 +194,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
              employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
              inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-             role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+             reason_codes, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
              store_liveness, stores, \
              subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
@@ -7868,6 +7868,89 @@ mod edge_placement {
             assert!(
                 refused.is_err(),
                 "the CHECK constraint must reject a token outside the three modes"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reason codes (ADR-0115), for the one column only this file can check.
+// ---------------------------------------------------------------------------
+
+/// `updated_at` crossing the seam as epoch milliseconds, against the real column.
+///
+/// The cloud's own tests run over an in-memory fake, which can only prove the routes carry whatever
+/// the seam hands them. Whether `(EXTRACT(EPOCH FROM updated_at) * 1000)::bigint` yields a sane
+/// millisecond count, and whether an edit moves it, is a question about PostgreSQL — a cast that
+/// silently produced seconds would pass every test upstream and date every row in the console to
+/// 1970.
+mod reason_code_timestamps {
+    use super::{TENANT_A, block_on, prepared};
+
+    use store_postgres::RowUpdate;
+
+    /// The reason code this test authors. A ULID, because that is what the id column holds.
+    const ID: &str = "01J0000000000000000000000A";
+
+    /// An authored record, shaped like the wire one but assembled here so the test crate needs no
+    /// dependency on the cloud's types — the adapter treats `doc` as opaque JSON either way.
+    fn doc(code: &str) -> String {
+        serde_json::json!({
+            "id": ID,
+            "code": code,
+            "display_name": "Waste or spoilage",
+            "applies_to": ["REASON_ACTION_VOID_LINE"],
+            "active": true,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn a_read_carries_the_write_instant_in_milliseconds_and_an_edit_moves_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let reason_codes = store.reason_codes();
+
+            let version = reason_codes
+                .insert(TENANT_A, ID, &doc("WASTE"))
+                .await
+                .expect("insert")
+                .expect("the id was free");
+
+            let listed = reason_codes.fetch(TENANT_A).await.expect("list");
+            let written = listed.first().expect("the row just inserted").updated_at_ms;
+
+            // Milliseconds, not seconds: the two differ by a factor of a thousand, and the only
+            // check that separates them is one against a real clock. 2020-01-01 is comfortably
+            // below any run of this suite and far above what a seconds-valued cast would produce
+            // for any date this decade.
+            const Y2020_MS: i64 = 1_577_836_800_000;
+            assert!(
+                written > Y2020_MS,
+                "the projection is milliseconds since the epoch, not seconds: {written}"
+            );
+
+            // An edit moves it. `updated_at = now()` lives in the UPDATE statement and nowhere
+            // else — drop it and every row reads as the day it was created, which is exactly the
+            // staleness question the console asks this column to answer.
+            let updated = reason_codes
+                .update_at(TENANT_A, ID, &doc("WASTE_2"), &version)
+                .await
+                .expect("update");
+            assert!(
+                matches!(updated, RowUpdate::Updated(_)),
+                "the version handed back by the insert still stands"
+            );
+
+            let edited = reason_codes
+                .fetch_one(TENANT_A, ID)
+                .await
+                .expect("read")
+                .expect("still there")
+                .updated_at_ms;
+            assert!(
+                edited >= written,
+                "the edit restamped the row: {written} then {edited}"
             );
         });
     }

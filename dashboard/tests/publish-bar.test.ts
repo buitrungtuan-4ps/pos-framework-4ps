@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { publishState } from "../src/components/kit";
-import { staleNodes } from "../src/lib/published";
+import { lastEditedMs, staleNodes } from "../src/lib/published";
 import type { ConfigNode } from "../src/api/types";
 
 const node = (name: string, versionId: string | null, atMs: number | null): ConfigNode => ({
@@ -67,5 +67,34 @@ describe("which nodes a store has not picked up", () => {
     // The pre-field case from PR-5a. The node is published — it is in the effective document — and
     // this read cannot tell when, so a red line on it would be an invention.
     expect(staleNodes([node("permissions", null, null)], "01J0000000000000000000000A")).toEqual([]);
+  });
+});
+
+// `lastEditedMs` — the newest edit across the collection a node is compiled from (Wave 4).
+//
+// The publish bar needs one instant to compare against the publish date, and a config node is
+// compiled from a whole collection, so the question is "when was any of this last touched". The
+// cases worth pinning are the two that would each produce a *convincing* wrong answer rather than
+// an obviously broken one.
+describe("the newest edit across a collection", () => {
+  it("takes the maximum, not the first or the last row", () => {
+    expect(
+      lastEditedMs([{ updated_at_ms: 300 }, { updated_at_ms: 900 }, { updated_at_ms: 100 }]),
+    ).toBe(900);
+  });
+
+  it("cannot tell on an empty collection, and says so rather than answering 0", () => {
+    // `0` is an instant in 1970, which is older than any publish — so it would read as a confident
+    // "published, nothing has changed since". `null` suppresses the claim instead.
+    expect(lastEditedMs([])).toBeNull();
+    expect(lastEditedMs(null)).toBeNull();
+    expect(lastEditedMs(undefined)).toBeNull();
+  });
+
+  it("ignores rows a cloud did not date, but still answers from the ones it did", () => {
+    // A mixed read is what a rolling deploy looks like. The newest dated row is the best available
+    // answer; dropping the whole collection because one row lacks a date would be worse.
+    expect(lastEditedMs([{}, { updated_at_ms: 500 }, {}])).toBe(500);
+    expect(lastEditedMs([{}, {}])).toBeNull();
   });
 });

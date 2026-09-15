@@ -2477,13 +2477,14 @@ fn decode_reason_code(
     })
 }
 
-/// Pairs a stored reason-code row with the version the read saw.
+/// Pairs a stored reason-code row with the version the read saw and the instant it was written.
 fn versioned_reason_code(
     row: &ReasonCodeRow,
 ) -> Result<Versioned<pos_proto::reason_codes::PublishedReasonCode>, ReasonCodeStoreError> {
-    Ok(Versioned::new(
+    Ok(Versioned::edited(
         decode_reason_code(&row.doc_json)?,
         Version::new(row.version.clone()),
+        row.updated_at_ms,
     ))
 }
 
@@ -3253,8 +3254,8 @@ fn employee_record(row: EmployeeRow) -> Result<Versioned<Employee>, EmployeeStor
             EmployeeStoreError::new(format!("stored tenant id is not a ULID: {error}"))
         })?;
     let version = Version::new(row.version);
-    Ok(Versioned {
-        record: Employee {
+    Ok(Versioned::new(
+        Employee {
             employee_id,
             tenant_id,
             code: row.code,
@@ -3262,8 +3263,8 @@ fn employee_record(row: EmployeeRow) -> Result<Versioned<Employee>, EmployeeStor
             status: EntityStatus::from_db(&row.status),
             has_pin: row.has_pin,
         },
-        etag: version,
-    })
+        version,
+    ))
 }
 
 impl EmployeeStore for PostgresPeople {
@@ -3399,16 +3400,16 @@ fn role_template_record(
             ))
         })?;
     let version = Version::new(row.version);
-    Ok(Versioned {
-        record: RoleTemplate {
+    Ok(Versioned::new(
+        RoleTemplate {
             role_template_id,
             tenant_id,
             name: row.name,
             permissions,
             status: EntityStatus::from_db(&row.status),
         },
-        etag: version,
-    })
+        version,
+    ))
 }
 
 impl RoleTemplateStore for PostgresPeople {
@@ -3585,10 +3586,7 @@ fn area_record(row: AreaRow) -> Result<Versioned<Area>, FloorStoreError> {
         name: row.name,
         status: EntityStatus::from_db(&row.status),
     };
-    Ok(Versioned {
-        record,
-        etag: Version::new(row.version),
-    })
+    Ok(Versioned::new(record, Version::new(row.version)))
 }
 
 /// Reads one queried row into a [`Table`], folding the two nullable grid columns into an optional
@@ -3611,10 +3609,7 @@ fn table_record(row: TableRow) -> Result<Versioned<Table>, FloorStoreError> {
         position,
         status: EntityStatus::from_db(&row.status),
     };
-    Ok(Versioned {
-        record,
-        etag: Version::new(row.version),
-    })
+    Ok(Versioned::new(record, Version::new(row.version)))
 }
 
 impl AreaStore for PostgresFloor {
@@ -3751,10 +3746,7 @@ fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError
         is_default: row.is_default,
         status: EntityStatus::from_db(&row.status),
     };
-    Ok(Versioned {
-        record,
-        etag: Version::new(row.version),
-    })
+    Ok(Versioned::new(record, Version::new(row.version)))
 }
 
 /// Reads one queried row into a [`RoutingRule`].
