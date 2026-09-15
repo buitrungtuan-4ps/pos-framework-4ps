@@ -1574,9 +1574,30 @@ that against this route's `at_ms`. No new query, no 13-way mapping from node to 
 
 Depends on: PR-3, per screen. Size: 1–2 weeks, incremental (runs alongside PR-4 / PR-5).
 
-1. Every remaining screen onto `createAdminResource`; the last Refresh buttons go with them.
-2. Gates: no `t("action.refresh")` anywhere; no `createSignal` for load / error state in
-   `screens/`.
+**Scope correction, found at implementation.** This section said "every *remaining* screen", which
+assumed PR-3 had put some screens on the helper. It had not: `createAdminResource` shipped with a
+test file and **no caller**, and 37 of the 41 screens still hand-rolled their own `createSignal`
+pair. The six PR-3 counted as migrated had dropped their Refresh button by hand-writing a `load()`
+— D5's behaviour without D5's helper. So the work is *all* the screens, and it splits in two:
+
+- **PR-6a — the screens an operator watches.** Media, Reconcile, My sessions, Admins, Activation.
+  `failureOf` lands with them (a screen cannot narrow `state()` inline, so without it every caller
+  repeats the same re-check to reach the message), and the orphan gate widens from
+  `components/kit.tsx` to `lib/` — the gap the helper itself walked through.
+- **PR-6b — the screens an operator authors on.** The catalog set, Inventory, Campaigns, Layout,
+  Stations, Store groups, Reason codes, Tax rates, Config, Fleet, Ota, Reports, Audit. These adopt
+  `PublishBar` in the same pass (PR-5b left twelve waiting), because both edits touch the same
+  lines, and they carry the table work PR-3 deferred: `Toolbar`, the rest of the `RowActions`
+  sweep, `DataTable` compact density and card mode (V9, V18), `TechnicalDetails` into the kebab
+  (V14).
+
+Two screens need a judgement rather than a migration, and they are called out so they are not done
+by reflex: **Reports**' Refresh is really "run this date range" and wants a name, not a deletion;
+**Ota** primes three forms from three reads, so its reads have side effects a plain swap would drop.
+
+1. Every screen onto `createAdminResource`; the last Refresh buttons go with them.
+2. Gates: no `t("action.refresh")` on a migrated screen; no `createSignal` for load / error state in
+   `screens/`; every export of `components/kit.tsx` **and** `lib/resource.ts` has a caller.
 
 ### PR-7 · Releases (scheduled publish across nodes × stores)
 

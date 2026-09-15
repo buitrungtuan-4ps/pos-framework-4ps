@@ -77,6 +77,19 @@ export type ResourceOptions = {
 const DEFAULT_STALE_AFTER_MS = 30_000;
 
 /**
+ * The reason a read was refused, or `""` when there is none — the shape a `<Banner>` wants.
+ *
+ * A screen cannot narrow `state()` inline: `<Show when={r.state().state === "failed" && r.state()}>`
+ * hands the child the union, not the `failed` arm, so every call site would repeat the same
+ * re-check to get at `.message`. One function does the narrowing once, and `""` is falsy, so
+ * `<Show when={failureOf(r)}>` renders the banner only when there is something to say.
+ */
+export function failureOf<T>(resource: AdminResource<T>): string {
+  const current = resource.state();
+  return current.state === "failed" ? current.message : "";
+}
+
+/**
  * A screen's read.
  *
  * `read` is called with the context the scope promised — a tenant-scoped read is never called with

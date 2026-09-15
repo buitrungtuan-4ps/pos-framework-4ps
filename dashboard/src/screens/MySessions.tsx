@@ -20,6 +20,7 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { createAdminResource, failureOf } from "../lib/resource";
 
 // A Unix-ms instant as a locale-aware date-time; an unparseable value falls back to its raw number
 // rather than throwing, so a malformed row never blanks the table.
@@ -34,61 +35,44 @@ function formatInstant(ms: number): string {
 }
 
 export function MySessions() {
-  const [sessions, setSessions] = createSignal<AdminSessionView[] | null>(null);
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
+  const [revoking, setRevoking] = createSignal(false);
   const [pendingRevoke, setPendingRevoke] = createSignal<AdminSessionView | null>(null);
   const [pendingOthers, setPendingOthers] = createSignal(false);
 
-  const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-    toast.error(message);
-  };
-
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      setSessions(await api.listSessions());
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  void load();
+  // No scope: an admin's own sessions belong to the admin, not to a tenant or a store. Revalidated
+  // on focus because a session revoked from another browser should stop being listed here without
+  // the operator having to ask.
+  const sessions = createAdminResource(() => api.listSessions(), { revalidateOnFocus: true });
 
   const revoke = async () => {
     const target = pendingRevoke();
     if (!target) {
       return;
     }
-    setBusy(true);
+    setRevoking(true);
     try {
       await api.revokeSession(target.id);
       setPendingRevoke(null);
       toast.ok(t("sessions.revoked"));
-      await load();
+      await sessions.refetch();
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setRevoking(false);
     }
   };
 
   const revokeOthers = async () => {
-    setBusy(true);
+    setRevoking(true);
     try {
       await api.revokeOtherSessions();
       setPendingOthers(false);
       toast.ok(t("sessions.othersRevoked"));
-      await load();
+      await sessions.refetch();
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setRevoking(false);
     }
   };
 
@@ -141,22 +125,19 @@ export function MySessions() {
       <Card
         title={t("sessions.list")}
         actions={
-          <div class="flex gap-2">
-            <Button
-              variant="secondary"
-              disabled={busy() || (sessions()?.length ?? 0) <= 1}
-              onClick={() => setPendingOthers(true)}
-            >
-              {t("sessions.revokeOthers")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
-          </div>
+          <Button
+            variant="secondary"
+            disabled={revoking() || (sessions.value()?.length ?? 0) <= 1}
+            onClick={() => setPendingOthers(true)}
+          >
+            {t("sessions.revokeOthers")}
+          </Button>
         }
       >
-        <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-        <Show when={sessions()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
+        <Show when={failureOf(sessions)}>
+          {(message) => <Banner tone="danger" message={message()} />}
+        </Show>
+        <Show when={sessions.value()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
           {(loaded) => (
             <DataTable
               columns={columns()}
@@ -167,7 +148,7 @@ export function MySessions() {
               actions={(row) => (
                 <Button
                   variant="danger-ghost"
-                  disabled={busy() || row.current}
+                  disabled={revoking() || row.current}
                   title={row.current ? t("sessions.cannotRevokeCurrent") : undefined}
                   onClick={() => setPendingRevoke(row)}
                 >
@@ -187,7 +168,7 @@ export function MySessions() {
         cancelLabel={t("action.cancel")}
         closeLabel={t("action.close")}
         danger
-        busy={busy()}
+        busy={revoking()}
         onConfirm={() => void revoke()}
         onCancel={() => setPendingRevoke(null)}
       />
@@ -199,7 +180,7 @@ export function MySessions() {
         cancelLabel={t("action.cancel")}
         closeLabel={t("action.close")}
         danger
-        busy={busy()}
+        busy={revoking()}
         onConfirm={() => void revokeOthers()}
         onCancel={() => setPendingOthers(false)}
       />

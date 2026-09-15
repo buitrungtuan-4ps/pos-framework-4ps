@@ -1,4 +1,4 @@
-// A kit component with no caller is a component nobody agreed to (Wave 4 · PR-3).
+// A component or helper with no caller is a thing nobody agreed to (Wave 4 · PR-3, widened in PR-6).
 //
 // The icons set taught this the expensive way: three glyphs were vendored "for later", nothing drew
 // them, and the bundle carried them for a release. The kit is the same shape of risk and larger —
@@ -6,6 +6,12 @@
 // it first rather than by the screen that has the problem, and it costs bundle bytes in the
 // meantime. So: every component the kit exports is imported by something, and the two that had no
 // caller when PR-3 shipped were removed rather than parked.
+//
+// PR-3 aimed that rule at `components/kit.tsx` alone, and `lib/` walked straight through the gap:
+// `createAdminResource` shipped in the same PR with its own test file and **no screen calling it**,
+// which is the exact failure the rule above is written against. A helper is as capable of being
+// designed in advance of its callers as a component is — more so, because it has no visual absence
+// to give it away. The sweep below therefore covers both directories.
 //
 // The second rule is D5's: a screen that has been migrated does not carry a Refresh button. Stated
 // as a list rather than as "no screen anywhere", because PR-6 finishes the migration and a gate
@@ -61,11 +67,14 @@ describe("every component the kit exports", () => {
 });
 
 describe("a screen whose Refresh button has gone", () => {
-  // The five the F2 kit already owned, plus Alerts. Each re-reads after its own mutations, and
-  // Alerts — the one live screen among them — also revalidates on focus and on a minute's timer.
-  // PR-6 migrates the remainder onto `createAdminResource` and extends this list as it goes; a gate
-  // that failed today on the screens still waiting would have to be disabled, which is how a gate
-  // stops meaning anything.
+  // Two groups, and the difference matters when reading this list. The first six dropped the button
+  // in PR-3 by hand-writing a `load()` and calling it after each mutation: the *behaviour* D5 asks
+  // for, without the helper. The five after them are on `createAdminResource` itself (PR-6), which
+  // is also where the helper acquired its first caller at all.
+  //
+  // PR-6b migrates the authoring screens and extends this list as it goes; a gate that failed today
+  // on the screens still waiting would have to be disabled, which is how a gate stops meaning
+  // anything.
   const MIGRATED = [
     "screens/ApiKeys.tsx",
     "screens/Webhooks.tsx",
@@ -73,6 +82,11 @@ describe("a screen whose Refresh button has gone", () => {
     "screens/Stores.tsx",
     "screens/Translations.tsx",
     "screens/Alerts.tsx",
+    "screens/Media.tsx",
+    "screens/Reconcile.tsx",
+    "screens/MySessions.tsx",
+    "screens/Admins.tsx",
+    "screens/Activation.tsx",
   ];
 
   it("has no Refresh button, because it re-reads what it changes", () => {

@@ -40,6 +40,7 @@ import {
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { createAdminResource, failureOf } from "../lib/resource";
 
 const ROLE_LABEL: Record<AdminRole, MessageKey> = {
   owner: "role.owner",
@@ -49,10 +50,15 @@ const ROLE_LABEL: Record<AdminRole, MessageKey> = {
 };
 
 export function Admins() {
-  const [admins, setAdmins] = createSignal<AdminIdentity[] | null>(null);
-  const [invites, setInvites] = createSignal<AdminInvite[]>([]);
-  const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
+  // The roster and the outstanding invitations, in one state: they are two halves of "who can get
+  // in", and a screen that had the roster but not the invitations would under-report that.
+  // Console-level, so no scope — an admin roster belongs to the console, not to a tenant.
+  const roster = createAdminResource(async () => {
+    const [admins, invites] = await Promise.all([api.listAdmins(), api.listInvites()]);
+    return { admins, invites };
+  });
+  const admins = () => roster.value()?.admins ?? null;
+  const invites = () => roster.value()?.invites ?? [];
 
   // Four lifecycles, so revoking an invitation does not disable the roster and a role change does
   // not disable the invite form (ADR-0121 §3).
@@ -80,29 +86,6 @@ export function Admins() {
   const invitableRoles = (): readonly AdminRole[] =>
     canManage() ? ADMIN_ROLES : ADMIN_ROLES.filter((role) => role !== "owner");
 
-  const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-    toast.error(message);
-  };
-
-  const load = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const [roster, pending] = await Promise.all([api.listAdmins(), api.listInvites()]);
-      setAdmins(roster);
-      setInvites(pending);
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Console-level, so no scoped auto-load — just fetch once on open.
-  void load();
-
   const openInvite = () => {
     setInviteEmail("");
     setInviteName("");
@@ -129,7 +112,7 @@ export function Admins() {
       .then((invited) => {
         if (invited) {
           toast.ok(t("admins.invited"));
-          void load();
+          void roster.refetch();
         }
       });
   };
@@ -153,7 +136,7 @@ export function Admins() {
     void roleChange.run(() => api.setAdminRole(row.id, draftRole())).then((changed) => {
       if (changed) {
         toast.ok(t("admins.roleChanged"));
-        void load();
+        void roster.refetch();
       }
     });
   };
@@ -166,7 +149,7 @@ export function Admins() {
     void suspension.run(() => api.setAdminStatus(row.id, "suspended")).then((suspended) => {
       if (suspended) {
         toast.ok(t("admins.suspended"));
-        void load();
+        void roster.refetch();
       } else {
         // The confirm stays open carrying the refusal; a page banner would say it twice.
         toast.error(suspension.error());
@@ -175,14 +158,13 @@ export function Admins() {
   };
 
   const reactivate = async (row: AdminIdentity) => {
-    setError("");
     setReactivating(row.id);
     try {
       await api.setAdminStatus(row.id, "active");
       toast.ok(t("admins.reactivated"));
-      await load();
+      await roster.refetch();
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
       setReactivating("");
     }
@@ -196,7 +178,7 @@ export function Admins() {
     void revocation.run(() => api.revokeInvite(target.id)).then((revoked) => {
       if (revoked) {
         toast.ok(t("admins.inviteRevoked"));
-        void load();
+        void roster.refetch();
       } else {
         toast.error(revocation.error());
       }
@@ -248,15 +230,12 @@ export function Admins() {
         <Card
           title={t("admins.list")}
           actions={
-            <div class="flex gap-2">
-              <Button onClick={openInvite}>{t("admins.invite")}</Button>
-              <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
-            </div>
+            <Button onClick={openInvite}>{t("admins.invite")}</Button>
           }
         >
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={failureOf(roster)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={admins()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
             {(loaded) => (
               <DataTable
