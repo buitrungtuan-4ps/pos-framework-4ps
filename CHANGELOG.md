@@ -124,6 +124,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **The last three authoring screens re-read what they change, and say where the shop stands (Wave 4 · PR-6c-4, D5/F13).**
+  Config, Store settings and Campaigns onto `createAdminResource`, and Config's Refresh button goes
+  with it. All three are form-priming screens rather than tables, so the read and the draft stay
+  apart: the resource holds what the server said, the signals hold what the operator typed, and a
+  priming effect copies one into the other.
+
+  Store settings was dating its own publish line from the **tree's** current version, and the tree
+  moves whenever any node is published — so saving a tax rate made this screen claim the store's
+  locale had just been published. It now reads the `locale` and `store_profile` nodes' own dates,
+  one bar each, and a test pins the difference.
+
+  Config's capability panel gets a bar too, over a date it has to derive: capability flags publish
+  as top-level keys, one node per flag, so the honest answer is the newest of them rather than a
+  `capabilities` node that does not exist. Its JSON layer editor keeps its plain button — it
+  publishes whatever keys the operator typed at whatever level they chose, which is not a node a
+  bar could name.
+
+  Campaigns takes the bar with its preview as the bar's secondary control. A campaign carries no
+  `updated_at` on the wire, so the bar is told nothing about edits and answers "published" rather
+  than guessing at staleness.
+
+  The kit-adoption gate gains all three on both lists, and picks up seven screens earlier slices
+  migrated but never listed: the six from PR-6c-2, and Tax rates, whose gate inconsistency
+  PR-6c-3 described closing but did not. A gate that does not list a migrated screen cannot
+  notice it being reverted, which is the one job it has.
 - **Channels says where the shop stands for each of the five things it publishes (Wave 4 · PR-6c-3,
   F13).** Tax rates and Channels onto `createAdminResource`; Channels adopts `PublishBar` five times.
 
@@ -139,9 +164,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   has typed over it. Priming on each read keeps today's behaviour — a re-read after a save or a
   `412` replaces the draft, which is the whole point of reloading after a conflict.
 
-  Tax rates also closes a gate inconsistency it had been carrying since PR-5b: it adopted the
-  publish bar then but never got the resource helper, so it sat in one of `kit-adoption.test.ts`'s
-  two lists and not the other.
+  Tax rates had been carrying a gate inconsistency since PR-5b: it adopted the publish bar then
+  but never got the resource helper, so it sat in one of `kit-adoption.test.ts`'s two lists and
+  not the other. The screen was migrated here; the list entry was missed, and lands in PR-6c-4.
 
 - **Six operational screens re-read what they change (Wave 4 · PR-6c-2, D5).** Audit, Fleet,
   Layout, Inventory, Campaigns and Store groups onto `createAdminResource`. Inventory adopts

@@ -1518,6 +1518,7 @@
   "storeSettings.country": "Country",
   "storeSettings.countryHint": "Which country this store is in. Required — a hosted store's region is compared against it, and the fleet console cannot answer “where is this store's data?” without it.",
   "storeSettings.countryNone": "Choose a country…",
+  "storeSettings.countryRequired": "Choose the country this store trades in before publishing.",
   "storeSettings.currency": "Currency (3-letter code)",
   "storeSettings.cutoff": "Business-date cutoff hour",
   "storeSettings.cutoffHint": "0–23. Before this hour, the trading day is still the previous calendar day.",

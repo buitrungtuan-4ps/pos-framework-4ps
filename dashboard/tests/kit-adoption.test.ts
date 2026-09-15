@@ -66,6 +66,9 @@ describe("a screen that publishes a config node", () => {
     "screens/catalog/Menus.tsx",
     "screens/Inventory.tsx",
     "screens/Channels.tsx",
+    "screens/Config.tsx",
+    "screens/StoreSettings.tsx",
+    "screens/Campaigns.tsx",
   ];
 
   it("renders the shared publish bar, so it says where the shop stands", () => {
@@ -79,7 +82,7 @@ describe("a screen that publishes a config node", () => {
   it("stays on the list, so an adopted screen cannot quietly un-adopt", () => {
     // The list is the record of what has moved. Shrinking it is how a migration gets reverted one
     // screen at a time without anybody noticing, so the count is pinned as well as the contents.
-    expect(ADOPTED.length).toBeGreaterThanOrEqual(7);
+    expect(ADOPTED.length).toBeGreaterThanOrEqual(10);
   });
 });
 
@@ -114,6 +117,14 @@ describe("a screen whose Refresh button has gone", () => {
     "screens/catalog/Menus.tsx",
     "screens/Inventory.tsx",
     "screens/Channels.tsx",
+    "screens/TaxRates.tsx",
+    "screens/Audit.tsx",
+    "screens/Fleet.tsx",
+    "screens/Layout.tsx",
+    "screens/Campaigns.tsx",
+    "screens/StoreGroups.tsx",
+    "screens/Config.tsx",
+    "screens/StoreSettings.tsx",
   ];
 
   it("has no Refresh button, because it re-reads what it changes", () => {

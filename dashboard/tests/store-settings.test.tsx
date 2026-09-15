@@ -14,7 +14,10 @@
 //   * a node written by a fork — wrong types, missing keys — leaves the defaults standing instead
 //     of throwing, because this console still has to draw that store;
 //   * `cash_rounding_increment: null` is a published value meaning "do not round", not an absent
-//     one, so it clears the field rather than leaving the previous store's increment in place.
+//     one, so it clears the field rather than leaving the previous store's increment in place;
+//   * the date the line prints is the **locale node's**, not the tree's. The tree's version moves
+//     whenever any node is published, so reading it made this screen claim the store's locale had
+//     just been published because somebody had saved a tax rate (Wave 4 · PR-6c-4).
 
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,14 +80,18 @@ const PUBLISHED = {
   },
 };
 
+/** Mid-2023 and mid-2026, far enough apart that a formatted date names one year or the other. */
+const LOCALE_AT = Date.UTC(2023, 5, 1);
+const OTHER_NODE_AT = Date.UTC(2026, 5, 1);
+
 const effectiveConfig = vi.fn();
-const configVersions = vi.fn();
+const configNodes = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
     listCountries: () => Promise.resolve(COUNTRIES),
     effectiveConfig: (...args: unknown[]) => effectiveConfig(...args),
-    configVersions: (...args: unknown[]) => configVersions(...args),
+    configNodes: (...args: unknown[]) => configNodes(...args),
     publishLocale: vi.fn(),
     publishStoreProfile: vi.fn(),
   },
@@ -114,9 +121,13 @@ describe("store settings", () => {
     localStorage.clear();
     vi.clearAllMocks();
     effectiveConfig.mockResolvedValue(PUBLISHED);
-    configVersions.mockResolvedValue([
-      { version_id: "01VERSIONAAAAAAAAAAAAAAAAA", at_ms: 1_700_000_000_000, current: true },
-    ]);
+    configNodes.mockResolvedValue({
+      current_version_id: "01VERSIONAAAAAAAAAAAAAAAAA",
+      nodes: [
+        { node: "locale", version_id: "01VERSIONAAAAAAAAAAAAAAAAA", at_ms: LOCALE_AT },
+        { node: "store_profile", version_id: "01VERSIONAAAAAAAAAAAAAAAAA", at_ms: LOCALE_AT },
+      ],
+    });
     selectTenant(TENANT.id, TENANT.name);
     selectStore(STORE.id, STORE.name);
   });
@@ -135,7 +146,7 @@ describe("store settings", () => {
 
   it("says so when the store has published nothing, rather than presenting defaults as an answer", async () => {
     effectiveConfig.mockResolvedValue(null);
-    configVersions.mockResolvedValue([]);
+    configNodes.mockResolvedValue({ current_version_id: null, nodes: [] });
     await mount();
     expect(screen.getByText(/Nothing published for this store yet/)).toBeTruthy();
     expect(field("Currency (3-letter code)")).toBe("VND");
@@ -156,5 +167,22 @@ describe("store settings", () => {
   it("treats a null rounding increment as published, because null is what 'do not round' is", async () => {
     await mount();
     expect(field("Cash rounding (minor units)")).toBe("");
+  });
+
+  it("dates the line from the locale node, not from whatever moved the tree last", async () => {
+    // The store published its locale in 2023 and a tax rate in 2026. Reading the tree's current
+    // version — which is what this screen used to do — would date the locale 2026 and tell the
+    // operator a node was fresh when it is three years old.
+    configNodes.mockResolvedValue({
+      current_version_id: "01VERSIONBBBBBBBBBBBBBBBBB",
+      nodes: [
+        { node: "locale", version_id: "01VERSIONAAAAAAAAAAAAAAAAA", at_ms: LOCALE_AT },
+        { node: "tax", version_id: "01VERSIONBBBBBBBBBBBBBBBBB", at_ms: OTHER_NODE_AT },
+      ],
+    });
+    await mount();
+    const line = await screen.findByText(/Showing what this store is running now/);
+    expect(line.textContent).toContain("2023");
+    expect(line.textContent).not.toContain("2026");
   });
 });
