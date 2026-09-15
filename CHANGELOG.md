@@ -75,10 +75,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   and every table gets `tabular-nums`. Chosen for coverage — this framework already ships VN, JP and
   IN country modules, and Inter stops at Latin/Cyrillic/Greek. Thai, Devanagari and Arabic ship with
   the country module that needs them; CJK falls back to the system face.
-- **The primary button is no longer the brand colour (D1, V1).** `--primary` (a neutral ink) is now
-  separate from `--accent` (the one token a fork sets for itself: logo, focus ring, selected nav
-  tint). Red belongs to `--danger` alone, and is solid only inside a confirmation — the 28 solid red
-  triggers across the console become `danger-ghost`. `docs/ui-ux.md` §2 records both scales.
+- **The primary button is no longer the brand colour (D1, V1).** `--primary` (a neutral ink) is a
+  new token, separate from `--accent` — which keeps its value and gains a rule: it is the one token
+  a fork sets for itself (logo, focus ring, selected nav tint, links) and is never used on a button.
+  Solid red survives only inside a confirmation; the 28 solid red triggers across the console become
+  `danger-ghost`. The token file is mirrored into `ui/`, so the till gains `--primary` too — its own
+  thirteen `bg-accent` buttons are **not** changed here, and moving them is a separate call on the
+  selling surface. `docs/ui-ux.md` §2 records the rule and both button scales.
 - **Two button sizes for two surfaces (D3).** The till keeps 48/56; the console gets 40 by default
   and 32 in rows and toolbars, which is where the extra height was costing four rows of a table on a
   laptop. Buttons also gained `ghost` and `danger-ghost` variants and a `size` prop.

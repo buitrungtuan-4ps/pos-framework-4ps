@@ -101,16 +101,14 @@
      framework's "save" button belongs to the operator, not to a brand. */
   --primary: oklch(0.32 0.02 260);
   --primary-ink: oklch(0.99 0 0);
-  /* The fork's brand. A quiet blue-grey by default so an unbranded console looks deliberate rather
-     than unfinished, and so the hue is far enough from `--danger` that a red ring never reads as an
-     error. A fork overrides these two and nothing else. */
-  --accent: oklch(0.48 0.09 250);
+  /* The fork's brand. Unchanged in value — what changed is where it may be used: the logo, the focus
+     ring, the selected nav tint, a link. Never a button. A fork overrides these two and nothing
+     else. */
+  --accent: oklch(0.55 0.16 25); /* the brand red, muted for long shifts */
   --accent-ink: oklch(0.99 0 0);
-  --selected: oklch(0.93 0.03 250);
-  --selected-ink: oklch(0.38 0.1 250);
-  /* Danger keeps the red, and now owns it alone: with the accent moved off 25° a red control means
-     one thing on this console (V1). */
-  --danger: oklch(0.51 0.19 25);
+  --selected: oklch(0.93 0.04 25);
+  --selected-ink: oklch(0.42 0.16 25);
+  --danger: oklch(0.55 0.19 25);
   --danger-ink: oklch(0.99 0 0);
   --ok: oklch(0.52 0.13 155); /* darkened from 0.6 so `text-ok` clears AA 4.5:1 on surface/canvas (see docs/wcag-contrast-audit.md) */
 
@@ -138,11 +136,11 @@
     --line: oklch(0.32 0.014 260);
     --primary: oklch(0.92 0.008 260);
     --primary-ink: oklch(0.2 0.012 260);
-    --accent: oklch(0.72 0.09 250);
+    --accent: oklch(0.62 0.15 25);
     --accent-ink: oklch(0.15 0.01 260);
-    --selected: oklch(0.31 0.04 250);
-    --selected-ink: oklch(0.86 0.06 250);
-    --danger: oklch(0.68 0.17 25);
+    --selected: oklch(0.31 0.05 25);
+    --selected-ink: oklch(0.88 0.07 25);
+    --danger: oklch(0.64 0.18 25);
     --danger-ink: oklch(0.15 0.01 260);
     --ok: oklch(0.68 0.13 155);
 
@@ -172,11 +170,11 @@
   --line: oklch(0.32 0.014 260);
   --primary: oklch(0.92 0.008 260);
   --primary-ink: oklch(0.2 0.012 260);
-  --accent: oklch(0.72 0.09 250);
+  --accent: oklch(0.62 0.15 25);
   --accent-ink: oklch(0.15 0.01 260);
-  --selected: oklch(0.31 0.04 250);
-  --selected-ink: oklch(0.86 0.06 250);
-  --danger: oklch(0.68 0.17 25);
+  --selected: oklch(0.31 0.05 25);
+  --selected-ink: oklch(0.88 0.07 25);
+  --danger: oklch(0.64 0.18 25);
   --danger-ink: oklch(0.15 0.01 260);
   --ok: oklch(0.68 0.13 155);
 
