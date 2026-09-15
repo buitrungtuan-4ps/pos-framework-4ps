@@ -433,7 +433,7 @@ export function Ota() {
                             when={live().halted}
                             fallback={
                               <Button
-                                variant="danger"
+                                variant="danger-ghost"
                                 disabled={busy()}
                                 onClick={() => setConfirmHalt(true)}
                               >

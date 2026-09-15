@@ -25,6 +25,11 @@
   /* One radius, one border. */
   --radius-token: 0.5rem; /* 8px */
 
+  /* How wide a line of running text may get: 65 characters, the span an eye tracks without losing
+     the return sweep. A `max-w-measure` on a paragraph, never on a table — a table's job is to fit
+     its columns (V2). */
+  --container-measure: 65ch;
+
   /* Motion: 100–150ms, one easing. Honoured only when the viewer allows motion (see base).
    *
    * `--ease-token` is the `ease-token` utility. Overriding Tailwind's two `--default-transition-*`
@@ -46,6 +51,15 @@
   --color-ink: var(--ink);
   --color-ink-muted: var(--ink-muted);
   --color-line: var(--line);
+  /* The button ink, and the fork's brand — two roles that were one token until Wave 4 (D1).
+     `--primary` is what a primary button is painted in: a neutral ink, because this is a framework
+     and the button that means "do the thing" should not be anybody's brand colour. `--accent` is
+     the one token a fork sets for itself, and it is used where brand belongs — the logo, the focus
+     ring, the selected nav tint, a link — never on a button. Keeping them apart is what makes
+     per-tenant branding a token change rather than a component change, which `docs/ui-ux.md` has
+     promised since P6 and could not deliver while the two were the same value. */
+  --color-primary: var(--primary);
+  --color-primary-ink: var(--primary-ink);
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   /* Selection: the ground under the thing you are looking at, and the ink that sits on it. A
@@ -83,6 +97,13 @@
   --ink: oklch(0.22 0.02 260);
   --ink-muted: oklch(0.48 0.02 260);
   --line: oklch(0.9 0.01 260);
+  /* The primary button: the page's own ink, one step off black. Neutral by decision (D1) — a
+     framework's "save" button belongs to the operator, not to a brand. */
+  --primary: oklch(0.32 0.02 260);
+  --primary-ink: oklch(0.99 0 0);
+  /* The fork's brand. Unchanged in value — what changed is where it may be used: the logo, the focus
+     ring, the selected nav tint, a link. Never a button. A fork overrides these two and nothing
+     else. */
   --accent: oklch(0.55 0.16 25); /* the brand red, muted for long shifts */
   --accent-ink: oklch(0.99 0 0);
   --selected: oklch(0.93 0.04 25);
@@ -113,6 +134,8 @@
     --ink: oklch(0.95 0.008 260);
     --ink-muted: oklch(0.72 0.02 260);
     --line: oklch(0.32 0.014 260);
+    --primary: oklch(0.92 0.008 260);
+    --primary-ink: oklch(0.2 0.012 260);
     --accent: oklch(0.62 0.15 25);
     --accent-ink: oklch(0.15 0.01 260);
     --selected: oklch(0.31 0.05 25);
@@ -145,6 +168,8 @@
   --ink: oklch(0.95 0.008 260);
   --ink-muted: oklch(0.72 0.02 260);
   --line: oklch(0.32 0.014 260);
+  --primary: oklch(0.92 0.008 260);
+  --primary-ink: oklch(0.2 0.012 260);
   --accent: oklch(0.62 0.15 25);
   --accent-ink: oklch(0.15 0.01 260);
   --selected: oklch(0.31 0.05 25);

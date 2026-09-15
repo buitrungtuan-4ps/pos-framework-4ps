@@ -317,7 +317,7 @@ export function ReasonCodes() {
                     >
                       {row.active ? t("reasonCodes.retire") : t("reasonCodes.restore")}
                     </Button>
-                    <Button variant="danger" onClick={() => deletion.confirm(row)}>
+                    <Button variant="danger-ghost" onClick={() => deletion.confirm(row)}>
                       {t("action.delete")}
                     </Button>
                   </div>

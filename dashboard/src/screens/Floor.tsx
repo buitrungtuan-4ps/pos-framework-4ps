@@ -466,7 +466,7 @@ export function Floor() {
                           when={row.status === "archived"}
                           fallback={
                             <Button
-                              variant="danger"
+                              variant="danger-ghost"
                               disabled={busy()}
                               onClick={() => setPendingAreaArchive(row)}
                             >
@@ -544,7 +544,7 @@ export function Floor() {
                         when={row.status === "archived"}
                         fallback={
                           <Button
-                            variant="danger"
+                            variant="danger-ghost"
                             disabled={busy()}
                             onClick={() => setPendingTableArchive(row)}
                           >

@@ -156,12 +156,16 @@ const PAIRS = [
   ["ink-muted", "canvas", "text"],
   ["ink-muted", "surface", "text"],
   ["ink-muted", "surface-raised", "text"],
+  // The primary button and its label (D1): the one control an operator presses most, so its pair is
+  // gated as text like any other.
+  ["primary-ink", "primary", "text"],
   ["accent-ink", "accent", "text"],
   ["danger-ink", "danger", "text"],
   // The open nav row: `selected-ink` on `selected`. Gated as text because that is what it is — the
   // row's label — and it is the pair most easily got wrong, since a tint pale enough to sit under a
   // whole row is also pale enough to lose its foreground.
   ["selected-ink", "selected", "text"],
+  ["primary", "surface", "text"],
   ["accent", "surface", "text"],
   ["accent", "canvas", "text"],
   ["danger", "surface", "text"],

@@ -2,6 +2,88 @@
 @import "./styles/tokens.css";
 
 /*
+ * The console's typeface, self-hosted (Wave 4 · PR-2, decision D2).
+ *
+ * # Why a typeface at all
+ *
+ * Until now the console asked for `system-ui` and got whatever the machine had: Segoe on Windows,
+ * SF on macOS, Roboto on Android, something else on a Linux desktop. Four operators looking at the
+ * same table saw four different column widths and four different numeral shapes, and none of the
+ * system faces has tabular numerals, so a money column never lined up.
+ *
+ * # Why Noto Sans
+ *
+ * It is the family built for the problem this framework has — "no tofu", no empty box in any
+ * script. The console already ships English and Vietnamese and the tree already carries Japanese
+ * and Indian country modules; Inter, the usual answer, covers Latin, Cyrillic, Greek and Vietnamese
+ * and stops there. Six subsets are served from `/fonts` beside the app: each face names its
+ * `unicode-range`, so a browser fetches only the scripts on the screen — 36 kB for an English
+ * console, 50 kB for a Vietnamese one, nothing for the rest. Each file is the *variable* font, so
+ * one download carries every weight (`font-weight: 100 900`) rather than three.
+ *
+ * Thai, Devanagari and Arabic ship with the country module that needs them rather than here; CJK is
+ * several megabytes a weight and is deliberately not bundled — it falls back to the system face,
+ * whose Latin is close enough to Noto not to jar. `dashboard/public/fonts/README.md` records the
+ * provenance, the measured sizes and the OFL licence these files are redistributed under.
+ *
+ * `font-display: swap` because a console that shows nothing until a font arrives is worse than one
+ * that reflows: the fallback stack below is metric-compatible enough that the swap is not a jump.
+ */
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-vietnamese.woff2") format("woff2");
+  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-cyrillic.woff2") format("woff2");
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-cyrillic-ext.woff2") format("woff2");
+  unicode-range: U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
+}
+
+@font-face {
+  font-family: "Noto Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/noto-sans-greek.woff2") format("woff2");
+  unicode-range: U+0370-0377, U+037A-037F, U+0384-038A, U+038C, U+038E-03A1, U+03A3-03FF;
+}
+
+/*
  * Base: paint the ground with a token (never borrow the host's), set the body type, and keep the
  * page from scrolling sideways. Motion tokens apply only when the viewer allows motion.
  */
@@ -20,11 +102,22 @@ body {
   background: var(--color-canvas);
   color: var(--color-ink);
   font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    "Noto Sans", sans-serif;
+    "Noto Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
   font-size: var(--text-base);
   -webkit-text-size-adjust: 100%;
   overflow-x: hidden;
+}
+
+/*
+ * Digits that line up. `tabular-nums` is the one typographic property a table of money cannot do
+ * without: proportional figures make 111 narrower than 000, so a column of totals reads as ragged
+ * even when every number is right-aligned. Applied to every table cell rather than left to each
+ * screen to remember, and offered as `.tabular` for a figure outside a table (a KPI, a count).
+ */
+table,
+.tabular {
+  font-variant-numeric: tabular-nums;
 }
 
 /* A single focus ring, visible on both themes — keyboard reachability is a requirement, not a nicety. */

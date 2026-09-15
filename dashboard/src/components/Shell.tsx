@@ -157,7 +157,7 @@ export function Shell(props: ParentProps) {
           onClick={() => setNavOpen(!navOpen())}
           class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink md:hidden"
         >
-          <span aria-hidden="true">☰</span>
+          <Icon name="menu" class="h-5 w-5 shrink-0" />
         </button>
         <span class="text-lg font-semibold text-ink">{t("app.title")}</span>
         <div class="flex flex-1 flex-wrap items-center gap-2">
@@ -170,7 +170,7 @@ export function Shell(props: ParentProps) {
           onClick={openPalette}
           class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
         >
-          <span aria-hidden="true">🔎</span>
+          <Icon name="search" class="h-5 w-5 shrink-0" />
         </button>
         <NotificationBell />
         <AccountMenu onSignOut={() => void logout()} />
@@ -325,7 +325,14 @@ export function Shell(props: ParentProps) {
               )}
             </For>
           </nav>
-          <main class="flex-1 overflow-y-auto p-4 md:p-6">{props.children}</main>
+          {/* A page is bounded, and the bound is generous rather than tight: 1280px keeps a wide
+              table wide while stopping a form from stretching to the full 1440 of a laptop, where
+              a label sat at the far left of the screen and its input at the far right (V2). The
+              side padding is on this element and nothing inside it re-adds a gutter, so the
+              measure is decided once. */}
+          <main class="flex-1 overflow-y-auto p-4 md:p-6">
+            <div class="mx-auto w-full max-w-[80rem]">{props.children}</div>
+          </main>
           <footer class="shrink-0 border-t border-line px-4 py-2 text-xs text-ink-muted md:px-6">
             <span>{t("app.title")}</span>
             <span aria-hidden="true"> · </span>

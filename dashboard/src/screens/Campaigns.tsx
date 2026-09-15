@@ -581,7 +581,7 @@ export function Campaigns() {
                           {t("campaigns.vouchers")}
                         </Button>
                       </Show>
-                      <Button variant="danger" disabled={busy()} onClick={() => setPendingDelete(row)}>
+                      <Button variant="danger-ghost" disabled={busy()} onClick={() => setPendingDelete(row)}>
                         {t("action.delete")}
                       </Button>
                     </div>

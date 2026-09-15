@@ -174,7 +174,7 @@ export function Media() {
                           </TechnicalDetails>
                           <Show when={canManage()}>
                             <Button
-                              variant="danger"
+                              variant="danger-ghost"
                               disabled={busy()}
                               onClick={() => setPendingDelete(asset)}
                             >

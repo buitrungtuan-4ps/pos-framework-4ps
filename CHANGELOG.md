@@ -35,6 +35,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoized menu item lookups and layout categories in Order screen.** Reduced grid assembly and item lookup from $O(M \cdot N)$ linear scans to $O(M + N)$ using a `createMemo` `Map` lookup in `ui/src/screens/Order.tsx`.
 - **Optimized menu placement resolution in `compile_menu`.** Pre-grouped placements by `menu_id` using `BTreeMap` in `pos-cloud`'s `catalog_compiler`, reducing resolution lookup complexity from $O(\text{chain\_depth} \times \text{placements})$ to $O(\text{placements} \log \text{menus})$.
 
+### Added
+
+- **An asset-weight gate (`pnpm assets`).** Self-hosting a typeface put a third of a megabyte of
+  binary into a front end that had none — the right trade, and one that stops being right silently
+  if a CJK subset is dropped in later. `dashboard/scripts/asset-weight.mjs` fails the build if any
+  file under `public/` passes 200 kB or the directory passes 512 kB, with the measurement printed.
+
 ### Fixed
 
 - **Store settings showed the framework's defaults on every store (Wave 4 · PR-1, V15).** The screen
@@ -60,6 +67,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console has a typeface, and it is self-hosted (Wave 4 · PR-2, D2).** It asked for
+  `system-ui` and got Segoe on Windows, SF on macOS, Roboto on Android — four operators saw four
+  different column widths, and none of those faces has tabular numerals, so a money column never
+  lined up. Six variable Noto Sans subsets now ship under `dashboard/public/fonts`, each with a
+  `unicode-range`: a reader downloads 36 kB for an English console and 50 kB for a Vietnamese one,
+  and every table gets `tabular-nums`. Chosen for coverage — this framework already ships VN, JP and
+  IN country modules, and Inter stops at Latin/Cyrillic/Greek. Thai, Devanagari and Arabic ship with
+  the country module that needs them; CJK falls back to the system face.
+- **The primary button is no longer the brand colour (D1, V1).** `--primary` (a neutral ink) is a
+  new token, separate from `--accent` — which keeps its value and gains a rule: it is the one token
+  a fork sets for itself (logo, focus ring, selected nav tint, links) and is never used on a button.
+  Solid red survives only inside a confirmation; the 28 solid red triggers across the console become
+  `danger-ghost`. The token file is mirrored into `ui/`, so the till gains `--primary` too — its own
+  thirteen `bg-accent` buttons are **not** changed here, and moving them is a separate call on the
+  selling surface. `docs/ui-ux.md` §2 records the rule and both button scales.
+- **Two button sizes for two surfaces (D3).** The till keeps 48/56; the console gets 40 by default
+  and 32 in rows and toolbars, which is where the extra height was costing four rows of a table on a
+  laptop. Buttons also gained `ghost` and `danger-ghost` variants and a `size` prop.
+- **`PageHeader` takes the screen's actions**, so a create button sits in the same place on every
+  screen instead of above the table on one and inside a card on the next. A page is bounded to
+  1280 px and running text to 65 characters (V2).
+- **Five emoji became icons (V7).** The nav toggle, the palette's search button, the notification
+  bell, the media placeholder and the subject-request warning rendered as a different picture on
+  every operating system; `icons.tsx` gains `bell`, `menu` and `search`.
 - **The get-started checklist and the new-store wizard open Store settings, not Configuration
   (Wave 4 · PR-1, F1/F2).** Configuration holds capability flags and the version history — the one
   screen in the publish chain a brand-new store does not need. Both now name the order the four

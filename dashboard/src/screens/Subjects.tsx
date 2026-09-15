@@ -19,6 +19,7 @@ import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { ConfirmDialog } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { Icon } from "../components/icons";
 
 export function Subjects() {
   const [subjectId, setSubjectId] = createSignal("");
@@ -130,7 +131,7 @@ export function Subjects() {
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <div class="rounded-token border border-danger p-3 text-sm text-ink">
-            <span aria-hidden="true">⚠️ </span>
+            <Icon name="triangle-alert" class="mr-1 inline h-4 w-4 shrink-0 align-text-bottom" />
             {t("subjects.guardrail")}
           </div>
 
@@ -183,7 +184,7 @@ export function Subjects() {
                       </Button>
                       <Show when={!found().masked}>
                         <Button
-                          variant="danger"
+                          variant="danger-ghost"
                           disabled={busy()}
                           onClick={() => setPendingErase(true)}
                         >

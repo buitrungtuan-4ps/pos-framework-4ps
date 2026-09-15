@@ -663,7 +663,7 @@ export function Fleet() {
                     </Button>
                     <p class="text-xs text-ink-muted">{t("fleet.handoverRetireHint")}</p>
                   </Show>
-                  <Button variant="danger" onClick={() => setBumping(store())}>
+                  <Button variant="danger-ghost" onClick={() => setBumping(store())}>
                     {t("fleet.leaseBump")}
                   </Button>
                   <p class="text-xs text-ink-muted">{t("fleet.leaseBumpHint")}</p>

@@ -489,7 +489,7 @@ export function Stores() {
                     when={current().status === "archived"}
                     fallback={
                       <Button
-                        variant="danger"
+                        variant="danger-ghost"
                         disabled={tenantCrud.saving()}
                         onClick={() => tenantCrud.confirm(current())}
                       >
@@ -571,7 +571,7 @@ export function Stores() {
                         when={row.status === "archived"}
                         fallback={
                           <Button
-                            variant="danger"
+                            variant="danger-ghost"
                             disabled={storeCrud.saving()}
                             onClick={() => storeCrud.confirm(row)}
                           >
@@ -622,7 +622,7 @@ export function Stores() {
                       when={row.status === "archived"}
                       fallback={
                         <Button
-                          variant="danger"
+                          variant="danger-ghost"
                           disabled={brandCrud.saving()}
                           onClick={() => brandCrud.confirm(row)}
                         >

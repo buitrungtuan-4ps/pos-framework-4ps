@@ -477,7 +477,7 @@ export function Inventory() {
                         {t("action.edit")}
                       </Button>
                       <Button
-                        variant="danger"
+                        variant="danger-ghost"
                         disabled={busy()}
                         onClick={() => setPendingIngDelete(row)}
                       >
@@ -525,7 +525,7 @@ export function Inventory() {
                       {t("action.edit")}
                     </Button>
                     <Button
-                      variant="danger"
+                      variant="danger-ghost"
                       disabled={busy()}
                       onClick={() => setPendingRecDelete(row)}
                     >
@@ -564,7 +564,7 @@ export function Inventory() {
                     {t("action.edit")}
                   </Button>
                   <Button
-                    variant="danger"
+                    variant="danger-ghost"
                     disabled={busy()}
                     onClick={() => setPendingSupDelete(row)}
                   >

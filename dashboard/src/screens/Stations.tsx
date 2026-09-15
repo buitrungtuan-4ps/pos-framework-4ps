@@ -362,7 +362,7 @@ export function Stations() {
                           when={row.status === "archived"}
                           fallback={
                             <Button
-                              variant="danger"
+                              variant="danger-ghost"
                               disabled={busy()}
                               onClick={() => setPendingStationArchive(row)}
                             >
@@ -463,7 +463,7 @@ export function Stations() {
                   actions={(row) => (
                     <Show when={canManage()}>
                       <Button
-                        variant="danger"
+                        variant="danger-ghost"
                         disabled={busy()}
                         onClick={() => setPendingRuleRemove(row)}
                       >

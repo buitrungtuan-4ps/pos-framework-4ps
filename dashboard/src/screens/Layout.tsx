@@ -740,7 +740,7 @@ export function Layout() {
                               {t("action.edit")}
                             </Button>
                             <Button
-                              variant="danger"
+                              variant="danger-ghost"
                               disabled={busy()}
                               onClick={() => setPendingRemove(button)}
                             >
@@ -855,7 +855,7 @@ export function Layout() {
             <>
               <Show when={buttonEditing() !== null}>
                 <Button
-                  variant="danger"
+                  variant="danger-ghost"
                   disabled={busy()}
                   onClick={() => {
                     const current = channelButtons().find(
