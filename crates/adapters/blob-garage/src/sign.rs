@@ -30,7 +30,9 @@ pub(crate) struct Credentials {
     pub(crate) access_key: String,
     /// The secret, never logged.
     pub(crate) secret_key: String,
-    /// The signing region (MinIO and Garage default to `us-east-1`).
+    /// The signing region. It is a signing input, not a geography, and has to match what the
+    /// server was configured with: Garage's own default is `garage`, which is what `bootstrap.sh`
+    /// writes and what `ArtifactsConfig` defaults to. AWS-flavoured servers use `us-east-1`.
     pub(crate) region: String,
     /// The signing service — `s3`.
     pub(crate) service: String,
