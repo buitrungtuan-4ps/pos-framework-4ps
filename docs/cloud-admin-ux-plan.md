@@ -1,11 +1,13 @@
 # Cloud admin console — complete overhaul plan (v2)
 
-**Status** Proposed · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-09
+**Status** Proposed · **Owner** @maintainers-cloud · **Last reviewed** 2026-09-14
 
 Tracks F, G, M and O have since been delivered; §1's verdict table is the state of the console
 as v2 found it, not as it stands. **[Wave 3](#wave-3--measured-on-a-running-console-2026-09-09)**
-at the foot of this document is the current assessment — written from the running product
-rather than from the code — and carries the plan that is live.
+was the assessment written from the running product rather than from the code.
+**[Wave 4](#wave-4--the-console-as-an-end-user-sees-it-2026-09-14)**, after it, is the current
+one — the console scored as an end user would score it, the owner's eight decisions, and the
+eight-PR task list awaiting approval.
 
 Version 2 of the console plan. Version 1 (the A0–A8 roadmap) framed the problem — one context
 contract, everything as master data, one screen pattern — and it survives here intact. What changed:
@@ -1230,3 +1232,292 @@ Stores, not the sidebar — the only screen deliberately unfiled.
 One consequence worth naming: on `/stores/new` no group is open, because the wizard is in no group.
 That is the honest answer rather than a bug — no nav entry corresponds to the wizard, so marking one
 would be a lie — and eight short headings is a usable nav. It is asserted rather than left to chance.
+
+---
+
+# Wave 4 — the console as an end user sees it (2026-09-14)
+
+**Status** Task list written; **awaiting owner approval before any code is written.**
+**Decisions** D1–D8 recorded below (owner, 2026-09-14). **Baseline** `main` @ `0980d31`,
+dashboard `pnpm build` green, 200 tests / 30 files.
+
+Wave 3 fixed the console from the code outwards. Wave 4 started from the other end: the real
+console was run against a local `pos_cloud` (three fictional stores, one seeded with a full
+tree, one never published), 42 screenshots were taken across 30 screens in light, dark and phone
+width, and the result was scored as a user who knows UX would score it. The verdict, in one
+line: **clean but not beautiful, usable but not easy** (3.1 / 5 across ten dimensions). The
+findings, the component spec and the debate are in the review artifact ("Một Đợt Phát Hành",
+v2); this section is the part that has to live in the repository — what was decided, what will
+be done, in which order, and what makes each step green.
+
+## 4w.0 Decisions taken (owner, 2026-09-14)
+
+| # | Question | Decision |
+| --- | --- | --- |
+| D1 | Brand red is both the primary and the destructive button | **Neutral primary.** This is a framework, not a brand site. `--primary` becomes a neutral ink; red is danger only; `--accent` is a per-fork brand token (logo, focus ring, nav tint). |
+| D2 | Typeface | **Noto Sans, self-hosted**, subset Latin + Vietnamese + Cyrillic + Greek via `unicode-range` (~150 kB total, one request each on first use). Thai / Devanagari / Arabic packs ship with the country module that needs them; CJK falls back to system fonts. `tabular-nums` on every numeric column. |
+| D3 | 48 px buttons everywhere | **Two scales.** Till 48 / 56 unchanged; console 40 default, 32 in rows and toolbars. `docs/ui-ux.md` §2 is amended in PR-2. |
+| D4 | Two ways to create a store | **One "New store" → wizard**, with a "skip key and installer, create the record only" step. |
+| D5 | Refresh buttons | **No Refresh button anywhere.** Every mutation re-reads its own resource; live screens (hub, fleet, alerts, OTA, reconcile) revalidate on window focus and every 30–60 s. The resource helper lands per screen inside PR-3 rather than as a separate wave. |
+| D6 | Get-started card | **Collapses** to a one-line strip once one step is done. |
+| D7 | Step-budget ceilings | Console ceilings **4 / 6 / 3** (create / publish / find) are set in PR-8, when the kit has made them reachable; the gate reports until then. |
+| D8 | Where a scheduled publish is converted to an instant | **On the cloud**, from the store's published `locale.timezone` and `business_date_cutoff` (option O2). Edge-side conversion (O3) is deferred to the B·W7 line of the roadmap. |
+
+### The clarifications behind five of the decisions
+
+Five of the eight were not a plain "agree with the recommendation"; the owner asked a question
+first, and the answer is what the decision rests on. Recorded here so the decision can be
+re-read with its reason, not only its outcome. The questions were asked in Vietnamese and are
+paraphrased.
+
+**D1 — "This is a POS core framework: keep the colours generic so anyone can use it, and do
+not centre it on one brand."** Agreed, and it goes further than the recommendation (which had
+been to keep the brand red as primary). The primary button becomes a neutral ink; red is kept
+for warnings and destructive actions only. The brand colour becomes one token, `--accent`, that
+each fork sets for itself and that is used on the logo, the focus ring and the selected nav
+tint — never on a button. The framework default for it is a quiet blue-grey. This is what
+`docs/ui-ux.md` already promised: per-tenant branding means changing tokens, not components.
+PR-2 splits `--primary` from `--accent`; the buttons on all 32 screens follow automatically.
+
+**D2 — "Which typeface covers the most countries? This is a core framework."** Noto Sans, the
+family built for exactly that purpose ("no tofu": no empty box in any script). Self-host the
+Latin, Latin-extended, Vietnamese, Cyrillic and Greek subsets in three weights (about 150 kB);
+`unicode-range` means the browser downloads only the scripts on screen. Each country module
+brings its own script pack when it needs one — Thai, Devanagari, Arabic, each 50–150 kB, loaded
+only when the console or a store uses that locale. CJK is not bundled (several MB per weight);
+it falls back to the system font (Yu Gothic, Hiragino, Noto CJK on Android), whose Latin glyphs
+are close enough to Noto not to jar. Noto Sans has tabular numerals, which the tables and KPIs
+lack today. Inter was not chosen because it covers Latin, Cyrillic, Greek and Vietnamese only —
+no Thai, no Indic, no Arabic — a dead end for a framework that already ships VN, JP and IN
+modules.
+
+**D5 — "Why does it not refresh itself? Why a Refresh button at all?"** The owner is right: the
+button should not exist. It exists because thirty screens each hand-wrote their own data
+loading and none re-reads after a save. The fix is at the root: after every Save or Publish the
+screen re-reads exactly what it changed; the live screens (Fleet, Alerts, OTA, the hub)
+revalidate when the tab regains focus and every 30–60 seconds. Result: no Refresh button
+anywhere, and no interim "fold them into one icon" step. Plan change: the resource helper does
+not wait for PR-6; it lands with PR-3, screen by screen — whichever screen is touched loses its
+Refresh button at the same time.
+
+**D7 — "What is counting clicks for?"** It is a gate in CI, not a reporting metric. The
+repository already has a script that measures seven core admin flows
+([ADR-0109](adr/0109-counting-the-taps-an-operator-makes.md)). Once a ceiling is set, anyone who adds an
+"Are you sure?" box to the price-change flow turns the build red immediately — daily work
+cannot get slower by degrees without anyone noticing. Today the ceilings are empty, so the
+script only prints the counts. The real question is therefore only "when to set the numbers".
+Answer: in PR-8, after `PublishBar` and releases have actually shortened the flows; set now,
+every publish flow would be red for the reason this wave already knows. Expected ceilings
+4 / 6 / 3 (create / publish / find).
+
+**D8 — "Does a scheduled publish follow each store's edge machine, or the cloud's config for
+that edge's timestamp?"** The cloud, not the edge clock. Today the cloud holds one absolute
+instant typed by the admin on the admin's machine; at that instant it activates the new
+version, and the edge pulls it within 30 seconds with no notion of time of its own. The
+decision (option O2): the admin enters "00:00 local" or "start of business day"; the cloud
+converts it per store using the timezone already declared for that store in Store settings
+(`locale.timezone` and `business_date_cutoff`), so each store gets its own instant; the cloud
+activates at that instant; the edge pulls as usual. The edge machine's clock takes no part —
+deliberately, because a machine clock can be wrong, and a store that is offline at that moment
+still receives the right version when it reconnects. The later option (O3), where the edge
+switches on its own clock even while offline, needs the edge to hold two versions at once and
+touches an architectural rule; it is deferred to the B·W7 line of the roadmap.
+
+## 4w.1 What the run found — the twenty findings, by kind
+
+Three kinds, because they need three different fixes and the order below depends on telling
+them apart.
+
+**Says the wrong thing (fix in PR-1, no design needed).**
+
+- V10 · A store nobody has published to answers `404` from `configVersions`, and the get-started
+  card shows "Could not check" in red. Not a failure; an empty list.
+- V11 · Fleet and OTA compute online / in-sync with their own strings; the hub uses
+  `lib/posture.ts`. The same box can be "Online" in one place and "Last seen 2 h ago" in another.
+- V12 · Three background tasks (`alert_evaluator`, `archive_retention`,
+  `scheduled_publish_activator`) show their snake_case key on Fleet — no label.
+- V13 · Breadcrumb on console-level screens (Alerts, Audit, Admins, My security) still names a
+  tenant and store that the screen ignores.
+- V15 · Store settings never loads the published `locale` / `store_profile`; every open shows
+  framework defaults (VND, Asia/Ho_Chi_Minh, cutoff 04:00) even for a store that runs something
+  else. Saving from that screen silently overwrites the published values.
+- V17 · Channels & payments still says "Choose a store above to publish" — the store picker is
+  in the top bar now.
+- F1 / F2 / F3 / F12 · Get-started's "config" step links to the raw Configuration screen instead of
+  Store settings; the wizard's next step does the same; Activation never says "one code per box"
+  ([ADR-0118](adr/0118-one-credential-per-box-and-the-cloud-learns.md)); Configuration shows the raw JSON editor
+  first and "Publish a level" as a peer, where the JSON is the advanced path.
+
+**Looks unconsidered (fix in PR-2 / PR-3, needs the decisions above).**
+
+- V1 · 28 solid danger buttons across the run; red is primary, destructive and brand at once.
+- V2 · No `max-width` on any screen; forms stretch to 1440 px.
+- V3 · 48 px buttons in table rows; the Stores table is 1.5× the height it needs.
+- V4 · Three create patterns still live side by side (header button → FormPanel; "Add…" card;
+  wizard link) — ADR-0121 §6 is half-finished.
+- V5 · Thirty Refresh buttons on thirty screens.
+- V6 · Three shapes of empty state (inline sentence, muted card, full `EmptyState`).
+- V7 · Emoji as header icons on eleven screens; the icon set from Stage 6 covers them.
+- V8 · No chosen typeface; the console renders differently on every OS.
+- V9 · Phone width clips eight tables with no horizontal scroll container.
+- V14 · Technical details (ULIDs, ETags) open inline and push the row down.
+- V16 · Hub KPIs are plain paragraphs; nothing is a number at a glance.
+- V18 · `DataTable` has one density; no compact rows, no card mode below `md`.
+- V19 · Row actions are five inline buttons; no kebab.
+- V20 · Date and time inputs are bare `<input type="date">` with no timezone hint.
+
+**Missing a function (PR-5 → PR-7, needs a contract change).**
+
+- F6 · A config version does not record which node it published; nothing can answer "which
+  nodes of this store are stale".
+- F7 · Prerequisite rules (tax before menu, locale before anything) exist only in the batch
+  publish ([ADR-0122](adr/0122-a-store-group-is-a-delivery-cohort.md)); a single publish can
+  still be made out of order.
+- F8 / F9 / F10 / F17 · No release: nothing groups several nodes to several stores under one
+  schedule, reports node × store, or converts "Monday 04:00 at each store" into per-store
+  instants (D8).
+- F11 / F13 / F15 / F16 · No generic preview before publish; twenty hand-made publish buttons
+  instead of one `PublishBar`; no CSV import for items; no cross-entity search.
+
+## 4w.2 The plan — eight PRs, in dependency order
+
+Each PR is one unit: open → CI green → merge → next. The order is by *which one uses which*,
+not by importance: PR-2 sizes the buttons before PR-3 builds `RowActions` from them; PR-3 has
+`Toolbar` before PR-5 builds `PublishBar` into it; PR-5 knows which node is stale before PR-7
+can say what a release is waiting on. PR-1 is first because it fixes what is actually wrong and
+depends on nothing. Every PR keeps `cd dashboard && pnpm build` green (tsc · i18n lint · i18n
+parity · contrast · installers · step-budget · vitest · vite) and adds the tests named under it.
+
+### PR-1 · What the console says wrong (no contract change, no migration)
+
+Depends on: nothing. Size: 1–2 days.
+
+1. `api/client.ts` — `configVersions` returns `[]` on `404` (V10). Test: stubbed `fetch` →
+   empty list, get-started shows "not yet" rather than "Could not check".
+2. `screens/Fleet.tsx`, `screens/Ota.tsx` — presence and config badges from
+   `lib/posture.ts` (`onlineVerdict`, `configVerdict`); drop the local `online` / `inSync`
+   strings (V11). Three task labels added to `TASK_LABELS` (V12).
+3. `components/Shell.tsx` — breadcrumb omits tenant / store when the matched screen is
+   `tenantScoped: false` (V13). Test in `shell-nav.test.tsx`.
+4. `screens/StoreSettings.tsx` — on open, `api.effectiveConfig(tenant, store)`; hydrate the
+   `locale` and `store_profile` fields from it, reset to defaults first when the store changes;
+   one muted line: "Running now: published <date>" or "Nothing published — framework defaults
+   shown" (V15). New `tests/store-settings.test.tsx`.
+5. `lib/get-started.ts`, `screens/NewStore.tsx` — the config step and the wizard's next step
+   both open Store settings; hint names the four publishes in order (Store settings → Tax
+   rates → Menu → People) (F1 interim, F2). Update `wizard-next-steps.test.tsx`.
+6. `screens/Activation.tsx` — one sentence: one code activates one box (F3).
+7. `screens/Config.tsx` — the raw JSON editor moves under a `<details>` "Advanced"; "Publish a
+   level" stays first (F12).
+8. `i18n/en.json`, `i18n/vi.json` — keys for all of the above; copy fix on Channels (V17).
+9. `CHANGELOG.md` `[Unreleased]` · this section's status line.
+
+### PR-2 · Visual foundation (decide once, change in one place)
+
+Depends on: nothing (parallel with PR-1). Size: 1–2 days.
+
+1. `styles/tokens.css` — `--primary` split from `--accent` (D1); a danger hue that is not the
+   brand red; `--measure` (65 ch) for running text; `tabular-nums` utility.
+2. `styles/app.css` — `@font-face` for self-hosted Noto Sans subsets with `unicode-range`
+   (D2); fallback stack; files under `dashboard/public/fonts/` with a size gate.
+3. `components/ui.tsx` — `Button` gains `size: sm | md | lg` (32 / 40 / 48) and variants
+   `primary | secondary | ghost | danger-ghost`; solid `danger` allowed only inside
+   `ConfirmDialog` (V1, V3).
+4. `PageHeader` — `actions` slot, one-line description, `Icon` from the Stage 6 set instead of
+   emoji (V7).
+5. `Shell.tsx` — `max-width` on `main` per screen kind: forms `~72 ch`, tables full (V2).
+6. `docs/ui-ux.md` §2 — till 48 / 56, console 40 / 32 (D3).
+7. Gates: `visual-tokens.test.ts` refuses a solid danger class outside `ConfirmDialog`;
+   `wcag-contrast` re-run on the new hues; bundle-size guard extended to the font files.
+
+### PR-3 · The kit, completed — and applied so it does not drift
+
+Depends on: PR-2. Size: 3–4 days.
+
+1. New in `components/kit.tsx`: `Tabs`, `KpiTile`, `Toolbar`, `RowActions` (kebab),
+   `FormSection` + `StickyActions`, `DateField` / `DateRange` / `DateTime` (with the store's
+   timezone shown, V20), and one `EmptyState` as the only empty-state shape (V6).
+2. `DataTable` — `density: compact` at 44 px rows; card mode below `md` (V9, V18);
+   `TechnicalDetails` moves into the row kebab (V14, V19).
+3. Apply: Catalog / wizard / Alerts → `Tabs`; hub → `KpiTile` (V16); ~25 tables → `Toolbar` +
+   `RowActions` (the 28 solid danger buttons become kebab entries); Store settings →
+   `FormSection`; Reports / Campaigns → `DateField`.
+4. `lib/resource.ts` — `createAdminResource`: load · error · refetch after mutation · ETag ·
+   skeleton; revalidate on focus and on an interval for live screens. Migrated **per screen as
+   that screen is touched above**, and that screen's Refresh button is removed at the same time
+   (D5, V5).
+5. Get-started collapses to a one-line strip once one step is done (D6).
+6. Gates: `empty-state.test`, `tabs.test`, `kit-adoption.test` (no `Card title=add|create`, no
+   solid button inside a table row, no `t("action.refresh")` on a migrated screen).
+
+### PR-4 · One way to create (finishes ADR-0121 §6)
+
+Depends on: PR-3 (`RowActions`, `Toolbar`). Size: 1–2 days.
+
+1. `People.tsx`, `Floor.tsx` — the "Add…" cards become `FormPanel` opened from the header.
+2. `Stores.tsx` — one "New store" that opens the wizard; the wizard gains a "create the record
+   only" step (D4, V4); the Organisation card shrinks and "Archive organisation" moves to a kebab.
+3. `tests/authoring-controls.test.ts` (gate U3) extended to the three screens.
+
+### PR-5 · Which node is stale (small backend, unlocks everything after)
+
+Depends on: PR-3 (`Toolbar`). Size: 4–5 days. Backend can start while PR-2 / PR-3 are in
+progress.
+
+1. `crates/pos-cloud` config tree + `store-postgres` — `node_key` recorded on every published
+   version (additive migration); `GET /admin/stores/{id}/config/nodes` returns, per node:
+   published version, held version, last author edit (F6). `routes.txt` additive; snapshot and
+   `openapi-admin` regenerated.
+2. Prerequisite rules from ADR-0122 applied to single-node publish as well (F7); refusal names
+   the missing prerequisite.
+3. `PublishBar` in the kit — target · state · preview when available · Publish — modelled on
+   Configuration's; replaces the hand-made publish blocks on 13 screens (F13). Gate: no
+   `api.publish*` call from a screen file.
+4. Hub Configuration card lists the stale nodes; get-started step 5 becomes four sub-lines;
+   "needs republish" flag on the hub and in the config tree (F4).
+5. Tests: `publish-bar.test`, `config-nodes` route test, prerequisite refusal test.
+
+### PR-6 · The data layer, finished
+
+Depends on: PR-3, per screen. Size: 1–2 weeks, incremental (runs alongside PR-4 / PR-5).
+
+1. Every remaining screen onto `createAdminResource`; the last Refresh buttons go with them.
+2. Gates: no `t("action.refresh")` anywhere; no `createSignal` for load / error state in
+   `screens/`.
+
+### PR-7 · Releases (scheduled publish across nodes × stores)
+
+Depends on: PR-5. Size: 1–2 weeks.
+
+1. **ADR first** (per `AGENTS.md` §2): a release = `nodes[] × (store | group)`, now or at a
+   wall-clock time; the cloud converts the wall-clock time to a per-store instant from that
+   store's published `locale.timezone` and `business_date_cutoff` (D8, option O2); the snapshot is
+   taken at schedule time; states draft → scheduled → applying → applied | partial.
+2. `crates/pos-cloud/src/scheduling.rs`, `http.rs`, migration — `/admin/releases` (create,
+   list for tenant, cancel, report node × store) (F8, F9, F10, F17).
+3. Console — `Releases.tsx` (publish centre, by store) and `Calendar.tsx` (by tenant);
+   `PublishBar` gains "Add to a release"; the wizard asks group + country and offers "as the
+   group" (L1–L4).
+4. Tests: activator converts the same wall-clock time to two instants for two timezones;
+   partial report; cancel before activation.
+
+### PR-8 · Finish
+
+Depends on: PR-5, PR-7. Size: 1 week.
+
+1. F11 generic preview before publish · F15 CSV import for items (dry-run → apply, as
+   Translations does; prices are T2 — the import log carries no clear-text price) · F16
+   cross-entity search in the command palette · the rest of V16.
+2. Step-budget ceilings 4 / 6 / 3 set in `dashboard/scripts/steps` so gate A4 starts refusing
+   (D7).
+
+## 4w.3 Rhythm and what "approved" means
+
+About 5–7 weeks for one person; 3–4 weeks for two (backend starts PR-5 while the front end does
+PR-2 / PR-3). Nothing here is a big bang: every merged PR leaves the console better than the one
+before it. If only two PRs could be done, they would be PR-1 and PR-2 — fix what is said wrong,
+and decide the colour and the button — the two things a user sees first and the two cheapest.
+
+Approval of this section means: start PR-1 and PR-2 (they are independent), in that order on
+one branch or in parallel on two; the rest follow in the order above. A change to the order or
+the scope is a change to this section first.
