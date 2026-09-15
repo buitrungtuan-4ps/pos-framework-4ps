@@ -283,6 +283,11 @@ export function Activation() {
           }
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          {/* The trap the runbook has a callout for and this screen said nothing about: a code is
+              issued per named device, but the store *machine* redeems exactly one — a second code
+              presented to an activated box is refused (ADR-0118). Said here, next to the roster,
+              and again in the issuing form. */}
+          <p class="mb-3 max-w-2xl text-sm text-ink-muted">{t("activation.oneCodeHint")}</p>
           <Show
             when={devices()}
             fallback={<p class="text-sm text-ink-muted">{t("activation.loadHint")}</p>}
@@ -360,6 +365,7 @@ export function Activation() {
           onSubmit={issue}
           as="modal"
         >
+          <p class="mb-3 text-sm text-ink-muted">{t("activation.oneCodeHint")}</p>
           {/* An archived device is off the roster: it is still in the table, where it can be
               restored, but it is not offered a fresh activation code. */}
           <SelectField

@@ -37,6 +37,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Store settings showed the framework's defaults on every store (Wave 4 · PR-1, V15).** The screen
+  read the country registry and nothing else, so a store running JPY at a 06:00 cutoff opened on
+  VND, `Asia/Ho_Chi_Minh` and 04:00. A publish from this screen rebuilds the whole `locale` node
+  from the form, so correcting an address could have moved a store's currency. It now reads the
+  store's effective configuration on open, fills every locale and identity field from it, resets
+  first so switching stores cannot carry a value across, and says whose values are on screen —
+  "Showing what this store is running now — published <date>", or that nothing is published yet.
+- **Fleet, OTA and the store hub disagreed about the same shop (V11).** Fleet and OTA computed
+  presence and configuration verdicts from the raw booleans, so a store provisioned an hour ago and
+  never installed read "Offline" and "Behind" on one screen and "Not installed yet" on another. All
+  three now read `lib/posture.ts`.
+- **A store with nothing published read as a failed check (V10).** `configVersions` threw on the
+  `404` that means "no tree yet", and the get-started checklist painted "Could not check" in red on
+  every new store. The client answers `[]` for that case and still throws on a real refusal.
+- **Three background tasks showed their snake_case keys on Fleet (V12).** `alert_evaluator`,
+  `archive_retention` and `scheduled_publish_activator` have labels.
+- **The breadcrumb named a tenant and store on screens that ignore them (V13).** Admins, Audit,
+  Alerts and My security span every tenant; the trail no longer claims otherwise.
+- **Five screens told the operator to choose a store "above" (V17).** The store picker moved to the
+  top bar in F1. Channels, Campaigns, Inventory and Tax rates now say where it is.
+
+### Changed
+
+- **The get-started checklist and the new-store wizard open Store settings, not Configuration
+  (Wave 4 · PR-1, F1/F2).** Configuration holds capability flags and the version history — the one
+  screen in the publish chain a brand-new store does not need. Both now name the order the four
+  publishes have to happen in: Store settings, Tax rates, the Menu, then People.
+- **Activation says that one code activates one machine (F3).** The per-box rule from
+  [ADR-0118](docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) was in the runbook and
+  nowhere on the screen that issues the codes.
+- **Configuration's raw JSON publish folds under "Advanced" (F12).** Replacing a whole layer from
+  pasted JSON is the sharpest tool on that screen and it sat open beside the capability form. Still
+  one click away, with a line saying which screens own the same nodes.
+
 - **`main`'s `integration` job could not start its S3 server.** The step pinned
   `minio/minio` by digest and that repository is gone from Docker Hub, so the pull failed with
   `pull access denied` and took the rest of the job with it: `blob-garage`, both NATS servers and

@@ -12,6 +12,7 @@ import { api } from "../api/client";
 import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
+import { onlineVerdict } from "../lib/posture";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
@@ -274,12 +275,16 @@ export function Ota() {
       key: "presence",
       header: t("ota.presence"),
       sortValue: (row) => (row.online ? 1 : 0),
-      cell: (row) => (
-        <StatusBadge
-          tone={row.online ? "active" : "disabled"}
-          label={row.online ? t("ota.online") : t("ota.offline")}
-        />
-      ),
+      // Same posture as the hub and Fleet: a store that was never installed is not "offline".
+      cell: (row) => {
+        const verdict = onlineVerdict(row);
+        return (
+          <StatusBadge
+            tone={verdict.tone === "ok" ? "active" : verdict.tone === "attention" ? "danger" : "neutral"}
+            label={t(verdict.headline)}
+          />
+        );
+      },
     },
     {
       key: "id",

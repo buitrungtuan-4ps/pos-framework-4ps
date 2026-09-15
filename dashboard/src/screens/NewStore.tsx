@@ -82,11 +82,20 @@ export function NextSteps(props: { tenant: string; store: string }) {
           </a>
         </li>
         <li>
-          <a class="text-accent underline" href={screenHref("config", props.tenant, props.store)}>
+          {/* Store settings, not Configuration: the four publishes a shop needs (locale, tax, menu,
+              roster) start there, and Configuration is the one screen among them a new store does
+              not need. Same reasoning as the get-started's publish step (`lib/get-started.ts`). */}
+          <a
+            class="text-accent underline"
+            href={screenHref("storeSettings", props.tenant, props.store)}
+          >
             {t("wizard.nextConfig")}
           </a>
         </li>
       </ul>
+      {/* The order matters and nothing else says it: a menu published over a missing tax node boots
+          a store that cannot close a bill (ADR-0122 §7). */}
+      <p class="text-sm text-ink-muted">{t("wizard.publishOrder")}</p>
     </div>
   );
 }

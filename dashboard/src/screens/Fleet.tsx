@@ -16,6 +16,7 @@ import type {
 } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
+import { configVerdict, onlineVerdict, type Tone } from "../lib/posture";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
@@ -40,6 +41,9 @@ const TASK_LABELS: Record<string, MessageKey> = {
   rollup_projector: "fleet.task.rollupProjector",
   retention: "fleet.task.retention",
   webhook_dispatcher: "fleet.task.webhookDispatcher",
+  alert_evaluator: "fleet.task.alertEvaluator",
+  archive_retention: "fleet.task.archiveRetention",
+  scheduled_publish_activator: "fleet.task.scheduledPublishActivator",
 };
 
 function taskLabel(task: string): string {
@@ -214,12 +218,24 @@ export function Fleet() {
     onCleanup(() => clearInterval(handle));
   });
 
-  const onlineBadge = (online: boolean) => (
-    <StatusBadge
-      tone={online ? "active" : "disabled"}
-      label={online ? t("fleet.online") : t("fleet.offline")}
-    />
-  );
+  // The hub's posture rules (`lib/posture.ts`), not the raw booleans: a store that has never been
+  // installed is "not installed yet", not "offline", and a store nobody has published to is
+  // "nothing published", not "behind". The fleet table read the two flags directly and so said the
+  // opposite of the hub about the same shop, on the screen an operator opens during an incident.
+  const badgeTone = (tone: Tone): "active" | "danger" | "neutral" => {
+    switch (tone) {
+      case "ok":
+        return "active";
+      case "attention":
+        return "danger";
+      default:
+        return "neutral";
+    }
+  };
+  const onlineBadge = (row: FleetStore) => {
+    const verdict = onlineVerdict(row);
+    return <StatusBadge tone={badgeTone(verdict.tone)} label={t(verdict.headline)} />;
+  };
 
   // Beside the presence badge, never on a settings page: a store's mode decides what its silence
   // *means*, so it belongs where somebody reads that silence during an incident (ADR-0110).
@@ -253,12 +269,10 @@ export function Fleet() {
     </Show>
   );
 
-  const configBadge = (row: FleetStore) => (
-    <StatusBadge
-      tone={row.config_current ? "active" : "neutral"}
-      label={row.config_current ? t("fleet.inSync") : t("fleet.drifted")}
-    />
-  );
+  const configBadge = (row: FleetStore) => {
+    const verdict = configVerdict(row);
+    return <StatusBadge tone={badgeTone(verdict.tone)} label={t(verdict.headline)} />;
+  };
 
   // Shown only when the store is actually under a lease *and* this box is behind it. A store the
   // cloud has never issued a lease to has no standing to display, and putting a badge on it would
@@ -365,7 +379,7 @@ export function Fleet() {
       sortValue: (row) => (row.online ? 1 : 0),
       cell: (row) => (
         <div class="flex flex-wrap items-center gap-1">
-          {onlineBadge(row.online)}
+          {onlineBadge(row)}
           {placementBadge(row)}
         </div>
       ),
@@ -538,7 +552,7 @@ export function Fleet() {
             {(store) => (
               <div class="flex flex-col gap-4">
                 <div class="flex flex-wrap gap-2">
-                  {onlineBadge(store().online)}
+                  {onlineBadge(store())}
                   {placementBadge(store())}
                   {configBadge(store())}
                   {leaseBadge(store())}

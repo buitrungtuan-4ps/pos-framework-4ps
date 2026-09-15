@@ -39,15 +39,28 @@ describe("the wizard's closing step", () => {
     expect(link.getAttribute("href")).toBe(`/t/${TENANT}/activation?store=${STORE}`);
   });
 
-  it("links to configuration, scoped to the store it just created", () => {
+  // Wave 4 · PR-1 (F2): the second link used to open Configuration, which holds capability flags
+  // and the version history — the one screen in the publish chain a brand-new store does not need.
+  // The chain starts at Store settings, and the wizard now hands over that.
+  it("links to store settings, scoped to the store it just created", () => {
     mountNextSteps();
-    const link = screen.getByRole("link", { name: "Publish this store's configuration" });
-    expect(link.getAttribute("href")).toBe(`/t/${TENANT}/config?store=${STORE}`);
+    const link = screen.getByRole("link", { name: "Set up and publish this store's settings" });
+    expect(link.getAttribute("href")).toBe(`/t/${TENANT}/store-settings?store=${STORE}`);
+  });
+
+  it("names the publish order, which nothing else on the path says", () => {
+    mountNextSteps();
+    expect(
+      screen.getByText(/Publish in this order: Store settings, then Tax rates, then the Menu/),
+    ).toBeTruthy();
   });
 
   it("carries the store it is given, so an unrelated store in context cannot leak in", () => {
     mountNextSteps(OTHER_STORE);
-    for (const name of ["Activate this store's devices", "Publish this store's configuration"]) {
+    for (const name of [
+      "Activate this store's devices",
+      "Set up and publish this store's settings",
+    ]) {
       expect(screen.getByRole("link", { name }).getAttribute("href")).toContain(OTHER_STORE);
     }
   });

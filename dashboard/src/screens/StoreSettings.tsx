@@ -15,8 +15,8 @@
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Country } from "../api/types";
-import { LOCALES, localeName, t } from "../i18n";
+import type { Country, Json } from "../api/types";
+import { locale as consoleLocale, LOCALES, localeName, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
@@ -92,6 +92,45 @@ const REGISTRATION_LABEL: Record<string, string> = {
   IN: "GSTIN",
 };
 
+/** One node of the store's effective config tree, or `null` when the tree does not carry it. */
+function node(effective: Json | null, key: string): Record<string, Json> | null {
+  if (effective === null || typeof effective !== "object" || Array.isArray(effective)) {
+    return null;
+  }
+  const value = (effective as Record<string, Json>)[key];
+  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, Json>;
+}
+
+/** A string field of a published node, or `null` — a node written by a fork may hold anything. */
+function readString(from: Record<string, Json> | null, key: string): string | null {
+  const value = from?.[key];
+  return typeof value === "string" ? value : null;
+}
+
+/** A finite-number field of a published node, or `null`. */
+function readNumber(from: Record<string, Json> | null, key: string): number | null {
+  const value = from?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** A boolean field of a published node, or `null`. */
+function readBoolean(from: Record<string, Json> | null, key: string): boolean | null {
+  const value = from?.[key];
+  return typeof value === "boolean" ? value : null;
+}
+
+/** A string-array field of a published node as textarea lines; missing or malformed reads as "". */
+function readLines(from: Record<string, Json> | null, key: string): string {
+  const value = from?.[key];
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return value.filter((entry): entry is string => typeof entry === "string").join("\n");
+}
+
 /** A textarea's lines as printed lines, trimmed, with the blanks dropped. */
 function printedLines(text: string): string[] {
   return text
@@ -130,6 +169,10 @@ export function StoreSettings() {
   const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  // Whether the store is actually running a `locale` node, and when its tree was last published.
+  // Both are for the one line under the form: a form that shows values has to say whose they are.
+  const [localePublished, setLocalePublished] = createSignal(false);
+  const [publishedAtMs, setPublishedAtMs] = createSignal<number | null>(null);
 
   const fail = (caught: unknown) => {
     const message = apiMessage(caught);
@@ -137,11 +180,121 @@ export function StoreSettings() {
     toast.error(message);
   };
 
+  /**
+   * Back to the framework's own defaults.
+   *
+   * Called before every hydration, and it is the half that makes switching stores safe: without it
+   * a field the *previous* store published and this one does not would survive the switch, and this
+   * screen publishes whatever the fields hold.
+   */
+  const resetToDefaults = () => {
+    setCurrency("VND");
+    setTimezone("Asia/Ho_Chi_Minh");
+    setCutoffHour(4);
+    setDisplayLanguage("");
+    setPricesIncludeTax(false);
+    setRoundingText("");
+    setNotesText("");
+    setCountry("");
+    setFilledFrom("");
+    setLegalName("");
+    setTradingName("");
+    setAddressText("");
+    setRegistrationNumber("");
+    setRegistrationLabel("");
+    setContactText("");
+    setFooterText("");
+    setLocalePublished(false);
+    setPublishedAtMs(null);
+  };
+
+  /**
+   * Fill the form from what the store is running (V15).
+   *
+   * Until this existed the screen opened on framework defaults for every store — VND,
+   * Asia/Ho_Chi_Minh, cutoff 04:00 — whatever that store had published. Two failures, and the
+   * second is the serious one: the operator was told the wrong thing, and then a Save of any single
+   * field republished the whole node from those defaults, so opening this screen to fix a typo in
+   * the address could move a Tokyo store's currency to VND. A publish here rebuilds the node
+   * wholesale (`admin_publish_locale`), so the form has to start from the node, not from nothing.
+   *
+   * Each field is read defensively: a node written by a fork, or by an older build, is a store this
+   * console still has to draw. A value of the wrong type leaves the framework default in place
+   * rather than throwing.
+   */
+  const hydrate = (effective: Json | null) => {
+    const locale = node(effective, "locale");
+    const profile = node(effective, "store_profile");
+    setLocalePublished(locale !== null);
+
+    const currencyCode = readString(locale, "currency_code");
+    if (currencyCode !== null) {
+      setCurrency(currencyCode.toUpperCase());
+    }
+    const zone = readString(locale, "timezone");
+    if (zone !== null) {
+      setTimezone(zone);
+    }
+    const cutoff = readNumber(locale, "cutoff_hour");
+    if (cutoff !== null) {
+      setCutoffHour(Math.max(0, Math.min(23, Math.trunc(cutoff))));
+    }
+    const language = readString(locale, "display_language");
+    if (language !== null) {
+      setDisplayLanguage(language);
+    }
+    const inclusive = readBoolean(locale, "prices_include_tax");
+    if (inclusive !== null) {
+      setPricesIncludeTax(inclusive);
+    }
+    // `cash_rounding_increment` is nullable *by design* — `null` means "do not round" — so an
+    // explicit null is a published value and leaves the field blank, which is what blank means here.
+    if (locale !== null && "cash_rounding_increment" in locale) {
+      const increment = readNumber(locale, "cash_rounding_increment");
+      setRoundingText(increment === null ? "" : String(increment));
+    }
+    const denominations = locale?.["cash_denominations"];
+    if (Array.isArray(denominations)) {
+      setNotesText(
+        denominations
+          .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
+          .join(", "),
+      );
+    }
+    // The country is on both nodes and they can disagree — `store_profile` carries the country the
+    // paper claims, `locale` the one the store trades under (ADR-0114). The picker edits the locale
+    // one, so that is the one it shows; the profile's is the fallback for a store that published a
+    // profile before `country_code` was required on the locale publish.
+    const countryCode = readString(locale, "country_code") ?? readString(profile, "country_code");
+    if (countryCode !== null) {
+      setCountry(countryCode.toUpperCase());
+    }
+
+    setLegalName(readString(profile, "legal_name") ?? "");
+    setTradingName(readString(profile, "trading_name") ?? "");
+    setAddressText(readLines(profile, "address_lines"));
+    setRegistrationNumber(readString(profile, "tax_registration_number") ?? "");
+    setRegistrationLabel(readString(profile, "tax_registration_label") ?? "");
+    setContactText(readLines(profile, "contact_lines"));
+    setFooterText(readLines(profile, "footer_lines"));
+  };
+
   const load = async () => {
     setError("");
     setBusy(true);
+    resetToDefaults();
     try {
-      setCountries(await api.listCountries());
+      // Three reads, in parallel: the country registry for the pickers, the effective tree for the
+      // values, and the version list only for the date the line under the form prints. A store
+      // nobody has published to answers `null` and an empty list, and both are ordinary answers.
+      const [countryList, effective, versions] = await Promise.all([
+        api.listCountries(),
+        api.effectiveConfig(tenantId(), storeId()),
+        api.configVersions(tenantId(), storeId()),
+      ]);
+      setCountries(countryList);
+      hydrate(effective);
+      setPublishedAtMs(versions.find((version) => version.current)?.at_ms ?? null);
       setLoaded(true);
     } catch (caught) {
       fail(caught);
@@ -150,8 +303,21 @@ export function StoreSettings() {
     }
   };
 
-  // The country registry is not store-scoped, but loading it on the store gate keeps one load path.
+  // Re-reads on every context change, which is what makes the reset above load-bearing.
   onScopedContext("store", () => void load());
+
+  /** What the form is showing: this store's published values, or the framework's defaults. */
+  const runningLine = createMemo(() => {
+    if (!localePublished()) {
+      return t("storeSettings.nothingPublished");
+    }
+    const at = publishedAtMs();
+    return at === null
+      ? t("storeSettings.runningNow")
+      : t("storeSettings.runningNowAt", {
+          when: new Date(at).toLocaleString(consoleLocale()),
+        });
+  });
 
   // The currencies the platform's country modules declare, deduped, as datalist suggestions.
   const currencyOptions = createMemo(() => {
@@ -211,6 +377,20 @@ export function StoreSettings() {
     toast.ok(t("storeSettings.filledFrom", { country: country.display_name }));
   };
 
+  /**
+   * Re-read the version list after a publish, so the line under the form stops describing the tree
+   * as it was a second ago. Narrower than a full reload on purpose: the fields hold exactly what
+   * was just published, and a failed read here should not blank a form the operator is still using.
+   */
+  const refreshPublishedAt = async () => {
+    try {
+      const versions = await api.configVersions(tenantId(), storeId());
+      setPublishedAtMs(versions.find((version) => version.current)?.at_ms ?? null);
+    } catch {
+      setPublishedAtMs(null);
+    }
+  };
+
   const publishProfile = async () => {
     setError("");
     setBusy(true);
@@ -226,6 +406,7 @@ export function StoreSettings() {
         country_code: country().trim() || undefined,
       });
       toast.ok(t("storeSettings.profilePublished", { store: storeName() }));
+      await refreshPublishedAt();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -248,6 +429,8 @@ export function StoreSettings() {
         cash_denominations: noteValues(),
       });
       toast.ok(t("storeSettings.published", { store: storeName() }));
+      setLocalePublished(true);
+      await refreshPublishedAt();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -262,6 +445,9 @@ export function StoreSettings() {
         <Card title={t("storeSettings.locale")}>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={loaded()}>
+            {/* Whose values these are. A form that silently shows defaults for a store running
+                something else is worse than an empty one, because it reads as an answer. */}
+            <p class="mb-4 text-sm text-ink-muted">{runningLine()}</p>
             <div class="grid max-w-xl gap-4">
               {/* Which country this store is in (ADR-0114). Required: the publish refuses without
                   it, because it is the value a hosted store's region is compared against — and a

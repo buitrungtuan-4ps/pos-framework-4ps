@@ -115,13 +115,18 @@ export function Shell(props: ParentProps) {
   // The breadcrumb: the working context (tenant, then store, each shown once set) then the page.
   const crumbs = (): string[] => {
     const trail: string[] = [];
-    if (tenantName()) {
-      trail.push(tenantName());
-    }
-    if (storeName()) {
-      trail.push(storeName());
-    }
     const screen = screenAtPath(screenPathOf(location.pathname));
+    // The working context leads the trail only on a screen that is scoped to it. Admins, Audit and
+    // Alerts span every tenant; "Pizza 4P's › Bến Thành › Admins" claimed the roster belonged to
+    // one shop, which is the kind of wrong that a breadcrumb exists to prevent.
+    if (screen?.tenantScoped !== false) {
+      if (tenantName()) {
+        trail.push(tenantName());
+      }
+      if (storeName()) {
+        trail.push(storeName());
+      }
+    }
     trail.push(screen ? t(screen.key) : t("app.title"));
     return trail;
   };

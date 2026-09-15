@@ -22,7 +22,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Shell } from "../src/components/Shell";
-import { setStoreId, setTenantId } from "../src/state/session";
+import { setStoreId, setStoreName, setTenantId, setTenantName } from "../src/state/session";
 
 const TENANT = "01M22190WCY5PS7KCA7ET7H679";
 const STORE = "01M2219QK4T3W6Z0Y8FBQ2X5MV";
@@ -59,6 +59,8 @@ beforeEach(() => {
   localStorage.clear();
   setTenantId("");
   setStoreId("");
+  setTenantName("");
+  setStoreName("");
   whoami.mockResolvedValue({ role: "owner", email: "[EMAIL_REDACTED]" });
   listTenants.mockResolvedValue([]);
   listStores.mockResolvedValue([]);
@@ -236,5 +238,38 @@ describe("the drawer under md", () => {
     await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
     fireEvent.keyDown(toggle, { key: "Escape" });
     await waitFor(() => expect(toggle.getAttribute("aria-expanded")).toBe("false"));
+  });
+});
+
+// Wave 4 · PR-1 (V13): the breadcrumb led with the working context on every screen, including the
+// ones that ignore it. "Pizza 4P's › Bến Thành › Admins" claimed the console's admin roster belonged
+// to one shop — the console has one roster, spanning every tenant. A breadcrumb that names a scope
+// the screen does not have is worse than no breadcrumb: it is the one element on the page whose
+// whole job is to say where you are.
+describe("the breadcrumb", () => {
+  const crumbs = () =>
+    screen
+      .getByLabelText("Breadcrumb")
+      .textContent?.split("›")
+      .map((part) => part.trim())
+      .filter((part) => part !== "") ?? [];
+
+  beforeEach(() => {
+    setTenantId(TENANT);
+    setStoreId(STORE);
+    setTenantName("Bốn Phương Foods");
+    setStoreName("Bến Thành");
+  });
+
+  it("leads with the working context on a screen scoped to it", async () => {
+    mountShell("/t/" + TENANT + "/store-settings");
+    await waitFor(() => expect(whoami).toHaveBeenCalled());
+    expect(crumbs()).toEqual(["Bốn Phương Foods", "Bến Thành", "Store settings"]);
+  });
+
+  it("omits it on a console-level screen, which spans every tenant", async () => {
+    mountShell("/admins");
+    await waitFor(() => expect(whoami).toHaveBeenCalled());
+    expect(crumbs()).toEqual(["Admins"]);
   });
 });
