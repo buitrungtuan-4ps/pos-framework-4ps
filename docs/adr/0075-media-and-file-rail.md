@@ -63,6 +63,15 @@ The gaps this closes:
    T1/T2 export domains. XLSX is **deferred** — CSV is the interoperable floor; XLSX pulls a heavier
    dependency and buys little over CSV.
 
+   **Item import shipped in Wave 4 PR-8 (roadmap-v3 F15)**, on this same rail and in the shape this
+   decision describes: dry run, then an explicit confirm. It takes exactly the columns the item
+   export writes, so the pair round-trips, and it is the format rather than a rule that keeps prices
+   out of it — an item CSV has no price column, because a price is a per-channel placement. A row
+   naming a `menu_item_id` this tenant does not have is **rejected, never created**: the id is the
+   identity an inbound order names, and a file that could mint one would let a spreadsheet invent a
+   wire id. The T1 domains (the employee roster) stay deferred under decision 5 — a bulk personal-data
+   import is a question about lawful basis, not about a parser.
+
 5. **Data-classification guardrails are part of the design, not an afterthought.** Employee and subject
    data are T1; prices are T2. Therefore the export rail ships **only the non-personal domains** (items,
    translations) autonomously: every export is permission-gated and audited (the audit entry records who

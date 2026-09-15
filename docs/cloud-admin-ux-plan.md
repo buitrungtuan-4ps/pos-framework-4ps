@@ -1413,7 +1413,8 @@ them apart.
 - F11 / F13 / F15 / F16 · No generic preview before publish; twenty hand-made publish buttons
   instead of one `PublishBar`; no CSV import for items; no cross-entity search.
   *(F13 closed in PR-5; **F11 closed in PR-8** — `POST /admin/config/preview` compiles any node the
-  cloud's node table knows and the bar shows the diff before the write.)*
+  cloud's node table knows and the bar shows the diff before the write. **F15 closed in PR-8** — the
+  item master imports over ADR-0075's dry-run-first rail, round-tripping the export's own columns.)*
 
 ## 4w.2 The plan — eight PRs, in dependency order
 

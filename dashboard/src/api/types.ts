@@ -214,6 +214,16 @@ export interface TranslationImportReport {
   readonly reject_count: number;
 }
 
+/**
+ * The same rail's report for the **item master** (roadmap-v3 **F15**).
+ *
+ * Structurally identical because it is the same rail — one row per CSV row, in file order, with the
+ * totals the review dialog headlines. What a row's `key` names differs: the item's id where the file
+ * named one, otherwise the name it gave. No price appears anywhere in it, because the item CSV has
+ * no price column: a price is a per-channel placement, not an item field.
+ */
+export type ItemImportReport = TranslationImportReport;
+
 /** Whether a registry entity is in use or retired (ADR-0065). Entities are archived, never deleted. */
 export type EntityStatus = "active" | "archived";
 

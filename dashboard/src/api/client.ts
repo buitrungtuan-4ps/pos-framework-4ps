@@ -62,6 +62,7 @@ import type {
   Menu,
   MenuPlacement,
   MenuSection,
+  ItemImportReport,
   NodePreview,
   ModifierGroup,
   PermissionInfo,
@@ -1651,6 +1652,18 @@ export const api = {
   applyTranslationsCsv: (tenantId: string, file: Blob) =>
     requestUpload<TranslationImportReport>(
       `/admin/translations/import/apply?${tenantQuery(tenantId)}`,
+      file,
+    ),
+  // The item master over the same rail (F15). The file is the one `exportItemsCsv` writes, so the
+  // pair round-trips; it carries no price, and neither does the report.
+  dryRunItemsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<ItemImportReport>(
+      `/admin/catalog/import/items/dry-run?${tenantQuery(tenantId)}`,
+      file,
+    ),
+  applyItemsCsv: (tenantId: string, file: Blob) =>
+    requestUpload<ItemImportReport>(
+      `/admin/catalog/import/items/apply?${tenantQuery(tenantId)}`,
       file,
     ),
 

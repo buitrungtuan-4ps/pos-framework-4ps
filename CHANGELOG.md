@@ -58,6 +58,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The item master imports from a spreadsheet, dry run first** (Wave 4 PR-8, finding F15,
+  [ADR-0075](docs/adr/0075-media-and-file-rail.md)). The console could export the catalogue's items to
+  CSV and had no way to bring them back: renaming two hundred items meant two hundred trips through a
+  drawer. `POST /admin/catalog/import/items/dry-run` classifies every row — would add, would update,
+  rejected with the reason — and writes nothing; `…/apply` is the confirm.
+  - It takes exactly the columns the export writes, so the pair round-trips. Foreign keys (tax class,
+    category, sub-category, image) are checked row by row against the tenant's own, where the operator
+    can see which row broke, rather than at the write, where the first failure hides the rest.
+  - A row naming an item this tenant does not have is **rejected, not created**: `menu_item_id` is the
+    identity an inbound order names, and a file that could mint one would let a spreadsheet invent a
+    wire id.
+  - An update keeps what the format cannot carry — an item's per-locale names survive an import that
+    never mentioned them — and is conditional on the version the review read, so a row somebody else
+    changed in between is refused rather than silently overwritten.
+  - **No price crosses this rail in either direction**, and that is a property of the format rather
+    than a redaction rule: an item CSV has no price column, because a price is a per-channel
+    placement. Neither the upload nor the row-by-row report can carry one in clear text.
+  - The employee roster stays out. A bulk personal-data import is a decision about lawful basis, not
+    a parser, and ADR-0075 decision 5 still defers it.
+
 - **Every publish bar can show what the publish would change, before it changes it**
   (Wave 4 PR-8, finding F11). `POST /admin/config/preview` compiles a node for one store and returns
   the merge patch a publish of it would apply — minting no version, saving nothing, auditing nothing

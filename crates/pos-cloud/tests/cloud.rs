@@ -11232,6 +11232,131 @@ fn post_bytes_with_cookie(
         .expect("build the request")
 }
 
+/// The item-master CSV import, end to end over the routes (roadmap-v3 **F15**).
+///
+/// The dry run must write nothing and the apply must write what it promised — the two properties an
+/// operator is trusting when they press the button on a file of hundreds of rows.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one file through both halves of the rail, asserted end to end — the point is that the \
+              dry run and the apply agree about the same bytes, so splitting them into two tests \
+              would duplicate the whole fixture to check half the property each time"
+)]
+async fn an_item_import_reviews_without_writing_and_then_applies_what_it_promised() {
+    let catalog = FakeCatalog::default();
+    let router = catalog_app(provisioned_admin(), catalog.clone());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // A tax class to reference, and one existing item to update.
+    let tax_class = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/tax-classes",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create tax class");
+    assert_eq!(tax_class.status(), StatusCode::CREATED);
+    let tax_class_id = json_body(tax_class).await["tax_class_id"]
+        .as_str()
+        .expect("a tax class id")
+        .to_owned();
+
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Pho",
+                "tax_class_id": tax_class_id,
+                "name_translations": { "vi": "Phở" },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let menu_item_id = json_body(created).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let csv = format!(
+        "menu_item_id,name,status,tax_class_id,item_category_id,item_subcategory_id,image_ref\n\
+         {menu_item_id},Pho bo,active,{tax_class_id},,,\n\
+         ,Tra da,active,{tax_class_id},,,\n\
+         ,No tax,active,not-an-id,,,\n"
+    );
+
+    let reviewed = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/catalog/import/items/dry-run?tenant_id={tenant}"),
+            csv.clone().into_bytes(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the dry run");
+    assert_eq!(reviewed.status(), StatusCode::OK);
+    let report = json_body(reviewed).await;
+    assert_eq!(report["update_count"], 1);
+    assert_eq!(report["create_count"], 1);
+    assert_eq!(report["reject_count"], 1);
+    assert_eq!(
+        catalog
+            .tenant_items(TenantId::new(Ulid::from_u128(1)))
+            .len(),
+        1,
+        "a dry run that wrote a row would be a dry run nobody can trust"
+    );
+
+    let applied = router
+        .clone()
+        .oneshot(post_bytes_with_cookie(
+            &format!("/admin/catalog/import/items/apply?tenant_id={tenant}"),
+            csv.into_bytes(),
+            "text/csv",
+            &cookie,
+        ))
+        .await
+        .expect("route the apply");
+    assert_eq!(applied.status(), StatusCode::OK);
+    let report = json_body(applied).await;
+    assert_eq!(report["create_count"], 1);
+    assert_eq!(report["update_count"], 1);
+    assert_eq!(report["reject_count"], 1, "the bad row is still refused");
+
+    let items = catalog.tenant_items(TenantId::new(Ulid::from_u128(1)));
+    assert_eq!(items.len(), 2, "one created, one updated in place");
+    let updated = items
+        .iter()
+        .find(|row| row.record.menu_item_id.to_string() == menu_item_id)
+        .expect("the updated item");
+    assert_eq!(updated.record.name, "Pho bo");
+    assert_eq!(
+        updated
+            .record
+            .name_translations
+            .get("vi")
+            .map(String::as_str),
+        Some("Phở"),
+        "the import kept the per-locale name the CSV format cannot carry"
+    );
+    assert!(
+        items.iter().any(|row| row.record.name == "Tra da"),
+        "the row naming no id was created"
+    );
+    assert!(
+        !items.iter().any(|row| row.record.name == "No tax"),
+        "the rejected row was never written"
+    );
+}
+
 #[tokio::test]
 async fn media_uploads_serves_lists_and_deletes_and_rejects_a_non_image() {
     let router = media_app(provisioned_admin(), FakeMedia::default());

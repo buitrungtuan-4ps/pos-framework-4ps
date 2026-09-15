@@ -9,16 +9,17 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type { CatalogItem, ItemSort } from "../../api/types";
+import type { CatalogItem, ItemImportReport, ItemSort } from "../../api/types";
 import { LOCALES, localeName, t } from "../../i18n";
 import { createAdminResource, failureOf } from "../../lib/resource";
 import { actingAdmin, tenantId } from "../../state/session";
-import { Banner, Button, Card, SelectField, TextField } from "../../components/ui";
+import { Banner, Button, Card, FileButton, SelectField, TextField } from "../../components/ui";
 import {
   type Column,
   DataTable,
   Drawer,
   EmptyState,
+  Modal,
   TechnicalDetails,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
@@ -268,6 +269,69 @@ export function CatalogItems() {
     }
   };
 
+  // CSV import, dry-run first (ADR-0075, F15). The file is held between the two steps so the
+  // confirm re-sends the exact bytes the review classified — re-picking the file to apply would
+  // let the operator confirm one file and send another.
+  const [importReport, setImportReport] = createSignal<ItemImportReport | null>(null);
+  const [importFile, setImportFile] = createSignal<File | null>(null);
+
+  const closeImport = () => {
+    setImportReport(null);
+    setImportFile(null);
+  };
+
+  // Step 1: classify every row and show the verdicts. Nothing is written.
+  const reviewImport = async (file: File) => {
+    setBusy(true);
+    try {
+      const report = await api.dryRunItemsCsv(tenantId(), file);
+      setImportFile(file);
+      setImportReport(report);
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 2: the operator confirms, and the same bytes are applied. The report comes back a second
+  // time because a row can still be refused at the write — the item changed while the review was
+  // open — and the operator needs to see which.
+  const applyImport = async () => {
+    const file = importFile();
+    if (!file) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const report = await api.applyItemsCsv(tenantId(), file);
+      if (report.reject_count > 0) {
+        toast.error(
+          t("catalog.importPartial", {
+            created: report.create_count,
+            updated: report.update_count,
+            rejected: report.reject_count,
+          }),
+        );
+        setImportReport(report);
+      } else {
+        toast.ok(
+          t("catalog.importApplied", {
+            created: report.create_count,
+            updated: report.update_count,
+          }),
+        );
+        closeImport();
+      }
+      // An import can create rows, so the window the operator is on may have moved under them.
+      await show(offset());
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const columns = (): Column<CatalogItem>[] => [
     {
       key: "name",
@@ -332,6 +396,13 @@ export function CatalogItems() {
               <Button variant="secondary" disabled={busy()} onClick={() => void exportItems()}>
                 {t("catalog.exportCsv")}
               </Button>
+              <FileButton
+                label={t("catalog.importCsv")}
+                accept=".csv,text/csv"
+                variant="secondary"
+                disabled={busy()}
+                onPick={(file) => void reviewImport(file)}
+              />
             </Show>
             <Button disabled={busy()} onClick={openCreate}>
               {t("catalog.createItem")}
@@ -507,6 +578,63 @@ export function CatalogItems() {
           </div>
         </Show>
       </Drawer>
+
+      {/*
+        The review dialog: what the file would do, before it does it. The rejected rows are listed
+        with their reasons rather than counted, because a spreadsheet is fixed row by row and a
+        number tells the operator nothing about which one to look at.
+      */}
+      <Modal
+        open={importReport() !== null}
+        title={t("catalog.importReview")}
+        closeLabel={t("action.close")}
+        onClose={closeImport}
+        footer={
+          <>
+            <Button variant="secondary" onClick={closeImport}>
+              {t("action.cancel")}
+            </Button>
+            <Button
+              disabled={
+                busy() ||
+                (importReport()?.create_count ?? 0) + (importReport()?.update_count ?? 0) === 0
+              }
+              onClick={() => void applyImport()}
+            >
+              {t("catalog.importApply")}
+            </Button>
+          </>
+        }
+      >
+        <Show when={importReport()}>
+          {(report) => (
+            <div class="flex flex-col gap-3 text-sm text-ink">
+              <p>
+                {t("catalog.importSummary", {
+                  created: report().create_count,
+                  updated: report().update_count,
+                  rejected: report().reject_count,
+                })}
+              </p>
+              <Show when={report().reject_count > 0}>
+                <div class="flex flex-col gap-1">
+                  <p class="font-medium">{t("catalog.importRejected")}</p>
+                  <ul class="max-h-40 overflow-y-auto text-xs text-ink-muted">
+                    <For each={report().rows.filter((row) => row.action === "reject")}>
+                      {(row) => (
+                        <li>
+                          {row.key || t("catalog.importUnnamedRow")} —{" "}
+                          {"reason" in row ? row.reason : ""}
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </div>
+              </Show>
+            </div>
+          )}
+        </Show>
+      </Modal>
     </div>
   );
 }
