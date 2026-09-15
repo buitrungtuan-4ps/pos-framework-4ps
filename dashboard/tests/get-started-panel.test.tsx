@@ -2,12 +2,13 @@
 //
 // The rules are pinned in `get-started.test.ts`. What is checked here is the wiring the rules
 // cannot see: that the panel appears on the landing screen with no context, that its links carry
-// the working context so they land on the right store, that it stands down once every required step
-// is done, and that it fires no store-scoped read before a store is chosen — the last being the
-// reason the panel is safe to put on a screen every operator opens all day.
+// the working context so they land on the right store, that it folds to its progress line once the
+// operator is under way and stands down entirely once every required step is done, and that it
+// fires no store-scoped read before a store is chosen — the last being the reason the panel is safe
+// to put on a screen every operator opens all day.
 
 import { MemoryRouter, Route } from "@solidjs/router";
-import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GetStarted } from "../src/components/GetStarted";
@@ -137,7 +138,39 @@ describe("once the setup is finished", () => {
     setStoreId(STORE);
     mount();
     await waitFor(() => expect(admittedDevices).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText("Could not check")).toBeTruthy());
     expect(screen.getByText("Set up this cloud")).toBeTruthy();
+    // Five steps are done, so the panel has folded (D6); the operator opens it to see which one
+    // could not be checked, and the answer is the honest "could not check" rather than a cross.
+    fireEvent.click(await screen.findByRole("button", { name: "Show the steps" }));
+    expect(screen.getByText("Could not check")).toBeTruthy();
+  });
+});
+
+describe("once the operator is under way", () => {
+  it("folds to its progress line, and opens again when asked", async () => {
+    setUpFully();
+    // Everything but the last step: enough progress that the panel should get out of the way, not
+    // so much that it stands down altogether.
+    fleetStore.mockResolvedValue({ last_seen_at_ms: null });
+    setTenantId(TENANT);
+    setStoreId(STORE);
+    mount();
+    await waitFor(() => expect(fleetStore).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("5 of 6 required steps done.")).toBeTruthy());
+    // The progress is still on the screen; the seven rows of guidance are not.
+    expect(screen.queryByText("Create an organisation")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show the steps" }));
+    expect(screen.getByText("Create an organisation")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide the steps" }));
+    expect(screen.queryByText("Create an organisation")).toBeNull();
+  });
+
+  it("stays open while nothing at all is done, because that console needs the guidance", async () => {
+    mount();
+    await waitFor(() => expect(listTenants).toHaveBeenCalled());
+    expect(screen.getByText("Create an organisation")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Hide the steps" })).toBeNull();
   });
 });

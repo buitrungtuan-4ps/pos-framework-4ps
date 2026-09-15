@@ -41,7 +41,6 @@ import {
   configVerdict,
   neverInstalled,
   onlineVerdict,
-  toneClass,
   type Tone,
 } from "../lib/posture";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
@@ -49,6 +48,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
 import { GetStarted } from "../components/GetStarted";
 import { Button, Card, PageHeader, Skeleton, TextArea } from "../components/ui";
+import { KpiTile } from "../components/kit";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
 function canReadRevenue(): boolean {
@@ -100,14 +100,19 @@ function HubCard<T>(props: {
       >
         {(ready) => {
           const rendered = props.children(ready().value);
+          // The kit's tile rather than this card's own paragraph pair (V16): the hub had the only
+          // figure-first rendering in the console, written here, so every other screen that wanted
+          // one either did without or invented a second. `KpiTile` is that rendering, moved where
+          // the rest of the console can reach it; the card keeps what is particular to the hub —
+          // the panel states and the link out.
           return (
-            <div class="space-y-1">
-              <p class={`text-2xl font-semibold ${toneClass(rendered.tone ?? "plain")}`}>
-                {rendered.headline}
-              </p>
-              <p class="text-sm text-ink-muted">{rendered.support}</p>
-              {props.action?.(ready().value)}
-            </div>
+            <KpiTile
+              label={props.title}
+              value={rendered.headline}
+              support={rendered.support}
+              tone={rendered.tone ?? "plain"}
+              action={props.action?.(ready().value)}
+            />
           );
         }}
       </Show>

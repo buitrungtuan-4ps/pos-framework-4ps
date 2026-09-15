@@ -11,6 +11,7 @@ import {
   createSignal,
   For,
   type JSX,
+  onCleanup,
   type ParentProps,
   Show,
 } from "solid-js";
@@ -808,5 +809,233 @@ export function ReorderList<T>(props: {
         )}
       </For>
     </ul>
+  );
+}
+
+// --- The pieces the run found missing (Wave 4 · PR-3) --------------------------------------------
+
+/**
+ * A row of tabs that switches what is shown below it.
+ *
+ * Three screens had grown a hand-rolled version — the catalogue's sub-screens, the wizard's steps,
+ * the alerts' active/recent split — and each one drew its selected state differently, so the same
+ * control taught the operator three different rules about which tab they were on. Keyboard support
+ * is the part a hand-rolled tab strip always misses: arrow keys move between tabs, which is what
+ * `role="tablist"` promises a screen reader.
+ *
+ * Controlled: the caller owns `active`, because a tab is usually part of the URL.
+ */
+export function Tabs<K extends string>(props: {
+  tabs: readonly { readonly key: K; readonly label: string }[];
+  active: K;
+  onSelect: (key: K) => void;
+  label: string;
+}) {
+  const move = (from: number, step: number) => {
+    const count = props.tabs.length;
+    const next = props.tabs[(from + step + count) % count];
+    if (next) {
+      props.onSelect(next.key);
+    }
+  };
+  return (
+    <div role="tablist" aria-label={props.label} class="flex flex-wrap gap-1 border-b border-line">
+      <For each={props.tabs}>
+        {(tab, index) => (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={props.active === tab.key}
+            // The unselected tabs stay out of the tab order: one Tab press enters the strip, then
+            // the arrows move within it. That is the ARIA pattern, and it is also what stops a
+            // twelve-tab catalogue from costing twelve presses to step past.
+            tabindex={props.active === tab.key ? 0 : -1}
+            onClick={() => props.onSelect(tab.key)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight") {
+                move(index(), 1);
+              } else if (event.key === "ArrowLeft") {
+                move(index(), -1);
+              }
+            }}
+            class={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
+              props.active === tab.key
+                ? "border-accent text-ink"
+                : "border-transparent text-ink-muted hover:text-ink"
+            }`}
+          >
+            {tab.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/**
+ * One headline figure with its label, and optionally a word of support beneath it.
+ *
+ * The store hub's six numbers were paragraphs — "Revenue today: 4,120,000 ₫" in body text, six
+ * times — so nothing on the screen an operator opens first was readable at a glance. A KPI is a
+ * number first and a label second, which is the whole difference.
+ *
+ * `tone` is the same vocabulary `lib/posture.ts` speaks, so a card's hue comes from the rules that
+ * decide what the figure *means* rather than from the screen's own opinion.
+ */
+export function KpiTile(props: {
+  label: string;
+  value: string;
+  support?: string;
+  tone?: "ok" | "attention" | "idle" | "plain";
+  action?: JSX.Element;
+}) {
+  const hue = () => {
+    switch (props.tone) {
+      case "ok":
+        return "text-ok";
+      case "attention":
+        return "text-danger";
+      case "idle":
+        return "text-ink-muted";
+      default:
+        return "text-ink";
+    }
+  };
+  return (
+    <div class="flex flex-col gap-1 rounded-token border border-line bg-surface p-4 shadow-raised">
+      <span class="text-sm text-ink-muted">{props.label}</span>
+      <span class={`tabular text-xl font-semibold ${hue()}`}>{props.value}</span>
+      <Show when={props.support}>
+        <span class="text-sm text-ink-muted">{props.support}</span>
+      </Show>
+      <Show when={props.action}>
+        <div class="mt-1">{props.action}</div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * A row's actions behind one kebab.
+ *
+ * The run counted rows carrying up to five inline buttons — Edit, Archive, Revoke, Details, Resend
+ * — which is a table whose widest column is its verbs. Folded into a menu the row is its data
+ * again, and the destructive entry can be named plainly rather than shortened to fit.
+ *
+ * Closes on Escape and on a click outside, both of which a menu that only closes on its own button
+ * fails at the moment a second row's menu is opened.
+ */
+export function RowActions(props: { label: string; children: JSX.Element }) {
+  const [open, setOpen] = createSignal(false);
+  let container: HTMLDivElement | undefined;
+
+  useEscape(open, () => setOpen(false));
+
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const dismiss = (event: MouseEvent) => {
+      if (container && !container.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", dismiss);
+    onCleanup(() => document.removeEventListener("mousedown", dismiss));
+  });
+
+  return (
+    <div class="relative" ref={container}>
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label={props.label}
+        aria-expanded={open()}
+        aria-haspopup="true"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span aria-hidden="true">⋯</span>
+      </Button>
+      <Show when={open()}>
+        {/* `onClick` on the panel rather than on each entry: every entry closes the menu, and a
+            caller that had to remember to close it would eventually forget on one row. */}
+        <div
+          role="menu"
+          onClick={() => setOpen(false)}
+          class="absolute right-0 z-20 mt-1 flex min-w-40 flex-col items-stretch gap-1 rounded-token border border-line bg-surface p-1 shadow-overlay"
+        >
+          {props.children}
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * A date field that says which clock it means.
+ *
+ * Every date control in the console was a bare `<input type="date">`, which reads in the browser's
+ * timezone and says nothing about it. A report run from Tokyo for a Ho Chi Minh City store was a
+ * different day's takings than the same date typed in the shop, and nothing on screen admitted
+ * that. `zone` prints the store's IANA name beside the field when the caller knows it — the caller
+ * knows it because it is the store's published `locale.timezone`.
+ */
+export function DateField(props: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  zone?: string;
+  min?: string;
+  max?: string;
+}) {
+  return (
+    <label class="block">
+      <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
+      <input
+        type="date"
+        value={props.value}
+        min={props.min}
+        max={props.max}
+        onInput={(event) => props.onChange(event.currentTarget.value)}
+        class="h-10 w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
+      />
+      <Show when={props.zone}>
+        {(zone) => <span class="mt-1 block text-xs text-ink-muted">{zone()}</span>}
+      </Show>
+    </label>
+  );
+}
+
+/**
+ * A from/to pair that cannot be given backwards.
+ *
+ * Both Reports and Campaigns built one out of two `DateField`s and neither checked the order, so
+ * "from the 30th to the 1st" was an accepted query that returned nothing and explained nothing. The
+ * pair clamps: moving `from` past `to` carries `to` with it, and the reverse.
+ */
+export function DateRange(props: {
+  fromLabel: string;
+  toLabel: string;
+  from: string;
+  to: string;
+  onChange: (from: string, to: string) => void;
+  zone?: string;
+}) {
+  return (
+    <div class="flex flex-wrap items-start gap-3">
+      <DateField
+        label={props.fromLabel}
+        value={props.from}
+        max={props.to || undefined}
+        zone={props.zone}
+        onChange={(from) => props.onChange(from, props.to && from > props.to ? from : props.to)}
+      />
+      <DateField
+        label={props.toLabel}
+        value={props.to}
+        min={props.from || undefined}
+        onChange={(to) => props.onChange(props.from && to < props.from ? to : props.from, to)}
+      />
+    </div>
   );
 }

@@ -72,10 +72,18 @@ function mountStores() {
   ));
 }
 
-/** Opens the drawer for the one store in the table. */
+/**
+ * Opens the drawer for the one store in the table.
+ *
+ * Two clicks since Wave 4 · PR-3: the row's three verbs moved behind a kebab, so the handoff is
+ * reached through it rather than from a button sitting in the row. The extra step is asserted
+ * rather than worked around — "is reachable from the store's own row" is the claim this file makes,
+ * and a helper that reached past the menu would stop testing it.
+ */
 async function openHandoff() {
   mountStores();
   await waitFor(() => expect(screen.getByText(STORE.name)).toBeTruthy());
+  fireEvent.click(screen.getAllByRole("button", { name: messages["common.actions"] })[0] as Element);
   fireEvent.click(screen.getByRole("button", { name: messages["handoff.open"] }));
   await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
 }

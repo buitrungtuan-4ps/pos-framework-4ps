@@ -1245,8 +1245,9 @@ dashboard `pnpm build` green, 200 tests / 30 files.
 | --- | --- |
 | PR-1 · What the console says wrong | **Delivered** — V10 V11 V12 V13 V15 V17, F1 F2 F3 F12; 216 tests / 34 files |
 | PR-2 · Visual foundation | **Delivered** — D1 D2 D3, V1 V2 V3 V7; 218 tests / 34 files |
-| PR-3 · The kit, completed | Next |
-| PR-4 … PR-8 | Planned, in the order below |
+| PR-3 · The kit, completed | **Delivered** — D5 D6, V16 V19 V20; 229 tests / 36 files. Five of the planned components; see the delivery note below for the four that moved to PR-4/PR-6 |
+| PR-4 | Next |
+| PR-5 … PR-8 | Planned, in the order below |
 
 **One measurement corrected.** D2 estimated "three weights, about 150 kB". Google serves Noto Sans
 as one *variable* file per subset covering every weight, so what shipped is six files and 331 kB in
@@ -1462,6 +1463,31 @@ Depends on: PR-2. Size: 3–4 days.
 5. Get-started collapses to a one-line strip once one step is done (D6).
 6. Gates: `empty-state.test`, `tabs.test`, `kit-adoption.test` (no `Card title=add|create`, no
    solid button inside a table row, no `t("action.refresh")` on a migrated screen).
+
+**Delivered (2026-09-15), and what moved.** Shipped: `Tabs`, `KpiTile`, `RowActions`, `DateField`,
+`DateRange`, `lib/resource.ts`, the get-started fold (D6), the Refresh buttons removed from six
+screens with Alerts revalidating on focus and on a timer, and `kit-adoption.test.ts` — which is the
+reason four planned components are **not** here. That gate fails the build when a kit export has no
+caller, and `Toolbar`, `FormSection`, `StickyActions` and `DateTime` have none until the screens
+that want them are rebuilt: `Toolbar` is PR-6's (it wraps the screens moving onto the resource
+helper), `FormSection` and `StickyActions` are PR-4's (the "Add…" cards becoming `FormPanel`), and
+`DateTime` is PR-7's (a release's effective moment is the first field that needs a store's timezone
+printed beside it). A component library that ships ahead of its screens is a library nobody reads,
+so they land with their callers rather than as speculative exports.
+
+Also deferred, deliberately: `DataTable`'s `density: compact` and its card mode below `md` (V9,
+V18), and moving `TechnicalDetails` into the row kebab (V14). All three are changes to the table
+every list screen already renders, and PR-6 rewrites how those screens read their data — doing both
+at once would put a layout change and a data-flow change in the same diff. They go with PR-6.
+
+`createAdminResource` is on Alerts only. The helper is the deliverable here; the migration is
+per-screen and explicitly PR-6's, as §Sequencing already said.
+
+Two items in this section were already true and needed no code. **V6** — every screen that renders a
+`DataTable` already passes the kit's `EmptyState`; there is no second empty-state shape left to
+unify. And the planned gates `empty-state.test` / `tabs.test` are one file, `kit-adoption.test.ts`:
+a test that asserts every kit export has a caller subsumes "the screens use `EmptyState`" and "the
+screens use `Tabs`", and it catches the next component to drift rather than only these two.
 
 ### PR-4 · One way to create (finishes ADR-0121 §6)
 

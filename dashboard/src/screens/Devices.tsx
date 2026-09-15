@@ -15,7 +15,7 @@ import type { DeviceProposalSummary, Station, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, SelectField, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, SelectField, Skeleton, TextField } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -35,7 +35,6 @@ export function Devices() {
   // operator reads "Bến Thành" rather than a raw `01J9…`. Fetched alongside the proposals.
   const [names, setNames] = createSignal<Map<string, string>>(new Map());
   const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
   // Four lifecycles, one per thing an operator can be in the middle of, so a slow approval does not
   // grey out the terminal card underneath it (ADR-0121 §3).
   //
@@ -67,7 +66,6 @@ export function Devices() {
 
   const load = async () => {
     setError("");
-    setLoading(true);
     try {
       const [proposals, stores] = await Promise.all([
         api.listProposals(tenantId()),
@@ -78,7 +76,6 @@ export function Devices() {
     } catch (caught) {
       setError(apiMessage(caught));
     } finally {
-      setLoading(false);
     }
   };
 
@@ -285,14 +282,9 @@ export function Devices() {
       <RequireContext need="tenant">
         <Card
           title={t("devices.pending")}
-          actions={
-            <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
-          }
         >
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-          <Show when={rows()}>
+          <Show when={rows()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
             {(loaded) => (
               <DataTable
                 columns={columns()}

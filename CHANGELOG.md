@@ -37,6 +37,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console's kit gained the five renderings its screens kept re-inventing (Wave 4 · PR-3).**
+  `Tabs` (a `role="tablist"` with arrow keys and a roving tabindex, replacing pairs of buttons whose
+  pressed state was a colour swap), `KpiTile` (the store hub's figure-first rendering, moved where
+  every screen can reach it), `RowActions` (a row's verbs behind one kebab, closing on Escape and on
+  a click outside), `DateField` and `DateRange` (which clamps, so a window can no longer be given
+  backwards). A `kit-adoption` test fails the build if a kit export has no caller — a component
+  library that ships ahead of its screens is a library nobody reads.
+- **`createAdminResource`, a read that knows its own context (D5).** `dashboard/src/lib/resource.ts`
+  holds the shape every screen wrote by hand: loading/ready/failed, a refetch that is a no-op before
+  the first read, optional revalidation on focus and on a timer, and a generation counter so a slow
+  read landing after a fast one is discarded rather than overwriting it. Applied to Alerts here; the
+  remaining screens follow.
+
 - **An asset-weight gate (`pnpm assets`).** Self-hosting a typeface put a third of a megabyte of
   binary into a front end that had none — the right trade, and one that stops being right silently
   if a CJK subset is dropped in later. `dashboard/scripts/asset-weight.mjs` fails the build if any
@@ -91,6 +104,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Five emoji became icons (V7).** The nav toggle, the palette's search button, the notification
   bell, the media placeholder and the subject-request warning rendered as a different picture on
   every operating system; `icons.tsx` gains `bell`, `menu` and `search`.
+- **Refresh buttons are gone, and the screens that had them re-read for themselves (D5).** A button
+  labelled "Refresh" is the screen admitting it does not know when its own data went stale. Alerts,
+  Stores, API keys, Webhooks, Devices and Translations lose theirs; Alerts — the one live screen of
+  the six — re-reads when the tab regains focus after thirty seconds and on a sixty-second timer,
+  which is coarser than the evaluator's own loop, so polling faster would cost requests without
+  changing an answer. The screens that showed nothing while loading now show a skeleton.
+- **The get-started checklist folds once the operator is under way (D6).** Seven rows of guidance
+  sat above the store hub's own figures for as long as any one required step was outstanding, which
+  on a real estate is most of the time: one new shop with no key held the panel open on the hub of
+  every other shop. It now folds to its progress line as soon as a single step is done, with "Show
+  the steps" to open it, and still stands down entirely when they are all done. Not persisted — the
+  fold follows the work, so a console with nothing done yet is open on arrival.
+- **A store row is its data again (V16, V19).** The Stores table carried four inline verbs in its
+  widest column; they now sit behind one kebab, where the destructive one can be named plainly
+  rather than shortened to fit. The store hub's six figures are KPI tiles rather than paragraphs,
+  and Reports asks for its two dates with the kit's date controls rather than bare `type="date"`
+  inputs (V20).
 - **The get-started checklist and the new-store wizard open Store settings, not Configuration
   (Wave 4 · PR-1, F1/F2).** Configuration holds capability flags and the version history — the one
   screen in the publish chain a brand-new store does not need. Both now name the order the four

@@ -24,6 +24,7 @@ import {
   Card,
   CheckboxField,
   PageHeader,
+  Skeleton,
   SelectField,
   StatusBadge,
 } from "../components/ui";
@@ -67,14 +68,12 @@ export function ApiKeys() {
   // anywhere: the cloud stored the hash and cannot show this again.
   const [token, setToken] = createSignal("");
   const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
   // Two lifecycles, so revoking one key does not disable the issue form (ADR-0121 §3).
   const issue = useEntityCrud<ApiKeySummary>();
   const revocation = useEntityCrud<ApiKeySummary>();
 
   const load = async () => {
     setError("");
-    setLoading(true);
     try {
       const [keys, registered] = await Promise.all([
         api.listApiKeys(tenantId()),
@@ -85,7 +84,6 @@ export function ApiKeys() {
     } catch (caught) {
       setError(apiMessage(caught));
     } finally {
-      setLoading(false);
     }
   };
 
@@ -224,14 +222,11 @@ export function ApiKeys() {
             actions={
               <div class="flex gap-2">
                 <Button onClick={openIssue}>{t("apiKeys.create")}</Button>
-                <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                  {t("action.refresh")}
-                </Button>
               </div>
             }
           >
             <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-            <Show when={rows()}>
+            <Show when={rows()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
               {(loaded) => (
                 <DataTable
                   columns={columns()}
