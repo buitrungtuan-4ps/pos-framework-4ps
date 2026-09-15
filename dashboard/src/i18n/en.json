@@ -461,6 +461,7 @@
   "channels.publishOrigins": "Publish origins",
   "channels.publishQr": "Publish QR guardrails",
   "channels.publishTender": "Publish payment methods",
+  "channels.publishTo": "Publishes to {store}.",
   "channels.publishVendors": "Publish vendor policies",
   "channels.published": "Published channels to {store}.",
   "channels.qrCloseHour": "Close hour (0–23)",

@@ -12,7 +12,7 @@
 // to be: the edge compares it against the request's own Host, so a store that publishes nothing keeps
 // serving its own UI.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
@@ -24,7 +24,10 @@ import {
   type VendorPolicy,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -35,6 +38,7 @@ import {
   SelectField,
   TextField,
 } from "../components/ui";
+import { PublishBar } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -103,15 +107,44 @@ export function Channels() {
   const [vendors, setVendors] = createSignal<VendorPolicy[]>([]);
   const [origins, setOrigins] = createSignal<string[]>([]);
 
+  // The five store-scoped nodes this screen authors, read together.
+  //
+  // Without a store there is nothing to read: the nodes are per-shop, so the read answers `null`
+  // for each rather than refusing, and the forms below fall back to their defaults. That is a fact
+  // about the context, not a failure, and the store gate already says so on screen.
+  const nodes = createAdminResource(
+    async (tenant, store) => {
+      if (!store) {
+        return null;
+      }
+      const [channels, tender, qr, vendors, origins] = await Promise.all([
+        api.readChannels(tenant, store),
+        api.readTender(tenant, store),
+        api.readQrGuardrails(tenant, store),
+        api.readVendorPolicies(tenant, store),
+        api.readOrigins(tenant, store),
+      ]);
+      return { channels, tender, qr, vendors, origins };
+    },
+    { scope: "tenant" },
+  );
+  const published = usePublishedNodes();
+
   const fail = (caught: unknown) => {
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
   };
 
-  const load = async () => {
-    if (!storeId()) {
-      // The nodes are store-scoped; without a store there is nothing to read.
+  // The editable forms, primed from the read.
+  //
+  // Two states, not one: the resource holds what the store is running, these hold what the operator
+  // has typed over it. An absent node means "no restriction" for four of the five — show every
+  // channel and method enabled — so the fallback is the permissive default, which is what a store
+  // that has never published one of these actually behaves like.
+  createEffect(() => {
+    const read = nodes.value();
+    if (read === null) {
       setChannels([...SALES_CHANNELS]);
       setTender([...PAYMENT_METHODS]);
       setQr({ ...QR_DEFAULTS });
@@ -119,38 +152,21 @@ export function Channels() {
       setOrigins([]);
       return;
     }
-    setError("");
-    setBusy(true);
-    try {
-      const [ch, te, qg, vp, og] = await Promise.all([
-        api.readChannels(tenantId(), storeId()),
-        api.readTender(tenantId(), storeId()),
-        api.readQrGuardrails(tenantId(), storeId()),
-        api.readVendorPolicies(tenantId(), storeId()),
-        api.readOrigins(tenantId(), storeId()),
-      ]);
-      // An absent node means "no restriction": show every channel / method enabled.
-      setChannels(ch ? [...ch.enabled] : [...SALES_CHANNELS]);
-      setTender(te ? [...te.accepted] : [...PAYMENT_METHODS]);
-      const guardrails = qg ?? { ...QR_DEFAULTS };
-      setQr(guardrails);
-      setQrHoursOn(Boolean(guardrails.business_hours));
-      setQrOpen(String(guardrails.business_hours?.open_hour ?? 0));
-      setQrClose(String(guardrails.business_hours?.close_hour ?? 0));
-      setQrOffset(String(guardrails.business_hours?.tz_offset_minutes ?? 0));
-      setVendors(vp ? vp.policies.map((policy) => ({ ...policy })) : []);
-      // An absent node is *not* "no restriction" here, unlike the four above: it means same-origin
-      // only, which is how every store behaved before ADR-0111. So the empty list is the truth, and
-      // the card must not pre-fill anything an operator did not publish.
-      setOrigins(og ? [...og.allowed] : []);
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
+    setChannels(read.channels ? [...read.channels.enabled] : [...SALES_CHANNELS]);
+    setTender(read.tender ? [...read.tender.accepted] : [...PAYMENT_METHODS]);
+    const guardrails = read.qr ?? { ...QR_DEFAULTS };
+    setQr(guardrails);
+    setQrHoursOn(Boolean(guardrails.business_hours));
+    setQrOpen(String(guardrails.business_hours?.open_hour ?? 0));
+    setQrClose(String(guardrails.business_hours?.close_hour ?? 0));
+    setQrOffset(String(guardrails.business_hours?.tz_offset_minutes ?? 0));
+    setVendors(read.vendors ? read.vendors.policies.map((policy) => ({ ...policy })) : []);
+    // An absent node is *not* "no restriction" here, unlike the four above: it means same-origin
+    // only, which is how every store behaved before ADR-0111. So the empty list is the truth, and
+    // the card must not pre-fill anything an operator did not publish.
+    setOrigins(read.origins ? [...read.origins.allowed] : []);
+  });
 
-  onScopedContext("tenant", () => void load());
 
   const toggleChannel = (channel: SalesChannel) =>
     setChannels((prev) =>
@@ -167,6 +183,7 @@ export function Channels() {
     try {
       await api.publishChannels(tenantId(), storeId(), channels());
       toast.ok(t("channels.published", { store: storeName() }));
+      await published.refresh();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -179,6 +196,7 @@ export function Channels() {
     try {
       await api.publishTender(tenantId(), storeId(), tender());
       toast.ok(t("channels.tenderPublished", { store: storeName() }));
+      await published.refresh();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -231,6 +249,7 @@ export function Channels() {
     try {
       await api.publishQrGuardrails(tenantId(), storeId(), guardrails);
       toast.ok(t("channels.qrPublished", { store: storeName() }));
+      await published.refresh();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -257,6 +276,7 @@ export function Channels() {
         vendors().map((policy) => ({ ...policy, prep_minutes: Number(policy.prep_minutes) })),
       );
       toast.ok(t("channels.vendorsPublished", { store: storeName() }));
+      await published.refresh();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -292,6 +312,7 @@ export function Channels() {
       await api.publishOrigins(tenantId(), storeId(), allowed);
       setOrigins(allowed);
       toast.ok(t("channels.originsPublished", { store: storeName() }));
+      await published.refresh();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -313,7 +334,11 @@ export function Channels() {
       <PageHeader title={t("channels.title")} description={t("channels.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          {/* Two failures, two banners: the read's refusal is not the operator's to correct. */}
+      <Show when={failureOf(nodes)}>
+        {(message) => <Banner tone="danger" message={message()} />}
+      </Show>
+      <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
           {/* Channels */}
           <Card title={t("channels.channelsTitle")}>
@@ -331,11 +356,14 @@ export function Channels() {
                     )}
                   </For>
                 </div>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publishChannels()}>
-                    {t("channels.publishChannels")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("channels")}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishChannels")}
+                  busy={busy()}
+                  onPublish={() => void publishChannels()}
+                />
               </div>
             ))}
           </Card>
@@ -356,11 +384,14 @@ export function Channels() {
                     )}
                   </For>
                 </div>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publishTender()}>
-                    {t("channels.publishTender")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("tender")}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishTender")}
+                  busy={busy()}
+                  onPublish={() => void publishTender()}
+                />
               </div>
             ))}
           </Card>
@@ -421,11 +452,14 @@ export function Channels() {
                     />
                   </div>
                 </Show>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publishQr()}>
-                    {t("channels.publishQr")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("qr")}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishQr")}
+                  busy={busy()}
+                  onPublish={() => void publishQr()}
+                />
               </div>
             ))}
           </Card>
@@ -491,11 +525,14 @@ export function Channels() {
                     )}
                   </For>
                 </Show>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publishVendors()}>
-                    {t("channels.publishVendors")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("vendors")}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishVendors")}
+                  busy={busy()}
+                  onPublish={() => void publishVendors()}
+                />
               </div>
             ))}
           </Card>
@@ -546,13 +583,16 @@ export function Channels() {
                     )}
                   </For>
                 </Show>
-                <div>
-                  {/* Publishing an empty list is deliberate and allowed: it withdraws every second
-                      origin, which is distinct from never having published one. */}
-                  <Button disabled={busy()} onClick={() => void publishOrigins()}>
-                    {t("channels.publishOrigins")}
-                  </Button>
-                </div>
+                {/* Publishing an empty list is deliberate and allowed: it withdraws every second
+                    origin, which is distinct from never having published one. */}
+                <PublishBar
+                  label={t("channels.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("origins")}
+                  describe={describePublish}
+                  publishLabel={t("channels.publishOrigins")}
+                  busy={busy()}
+                  onPublish={() => void publishOrigins()}
+                />
               </div>
             ))}
           </Card>

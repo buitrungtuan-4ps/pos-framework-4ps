@@ -12,7 +12,7 @@
 // which means "print one line". The parts must sum to the cell's own rate; the screen says so
 // inline, and the server refuses a save where they do not.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
@@ -23,7 +23,8 @@ import {
   type TaxRate,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, CellField, PageHeader } from "../components/ui";
 import { EmptyState, PublishBar } from "../components/kit";
@@ -115,7 +116,6 @@ export function TaxRates() {
   // The breakdown beside each cell: cellKey → `CGST 2.5, SGST 2.5`. Empty means one printed line,
   // which is most of the world (ADR-0104).
   const [breakdowns, setBreakdowns] = createSignal<Record<string, string>>({});
-  const [loaded, setLoaded] = createSignal(false);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
@@ -138,7 +138,7 @@ export function TaxRates() {
       const message = t("taxRates.stale");
       setError(message);
       toast.error(message);
-      await load();
+      await table.refetch();
       return;
     }
     const message = apiMessage(caught);
@@ -146,35 +146,44 @@ export function TaxRates() {
     toast.error(message);
   };
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
+  // The active tax classes and the rate grid the store is running. One read, because the grid is
+  // indexed by class and a grid that arrived without its classes has no columns to draw.
+  const table = createAdminResource(
+    async (tenant) => {
       const [taxClasses, rates] = await Promise.all([
-        api.listTaxClasses(tenantId()),
-        api.listTaxRates(tenantId()),
+        api.listTaxClasses(tenant),
+        api.listTaxRates(tenant),
       ]);
-      setClasses(taxClasses.filter((row) => row.status === "active"));
-      setVersion(rates.etag);
-      const grid: Record<string, string> = {};
-      const parts: Record<string, string> = {};
-      for (const rate of rates.value) {
-        const key = cellKey(rate.tax_class_id, rate.sales_channel);
-        grid[key] = bpsToPercent(rate.rate_bps);
-        parts[key] = formatComponents(rate.components ?? []);
-      }
-      setCells(grid);
-      setBreakdowns(parts);
-      setLoaded(true);
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
+      return { classes: taxClasses.filter((row) => row.status === "active"), rates };
+    },
+    { scope: "tenant" },
+  );
+
+  // The editable grid, primed from the read.
+  //
+  // Two states rather than one, because they answer different questions: the resource holds what
+  // the server said, and `cells` holds what the operator has typed over it. Priming on each read
+  // keeps today's behaviour exactly — a re-read after a save or a `412` replaces the draft, which
+  // is the point of reloading after a conflict.
+  createEffect(() => {
+    const read = table.value();
+    if (read === null) {
+      return;
     }
-  };
+    setClasses(read.classes);
+    setVersion(read.rates.etag);
+    const grid: Record<string, string> = {};
+    const parts: Record<string, string> = {};
+    for (const rate of read.rates.value) {
+      const key = cellKey(rate.tax_class_id, rate.sales_channel);
+      grid[key] = bpsToPercent(rate.rate_bps);
+      parts[key] = formatComponents(rate.components ?? []);
+    }
+    setCells(grid);
+    setBreakdowns(parts);
+  });
 
   // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   const setCell = (taxClassId: string, channel: SalesChannel, value: string) => {
     setCells({ ...cells(), [cellKey(taxClassId, channel)]: value });
@@ -246,7 +255,7 @@ export function TaxRates() {
       await api.setTaxRates(tenantId(), rows(), version());
       // Re-read rather than trusting the save's own `ETag`: the next edit has to be made against
       // what is stored, and the reload is one request either way.
-      await load();
+      await table.refetch();
       setSavedAtMs(Date.now());
       toast.ok(t("taxRates.saved"));
     } catch (caught) {
@@ -275,16 +284,14 @@ export function TaxRates() {
     <div>
       <PageHeader title={t("taxRates.title")} description={t("taxRates.description")} />
       <RequireContext need="tenant">
-        <Card
-          title={t("taxRates.grid")}
-          actions={
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
-          }
-        >
+        <Card title={t("taxRates.grid")}>
+          {/* Two failures, two banners: the read's refusal is not the operator's to correct, the
+              save's conflict and the grid's own validation are. */}
+          <Show when={failureOf(table)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-          <Show when={loaded()}>
+          <Show when={table.value() !== null}>
             <div class="mb-4 overflow-x-auto">
               <Show
                 when={classes().length > 0}
