@@ -27,19 +27,6 @@ import type { MessageKey } from "../i18n";
  */
 export type Tone = "ok" | "attention" | "idle" | "plain";
 
-export function toneClass(tone: Tone): string {
-  switch (tone) {
-    case "ok":
-      return "text-ok";
-    case "attention":
-      return "text-danger";
-    case "idle":
-      return "text-ink-muted";
-    default:
-      return "text-ink";
-  }
-}
-
 /** A headline to print and the hue to print it in. */
 export type Verdict = { readonly headline: MessageKey; readonly tone: Tone };
 

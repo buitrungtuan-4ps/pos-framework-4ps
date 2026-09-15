@@ -5,7 +5,7 @@
 // with console.alerts.manage (Owner/Admin/Ops) can acknowledge or resolve a row; both are audited on
 // the server and both are idempotent, so a double-click is harmless. Read-only for everyone else.
 
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { Alert, AlertSeverity } from "../api/types";
@@ -13,7 +13,14 @@ import { locale, type MessageKey, t } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { actingAdmin } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
-import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
+import {
+  type Column,
+  DataTable,
+  Drawer,
+  EmptyState,
+  Tabs,
+  TechnicalDetails,
+} from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
@@ -105,6 +112,32 @@ export function Alerts() {
   };
 
   onMount(() => void load());
+
+  // D5's other half, and what makes removing the Refresh button honest rather than merely tidier:
+  // an alert list is a live screen, so it re-reads when the tab comes back — bounded by staleness,
+  // so alt-tabbing twice costs one request — and on a slow timer, so a console left open on a wall
+  // is not showing an hour-old picture of the fleet. Sixty seconds because the evaluator's own loop
+  // is coarser than that: polling faster would cost requests without changing an answer.
+  const STALE_AFTER_MS = 30_000;
+  const POLL_MS = 60_000;
+  let lastReadAt = Date.now();
+  const revalidate = () => {
+    lastReadAt = Date.now();
+    void load();
+  };
+  onMount(() => {
+    const onFocus = () => {
+      if (Date.now() - lastReadAt >= STALE_AFTER_MS) {
+        revalidate();
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    const handle = setInterval(revalidate, POLL_MS);
+    onCleanup(() => {
+      window.removeEventListener("focus", onFocus);
+      clearInterval(handle);
+    });
+  });
 
   // Swap the active/recent scope, then reload from the server (the two are different reads).
   const setScope = (next: boolean) => {
@@ -243,21 +276,22 @@ export function Alerts() {
   return (
     <div>
       <PageHeader title={t("alerts.title")} description={t("alerts.description")} />
+      {/* Two buttons whose pressed state was carried by a colour swap are a tab strip: one of the
+          two is what you are looking at, which is the thing a `role="tablist"` says out loud and a
+          pair of buttons does not. The Refresh button goes with it — the screen revalidates itself
+          on focus and on a timer (D5), which is what an operator watching an alert list needs
+          anyway. */}
+      <Tabs
+        label={t("alerts.title")}
+        active={recent() ? "recent" : "active"}
+        onSelect={(key) => setScope(key === "recent")}
+        tabs={[
+          { key: "active", label: t("alerts.showActive") },
+          { key: "recent", label: t("alerts.showRecent") },
+        ]}
+      />
       <Card
         title={recent() ? t("alerts.recent") : t("alerts.active")}
-        actions={
-          <div class="flex flex-wrap gap-2">
-            <Button variant={recent() ? "secondary" : "primary"} onClick={() => setScope(false)}>
-              {t("alerts.showActive")}
-            </Button>
-            <Button variant={recent() ? "primary" : "secondary"} onClick={() => setScope(true)}>
-              {t("alerts.showRecent")}
-            </Button>
-            <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-              {t("action.refresh")}
-            </Button>
-          </div>
-        }
       >
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={alerts()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>

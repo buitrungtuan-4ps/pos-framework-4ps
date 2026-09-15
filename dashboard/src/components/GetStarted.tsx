@@ -2,7 +2,7 @@
 //
 // The rules live in `lib/get-started.ts` and are unit tested there. This file is the reads and the
 // markup: seven requests the console already makes elsewhere, each answering one step, and a list
-// that stands down once every required step is done.
+// that folds to a progress line once one step is done and stands down entirely once they all are.
 //
 // # It never blocks and never writes
 //
@@ -27,7 +27,7 @@ import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { onScopedContext } from "../lib/scoped";
 import { screenHref } from "../state/screens";
 import { storeId, tenantId } from "../state/session";
-import { Card } from "./ui";
+import { Button, Card } from "./ui";
 
 /** The hue for a status. `todo` is deliberately not a danger colour: it is work, not a fault. */
 function statusClass(status: StepStatus): string {
@@ -120,48 +120,81 @@ export function GetStarted() {
       reporting: reporting(),
     });
 
+  /**
+   * Whether any required step is already behind the operator (decision D6).
+   *
+   * The checklist is the right panel on a console signed into for the first time and the wrong one
+   * on the tenth visit: seven rows of guidance sat above the store hub's own figures for as long as
+   * any single step was outstanding, which on a real estate is most of the time — one new shop with
+   * no key held the whole panel open on the hub of every other shop. So once one step is done it
+   * folds to its progress line and the operator opens it when they want it. Not persisted: the
+   * collapse follows the work, so a console with nothing done yet is open on arrival, and one
+   * mid-setup stays out of the way until asked.
+   */
+  const started = () => requiredProgress(by()).done > 0;
+  const [open, setOpen] = createSignal(false);
+
   return (
     <Show when={!setupComplete(by())}>
       <Card title={t("getStarted.title")}>
-        <p class="text-sm text-ink-muted">{t("getStarted.description")}</p>
-        <p class="mt-1 text-sm font-medium">{t("getStarted.progress", requiredProgress(by()))}</p>
-        <ol class="mt-3 flex flex-col gap-3">
-          {/* An ordered list, and the order is the whole point: the chain has to happen in this
-              sequence. The step number is left to the list rather than printed into the title, so
-              the title is one text node and assistive tech gets the position from the markup
-              instead of from a string somebody has to keep in step with the array. */}
-          <For each={STEPS}>
-            {(step) => {
-              const status = () => by()[step.id];
-              return (
-                <li class="flex flex-col gap-1 border-t border-line pt-3 first:border-0 first:pt-0">
-                  <div class="flex flex-wrap items-baseline gap-2">
-                    <span class="text-sm font-medium text-ink">{t(step.title)}</span>
-                    <span class={`text-xs font-medium ${statusClass(status())}`}>
-                      {t(STATUS_LABEL[status()])}
-                    </span>
-                    <Show when={step.optional}>
-                      <span class="text-xs text-ink-muted">{t("getStarted.optional")}</span>
+        <Show
+          when={open() || !started()}
+          fallback={
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-sm font-medium">{t("getStarted.progress", requiredProgress(by()))}</p>
+              <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
+                {t("getStarted.showSteps")}
+              </Button>
+            </div>
+          }
+        >
+          <p class="text-sm text-ink-muted">{t("getStarted.description")}</p>
+          <div class="mt-1 flex flex-wrap items-center justify-between gap-2">
+            <p class="text-sm font-medium">{t("getStarted.progress", requiredProgress(by()))}</p>
+            <Show when={started()}>
+              <Button variant="secondary" size="sm" onClick={() => setOpen(false)}>
+                {t("getStarted.hideSteps")}
+              </Button>
+            </Show>
+          </div>
+          <ol class="mt-3 flex flex-col gap-3">
+            {/* An ordered list, and the order is the whole point: the chain has to happen in this
+                sequence. The step number is left to the list rather than printed into the title, so
+                the title is one text node and assistive tech gets the position from the markup
+                instead of from a string somebody has to keep in step with the array. */}
+            <For each={STEPS}>
+              {(step) => {
+                const status = () => by()[step.id];
+                return (
+                  <li class="flex flex-col gap-1 border-t border-line pt-3 first:border-0 first:pt-0">
+                    <div class="flex flex-wrap items-baseline gap-2">
+                      <span class="text-sm font-medium text-ink">{t(step.title)}</span>
+                      <span class={`text-xs font-medium ${statusClass(status())}`}>
+                        {t(STATUS_LABEL[status()])}
+                      </span>
+                      <Show when={step.optional}>
+                        <span class="text-xs text-ink-muted">{t("getStarted.optional")}</span>
+                      </Show>
+                    </div>
+                    <p class="text-sm text-ink-muted">{t(step.hint)}</p>
+                    <Show when={step.go}>
+                      {(go) => (
+                        <p class="text-sm">
+                          <a
+                            class="text-accent underline"
+                            href={screenHref(go().screen, tenantId(), storeId())}
+                          >
+                            {t(go().label)}
+                          </a>
+                        </p>
+                      )}
                     </Show>
-                  </div>
-                  <p class="text-sm text-ink-muted">{t(step.hint)}</p>
-                  <Show when={step.go}>
-                    {(go) => (
-                      <p class="text-sm">
-                        <a
-                          class="text-accent underline"
-                          href={screenHref(go().screen, tenantId(), storeId())}
-                        >
-                          {t(go().label)}
-                        </a>
-                      </p>
-                    )}
-                  </Show>
-                </li>
-              );
-            }}
-          </For>
-        </ol>
+                  </li>
+                );
+              }}
+            </For>
+          </ol>
+        </Show>
       </Card>
     </Show>
   );

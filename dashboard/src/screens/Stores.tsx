@@ -42,6 +42,7 @@ import {
   Card,
   PageHeader,
   SelectField,
+  Skeleton,
   StatusBadge,
   TextField,
 } from "../components/ui";
@@ -52,6 +53,7 @@ import {
   Drawer,
   EmptyState,
   FormPanel,
+  RowActions,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -66,7 +68,6 @@ export function Stores() {
   // status, and the version any rename must present (production-readiness O2).
   const [tenant, setTenant] = createSignal<Tenant | null>(null);
   const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
 
   // One lifecycle per entity type, not one per screen (ADR-0121 §3). The tenant block gets one too:
   // it never opens a `FormPanel` — a single-record settings row is not a list, and a panel over one
@@ -84,7 +85,6 @@ export function Stores() {
 
   const load = async () => {
     setError("");
-    setLoading(true);
     try {
       const [loadedStores, loadedBrands, loadedTenants] = await Promise.all([
         api.listStores(tenantId()),
@@ -102,8 +102,6 @@ export function Stores() {
       const message = apiMessage(caught);
       setError(message);
       toast.error(message);
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -536,17 +534,11 @@ export function Stores() {
                 >
                   {t("wizard.open")}
                 </A>
-                <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                  {t("action.refresh")}
-                </Button>
               </div>
             }
           >
             <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-            <Show
-              when={stores()}
-              fallback={<p class="text-sm text-ink-muted">{t("stores.loadHint")}</p>}
-            >
+            <Show when={stores()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
               {(loaded) => (
                 <DataTable
                   columns={columns()}
@@ -556,15 +548,22 @@ export function Stores() {
                   empty={<EmptyState title={t("stores.empty")} />}
                   actionsHeader={t("common.actions")}
                   actions={(row) => (
-                    <div class="flex flex-wrap gap-2">
+                    <RowActions label={t("common.actions")}>
                       <Button
-                        variant="secondary"
+                        variant="ghost"
+                        size="sm"
+                        class="justify-start"
                         disabled={storeCrud.saving()}
                         onClick={() => openEditStore(row)}
                       >
                         {t("action.edit")}
                       </Button>
-                      <Button variant="secondary" onClick={() => openHandoff(row)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="justify-start"
+                        onClick={() => openHandoff(row)}
+                      >
                         {t("handoff.open")}
                       </Button>
                       <Show
@@ -572,6 +571,8 @@ export function Stores() {
                         fallback={
                           <Button
                             variant="danger-ghost"
+                            size="sm"
+                            class="justify-start"
                             disabled={storeCrud.saving()}
                             onClick={() => storeCrud.confirm(row)}
                           >
@@ -580,14 +581,16 @@ export function Stores() {
                         }
                       >
                         <Button
-                          variant="secondary"
+                          variant="ghost"
+                          size="sm"
+                          class="justify-start"
                           disabled={storeCrud.saving()}
                           onClick={() => void setStoreStatus(row, "active")}
                         >
                           {t("stores.restore")}
                         </Button>
                       </Show>
-                    </div>
+                    </RowActions>
                   )}
                 />
               )}

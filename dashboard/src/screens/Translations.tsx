@@ -239,9 +239,6 @@ export function Translations() {
                 disabled={busy()}
                 onPick={(file) => void onImportFile(file)}
               />
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
             </div>
           }
         >

@@ -12,7 +12,8 @@ import { t } from "../i18n";
 import { formatCount, formatMoney } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader } from "../components/ui";
+import { DateField, DateRange } from "../components/kit";
 import { apiMessage } from "../lib/errors";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
@@ -185,8 +186,19 @@ export function Reports() {
           {/* Window */}
           <Card title={t("reports.window")}>
             <div class="flex flex-wrap items-end gap-4">
-              <TextField label={t("reports.from")} type="date" value={from()} onInput={setFrom} />
-              <TextField label={t("reports.to")} type="date" value={to()} onInput={setTo} />
+              {/* One control, not two fields that can be given backwards (V20). A window from the
+                  30th to the 1st was an accepted query that returned nothing and explained
+                  nothing; the pair clamps instead. */}
+              <DateRange
+                fromLabel={t("reports.from")}
+                toLabel={t("reports.to")}
+                from={from()}
+                to={to()}
+                onChange={(nextFrom, nextTo) => {
+                  setFrom(nextFrom);
+                  setTo(nextTo);
+                }}
+              />
               <Button disabled={busy()} onClick={() => void load()}>
                 {t("action.refresh")}
               </Button>
@@ -371,12 +383,9 @@ export function Reports() {
             <Card title={t("reports.xzTitle")}>
               <p class="mb-3 text-sm text-ink-muted">{t("reports.xzHint")}</p>
               <div class="mb-4 flex flex-wrap items-end gap-4">
-                <TextField
-                  label={t("reports.xzDate")}
-                  type="date"
-                  value={xzDate()}
-                  onInput={setXzDate}
-                />
+                {/* The kit's date field, like the window above it (V20): the same control, in the
+                    same shape, on the two date questions this screen asks. */}
+                <DateField label={t("reports.xzDate")} value={xzDate()} onChange={setXzDate} />
                 <Button variant="secondary" disabled={busy()} onClick={() => void loadXz()}>
                   {t("reports.xzView")}
                 </Button>

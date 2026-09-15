@@ -16,7 +16,7 @@ import type { WebhookSummary } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge, TextField } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -36,7 +36,6 @@ export function Webhooks() {
   // Held only until the operator dismisses it. Nothing persists it, here or anywhere.
   const [secret, setSecret] = createSignal("");
   const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
   // Which endpoint is being re-enabled, so one slow request disables that row's button and not
   // every other row's (ADR-0121 §3 — the audit's "one shared busy flag disables every button").
   const [reenabling, setReenabling] = createSignal("");
@@ -46,13 +45,11 @@ export function Webhooks() {
 
   const load = async () => {
     setError("");
-    setLoading(true);
     try {
       setRows(await api.listWebhooks(tenantId()));
     } catch (caught) {
       setError(apiMessage(caught));
     } finally {
-      setLoading(false);
     }
   };
 
@@ -159,9 +156,6 @@ export function Webhooks() {
               <Button disabled={!storeId()} onClick={openRegister}>
                 {t("webhooks.register")}
               </Button>
-              <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
             </div>
           }
         >
@@ -169,7 +163,7 @@ export function Webhooks() {
           <Show when={!storeId()}>
             <Banner tone="danger" message={t("context.storeRequired")} />
           </Show>
-          <Show when={rows()}>
+          <Show when={rows()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
             {(loaded) => (
               <DataTable
                 columns={columns()}
