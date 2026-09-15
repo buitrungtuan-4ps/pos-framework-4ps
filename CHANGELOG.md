@@ -40,6 +40,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     reason any pair last could not apply. It says "Monday 04:00, each shop's own clock" rather than
     converting to one timestamp, because converting would be the console deciding which shop's clock
     is the real one.
+  - **A publish bar can hand its node to a release.** The six bars whose node a release can carry —
+    tax rates, reason codes, inventory, floor plan, campaigns, menu — gained **Add to a release**
+    beside Publish. It is a link to the publish centre with that node already chosen, not a second
+    write: a release carries a moment and a target, and a bar that knows one store and one node
+    would have to invent both. The Releases screen also lists what is still coming, soonest first.
   - **Upgrade note:** migration `0064_releases.sql` is additive — a new `releases` table, plus
     nullable `release_id` and `failure` columns on `scheduled_publishes`. A row with no release id
     is exactly today's behaviour, so the per-store campaign schedule is unchanged. The surface is

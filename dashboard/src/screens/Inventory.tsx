@@ -25,7 +25,7 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
-import { describePublish } from "../lib/publish-copy";
+import { addToRelease, describePublish } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -586,6 +586,7 @@ export function Inventory() {
             <PublishBar
               label={t("inventory.publishTo", { store: storeName() })}
               publishedAtMs={published.publishedAtMs("inventory")}
+              addToRelease={addToRelease("inventory", tenantId())}
               describe={describePublish}
               publishLabel={t("inventory.publish")}
               busy={busy()}
