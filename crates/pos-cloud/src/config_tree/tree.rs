@@ -11,6 +11,8 @@
 //! store's sync: a delta when the store is close behind, a full snapshot when it is more than *K*
 //! versions behind or holding a version the cloud no longer has.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -84,21 +86,36 @@ pub enum SyncOutcome {
     Deliver(ConfigUpdate),
 }
 
-/// One published version: its id and the effective document it resolves to.
+/// One published version: its id, the effective document it resolves to, and the nodes it set.
 #[derive(Debug, Clone)]
 struct Version {
     id: ConfigVersionId,
     effective: Value,
+    nodes: Vec<String>,
 }
 
-/// A published version in serializable form: a version id and the effective document it resolves to,
-/// as persisted in a [`ConfigTreeState`].
+/// A published version in serializable form: a version id, the effective document it resolves to,
+/// and the top-level node keys that version wrote, as persisted in a [`ConfigTreeState`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublishedVersion {
     /// The version id (a ULID).
     pub id: ConfigVersionId,
     /// The composed, validated effective document this version resolves to.
     pub effective: Value,
+    /// The top-level node keys this version wrote — `locale`, `tax`, `menu`, and so on.
+    ///
+    /// The console's question is per node, not per version: "is the menu this store is running the
+    /// menu I last edited?" A version id alone cannot answer it, because every publish moves the id
+    /// and there is one id for thirteen nodes, so a tax publish made the menu look freshly
+    /// published too (finding F6).
+    ///
+    /// Empty means *unknown*, not *nothing*: a version published before this field existed
+    /// deserialises with an empty list, and so does a whole-layer replace that names no nodes. A
+    /// reader must treat an empty list as "this version says nothing about any node" rather than as
+    /// "this version touched none", which is why the per-node read walks the history backwards and
+    /// stops at the newest version that *names* the node.
+    #[serde(default)]
+    pub nodes: Vec<String>,
 }
 
 /// A [`ConfigTree`]'s persistable state: its four authored layers, its published history, and its
@@ -180,6 +197,7 @@ impl<V: ConfigValidator> ConfigTree<V> {
                 .map(|version| Version {
                     id: version.id,
                     effective: version.effective,
+                    nodes: version.nodes,
                 })
                 .collect(),
             validator,
@@ -200,6 +218,7 @@ impl<V: ConfigValidator> ConfigTree<V> {
                 .map(|version| PublishedVersion {
                     id: version.id,
                     effective: version.effective.clone(),
+                    nodes: version.nodes.clone(),
                 })
                 .collect(),
             k: self.k,
@@ -212,6 +231,12 @@ impl<V: ConfigValidator> ConfigTree<V> {
     /// it validates commits the layer and appends the version. A rejected version leaves the tree
     /// exactly as it was — the last good version stays current.
     ///
+    /// `nodes` names the top-level keys this publish set, and is recorded on the version so the
+    /// console can answer "which node is stale" per node rather than per tree
+    /// ([`PublishedVersion::nodes`]). A caller that genuinely does not know — a whole-layer replace
+    /// from typed JSON — passes the layer's own keys; a caller that names nothing gets a version
+    /// that says nothing about any node, which the per-node read treats as silence, not as absence.
+    ///
     /// # Errors
     ///
     /// [`ConfigError::Invalid`] with every violation if the composed document does not validate.
@@ -220,6 +245,7 @@ impl<V: ConfigValidator> ConfigTree<V> {
         level: ConfigLevel,
         document: Value,
         version_id: ConfigVersionId,
+        nodes: Vec<String>,
     ) -> Result<ConfigVersionId, ConfigError> {
         let mut refs: [&Value; 4] = [
             &self.layers[0],
@@ -238,6 +264,7 @@ impl<V: ConfigValidator> ConfigTree<V> {
         self.history.push(Version {
             id: version_id,
             effective,
+            nodes,
         });
         Ok(version_id)
     }
@@ -255,6 +282,39 @@ impl<V: ConfigValidator> ConfigTree<V> {
             .iter()
             .find(|version| version.id == version_id)
             .map(|version| &version.effective)
+    }
+
+    /// The newest published version that named `node`, or `None` if none ever did.
+    ///
+    /// Walks backwards and stops at the first version naming the node, which is what makes an empty
+    /// `nodes` list mean *silence* rather than *absence*: a version published before the field
+    /// existed, or a whole-layer replace that named nothing, is skipped rather than treated as
+    /// evidence that the node was not published.
+    #[must_use]
+    pub fn node_version(&self, node: &str) -> Option<ConfigVersionId> {
+        self.history
+            .iter()
+            .rev()
+            .find(|version| version.nodes.iter().any(|name| name == node))
+            .map(|version| version.id)
+    }
+
+    /// Every node the current effective document carries, each with the version that last published
+    /// it — the console's "which node is stale" read (finding F6).
+    ///
+    /// Keyed on the *effective* document rather than on the history, so a node a store is running
+    /// appears even when no recorded version names it (the pre-field case above): its version comes
+    /// back `None`, which the console shows as "published, when is not recorded" rather than
+    /// inventing a date.
+    #[must_use]
+    pub fn published_nodes(&self) -> BTreeMap<String, Option<ConfigVersionId>> {
+        let Some(effective) = self.current_effective().and_then(Value::as_object) else {
+            return BTreeMap::new();
+        };
+        effective
+            .keys()
+            .map(|node| (node.clone(), self.node_version(node)))
+            .collect()
     }
 
     /// Every published version id, oldest first — the console's version-history read (ADR-0069 G2).
@@ -277,17 +337,25 @@ impl<V: ConfigValidator> ConfigTree<V> {
         version_id: ConfigVersionId,
         new_version_id: ConfigVersionId,
     ) -> Option<ConfigVersionId> {
-        let effective = self
+        let restored = self
             .history
             .iter()
-            .find(|version| version.id == version_id)?
-            .effective
-            .clone();
+            .find(|version| version.id == version_id)?;
+        let effective = restored.effective.clone();
+        // A restore replaces the whole effective document, so every node in it is republished —
+        // not just whichever nodes the version being restored happened to name. Reading the keys
+        // off the document is the honest answer, and it is what keeps a restored store from
+        // looking stale on nodes the restore did in fact refresh.
+        let nodes = effective
+            .as_object()
+            .map(|map| map.keys().cloned().collect())
+            .unwrap_or_default();
         let empty = || Value::Object(serde_json::Map::new());
         self.layers = [effective.clone(), empty(), empty(), empty()];
         self.history.push(Version {
             id: new_version_id,
             effective,
+            nodes,
         });
         Some(new_version_id)
     }
@@ -296,6 +364,29 @@ impl<V: ConfigValidator> ConfigTree<V> {
     #[must_use]
     pub fn current_effective(&self) -> Option<&Value> {
         self.history.last().map(|version| &version.effective)
+    }
+
+    /// The four layers merged as they stand — what a store would receive if it synced now.
+    ///
+    /// The difference from [`current_effective`](Self::current_effective) is where it reads from:
+    /// that one returns the document the last *publish* recorded, this one composes the layers
+    /// themselves. On a tree built only by publishes the two agree, because every publish records
+    /// exactly this merge. They part company on a tree whose layers were set some other way — a
+    /// restore flattens into the base layer, and a store seeded by a migration or a fixture has
+    /// layers and no history at all — and there the layers are the honest answer: the sync path
+    /// composes them, so they are what the shop gets.
+    ///
+    /// Used by the publish-time prerequisite check
+    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7), which is
+    /// asking what the store *holds*, not what it was last told.
+    #[must_use]
+    pub fn effective(&self) -> Value {
+        merge_layers(&[
+            &self.layers[0],
+            &self.layers[1],
+            &self.layers[2],
+            &self.layers[3],
+        ])
     }
 
     /// Decides what to send a store that reports holding `held` (or `None` if it has never synced).
@@ -368,7 +459,9 @@ fn to_document(value: &Value) -> ConfigDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, ConfigLevel, ConfigTree, SyncOutcome};
+    use super::{
+        ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, PublishedVersion, SyncOutcome,
+    };
 
     use serde_json::{Value, json};
 
@@ -387,6 +480,11 @@ mod tests {
         ConfigVersionId::new(Ulid::from_u128(n))
     }
 
+    /// The node keys a publish names, spelled the way a route spells them.
+    fn keys<const N: usize>(names: [&str; N]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
     fn document(update: &ConfigUpdate) -> Value {
         let raw = match update {
             ConfigUpdate::Snapshot(snapshot) => snapshot.document.as_json(),
@@ -402,12 +500,14 @@ mod tests {
             ConfigLevel::Tenant,
             json!({"currency": "VND", "tips_enabled": false}),
             version(1),
+            keys(["currency", "tips_enabled"]),
         )
         .expect("tenant publishes");
         tree.publish(
             ConfigLevel::Store,
             json!({"tips_enabled": true}),
             version(2),
+            keys(["tips_enabled"]),
         )
         .expect("store publishes");
 
@@ -426,6 +526,7 @@ mod tests {
             ConfigLevel::Store,
             json!({"pay_first_enabled": true, "tables_enabled": false}),
             version(1),
+            keys(["pay_first_enabled", "tables_enabled"]),
         )
         .expect("a coherent version publishes");
 
@@ -434,6 +535,7 @@ mod tests {
             ConfigLevel::Store,
             json!({"pay_first_enabled": true, "tables_enabled": true}),
             version(2),
+            keys(["pay_first_enabled", "tables_enabled"]),
         );
         assert!(matches!(rejected, Err(ConfigError::Invalid(_))));
         assert_eq!(
@@ -444,10 +546,112 @@ mod tests {
     }
 
     #[test]
+    fn a_node_is_dated_by_the_version_that_last_wrote_it_not_by_the_newest_one() {
+        // The finding, as a property (F6). Publishing tax must not make the menu look fresh.
+        let mut tree = ConfigTree::new(store_id(), StructuralValidator);
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"menu": {"items": []}}),
+            version(1),
+            keys(["menu"]),
+        )
+        .expect("the menu publishes");
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"menu": {"items": []}, "tax": {"rates": []}}),
+            version(2),
+            keys(["tax"]),
+        )
+        .expect("the tax table publishes");
+
+        assert_eq!(tree.current_version(), Some(version(2)));
+        assert_eq!(
+            tree.node_version("menu"),
+            Some(version(1)),
+            "the menu is still the menu published first"
+        );
+        assert_eq!(tree.node_version("tax"), Some(version(2)));
+        assert_eq!(tree.node_version("locale"), None, "never published");
+    }
+
+    #[test]
+    fn a_node_no_version_names_is_listed_with_no_version_rather_than_left_out() {
+        // The pre-field case: a version deserialised from a state written before `nodes` existed
+        // names nothing, and the node it published is in the effective document all the same.
+        let state = ConfigTreeState {
+            layers: [
+                json!({}),
+                json!({}),
+                json!({"locale": {"currency": "VND"}}),
+                json!({}),
+            ],
+            history: vec![PublishedVersion {
+                id: version(1),
+                effective: json!({"locale": {"currency": "VND"}}),
+                nodes: Vec::new(),
+            }],
+            k: 8,
+        };
+        let tree = ConfigTree::from_state(store_id(), StructuralValidator, state);
+
+        let nodes = tree.published_nodes();
+        assert_eq!(
+            nodes.get("locale"),
+            Some(&None),
+            "the node is listed, and says it does not know when — it does not claim never"
+        );
+        assert_eq!(nodes.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_node_list_deserialises_from_a_state_written_before_the_field_existed() {
+        // Forward compatibility in the direction that actually happens: every config_trees row in
+        // production predates this field, and a deploy that could not read them would take the
+        // whole fleet's configuration with it.
+        let older = r#"{"layers":[{},{},{},{}],"history":[{"id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","effective":{"a":1}}],"k":8}"#;
+        let state: ConfigTreeState =
+            serde_json::from_str(older).expect("an older state still reads");
+        assert_eq!(state.history.len(), 1);
+        assert!(state.history[0].nodes.is_empty());
+    }
+
+    #[test]
+    fn a_restore_names_every_node_in_the_document_it_restores() {
+        let mut tree = ConfigTree::new(store_id(), StructuralValidator);
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"locale": {"currency": "VND"}, "tax": {"rates": []}}),
+            version(1),
+            keys(["locale", "tax"]),
+        )
+        .expect("publishes");
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"locale": {"currency": "JPY"}, "tax": {"rates": []}}),
+            version(2),
+            keys(["locale"]),
+        )
+        .expect("publishes");
+
+        tree.restore(version(1), version(3)).expect("restores");
+
+        // Both nodes are back to what version 1 held, so both are dated by the restore — a restored
+        // store that still read "tax last published at version 1" would be telling the operator its
+        // tax node had not moved when it had.
+        assert_eq!(tree.node_version("locale"), Some(version(3)));
+        assert_eq!(tree.node_version("tax"), Some(version(3)));
+    }
+
+    #[test]
     fn a_store_with_nothing_gets_a_snapshot() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator);
-        tree.publish(ConfigLevel::Tenant, json!({"a": 1}), version(1))
-            .expect("publish");
+        tree.publish(
+            ConfigLevel::Tenant,
+            json!({"a": 1}),
+            version(1),
+            keys(["a"]),
+        )
+        .expect("publish");
         match tree.update_for(None) {
             SyncOutcome::Deliver(ConfigUpdate::Snapshot(snapshot)) => {
                 assert_eq!(snapshot.config_version_id, version(1));
@@ -459,20 +663,40 @@ mod tests {
     #[test]
     fn a_current_store_is_told_it_is_up_to_date() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator);
-        tree.publish(ConfigLevel::Tenant, json!({"a": 1}), version(1))
-            .expect("publish");
+        tree.publish(
+            ConfigLevel::Tenant,
+            json!({"a": 1}),
+            version(1),
+            keys(["a"]),
+        )
+        .expect("publish");
         assert_eq!(tree.update_for(Some(version(1))), SyncOutcome::UpToDate);
     }
 
     #[test]
     fn a_store_a_few_versions_behind_gets_a_delta_that_reproduces_current() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator);
-        tree.publish(ConfigLevel::Tenant, json!({"a": 1, "b": 2}), version(1))
-            .expect("v1");
-        tree.publish(ConfigLevel::Store, json!({"b": 20}), version(2))
-            .expect("v2");
-        tree.publish(ConfigLevel::Store, json!({"b": 20, "c": 3}), version(3))
-            .expect("v3");
+        tree.publish(
+            ConfigLevel::Tenant,
+            json!({"a": 1, "b": 2}),
+            version(1),
+            keys(["a", "b"]),
+        )
+        .expect("v1");
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"b": 20}),
+            version(2),
+            keys(["b"]),
+        )
+        .expect("v2");
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"b": 20, "c": 3}),
+            version(3),
+            keys(["b", "c"]),
+        )
+        .expect("v3");
 
         match tree.update_for(Some(version(1))) {
             SyncOutcome::Deliver(update @ ConfigUpdate::Delta(_)) => {
@@ -494,7 +718,7 @@ mod tests {
     fn a_store_more_than_k_versions_behind_gets_a_snapshot() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator).with_k(2);
         for n in 1..=5 {
-            tree.publish(ConfigLevel::Store, json!({"n": n}), version(n))
+            tree.publish(ConfigLevel::Store, json!({"n": n}), version(n), keys(["n"]))
                 .expect("publish");
         }
         // Holding v1 while current is v5 is 4 behind, past K=2.
@@ -514,10 +738,20 @@ mod tests {
     #[test]
     fn a_tree_round_trips_through_its_serializable_state() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator).with_k(7);
-        tree.publish(ConfigLevel::Tenant, json!({"a": 1, "b": 2}), version(1))
-            .expect("v1");
-        tree.publish(ConfigLevel::Store, json!({"b": 20}), version(2))
-            .expect("v2");
+        tree.publish(
+            ConfigLevel::Tenant,
+            json!({"a": 1, "b": 2}),
+            version(1),
+            keys(["a", "b"]),
+        )
+        .expect("v1");
+        tree.publish(
+            ConfigLevel::Store,
+            json!({"b": 20}),
+            version(2),
+            keys(["b"]),
+        )
+        .expect("v2");
 
         // Export, serialise, deserialise, and rebuild — as the persistence seam does.
         let state = tree.state();
@@ -545,8 +779,13 @@ mod tests {
     #[test]
     fn a_store_holding_an_unknown_version_gets_a_snapshot() {
         let mut tree = ConfigTree::new(store_id(), StructuralValidator);
-        tree.publish(ConfigLevel::Tenant, json!({"a": 1}), version(1))
-            .expect("publish");
+        tree.publish(
+            ConfigLevel::Tenant,
+            json!({"a": 1}),
+            version(1),
+            keys(["a"]),
+        )
+        .expect("publish");
         // Version 999 was never published (or has been pruned): resync whole.
         assert!(matches!(
             tree.update_for(Some(version(999))),

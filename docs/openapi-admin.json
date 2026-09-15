@@ -1394,6 +1394,91 @@
         }
       }
     },
+    "/admin/stores/{store_id}/config/nodes": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Lists a store's published config versions newest-first (super-admin only). The version history is\nthe config tree's own append-only log; the `at` of each is read from its ULID id, so no separate\ntimestamp column is needed. `404` if the store has no tree yet.\n`GET /admin/stores/{store_id}/config/nodes` — which node was published when (finding **F6**).",
+        "description": "Read-only and `console.data.read`, the same as the version history beside it. The effective\ndocument is not returned, only its node **keys**, so this route carries no configuration values\nat all and needs none of [`strip_tree_version`]'s redaction: a caller learns that a store has a\n`permissions` node and when it was published, never what is in it.",
+        "operationId": "admin_config_nodes",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store whose published nodes to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant the store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tree's current version id and, per node of the effective document, the version that last published it and when. A node whose version is null is published but by a version that does not record which nodes it wrote"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "This store has never published a configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/devices/admitted": {
       "get": {
         "tags": [
@@ -1830,6 +1915,10 @@
     {
       "name": "fleet",
       "description": "Where each store runs and how it is standing (ADR-0068, ADR-0110, ADR-0114). The reads themselves are still coverage debt; the one write here is documented because it is the only one on this surface a person answers a compliance warning with."
+    },
+    {
+      "name": "config",
+      "description": "A store's published configuration (ADR-0033). The authoring routes are still coverage debt; the per-node read here is documented because it is what a fork's own console needs to answer the operator's actual question — which node is stale — and because it carries no configuration values at all, only which nodes exist and when each was last published."
     }
   ]
 }

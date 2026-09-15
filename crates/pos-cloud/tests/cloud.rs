@@ -14571,6 +14571,11 @@ async fn catalog_is_behind_the_session_guard() {
 
 /// The main router (for login + the effective-config read), the catalog CRUD router, and the publish
 /// router — all sharing one admin, one catalog, and one config-tree store, as production merges them.
+///
+/// The tax and locale publish routers ride along because a menu publish now requires both nodes
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**):
+/// without them a test would have to seed the tree behind the routes to reach the path it is
+/// testing, which is exactly the shortcut that let the rule be built and never exercised end to end.
 fn catalog_publish_app(
     admin: FakeAdmin,
     catalog: FakeCatalog,
@@ -14591,6 +14596,19 @@ fn catalog_publish_app(
             clock(),
             Arc::new(NoopAuditRecorder),
         ))
+        .merge(http::config_tax_router(
+            FakeTaxRates::default(),
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::config_locale_router(
+            config_trees.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
         .merge(http::catalog_publish_router(
             catalog,
             config_trees,
@@ -14598,6 +14616,48 @@ fn catalog_publish_app(
             clock(),
             Arc::new(NoopAuditRecorder),
         ))
+}
+
+/// Publishes the `tax` and `locale` nodes a menu publish requires, in the order an operator has to.
+///
+/// Both go through the real routes rather than being written into the tree, because the sequence
+/// *is* the thing ADR-0122 §7 imposes on whoever sets a shop up: tax table, then locale, then the
+/// menu. A tax table with no rows still counts — the rule is about a store having been told what
+/// its taxes are, and "none" is an answer a tenant may legitimately give.
+async fn publish_menu_prerequisites(
+    router: &axum::Router,
+    cookie: &str,
+    tenant: &str,
+    store: &str,
+) {
+    let tax = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/tax",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store }),
+            cookie,
+        ))
+        .await
+        .expect("route tax publish");
+    assert_eq!(tax.status(), StatusCode::OK);
+
+    let locale = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "store_id": store,
+                "country_code": "VN",
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route locale publish");
+    assert_eq!(locale.status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -14657,6 +14717,9 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
         .expect("route place item");
     assert_eq!(placed.status(), StatusCode::CREATED);
 
+    // What the shop must already hold before a menu may be published to it (ADR-0122 §7).
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
+
     // Publish the menu to the store.
     let published = router
         .clone()
@@ -14705,6 +14768,70 @@ async fn publishing_an_unknown_menu_is_refused() {
         .await
         .expect("route publish unknown menu");
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Finding **F7**: the single-store path published a menu to a shop with no tax table.
+///
+/// The batch path had refused exactly this since store groups landed, so the same instruction got
+/// two answers depending on which button an operator pressed — and the permissive one produced a
+/// shop that boots, syncs, shows the menu, takes the order, and raises `TaxRateNotConfigured` at
+/// the payment screen. Both halves are asserted here: the refusal names what is missing, and the
+/// same publish succeeds once the operator has done what the refusal told them to.
+#[tokio::test]
+async fn publishing_a_menu_to_a_store_with_no_tax_table_is_refused_and_says_what_is_missing() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+
+    let publish = || {
+        router.clone().oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+    };
+
+    let refused = publish().await.expect("route the premature publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let message = json_body(refused).await["error"]["message"]
+        .as_str()
+        .expect("a message")
+        .to_owned();
+    assert!(
+        message.contains("`tax`"),
+        "the refusal names the node to publish first, which is the difference between an operator \
+         fixing it and an operator reading the ADR: {message}"
+    );
+
+    // Nothing was written: a refused publish leaves the shop exactly as it was.
+    let untouched = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the effective config");
+    assert!(
+        json_body(untouched).await["menu"].is_null(),
+        "the store has no menu node, so the refusal cost it nothing"
+    );
+
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
+    let accepted = publish()
+        .await
+        .expect("route the publish that follows the rule");
+    assert_eq!(
+        accepted.status(),
+        StatusCode::OK,
+        "doing what the refusal asked for is enough; there is no second hurdle"
+    );
 }
 
 #[tokio::test]
@@ -14768,6 +14895,10 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
         .await
         .expect("route create layout button");
     assert_eq!(placed.status(), StatusCode::CREATED);
+
+    // The same two nodes the menu publish requires — the layout rides along on that publish, so it
+    // inherits its prerequisites (ADR-0122 §7).
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
 
     // Publish the menu; the layout rides along on the same publish.
     let published = router

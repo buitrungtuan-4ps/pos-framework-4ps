@@ -1247,7 +1247,8 @@ dashboard `pnpm build` green, 200 tests / 30 files.
 | PR-2 · Visual foundation | **Delivered** — D1 D2 D3, V1 V2 V3 V7; 218 tests / 34 files |
 | PR-3 · The kit, completed | **Delivered** — D5 D6, V16 V20, and V19 on the Stores table; 229 tests / 36 files. Five of the planned components; see the delivery note below for the four that moved to PR-4/PR-6 |
 | PR-4 · One way to create | **Delivered** — D4, V4, ADR-0121 §6; 230 tests / 36 files |
-| PR-5 | Next |
+| PR-5a · Which node is stale (backend) | **Delivered** — F6, F7; 477 cloud tests |
+| PR-5b · `PublishBar` + the hub's stale-node card | Next — F13, F4 |
 | PR-6 … PR-8 | Planned, in the order below |
 
 **One measurement corrected.** D2 estimated "three weights, about 150 kB". Google serves Noto Sans
@@ -1541,6 +1542,33 @@ progress.
 4. Hub Configuration card lists the stale nodes; get-started step 5 becomes four sub-lines;
    "needs republish" flag on the hub and in the config tree (F4).
 5. Tests: `publish-bar.test`, `config-nodes` route test, prerequisite refusal test.
+
+**Split into 5a (backend, delivered 2026-09-15) and 5b (console).** The two halves have no shared
+file and different review surfaces — one is Rust and a wire contract, the other is thirteen screens
+— so they land separately. **5a** is items 1 and 2: the node keys recorded on every published
+version, `GET /admin/stores/{id}/config/nodes`, and the §7 prerequisites applied to the single-store
+publish path. **5b** is items 3 and 4: `PublishBar` and the hub's stale-node card.
+
+Three notes on what 5a turned out to be.
+
+*No migration.* The plan said "additive migration". The config tree is persisted as **one JSON
+document** (`config_trees.state`, migration 0004), so an added optional field needs no DDL at all —
+and a version written before it deserialises with an empty node list, which every read treats as
+"this version says nothing about any node" rather than "this version touched none". That
+distinction is the whole feature: the alternative reading would tell an operator their menu had
+never been published.
+
+*`routes.txt` is the edge's, not the cloud's.* The additive-route gate covers `/api/*`
+([ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)); an `/admin` route is documented in
+`docs/openapi-admin.json`, which this PR does rather than adding the route to the coverage-debt
+list.
+
+*Held version stays where it already is.* The plan wanted published, held and last-author-edit per
+node. Published is per node and is here. **Held** is one value for the whole store and is already on
+the fleet read that every screen asking this question has loaded — returning it again per node would
+be a second copy to keep in step. **Last author edit** is not a cloud read at all in 5b's design: the
+screen doing the publishing already holds its own entity's `updated_at`, so `PublishBar` compares
+that against this route's `at_ms`. No new query, no 13-way mapping from node to authoring table.
 
 ### PR-6 · The data layer, finished
 

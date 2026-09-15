@@ -209,7 +209,12 @@ where
         None => ConfigTree::new(publish.store_id, CapabilityValidator),
     };
     let version_id = mint_version_id(now_ms).ok_or_else(|| "OS entropy unavailable".to_owned())?;
-    match tree.publish(ConfigLevel::Store, store_layer, version_id) {
+    match tree.publish(
+        ConfigLevel::Store,
+        store_layer,
+        version_id,
+        vec![publish.node_key.clone()],
+    ) {
         Ok(id) => {
             // The activator has no operator and no `If-Match`, but it still composes on what it
             // read, so it takes the same precondition every console write does

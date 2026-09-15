@@ -129,6 +129,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_list_store_group_batches,
         crate::http::admin_read_store_group_batch,
         crate::http::admin_list_store_archives,
+        crate::http::admin_config_nodes,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
@@ -174,6 +175,15 @@ pub(crate) struct ErrorResponse {
                            ADR-0114). The reads themselves are still coverage debt; the one write \
                            here is documented because it is the only one on this surface a person \
                            answers a compliance warning with."
+        ),
+        (
+            name = "config",
+            description = "A store's published configuration (ADR-0033). The authoring routes are \
+                           still coverage debt; the per-node read here is documented because it is \
+                           what a fork's own console needs to answer the operator's actual \
+                           question — which node is stale — and because it carries no \
+                           configuration values at all, only which nodes exist and when each was \
+                           last published."
         ),
     )
 )]
