@@ -177,6 +177,18 @@ export function CatalogMenus() {
   const openMenuDetail = async (menuId: string) => {
     setSelectedMenu(menuId);
     resetPlacementEditor();
+    // The publish card follows the menu you opened. Opening a menu is the operator saying which one
+    // they are working on, and the next thing they do after saving a price is publish that same
+    // menu — re-picking it from a list of every menu was a tap that existed only because the two
+    // cards were built separately (roadmap-v3 D7; the price flow's eighth step). An explicit pick
+    // afterwards still wins, until a different menu is opened.
+    //
+    // Only an active menu is adopted: the picker offers active menus only, and a `<select>` holding
+    // a value it does not list shows the operator a blank where the menu name should be, which is
+    // worse than the tap this removes.
+    if (menus()?.find((menu) => menu.menu_id === menuId)?.status === "active") {
+      setPublishMenu(menuId);
+    }
     setBusy(true);
     try {
       await loadMenuDetail(menuId);
@@ -817,7 +829,8 @@ export function CatalogMenus() {
           <p class="text-sm text-ink-muted">{t("catalog.publishHint")}</p>
           {/* The picker stays: unlike every other node, "the menu" is a choice among several, and
               the bar has no opinion about which. It says where the shop stands; this says what to
-              send. */}
+              send. What it no longer does is start empty — opening a menu above selects it here, so
+              the common flow (edit a price, publish that menu) does not ask twice. */}
           <SelectField
             label={t("catalog.publishMenu")}
             value={publishMenu()}

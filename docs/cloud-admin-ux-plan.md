@@ -1276,7 +1276,7 @@ be done, in which order, and what makes each step green.
 | D4 | Two ways to create a store | **One "New store" → wizard**, with a "skip key and installer, create the record only" step. |
 | D5 | Refresh buttons | **No Refresh button anywhere.** Every mutation re-reads its own resource; live screens (hub, fleet, alerts, OTA, reconcile) revalidate on window focus and every 30–60 s. The resource helper lands per screen inside PR-3 rather than as a separate wave. |
 | D6 | Get-started card | **Collapses** to a one-line strip once one step is done. |
-| D7 | Step-budget ceilings | Console ceilings **4 / 6 / 3** (create / publish / find) are set in PR-8, when the kit has made them reachable; the gate reports until then. |
+| D7 | Step-budget ceilings | **Set in PR-8, as each flow's measured cost** — a no-regression ratchet rather than the expected round 4 / 6 / 3. Five of the seven flows land at or under D7's numbers; two do not, and the reason is recorded below and in `dashboard/scripts/step-budget.mjs`. |
 | D8 | Where a scheduled publish is converted to an instant | **On the cloud**, from the store's published `locale.timezone` and `business_date_cutoff` (option O2). Edge-side conversion (O3) is deferred to the B·W7 line of the roadmap. |
 
 ### The clarifications behind five of the decisions
@@ -1325,6 +1325,24 @@ script only prints the counts. The real question is therefore only "when to set 
 Answer: in PR-8, after `PublishBar` and releases have actually shortened the flows; set now,
 every publish flow would be red for the reason this wave already knows. Expected ceilings
 4 / 6 / 3 (create / publish / find).
+
+**Delivered in PR-8, and the expected numbers did not survive contact.** The measurement the
+gate had been printing since Q7 says: price change 8, shop online 1, provisioning 5, machine
+replacement 4, cohort publish 4, alert acknowledgement 2, capability publish 3. Two of those
+cannot reach D7's ceilings without giving something up that the wave deliberately built:
+
+* **Provisioning is 5 against a create ceiling of 4.** The wizard's three steps are a dependency
+  order — the store must exist before a key can be scoped to it, and the key must exist before the
+  installer can embed it. Reaching 4 means not scoping the key to its store.
+* **The price change is 7 against a publish ceiling of 6.** PR-8 removed the one removable tap
+  (the publish card now starts on the menu you opened, instead of asking which menu a second time).
+  The seventh is **Publish** itself, and dropping it means publishing on save — which is the
+  safeguard the flow is measured to protect, not overhead.
+
+So the ceilings shipped are each flow's measured cost. That keeps D7's stated purpose intact —
+adding a tap to a core flow turns the build red and the new number has to be argued into the
+file — and drops only the roundness of 4 / 6 / 3, which no evidence supported. Where a flow
+already sits at or under D7's number, the ratchet *is* D7's number.
 
 **D8 — "Does a scheduled publish follow each store's edge machine, or the cloud's config for
 that edge's timestamp?"** The cloud, not the edge clock. Today the cloud holds one absolute
