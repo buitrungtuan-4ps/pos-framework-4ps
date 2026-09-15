@@ -591,7 +591,7 @@ export function People() {
                           when={row.status === "archived"}
                           fallback={
                             <Button
-                              variant="danger"
+                              variant="danger-ghost"
                               disabled={busy()}
                               onClick={() => setPendingArchive(row)}
                             >
@@ -796,7 +796,7 @@ export function People() {
                   actions={(row) => (
                     <Show when={canManage()}>
                       <Button
-                        variant="danger"
+                        variant="danger-ghost"
                         disabled={busy()}
                         onClick={() => setPendingRemove(row)}
                       >

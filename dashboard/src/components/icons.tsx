@@ -49,6 +49,7 @@ import type { JSX } from "solid-js";
 export const ICON_NAMES = [
   "armchair",
   "arrow-down-to-line",
+  "bell",
   "book-open",
   "chart-column",
   "chef-hat",
@@ -63,6 +64,7 @@ export const ICON_NAMES = [
   "layers",
   "layout-grid",
   "megaphone",
+  "menu",
   "monitor-check",
   "monitor-smartphone",
   "package",
@@ -70,6 +72,7 @@ export const ICON_NAMES = [
   "plug-zap",
   "plus-circle",
   "refresh-cw",
+  "search",
   "server",
   "settings",
   "shield-check",
@@ -300,6 +303,25 @@ const GLYPHS: Record<IconName, () => JSX.Element> = {
       <path d="M15 21v-5a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v5" />
       <path d="M17.774 10.31a1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.451 0 1.12 1.12 0 0 0-1.548 0 2.5 2.5 0 0 1-3.452 0 1.12 1.12 0 0 0-1.549 0 2.5 2.5 0 0 1-3.77-3.248l2.889-4.184A2 2 0 0 1 7 2h10a2 2 0 0 1 1.653.873l2.895 4.192a2.5 2.5 0 0 1-3.774 3.244" />
       <path d="M4 10.95V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8.05" />
+    </>
+  ),
+  "bell": () => (
+    <>
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
+    </>
+  ),
+  "menu": () => (
+    <>
+      <path d="M4 6h16" />
+      <path d="M4 12h16" />
+      <path d="M4 18h16" />
+    </>
+  ),
+  "search": () => (
+    <>
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21-4.3-4.3" />
     </>
   ),
   "triangle-alert": () => (

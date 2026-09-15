@@ -190,7 +190,7 @@ export function Webhooks() {
                       </Button>
                     </Show>
                     <Button
-                      variant="danger"
+                      variant="danger-ghost"
                       disabled={deletion.saving()}
                       onClick={() => deletion.confirm(row)}
                     >

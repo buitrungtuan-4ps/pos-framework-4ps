@@ -794,7 +794,7 @@ export function CatalogMenus() {
                     <Button variant="secondary" disabled={busy()} onClick={() => openEditPlacement(row)}>
                       {t("action.edit")}
                     </Button>
-                    <Button variant="danger" disabled={busy()} onClick={() => setPendingRemove(row)}>
+                    <Button variant="danger-ghost" disabled={busy()} onClick={() => setPendingRemove(row)}>
                       {t("catalog.remove")}
                     </Button>
                   </div>

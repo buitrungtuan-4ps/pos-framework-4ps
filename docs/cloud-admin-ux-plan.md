@@ -1244,8 +1244,15 @@ dashboard `pnpm build` green, 200 tests / 30 files.
 | PR | State |
 | --- | --- |
 | PR-1 · What the console says wrong | **Delivered** — V10 V11 V12 V13 V15 V17, F1 F2 F3 F12; 216 tests / 34 files |
-| PR-2 · Visual foundation | Next |
-| PR-3 … PR-8 | Planned, in the order below |
+| PR-2 · Visual foundation | **Delivered** — D1 D2 D3, V1 V2 V3 V7; 218 tests / 34 files |
+| PR-3 · The kit, completed | Next |
+| PR-4 … PR-8 | Planned, in the order below |
+
+**One measurement corrected.** D2 estimated "three weights, about 150 kB". Google serves Noto Sans
+as one *variable* file per subset covering every weight, so what shipped is six files and 331 kB in
+the repository — but `unicode-range` means a reader downloads only the subsets on screen: **36 kB for
+an English console, 50 kB for a Vietnamese one**, which is better than the estimate on the number
+that matters. `dashboard/public/fonts/README.md` carries the per-file table.
 
 Wave 3 fixed the console from the code outwards. Wave 4 started from the other end: the real
 console was run against a local `pos_cloud` (three fictional stores, one seeded with a full

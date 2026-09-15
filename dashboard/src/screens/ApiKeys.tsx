@@ -243,7 +243,7 @@ export function ApiKeys() {
                   actions={(row) => (
                     <Show when={!row.revoked}>
                       <Button
-                        variant="danger"
+                        variant="danger-ghost"
                         disabled={revocation.saving()}
                         onClick={() => revocation.confirm(row)}
                       >

@@ -166,7 +166,7 @@ export function MySessions() {
               actionsHeader={t("common.actions")}
               actions={(row) => (
                 <Button
-                  variant="danger"
+                  variant="danger-ghost"
                   disabled={busy() || row.current}
                   title={row.current ? t("sessions.cannotRevokeCurrent") : undefined}
                   onClick={() => setPendingRevoke(row)}

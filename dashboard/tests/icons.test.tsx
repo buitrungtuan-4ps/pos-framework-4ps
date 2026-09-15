@@ -27,7 +27,7 @@
 import { render, screen } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { Icon, ICON_NAMES, type IconName } from "../src/components/icons";
+import { Icon, ICON_NAMES } from "../src/components/icons";
 import { SCREENS, type ScreenId } from "../src/state/screens";
 
 const source: string = Object.values(
@@ -68,20 +68,40 @@ describe("an icon", () => {
 });
 
 describe("every vendored glyph", () => {
-  const used = new Set<IconName>(
-    (Object.keys(SCREENS) as ScreenId[]).map((id) => SCREENS[id].icon),
-  );
+  // Until Wave 4 the set was exactly one glyph per nav screen, and this checked that correspondence
+  // in both directions. PR-2 added three glyphs no screen owns — the nav toggle, the palette's
+  // search affordance and the notification bell, each of which had been an emoji (finding V7) and so
+  // rendered as a different picture on every operating system. The invariant that still holds, and
+  // the one worth gating, is the reason the old one was written: **no glyph ships unused**. So a
+  // glyph counts as drawn if a screen declares it *or* any component asks for it by name.
+  const drawn = new Set<string>((Object.keys(SCREENS) as ScreenId[]).map((id) => SCREENS[id].icon));
+  const components: Record<string, string> = import.meta.glob("../src/**/*.tsx", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  });
+  for (const [path, text] of Object.entries(components)) {
+    if (path.endsWith("components/icons.tsx")) {
+      continue;
+    }
+    for (const match of text.matchAll(/<Icon\s+name="([a-z0-9-]+)"/g)) {
+      drawn.add(match[1] as string);
+    }
+  }
 
-  it("is drawn by a screen, so none is dead weight in the first paint", () => {
-    const orphans = ICON_NAMES.filter((name) => !used.has(name));
+  it("is drawn somewhere, so none is dead weight in the bundle", () => {
+    const orphans = ICON_NAMES.filter((name) => !drawn.has(name));
     expect(orphans).toEqual([]);
   });
 
-  it("accounts for every icon the console asks for", () => {
-    // The other direction. Both hold today because the set is exactly one glyph per screen, and the
-    // point of checking both is that adding a glyph "for later" and forgetting to use it costs
-    // bundle bytes.
-    expect(used.size).toBe(ICON_NAMES.length);
+  it("exists for every icon a screen declares", () => {
+    // The other direction, now stated over the screens alone: a nav entry naming a glyph the set
+    // does not carry is a blank square in the sidebar, which `ScreenId`'s type cannot catch on its
+    // own once the set and the screens are no longer one list.
+    const missing = (Object.keys(SCREENS) as ScreenId[])
+      .map((id) => SCREENS[id].icon)
+      .filter((name) => !(ICON_NAMES as readonly string[]).includes(name));
+    expect(missing).toEqual([]);
   });
 });
 

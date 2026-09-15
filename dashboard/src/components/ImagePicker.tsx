@@ -13,6 +13,7 @@ import { Modal } from "./kit";
 import { toast } from "./Toast";
 import { Button, FileButton } from "./ui";
 import { apiMessage } from "../lib/errors";
+import { Icon } from "./icons";
 
 /** A media thumbnail that degrades to a placeholder tile when there is no id or the asset fails to
  *  load — the never-blank posture (ADR-0075). `sizeClass` sets the box (default a 64px square). */
@@ -34,7 +35,7 @@ export function MediaThumbnail(props: {
           aria-label={t("media.noImage")}
           title={t("media.noImage")}
         >
-          <span aria-hidden="true">🖼️</span>
+          <Icon name="image" class="h-6 w-6 shrink-0" />
         </div>
       }
     >

@@ -304,7 +304,7 @@ export function Devices() {
                 actions={(row) => (
                   <div class="flex gap-2">
                     <Button onClick={() => void startApprove(row)}>{t("action.approve")}</Button>
-                    <Button variant="danger" onClick={() => rejection.confirm(row)}>
+                    <Button variant="danger-ghost" onClick={() => rejection.confirm(row)}>
                       {t("action.reject")}
                     </Button>
                   </div>

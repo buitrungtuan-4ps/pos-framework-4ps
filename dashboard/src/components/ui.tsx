@@ -64,39 +64,91 @@ export function StatusBadge(props: {
   );
 }
 
-/** The page title and optional one-line description at the top of every screen. */
-export function PageHeader(props: { title: string; description?: string }) {
+/**
+ * The page title, its one-line description, and the screen's own actions.
+ *
+ * `actions` is the slot the header lacked: every screen that had a create button put it somewhere of
+ * its own — above the table, inside a card, at the bottom of a form — so the same act sat in a
+ * different place on each of thirty screens. Given here, it is on the title line, right-aligned, on
+ * every screen that passes one, and it wraps under the title rather than squeezing it at phone
+ * width.
+ *
+ * The description is bounded to a `measure` (65 characters): a sentence that runs the full width of
+ * a 1440px window is a sentence nobody finishes (V2).
+ */
+export function PageHeader(props: { title: string; description?: string; actions?: JSX.Element }) {
   return (
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-ink">{props.title}</h1>
-      <Show when={props.description}>
-        <p class="mt-1 text-sm text-ink-muted">{props.description}</p>
+    <div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-semibold text-balance text-ink">{props.title}</h1>
+        <Show when={props.description}>
+          <p class="mt-1 max-w-measure text-sm text-ink-muted">{props.description}</p>
+        </Show>
+      </div>
+      <Show when={props.actions}>
+        <div class="flex flex-wrap items-center gap-2">{props.actions}</div>
       </Show>
     </div>
   );
 }
 
 type ButtonProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "secondary" | "danger";
+  variant?: "primary" | "secondary" | "ghost" | "danger" | "danger-ghost";
+  size?: "sm" | "md" | "lg";
 };
 
-/** A button sized to the 48px touch minimum, coloured by role. Content (the label) is a child. */
+/**
+ * A button, coloured by role and sized to where it sits.
+ *
+ * # Two scales, not one (decision D3)
+ *
+ * Every button in this console was 48px, the till's touch minimum, because both surfaces started
+ * from one token. A till is operated with a thumb at arm's length during service and 48 is right
+ * there; a back office is operated with a mouse, and a table of stores whose every row carries two
+ * 48px buttons is half again as tall as it needs to be — the Stores list fitted eight rows on a
+ * laptop where it should fit twelve. So: `lg` 48 stays for the rare full-width primary and for
+ * anything a finger will press on a tablet, `md` 40 is the console default, `sm` 32 is for a table
+ * row or a toolbar. The till's own components are a separate tree and are untouched.
+ *
+ * # `danger` is a confirmation, not a trigger (decision D1, finding V1)
+ *
+ * The run found 28 solid red buttons across the console — Revoke, Delete, Archive, Reject — each
+ * one a first-click action painted in the loudest colour the palette has. Red now means one thing
+ * and appears in one place: inside a confirmation, on the button that carries out what the dialog
+ * just described. The trigger that opens that dialog is `danger-ghost`: the word in red on the
+ * page's own ground, which reads as "this one is destructive" without shouting it from every row.
+ * `tests/visual-tokens.test.ts` refuses a solid `danger` outside `kit.tsx`.
+ */
 export function Button(props: ButtonProps) {
-  const [local, rest] = splitProps(props, ["variant", "class", "children"]);
+  const [local, rest] = splitProps(props, ["variant", "size", "class", "children"]);
   const palette = () => {
     switch (local.variant) {
       case "danger":
         return "bg-danger text-danger-ink";
+      case "danger-ghost":
+        return "border border-danger text-danger hover:bg-surface-raised";
+      case "ghost":
+        return "text-ink hover:bg-surface-raised";
       case "secondary":
         return "bg-surface-raised text-ink border border-line";
       default:
-        return "bg-accent text-accent-ink";
+        return "bg-primary text-primary-ink";
+    }
+  };
+  const metrics = () => {
+    switch (local.size) {
+      case "sm":
+        return "h-8 px-2.5 text-sm";
+      case "lg":
+        return "min-h-touch px-4 text-base";
+      default:
+        return "h-10 px-3.5 text-base";
     }
   };
   return (
     <button
       {...rest}
-      class={`inline-flex min-h-touch items-center justify-center rounded-token px-4 text-base font-medium transition-[filter] hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${palette()} ${local.class ?? ""}`}
+      class={`inline-flex shrink-0 items-center justify-center gap-1.5 rounded-token font-medium transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-50 ${metrics()} ${palette()} ${local.class ?? ""}`}
     >
       {local.children}
     </button>

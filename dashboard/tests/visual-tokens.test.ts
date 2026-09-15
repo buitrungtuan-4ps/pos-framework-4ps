@@ -113,3 +113,31 @@ describe("every hover state that changes a colour", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("the danger colour", () => {
+  // Wave 4 · PR-2 (D1, V1). The run counted 28 solid red buttons across the console: Revoke, Delete,
+  // Archive, Reject — every one of them the *trigger* that opens a confirmation, not the act itself.
+  // Red at full strength on a first click, twenty-eight times, is red that means nothing; and while
+  // the accent was also red, a primary button and a destructive one were the same colour, so the
+  // hue carried no information at all.
+  //
+  // The rule now: a solid `danger` button is the button inside a confirmation — the one that
+  // carries out what the dialog just described. Those live in `kit.tsx` (`ConfirmDialog`, and the
+  // discard prompt in `FormPanel`). A screen's own destructive control is `danger-ghost`: the word
+  // in red on the page's ground.
+  //
+  // Checked over the source because it is a claim about what the code may contain, and because a
+  // rendering test would have to mount all thirty screens to make the same claim.
+  it("is solid only inside a confirmation", () => {
+    const offenders = files
+      .filter(([path]) => !path.endsWith("components/kit.tsx"))
+      .filter(([, text]) => /variant="danger"/.test(text))
+      .map(([path]) => path);
+    expect(offenders).toEqual([]);
+  });
+
+  it("is still used, so this is not passing because every red button was deleted", () => {
+    const ghosts = files.filter(([, text]) => text.includes('variant="danger-ghost"'));
+    expect(ghosts.length).toBeGreaterThanOrEqual(15);
+  });
+});

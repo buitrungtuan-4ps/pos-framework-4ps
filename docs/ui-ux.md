@@ -73,15 +73,18 @@ Stores screen — so the flow is five clicks, not four, and nothing but a resolv
 | Group | Values |
 |---|---|
 | Spacing | 4 px scale: 4 · 8 · 12 · 16 · 24 · 32 |
-| Touch targets | 48 px standard; 56–64 px for money and primary actions |
+| Touch targets | **Two scales** (Wave 4 · D1/D3). *Till* (`ui/`): 48 px standard, 56–64 px for money and primary actions — a thumb, at arm's length, during service. *Console* (`dashboard/`): 40 px default, 32 px in a table row or a toolbar, 48 px kept for a full-width primary and for anything a finger presses on a tablet. A back office operated with a mouse does not need the till's target, and paying it made every list half again as tall as it needed to be. |
+| Typeface | **Noto Sans, self-hosted**, six variable subsets under `dashboard/public/fonts` with a `unicode-range` each, so a page fetches only the scripts it paints (36 kB English, 50 kB Vietnamese). Chosen for coverage — "no tofu" in any script — because this framework already ships VN, JP and IN country modules. Thai, Devanagari and Arabic ship with the country module that needs them; CJK falls back to the system face. `tabular-nums` on every table and on the `.tabular` utility. |
 | Type | 12 (meta) · 14 (label) · 16 (body) · 20 (heading) · 28 (KDS) · 40+ tabular (totals) |
+| Brand vs. primary | **Two tokens, not one** (Wave 4 · D1). `--primary` is the ink a primary button is painted in: neutral, because this is a framework and "do the thing" belongs to the operator rather than to a brand. `--accent` is the one token a fork sets for itself — logo, focus ring, selected nav tint, links — and is never used on a button. `--danger` is red and owns red alone: solid only inside a confirmation, `danger-ghost` for the control that opens one. |
 | Semantic colour | success / warning / error / info at WCAG AA contrast — every token pair measured in `docs/wcag-contrast-audit.md` and gated in CI (`pnpm contrast`). **Never carry meaning by colour alone** — always pair with an icon or text (8% of men have red-green colour deficiency). |
+| Measure | Running text is bounded to 65 characters (`max-w-measure`); a page is bounded to 1280 px. A table may use the full width — its job is to fit its columns. |
 | Shape | One radius (8 px), one border width (1 px). That is enough. |
 | Motion | 100–150 ms ease-out, only for entrance and orientation |
 | Theme | Light and dark across the product, configured per device (kitchen displays default to dark). Colour tokens are separate from structural tokens. |
 | On-screen keyboard | Shared component for numeric and text entry on touch devices without a physical keyboard |
 
-Tokens live in one theme file (SolidJS + Tailwind config), so per-tenant branding later means changing tokens, not components.
+Tokens live in one theme file per surface (`dashboard/src/styles/tokens.css`, `ui/src/styles/tokens.css`), so per-tenant branding means changing tokens, not components. Since Wave 4 that promise is literal for the console: a fork sets `--accent` and `--accent-ink` and nothing else moves.
 
 ## 3. Core screens
 

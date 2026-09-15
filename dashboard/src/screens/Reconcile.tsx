@@ -179,7 +179,7 @@ export function Reconcile() {
                 </p>
                 <div>
                   <Button
-                    variant="danger"
+                    variant="danger-ghost"
                     disabled={busy()}
                     onClick={() => setConfirmReset(true)}
                   >

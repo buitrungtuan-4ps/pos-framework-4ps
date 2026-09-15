@@ -8,6 +8,7 @@ import { createSignal, For, Show } from "solid-js";
 
 import { t } from "../i18n";
 import { useEscape } from "../lib/escape";
+import { Icon } from "./icons";
 
 type Tone = "ok" | "danger";
 type Note = { id: number; tone: Tone; message: string };
@@ -81,7 +82,7 @@ export function NotificationBell() {
         onClick={() => setOpen((value) => !value)}
         class="flex min-h-touch items-center gap-1 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
       >
-        <span aria-hidden="true">🔔</span>
+        <Icon name="bell" class="h-5 w-5 shrink-0" />
         <Show when={history().length > 0}>
           <span class="rounded-full bg-accent px-1.5 text-xs font-medium text-accent-ink">
             {history().length}

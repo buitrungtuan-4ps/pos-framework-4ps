@@ -275,7 +275,7 @@ export function Admins() {
                       <Show
                         when={row.status === "suspended"}
                         fallback={
-                          <Button variant="danger" onClick={() => suspension.confirm(row)}>
+                          <Button variant="danger-ghost" onClick={() => suspension.confirm(row)}>
                             {t("admins.suspend")}
                           </Button>
                         }

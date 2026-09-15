@@ -308,7 +308,7 @@ export function Activation() {
                     <Show
                       when={row.status === "archived"}
                       fallback={
-                        <Button variant="danger" onClick={() => archival.confirm(row)}>
+                        <Button variant="danger-ghost" onClick={() => archival.confirm(row)}>
                           {t("activation.archive")}
                         </Button>
                       }
