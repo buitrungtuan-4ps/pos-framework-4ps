@@ -89,11 +89,17 @@ export const STEPS: readonly Step[] = [
     hint: "getStarted.apiKey.hint",
     go: { screen: "apiKeys", label: "getStarted.apiKey.action" },
   },
+  // Links to Store settings, not to Configuration: the store cannot trade until its locale, tax,
+  // menu and roster are published, and each is published from the screen that owns it (ADR-0004),
+  // in an order the guide spells out — locale and tax before the menu, because a menu published
+  // over a missing tax node boots a store that cannot close a bill (ADR-0122 §7). Store settings is
+  // the first of the four, so it is where the chain starts. The Configuration screen holds
+  // capability flags and the version history, neither of which is what a new store is missing.
   {
     id: "config",
     title: "getStarted.config.title",
     hint: "getStarted.config.hint",
-    go: { screen: "config", label: "getStarted.config.action" },
+    go: { screen: "storeSettings", label: "getStarted.config.action" },
   },
   {
     id: "device",

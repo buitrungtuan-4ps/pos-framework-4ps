@@ -575,11 +575,14 @@ export const api = {
     ),
   // Config version history (ADR-0069 G2): list the append-only versions, read one's effective
   // document for the diff view, and roll back (which appends a new current version).
+  // A store nobody has published to has no tree, and the route answers `404` for it. To every
+  // caller that is "no versions yet", not a failure — the get-started checklist read the rejection
+  // as "could not check" and painted a red cross on a store that was simply new, and the Config
+  // screen's history had to special-case the same thing. `null` becomes `[]` here, once.
   configVersions: (tenantId: string, storeId: string) =>
-    requestJson<ConfigVersion[]>(
-      "GET",
+    requestJsonOrNull<ConfigVersion[]>(
       `/admin/stores/${encodeURIComponent(storeId)}/config/versions?${tenantQuery(tenantId)}`,
-    ),
+    ).then((versions) => versions ?? []),
   configVersionEffective: (tenantId: string, storeId: string, versionId: string) =>
     requestJson<Json>(
       "GET",

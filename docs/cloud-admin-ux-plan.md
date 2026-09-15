@@ -1237,9 +1237,15 @@ would be a lie — and eight short headings is a usable nav. It is asserted rath
 
 # Wave 4 — the console as an end user sees it (2026-09-14)
 
-**Status** Task list written; **awaiting owner approval before any code is written.**
+**Status** Approved by the owner on 2026-09-15; **PR-1 delivered**, PR-2 next.
 **Decisions** D1–D8 recorded below (owner, 2026-09-14). **Baseline** `main` @ `0980d31`,
 dashboard `pnpm build` green, 200 tests / 30 files.
+
+| PR | State |
+| --- | --- |
+| PR-1 · What the console says wrong | **Delivered** — V10 V11 V12 V13 V15 V17, F1 F2 F3 F12; 216 tests / 34 files |
+| PR-2 · Visual foundation | Next |
+| PR-3 … PR-8 | Planned, in the order below |
 
 Wave 3 fixed the console from the code outwards. Wave 4 started from the other end: the real
 console was run against a local `pos_cloud` (three fictional stores, one seeded with a full

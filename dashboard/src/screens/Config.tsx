@@ -453,27 +453,38 @@ export function Config() {
             </Show>
           </Card>
 
-          <Card title={t("config.publish")}>
-            <div class="flex flex-col gap-4">
-              <SelectField
-                label={t("config.level")}
-                value={level()}
-                options={CONFIG_LEVELS.map((name) => ({ value: name, label: t(LEVEL_KEY[name]) }))}
-                onChange={(value) => setLevel(value as ConfigLevel)}
-              />
-              <TextArea
-                label={t("config.document")}
-                value={document()}
-                onInput={setDocument}
-                rows={14}
-              />
-              <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-              <Show when={ok()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
-              <Button disabled={busy()} onClick={() => void publish()}>
-                {t("action.publish")}
-              </Button>
+          {/* Folded away: replacing a whole layer from pasted JSON is the sharpest tool on this
+              screen, and it sat as an open card beside the capability form — on the screen the
+              get-started used to send a brand-new store to. Still here, one click away. */}
+          <details class="rounded-token border border-line bg-surface shadow-raised">
+            <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-ink-muted">
+              {t("config.advanced")}
+            </summary>
+            <div class="border-t border-line p-4">
+              <p class="mb-3 text-sm text-ink-muted">{t("config.advancedHint")}</p>
+              <div class="flex flex-col gap-4">
+                <SelectField
+                  label={t("config.level")}
+                  value={level()}
+                  options={CONFIG_LEVELS.map((name) => ({ value: name, label: t(LEVEL_KEY[name]) }))}
+                  onChange={(value) => setLevel(value as ConfigLevel)}
+                />
+                <TextArea
+                  label={t("config.document")}
+                  value={document()}
+                  onInput={setDocument}
+                  rows={14}
+                />
+                <Show when={error()}>
+                  {(message) => <Banner tone="danger" message={message()} />}
+                </Show>
+                <Show when={ok()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
+                <Button disabled={busy()} onClick={() => void publish()}>
+                  {t("action.publish")}
+                </Button>
+              </div>
             </div>
-          </Card>
+          </details>
         </div>
 
         <div class="mt-6">
