@@ -6,13 +6,14 @@
 // read is behind console.data.read; the rebuild is behind console.config.publish (the server
 // enforces it — a viewer sees the history but a rebuild returns 403).
 
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { ReconcileRun, Store } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
-import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import { type Column, ConfirmDialog, DataTable, EmptyState } from "../components/kit";
@@ -28,62 +29,42 @@ function ageSeconds(atMs: number): number {
 }
 
 export function Reconcile() {
-  const [runs, setRuns] = createSignal<ReconcileRun[] | null>(null);
-  const [names, setNames] = createSignal<Map<string, string>>(new Map());
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
+  const [rebuilding, setRebuilding] = createSignal(false);
   const [confirmReset, setConfirmReset] = createSignal(false);
 
-  const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-    toast.error(message);
-  };
-
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      // The history (optionally narrowed to the store in context) and a store-name lookup, together.
-      const [loadedRuns, stores] = await Promise.all([
-        api.listReconcileRuns(tenantId(), storeId() || undefined),
-        api.listStores(tenantId()),
+  // The history (narrowed to the store in context when there is one) and a store-name lookup,
+  // together: one state for two reads that are useless apart, so a half-loaded screen cannot show
+  // runs with raw ULIDs where names belong. It re-reads itself on the interval and on focus, which
+  // is what a screen watching something that runs on a schedule needs (D5).
+  const history = createAdminResource(
+    async (tenant, store) => {
+      const [runs, stores] = await Promise.all([
+        api.listReconcileRuns(tenant, store || undefined),
+        api.listStores(tenant),
       ]);
-      setRuns(loadedRuns);
-      setNames(new Map(stores.map((store: Store) => [store.store_id, store.name])));
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant/store changes (never with an empty context, F0).
-  onScopedContext("tenant", () => void load());
-
-  // Poll while the screen is open, but only once a tenant is chosen.
-  onMount(() => {
-    const handle = setInterval(() => {
-      if (contextReady("tenant") && !busy()) {
-        void load();
-      }
-    }, POLL_MS);
-    onCleanup(() => clearInterval(handle));
-  });
+      return {
+        runs,
+        names: new Map(stores.map((row: Store) => [row.store_id, row.name])),
+      };
+    },
+    { scope: "tenant", intervalMs: POLL_MS, revalidateOnFocus: true },
+  );
 
   // A store's name if the registry knows it, else its raw id (a run for an archived store still shows).
-  const storeLabel = (id: string) => names().get(id) ?? id;
+  const storeLabel = (id: string) => history.value()?.names.get(id) ?? id;
 
   const rebuild = async () => {
     setConfirmReset(false);
-    setBusy(true);
+    setRebuilding(true);
     try {
       await api.resetRollups(tenantId(), storeId());
       toast.ok(t("reconcile.rebuilt"));
+      // The rebuild re-folds the rollups, so the next reconciliation has something new to say.
+      await history.refetch();
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setRebuilding(false);
     }
   };
 
@@ -130,26 +111,23 @@ export function Reconcile() {
       <PageHeader title={t("reconcile.title")} description={t("reconcile.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={failureOf(history)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
 
           <Card
             title={
               storeId() ? t("reconcile.historyForStore", { store: storeName() }) : t("reconcile.history")
             }
-            actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
-            }
           >
             <Show
-              when={runs()}
+              when={history.value()}
               fallback={<Skeleton label={t("common.loading")} rows={4} />}
             >
               {(loaded) => (
                 <DataTable
                   columns={columns()}
-                  rows={loaded()}
+                  rows={loaded().runs}
                   searchText={(row) => storeLabel(row.store_id)}
                   pageSize={15}
                   empty={
@@ -180,7 +158,7 @@ export function Reconcile() {
                 <div>
                   <Button
                     variant="danger-ghost"
-                    disabled={busy()}
+                    disabled={rebuilding()}
                     onClick={() => setConfirmReset(true)}
                   >
                     {t("reconcile.rebuildAction")}
@@ -199,7 +177,7 @@ export function Reconcile() {
           confirmLabel={t("reconcile.rebuildAction")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}
-          busy={busy()}
+          busy={rebuilding()}
           onConfirm={() => void rebuild()}
           onCancel={() => setConfirmReset(false)}
         />

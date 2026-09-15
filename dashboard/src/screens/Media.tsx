@@ -10,7 +10,8 @@ import { createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import type { MediaSummary } from "../api/types";
 import { locale, t } from "../i18n";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { actingAdmin, tenantId } from "../state/session";
 import { ConfirmDialog, EmptyState, Pager, TechnicalDetails } from "../components/kit";
 import { MediaThumbnail } from "../components/ImagePicker";
@@ -29,12 +30,26 @@ import { apiMessage } from "../lib/errors";
 const PAGE_SIZE = 24;
 
 export function Media() {
-  const [assets, setAssets] = createSignal<readonly MediaSummary[] | null>(null);
-  const [total, setTotal] = createSignal(0);
+  // The window the operator is looking at. A view parameter, not load state: the resource reads it
+  // when it runs, so moving the pager is `setOffset` then `refetch`, and a tenant switch resets it
+  // because the offset that fitted one library means nothing in another.
   const [offset, setOffset] = createSignal(0);
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
+  const [saving, setSaving] = createSignal(false);
   const [pendingDelete, setPendingDelete] = createSignal<MediaSummary | null>(null);
+
+  const library = createAdminResource(
+    (tenant) => {
+      const from = offset();
+      return api.listMediaPage(tenant, { limit: PAGE_SIZE, offset: from });
+    },
+    { scope: "tenant" },
+  );
+
+  /** Move the pager and read that window. */
+  const show = async (from: number) => {
+    setOffset(Math.max(0, from));
+    await library.refetch();
+  };
 
   // console.media.manage → owner/admin (mirrors the backend role set; the server re-checks).
   const canManage = () => {
@@ -42,51 +57,18 @@ export function Media() {
     return role === "owner" || role === "admin";
   };
 
-  const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-    toast.error(message);
-  };
-
-  const load = async (from = offset()) => {
-    setError("");
-    setBusy(true);
-    try {
-      const page = await api.listMediaPage(tenantId(), { limit: PAGE_SIZE, offset: from });
-      // A page that came back empty from somewhere other than the start means the library shrank
-      // under the pager — the last asset on the last page was just deleted. Step back rather than
-      // showing an empty grid over a non-zero count, which reads as "your images are gone".
-      if (page.items.length === 0 && from > 0) {
-        await load(Math.max(0, from - PAGE_SIZE));
-        return;
-      }
-      setAssets(page.items);
-      setTotal(page.total);
-      setOffset(page.offset);
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes — never with an empty context (F0). A tenant switch
-  // starts at the first page: the offset that fitted one library means nothing in another.
-  onScopedContext("tenant", () => void load(0));
-
   const upload = async (file: File) => {
-    setError("");
-    setBusy(true);
+    setSaving(true);
     try {
       await api.uploadMedia(tenantId(), file);
       toast.ok(t("media.uploaded"));
       // The read is newest-first, so the upload is on the first page — which is where the operator
       // expects to see the thing they just added.
-      await load(0);
+      await show(0);
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
@@ -95,16 +77,21 @@ export function Media() {
     if (!asset) {
       return;
     }
-    setBusy(true);
+    setSaving(true);
     try {
       await api.deleteMedia(tenantId(), asset.media_id);
       setPendingDelete(null);
       toast.ok(t("media.deleted"));
-      await load();
+      // Deleting the last asset on a page leaves the pager past the end of a library that just got
+      // shorter, and a re-read at that offset comes back empty over a non-zero count — which reads
+      // as "your images are gone". Step back to the previous window instead.
+      const page = library.value();
+      const lastOnPage = page !== null && page.items.length === 1 && offset() > 0;
+      await show(lastOnPage ? offset() - PAGE_SIZE : offset());
     } catch (caught) {
-      fail(caught);
+      toast.error(apiMessage(caught));
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   };
 
@@ -119,7 +106,11 @@ export function Media() {
       <PageHeader title={t("media.title")} description={t("media.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          {/* A refusal is its own state, not an empty grid: a role that cannot read the library has
+              not been told the library is empty (D5). */}
+          <Show when={failureOf(library)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
 
           <Card
             title={t("media.library")}
@@ -133,30 +124,27 @@ export function Media() {
                     label={t("media.upload")}
                     accept="image/*"
                     variant="primary"
-                    disabled={busy()}
+                    disabled={saving()}
                     onPick={(file) => void upload(file)}
                   />
                 </Show>
-                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.refresh")}
-                </Button>
               </div>
             }
           >
             <Show
-              when={assets()}
+              when={library.value()}
               fallback={<p class="text-sm text-ink-muted">{t("media.loading")}</p>}
             >
-              {(loaded) => (
+              {(page) => (
                 <Show
-                  when={loaded().length > 0}
+                  when={page().items.length > 0}
                   fallback={<EmptyState title={t("media.empty")} description={t("media.emptyHint")} />}
                 >
                   <Show when={canManage()}>
                     <p class="mb-3 text-sm text-ink-muted">{t("media.uploadHint")}</p>
                   </Show>
                   <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-                    <For each={loaded()}>
+                    <For each={page().items}>
                       {(asset) => (
                         <div class="flex flex-col gap-2 rounded-token border border-line p-3">
                           <MediaThumbnail
@@ -175,7 +163,7 @@ export function Media() {
                           <Show when={canManage()}>
                             <Button
                               variant="danger-ghost"
-                              disabled={busy()}
+                              disabled={saving()}
                               onClick={() => setPendingDelete(asset)}
                             >
                               {t("action.delete")}
@@ -187,11 +175,11 @@ export function Media() {
                   </div>
                   <div class="pt-4">
                     <Pager
-                      offset={offset()}
+                      offset={page().offset}
                       limit={PAGE_SIZE}
-                      total={total()}
-                      shown={loaded().length}
-                      onOffset={(next) => void load(next)}
+                      total={page().total}
+                      shown={page().items.length}
+                      onOffset={(next) => void show(next)}
                     />
                   </div>
                 </Show>
@@ -208,7 +196,7 @@ export function Media() {
         confirmLabel={t("action.delete")}
         cancelLabel={t("action.cancel")}
         closeLabel={t("action.close")}
-        busy={busy()}
+        busy={saving()}
         danger
         onConfirm={() => void remove()}
         onCancel={() => setPendingDelete(null)}
