@@ -7,6 +7,29 @@
 
 import { type PublishState } from "../components/kit";
 import { locale, t } from "../i18n";
+import { screenHref } from "../state/screens";
+
+/** The query parameter a publish bar hands the publish centre, naming the node it came from. */
+export const RELEASE_NODE_PARAM = "node";
+
+/**
+ * The `addToRelease` prop for a bar publishing `node`, or `undefined` when there is no tenant yet.
+ *
+ * `undefined` rather than a dead link: without a tenant the publish centre has nothing to list, and
+ * a button that lands on the context picker is a button that lied about where it was going.
+ */
+export function addToRelease(
+  node: string,
+  tenant: string,
+): { href: string; label: string } | undefined {
+  if (!tenant) {
+    return undefined;
+  }
+  return {
+    href: `${screenHref("releases", tenant, "")}?${RELEASE_NODE_PARAM}=${encodeURIComponent(node)}`,
+    label: t("publish.addToRelease"),
+  };
+}
 
 /** The line under a publish control, for a node published at `publishedAtMs`. */
 export function describePublish(state: PublishState, publishedAtMs: number | null): string {

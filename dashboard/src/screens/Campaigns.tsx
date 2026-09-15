@@ -26,7 +26,7 @@ import {
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
-import { describePublish } from "../lib/publish-copy";
+import { addToRelease, describePublish } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
@@ -613,6 +613,7 @@ export function Campaigns() {
                 <PublishBar
                   label={t("campaigns.publishTo", { store: storeName() })}
                   publishedAtMs={published.publishedAtMs("campaigns")}
+                  addToRelease={addToRelease("campaigns", tenantId())}
                   describe={describePublish}
                   publishLabel={t("campaigns.publish")}
                   busy={busy()}

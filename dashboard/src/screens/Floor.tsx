@@ -16,7 +16,7 @@ import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
-import { describePublish } from "../lib/publish-copy";
+import { addToRelease, describePublish } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 import { actingAdmin, storeId, storeName, tenantId } from "../state/session";
 import {
@@ -570,6 +570,7 @@ export function Floor() {
                 <PublishBar
                   label={t("floor.publishTo", { store: storeName() })}
                   publishedAtMs={published.publishedAtMs("floor")}
+                  addToRelease={addToRelease("floor", tenantId())}
                   editedAtMs={savedAtMs()}
                   describe={describePublish}
                   publishLabel={t("floor.publishAction")}

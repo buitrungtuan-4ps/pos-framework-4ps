@@ -17,6 +17,7 @@
 // Also pinned: `partial` is drawn as danger. `applied` is the only unqualified good, and a release
 // that shipped to thirty-eight of forty shops is not one of them.
 
+import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -56,6 +57,19 @@ const RELEASE = {
   updated_at_ms: 1_700_000_100_000,
 };
 
+/** A second release, still a draft — the only state from which one can be scheduled. */
+const DRAFT = {
+  ...RELEASE,
+  release_id: "01RELEASEBBBBBBBBBBBBBBBBB",
+  name: "Opening day",
+  status: "draft",
+  // No cohort, so the two rows stay tellable apart and the schedule form shows the store picker —
+  // the other half of ADR-0125 §3's "the store list is taken at schedule time".
+  target_group_id: null,
+  wall_clock_date: null,
+  wall_clock_time: null,
+};
+
 /**
  * One release's pairs, in the three states the grid must tell apart — and the one that is easiest
  * to get wrong: a pair that is still `pending` *and* carries the reason it last could not apply.
@@ -90,7 +104,7 @@ const readRelease = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
-    listReleases: () => Promise.resolve([RELEASE]),
+    listReleases: () => Promise.resolve([RELEASE, DRAFT]),
     listStoreGroups: () => Promise.resolve([GROUP]),
     listStores: () => Promise.resolve(STORES),
     listMenus: () => Promise.resolve([]),
@@ -102,9 +116,21 @@ vi.mock("../src/api/client", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
-/** Mounts the screen and waits for the one release to arrive. */
-async function mount() {
-  render(() => <Releases />);
+/**
+ * Mounts the screen at `url` and waits for the one release to arrive.
+ *
+ * Inside a `MemoryRouter` because the screen reads `?node=` — a publish bar hands it the node it came
+ * from (L1), and that is a router primitive, not a `window.location` read, so that it re-reads on a
+ * client-side navigation rather than only on a full load.
+ */
+async function mount(url = "/t/tenant/releases") {
+  const history = createMemoryHistory();
+  history.set({ value: url });
+  render(() => (
+    <MemoryRouter history={history}>
+      <Route path="/t/:tenant/releases" component={Releases} />
+    </MemoryRouter>
+  ));
   await waitFor(() => expect(screen.getByText(RELEASE.name)).toBeTruthy());
 }
 
@@ -137,7 +163,8 @@ describe("the publish centre", () => {
 
   it("reports every pair, and a pair that could not apply carries why", async () => {
     await mount();
-    fireEvent.click(screen.getByRole("button", { name: messages["releases.viewReport"]! }));
+    // Two releases, so two Report buttons. The first row is the one the fixture reports on.
+    fireEvent.click(screen.getAllByRole("button", { name: messages["releases.viewReport"]! })[0]!);
 
     await waitFor(() =>
       expect(screen.getByText("the menu names an archived item")).toBeTruthy(),
@@ -148,6 +175,29 @@ describe("the publish centre", () => {
     // The failed pair is still waiting, because the activator retries it. Drawing it as lost would
     // send an operator to fix by hand what the next tick is about to do.
     expect(screen.getByText(messages["releases.pair.pending"]!)).toBeTruthy();
+  });
+
+  it("carries the node a publish bar handed it into the schedule it opens", async () => {
+    // The point of L1: an operator who has assembled nine nodes should not have to remember to press
+    // nine buttons on Monday morning. Arriving from Tax rates, the node is already chosen — and it is
+    // chosen at *schedule* time, which is when it is snapshotted, not invented into a draft here.
+    await mount("/t/tenant/releases?node=tax");
+    expect(screen.getByText(/Tax rates is ready to go into a release/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: messages["releases.schedule"]! }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: messages["releases.scheduleNow"]! })).toBeTruthy(),
+    );
+    // Shown as a chosen value in the picker, not merely remembered in a signal.
+    expect(screen.getAllByText(messages["releases.node.tax"]!).length).toBeGreaterThan(0);
+  });
+
+  it("ignores a node it does not recognise rather than offering it", async () => {
+    // `?node=` arrives from a link, and a link can be edited or can go stale across a release of the
+    // console. An unknown key is dropped: pre-ticking something the schedule cannot carry would send
+    // the operator to a refusal they did not cause.
+    await mount("/t/tenant/releases?node=locale");
+    expect(screen.queryByText(/is ready to go into a release/)).toBeNull();
   });
 
   it("refuses to send both a local time and an exact instant", async () => {

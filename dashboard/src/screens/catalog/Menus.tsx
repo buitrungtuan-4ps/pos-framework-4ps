@@ -20,7 +20,7 @@ import type {
 import { SALES_CHANNELS } from "../../api/types";
 import { t } from "../../i18n";
 import { formatMoney } from "../../lib/format";
-import { describePublish } from "../../lib/publish-copy";
+import { addToRelease, describePublish } from "../../lib/publish-copy";
 import { usePublishedNodes } from "../../lib/published";
 import { createAdminResource, failureOf } from "../../lib/resource";
 import { storeId, storeName, tenantId } from "../../state/session";
@@ -830,6 +830,7 @@ export function CatalogMenus() {
           <PublishBar
             label={t("catalog.publishTo", { store: storeName() })}
             publishedAtMs={published.publishedAtMs("menu")}
+            addToRelease={addToRelease("menu", tenantId())}
             describe={describePublish}
             publishLabel={t("action.publish")}
             busy={busy()}

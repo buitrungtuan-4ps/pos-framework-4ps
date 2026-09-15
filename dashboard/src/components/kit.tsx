@@ -1104,6 +1104,21 @@ export function PublishBar(props: {
   disabledReason?: string;
   /** A diff or a summary the screen can show before the write (Campaigns and Config have one). */
   preview?: JSX.Element;
+  /**
+   * A way to put this node into a release instead of publishing it now
+   * ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md), L1).
+   *
+   * A link rather than a second write, and the reason is the record's: a release carries a *moment*
+   * and a *target*, and neither exists on this bar — it knows one store and one node. A button here
+   * that scheduled would have to invent both, which is a worse version of the publish centre the
+   * link goes to. So the bar hands the operator over with the node already chosen.
+   *
+   * Set only by screens whose node a release can carry. A node taken from a named source store
+   * cannot be in a release at all (the source's value could move between the choosing and the
+   * firing), and `locale` and `store_profile` are per-store by definition, so those bars leave it
+   * unset and show one action, which is the honest count of what they can do.
+   */
+  addToRelease?: { href: string; label: string };
   onPublish: () => void;
 }) {
   const state = () => publishState(props.publishedAtMs, props.editedAtMs);
@@ -1116,9 +1131,21 @@ export function PublishBar(props: {
             {props.describe(state(), props.publishedAtMs ?? null)}
           </span>
         </div>
-        <Button disabled={props.busy || props.disabled} onClick={() => props.onPublish()}>
-          {props.publishLabel}
-        </Button>
+        <div class="flex flex-wrap items-center gap-2">
+          <Show when={props.addToRelease}>
+            {(release) => (
+              <a
+                class="min-h-touch inline-flex items-center rounded-token border border-line px-3 text-sm text-ink focus-visible:outline-2 focus-visible:outline-accent"
+                href={release().href}
+              >
+                {release().label}
+              </a>
+            )}
+          </Show>
+          <Button disabled={props.busy || props.disabled} onClick={() => props.onPublish()}>
+            {props.publishLabel}
+          </Button>
+        </div>
       </div>
       <Show when={props.disabled && props.disabledReason}>
         {(reason) => <p class="text-sm text-ink-muted">{reason()}</p>}

@@ -29,6 +29,7 @@
 // Everything here is operational metadata: release names, node keys, store ids and publish
 // outcomes. No customer or employee identifier passes through this screen.
 
+import { useSearchParams } from "@solidjs/router";
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
@@ -43,6 +44,7 @@ import type {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage } from "../lib/errors";
+import { RELEASE_NODE_PARAM } from "../lib/publish-copy";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
@@ -137,6 +139,17 @@ function momentOf(release: Release): string {
 }
 
 export function Releases() {
+  // A publish bar can hand this screen a node — "Tax rates is ready to go into a release" (L1). It is
+  // remembered rather than acted on: the node is chosen when a release is *scheduled*, which is also
+  // when it is snapshotted, so the honest thing is to pre-tick it there rather than to invent a
+  // release around it here.
+  const [searchParams] = useSearchParams();
+  const arrivedWith = () => {
+    const asked = searchParams[RELEASE_NODE_PARAM];
+    const node = Array.isArray(asked) ? asked[0] : asked;
+    return node && RELEASE_NODES.some((known) => known.key === node) ? node : "";
+  };
+
   // The releases, the cohorts they may be aimed at, and the store registry as one state: a grid
   // that got the pairs but not the registry names forty shops in ULIDs.
   const centre = createAdminResource(
@@ -175,6 +188,20 @@ export function Releases() {
 
   // The report the screen is showing. The deliverable, not the button.
   const [report, setReport] = createSignal<ReleaseReport | null>(null);
+
+  /**
+   * What is still coming, soonest first — the calendar half of this screen (L2).
+   *
+   * A list ordered by the moment rather than a month grid, and by the *stated* moment rather than a
+   * converted one: a wall-clock release has no single instant to place on a calendar square, which
+   * is the same reason the table prints "04:00, each shop's own clock". Drafts are in, because a
+   * release nobody has timed is exactly the one an operator forgets.
+   */
+  const upcoming = () =>
+    (rows() ?? [])
+      .filter((row) => row.status !== "applied" && row.status !== "partial")
+      .slice()
+      .sort((left, right) => momentOf(left).localeCompare(momentOf(right)));
 
   const storeName = (id: string) => stores().find((row) => row.store_id === id)?.name ?? id;
   const groupName = (id: string) => groups().find((row) => row.group_id === id)?.name ?? id;
@@ -242,7 +269,7 @@ export function Releases() {
   };
 
   const openSchedule = (release: Release) => {
-    setNodes([]);
+    setNodes(arrivedWith() ? [arrivedWith()] : []);
     setMenuId("");
     setExplicitStores([]);
     setError("");
@@ -362,6 +389,9 @@ export function Releases() {
             {t("releases.viewReport")}
           </Button>
           <Show when={row.status === "draft"}>
+            {/* An ellipsis because it opens the form rather than scheduling: the submit inside says
+                "Schedule", and two controls on one screen reading the same word is one of them
+                lying about what it does. */}
             <Button onClick={() => openSchedule(row)}>{t("releases.schedule")}</Button>
           </Show>
           <Show when={row.status === "draft" || row.status === "scheduled"}>
@@ -409,6 +439,11 @@ export function Releases() {
           title={t("releases.list")}
           actions={<Button onClick={openDraft}>{t("releases.new")}</Button>}
         >
+          <Show when={arrivedWith()}>
+            {(node) => (
+              <Banner tone="ok" message={t("releases.fromNode", { node: nodeLabel(node()) })} />
+            )}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={failureOf(centre)}>
             {(message) => <Banner tone="danger" message={message()} />}
@@ -429,6 +464,25 @@ export function Releases() {
                 }
               />
             )}
+          </Show>
+        </Card>
+
+        <Card title={t("releases.upcoming")}>
+          <Show
+            when={upcoming().length > 0}
+            fallback={<p class="text-sm text-ink-muted">{t("releases.upcomingEmpty")}</p>}
+          >
+            <ul class="flex flex-col gap-1">
+              <For each={upcoming()}>
+                {(row) => (
+                  <li class="flex flex-wrap items-center gap-2 rounded-token border border-line bg-surface-raised px-3 py-2">
+                    <span class="text-sm text-ink-muted tabular-nums">{momentOf(row)}</span>
+                    <span class="text-sm text-ink">{row.name}</span>
+                    <StatusBadge tone={STATUS_TONE[row.status]} label={t(STATUS_LABEL[row.status])} />
+                  </li>
+                )}
+              </For>
+            </ul>
           </Show>
         </Card>
 
