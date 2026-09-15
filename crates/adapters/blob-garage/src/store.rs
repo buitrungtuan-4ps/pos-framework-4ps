@@ -17,8 +17,8 @@ const SIGNED_HEADERS: &str = "host;x-amz-content-sha256;x-amz-date";
 /// The default port for a `host` with no `:port`.
 const DEFAULT_PORT: u16 = 80;
 
-/// A [`BlobStore`] over an S3-compatible object store (Garage in production, MinIO in tests),
-/// reached path-style over plain HTTP.
+/// A [`BlobStore`] over an S3-compatible object store — Garage, in production and in the
+/// `integration` job alike — reached path-style over plain HTTP.
 ///
 /// Cloneable and shareable: it holds only configuration and opens a fresh connection per request.
 #[derive(Debug, Clone)]

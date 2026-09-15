@@ -9,7 +9,7 @@
 //! `list`, exactly as real S3's `ListObjectsV2` does, so it is the **adapter's** `is_under` filter
 //! that must keep `stores/1` from returning `stores/10`. The mock ignores authentication; the `SigV4` signature bytes
 //! are proven independently against AWS's vector in `src/sign.rs`, and a real server accepting them
-//! is proven by the `integration` suite against MinIO/Garage in CI.
+//! is proven by the `integration` suite against a real Garage in CI.
 
 // Test scaffolding: the mock and harness live outside the `#[test]` scope `allow-expect-in-tests`
 // covers, and the mock parses a small HTTP request by slicing.

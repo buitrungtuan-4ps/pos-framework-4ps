@@ -1,19 +1,26 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `blob-garage` against a live S3-compatible object store (MinIO or Garage).
+//! `blob-garage` against a live S3-compatible object store — Garage in CI, any S3 server locally.
 //!
 //! Runs the shared `BlobStore` contract suite — the same cases as the in-memory fake — so the
 //! hand-rolled `SigV4` and HTTP are proven against a real server rather than reasoned about. The
 //! signer's arithmetic is checked separately and server-free in `src/sign.rs`.
 //!
 //! Gated behind the `integration` feature, off by default, so the pull-request build stays
-//! infrastructure-free. Run it with a server reachable:
+//! infrastructure-free. Run it with a server reachable — the four variables below are all it
+//! needs, so any S3 server will do; `.github/workflows/main.yml` stands up Garage and fills them
+//! from the key it mints:
 //!
 //! ```text
-//! S3_ENDPOINT=http://localhost:9000 S3_ACCESS_KEY=minioadmin S3_SECRET_KEY=minioadmin \
+//! S3_ENDPOINT=http://localhost:3900 S3_REGION=garage \
+//!   S3_ACCESS_KEY=GK… S3_SECRET_KEY=… \
 //!   cargo test -p blob-garage --features integration
 //! ```
+//!
+//! Each case creates its own bucket through the S3 API, so the key must be allowed to create
+//! buckets. On Garage that is `garage key allow --create-bucket`; the deployed key deliberately
+//! does not carry it (`bootstrap.sh` pre-creates one bucket and grants read/write on that).
 
 #![cfg(feature = "integration")]
 // Test scaffolding: the harness setup is outside the `#[test]` scope `allow-expect-in-tests` covers.

@@ -37,6 +37,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`main`'s `integration` job could not start its S3 server.** The step pinned
+  `minio/minio` by digest and that repository is gone from Docker Hub, so the pull failed with
+  `pull access denied` and took the rest of the job with it: `blob-garage`, both NATS servers and
+  the ingest-cursor step were all skipped, leaving `main` proving only the PostgreSQL third.
+  The fixture is now **Garage** (`dxflrs/garage` v1.0.1, pinned by digest) — the S3 server
+  `deploy/compose.yml` actually deploys, so the hand-rolled `SigV4` is proven against the server
+  production answers with rather than against a stand-in nobody runs. The provisioning sequence is
+  `deploy/bootstrap.sh`'s (config, wait for the RPC, assign a single-node layout, mint a key), so a
+  break in the operator's path now breaks CI first. No Rust changed: `tests/integration.rs` already
+  took its endpoint, region and credentials from the environment. The CI key is allowed to create
+  buckets because the contract suite hands each case a fresh one; the deployed key is not, and
+  nothing in `pos_cloud` asks for it.
+- **`main.yml` gained a `workflow_dispatch` trigger.** Its jobs are the only place the adapters
+  meet real backing services and nothing pre-merge runs them, so a change to that file used to be
+  unprovable until after it had landed. A branch can now ask for one run first.
+- **The `blob-garage` documentation named the wrong server and the wrong region.** Three comments
+  said the suite runs against MinIO, which stopped being true here; `sign.rs` claimed Garage
+  defaults to `us-east-1`, which was never true — its default is `garage`, which is what
+  `bootstrap.sh` writes and what `ArtifactsConfig` already defaulted to.
+
 - **The deploy reported success on a cloud that had stopped.** `deploy.yml` ended when Compose
   printed `Started`, which only means the process was spawned. Every boot refusal `pos_cloud` has
   runs after that point — a missing `internal_shared_secret`

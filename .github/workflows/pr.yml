@@ -381,8 +381,9 @@ jobs:
   # keeps its "no services" property and neither job waits on the other. The
   # suite is 92 cases in about twenty seconds; the file this was split out of
   # calls the pre-merge gate too slow for it, which the clock does not support.
-  # MinIO and NATS stay in `main`: those need a `docker run` with a command a
-  # service block cannot pass, which is a different cost.
+  # Garage and NATS stay in `main`: neither fits a `services:` block — NATS needs
+  # a command it cannot pass, Garage needs its config mounted and a layout
+  # assigned before it answers — which is a different cost.
   # ---------------------------------------------------------------------------
   postgres:
     runs-on: ubuntu-24.04

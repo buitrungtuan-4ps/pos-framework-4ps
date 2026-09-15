@@ -4,10 +4,18 @@ name: main
 # pull-request gate.
 #
 # The `integration` job runs the code that needs a real backing service against
-# one — `store-postgres` against PostgreSQL, `blob-garage` against S3 (MinIO),
+# one — `store-postgres` against PostgreSQL, `blob-garage` against S3 (Garage),
 # `link-nats` and the `pos_cloud` ingest cursor against NATS JetStream (all P7). The
 # service image is pinned by digest, not tag: a tag is mutable, and a silently
 # changed database version is a long afternoon.
+#
+# The S3 third runs against **Garage**, the server `deploy/compose.yml` actually
+# deploys, not against a stand-in. It used to be MinIO, until `minio/minio`
+# disappeared from Docker Hub and took this job down with it; the replacement was
+# chosen for what it proves rather than for being the closest swap — the risky part
+# of `blob-garage` is its hand-rolled SigV4 ([ADR-0031](../../docs/adr/0031-cloud-adapter-transports.md)),
+# and proving that against the deployed server is worth more than proving it
+# against a second implementation nobody runs.
 #
 # **The PostgreSQL third of this now also runs pre-merge**, in `pr.yml`'s
 # `postgres` job. This header used to say the whole job was "too slow or too
@@ -15,13 +23,19 @@ name: main
 # cases in about twenty seconds — and two broken statements reached `main`
 # because nothing checked SQL before it landed. It stays here too: this job is
 # what proves the three adapters together on one runner, and a duplicate twenty
-# seconds after merge is not a cost worth reasoning about. MinIO and NATS are a
-# different matter and stay post-merge only: both need a `docker run` with a
-# command a service block cannot pass.
+# seconds after merge is not a cost worth reasoning about. Garage and NATS are a
+# different matter and stay post-merge only: neither fits a `services:` block —
+# NATS needs a command it cannot pass, Garage needs its config mounted first —
+# and Garage additionally needs a layout assigned and a key minted before it
+# will answer.
 
 on:
   push:
     branches: [main, "release/**"]
+  # These jobs are the only place the three adapters meet real backing services, and
+  # nothing before a merge runs them — so a change to this file can only be proven
+  # after it has landed. This lets a branch ask for one run first.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,7 +50,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Against real PostgreSQL, S3 (MinIO) and NATS JetStream. The domain never needs
+  # Against real PostgreSQL, S3 (Garage) and NATS JetStream. The domain never needs
   # any of them; the adapters do, and a contract test that runs only against a fake
   # proves nothing about the real thing.
   # ---------------------------------------------------------------------------
@@ -72,28 +86,90 @@ jobs:
         # Single-threaded: every case shares the one database and truncates between
         # cases (see the crate's tests/integration.rs).
         run: cargo test -p store-postgres --features integration --locked -- --test-threads=1
-      - name: start MinIO
-        # Pinned by digest (minio/minio as of this commit), not tag — see the file header. Run as a
-        # step rather than a `services:` entry because the server needs the `server /data` command,
-        # which a service block cannot pass.
+      - name: start Garage
+        # The S3 server the fork actually deploys (`deploy/compose.yml`), at the same version, so
+        # the hand-rolled SigV4 is proven against the thing production runs rather than against a
+        # stand-in. Pinned by digest (dxflrs/garage:v1.0.1 as of this commit), not tag — see the
+        # file header. A step rather than a `services:` entry because the server needs its config
+        # mounted before it starts, which a service block cannot do.
+        #
+        # The sequence below is `deploy/bootstrap.sh`'s, deliberately: config, wait for the RPC,
+        # assign a single-node layout, mint a key. Keeping CI on the operator's commands means a
+        # provisioning step that breaks breaks here first.
         run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
-            server /data
+          set -euo pipefail
+          mkdir -p /tmp/garage
+          # Generated, not written down: a literal here would be a 64-hex string next to the word
+          # `rpc_secret`, which is what a secret is, and the `secrets` gate is right to refuse it
+          # however throwaway the value. `bootstrap.sh` generates its own the same way.
+          rpc_secret="$(openssl rand -hex 32)"
+          cat > /tmp/garage/garage.toml <<EOF
+          metadata_dir = "/var/lib/garage/meta"
+          data_dir = "/var/lib/garage/data"
+          db_engine = "lmdb"
+          replication_factor = 1
+          rpc_bind_addr = "[::]:3901"
+          rpc_secret = "${rpc_secret}"
+
+          [s3_api]
+          s3_region = "garage"
+          api_bind_addr = "[::]:3900"
+          root_domain = ".s3.garage.local"
+          EOF
+          docker run -d --name garage -p 3900:3900 \
+            -v /tmp/garage/garage.toml:/etc/garage.toml:ro \
+            dxflrs/garage@sha256:a5706cf1f3d7b349ac5133ec59ad8181b709270b75e5f2fa7b3e1a5c07d67137
+
+          garage() { docker exec garage /garage "$@"; }
+
+          # Garage answers its RPC a little after the container starts; bootstrap.sh waits the same
+          # way. Without this the first `layout assign` races the boot and fails intermittently.
+          ready=0
           for _ in $(seq 1 30); do
-            if curl -sf http://localhost:9000/minio/health/ready >/dev/null; then exit 0; fi
-            sleep 1
+            if garage status >/dev/null 2>&1; then ready=1; break; fi
+            sleep 2
           done
-          echo "MinIO did not become ready" >&2
-          docker logs minio || true
-          exit 1
+          if [ "$ready" != "1" ]; then
+            echo "Garage did not answer its RPC" >&2
+            docker logs garage || true
+            exit 1
+          fi
+
+          # `garage status` prints the node id in the first column of the first node row.
+          node_id="$(garage status | awk '/^[0-9a-f]{16}/ { print $1; exit }')"
+          if [ -z "$node_id" ]; then
+            echo "could not read the Garage node id from:" >&2
+            garage status >&2 || true
+            exit 1
+          fi
+          garage layout assign -z ci -c 1G "$node_id"
+          garage layout apply --version 1
+
+          # `key create` prints the id and secret once. Unlike production, this key is allowed to
+          # create buckets: the contract suite hands every case a freshly-created bucket of its own
+          # (`blob-garage` tests/integration.rs), which is what `ensure_bucket` is for and its only
+          # caller in the tree. The deployed key never gets this — bootstrap.sh pre-creates one
+          # bucket and grants read/write on it, and nothing in `pos_cloud` calls `ensure_bucket`.
+          key_out="$(garage key create ci)"
+          key_id="$(printf '%s\n' "$key_out" | awk -F': *' '/Key ID/ { print $2; exit }')"
+          key_secret="$(printf '%s\n' "$key_out" | awk -F': *' '/Secret key/ { print $2; exit }')"
+          if [ -z "$key_id" ] || [ -z "$key_secret" ]; then
+            echo "could not mint a Garage key" >&2
+            exit 1
+          fi
+          garage key allow --create-bucket "$key_id"
+
+          echo "::add-mask::$key_secret"
+          {
+            echo "S3_ACCESS_KEY=$key_id"
+            echo "S3_SECRET_KEY=$key_secret"
+          } >> "$GITHUB_ENV"
       - name: blob-garage against a real S3
         env:
-          S3_ENDPOINT: http://localhost:9000
-          S3_REGION: us-east-1
-          S3_ACCESS_KEY: minioadmin
-          S3_SECRET_KEY: minioadmin
+          S3_ENDPOINT: http://localhost:3900
+          # Garage's own default region name. It is a signing input, not a geography, and has to
+          # match `s3_region` in the config above or every request fails the signature check.
+          S3_REGION: garage
         run: cargo test -p blob-garage --features integration --locked
       - name: start NATS with JetStream
         # Pinned by digest (nats:2.10 as of this commit), not tag — see the file header. A step

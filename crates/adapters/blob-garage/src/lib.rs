@@ -13,8 +13,9 @@
 //! "Hand-rolled" does not mean "unverified". The one part that must be exactly right — the `SigV4`
 //! signature — is checked in [`sign`]'s unit test against AWS's published vector, with no server;
 //! and the end-to-end behaviour (put/get/delete, and segment-aware prefix listing) runs the shared
-//! `BlobStore` contract suite against a real S3 server (MinIO/Garage) behind the `integration`
-//! feature.
+//! `BlobStore` contract suite against a real S3 server behind the `integration` feature — in CI
+//! against Garage, the server the fork deploys, so the signature is proven against the thing
+//! production answers with rather than against a second implementation.
 //!
 //! Path-style addressing (`http://endpoint/bucket/key`) and plain `http://` only — the cloud
 //! reaches its own object store over the private network of its box; a public path terminates TLS
