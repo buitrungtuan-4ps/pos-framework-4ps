@@ -541,6 +541,10 @@ mod tests {
                 ForbiddenReason::LinkLocal
             ))
         );
+    }
+
+    #[test]
+    fn v6_translation_prefixes_are_refused() {
         // NAT64 well-known prefix smuggling cases (`64:ff9b::a.b.c.d`).
         assert_eq!(
             classify_ip(ip("64:ff9b::127.0.0.1")),
