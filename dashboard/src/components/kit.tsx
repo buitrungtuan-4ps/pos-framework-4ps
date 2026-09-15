@@ -1039,3 +1039,91 @@ export function DateRange(props: {
     </div>
   );
 }
+
+/**
+ * Where a published node stands relative to the screen's own data.
+ *
+ * Three answers and no fourth: it has never been published; it is published and nothing has changed
+ * since; or it is published and the authoring data has moved on. The last one is the whole point —
+ * a screen that says "Published 3 June" and nothing else cannot tell an operator whether the edit
+ * they made this morning is on the shop floor.
+ */
+export type PublishState = "never" | "published" | "stale";
+
+/**
+ * Which of the three a node is in.
+ *
+ * `editedAtMs` is the screen's own data — the newest `updated_at` of whatever it authors — and is
+ * allowed to be null: a screen that cannot tell when its data last changed says so by passing null,
+ * and gets `published` rather than a guess. Equal timestamps are **not** stale: a publish writes
+ * its own node, so the two clocks agreeing means the publish is the newer event.
+ */
+export function publishState(
+  publishedAtMs: number | null | undefined,
+  editedAtMs: number | null | undefined,
+): PublishState {
+  if (publishedAtMs === null || publishedAtMs === undefined) {
+    return "never";
+  }
+  if (editedAtMs === null || editedAtMs === undefined) {
+    return "published";
+  }
+  return editedAtMs > publishedAtMs ? "stale" : "published";
+}
+
+/**
+ * One publish control, with what it publishes to and where that stands (finding **F13**).
+ *
+ * Thirteen screens had written their own: a button, a sentence, sometimes a store name, sometimes a
+ * warning, never the same two the same way, and not one of them said whether the thing in front of
+ * the operator was already on the shop floor. The run found an operator pressing Publish twice
+ * because the screen gave them no way to tell.
+ *
+ * The bar renders the target, the state, an optional preview, and the button. It does **not** make
+ * the call: `onPublish` is the screen's, because a publish is a domain write with a domain's
+ * arguments and putting thirteen of those behind one component means a switch on node keys inside
+ * the kit. What is shared is the *rendering and the state machine*, which is what was inconsistent.
+ *
+ * `describe` turns a state into the screen's own words, so every message key stays in the screen and
+ * every rule stays here.
+ */
+export function PublishBar(props: {
+  /** What is being published, in the operator's words — "Tax rates", "The menu". */
+  label: string;
+  /** When this node was last published, from `GET /admin/stores/{id}/config/nodes`. */
+  publishedAtMs?: number | null;
+  /** When the screen's own authored data last changed, or null when it cannot tell. */
+  editedAtMs?: number | null;
+  /** The state in the screen's words. */
+  describe: (state: PublishState, publishedAtMs: number | null) => string;
+  publishLabel: string;
+  busy?: boolean;
+  /** Set when publishing is not possible at all — no store chosen, no permission. */
+  disabled?: boolean;
+  /** Why it is disabled, said out loud rather than left to a greyed button. */
+  disabledReason?: string;
+  /** A diff or a summary the screen can show before the write (Campaigns and Config have one). */
+  preview?: JSX.Element;
+  onPublish: () => void;
+}) {
+  const state = () => publishState(props.publishedAtMs, props.editedAtMs);
+  return (
+    <div class="flex flex-col gap-2 rounded-token border border-line bg-surface-raised p-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex flex-col gap-0.5">
+          <span class="text-sm font-medium text-ink">{props.label}</span>
+          <span class={`text-sm ${state() === "stale" ? "text-danger" : "text-ink-muted"}`}>
+            {props.describe(state(), props.publishedAtMs ?? null)}
+          </span>
+        </div>
+        <Button disabled={props.busy || props.disabled} onClick={() => props.onPublish()}>
+          {props.publishLabel}
+        </Button>
+      </div>
+      <Show when={props.disabled && props.disabledReason}>
+        {(reason) => <p class="text-sm text-ink-muted">{reason()}</p>}
+      </Show>
+      <Show when={props.preview}>{(preview) => <div>{preview()}</div>}</Show>
+    </div>
+  );
+}

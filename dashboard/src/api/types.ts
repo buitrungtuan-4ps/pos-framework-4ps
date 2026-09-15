@@ -24,6 +24,23 @@ export interface ConfigVersion {
   readonly current: boolean;
 }
 
+/** One node of a store's published configuration, from `GET /admin/stores/{id}/config/nodes`
+ *  (Wave 4 · PR-5a, finding F6). `version_id`/`at_ms` are null when the version that published this
+ *  node does not record which nodes it wrote — "published, when is not recorded", never "never
+ *  published": the node is in the effective document, so it was. */
+export interface ConfigNode {
+  readonly node: string;
+  readonly version_id: string | null;
+  readonly at_ms: number | null;
+}
+
+/** A store's configuration, per node. `current_version_id` is the tree's newest version — what the
+ *  store *should* be holding; what it *is* holding is on the fleet read. */
+export interface ConfigNodes {
+  readonly current_version_id: string | null;
+  readonly nodes: readonly ConfigNode[];
+}
+
 /** The one-time TOTP enrolment returned by `POST /admin/setup` (ADR-0034). */
 export interface Enrolment {
   readonly otpauth_uri: string;

@@ -30,6 +30,7 @@ import type {
   TableQrSheet,
   ChannelPrice,
   ConfigLevel,
+  ConfigNodes,
   ConfigVersion,
   CreateApiKeyResponse,
   CreatedId,
@@ -583,6 +584,13 @@ export const api = {
     requestJsonOrNull<ConfigVersion[]>(
       `/admin/stores/${encodeURIComponent(storeId)}/config/versions?${tenantQuery(tenantId)}`,
     ).then((versions) => versions ?? []),
+  // Which node was published when (Wave 4 · PR-5a, F6). A store nobody has published to answers
+  // `404`, and to every caller that is "nothing published yet" rather than a failure — the same
+  // reasoning as `configVersions` above, so the same `null` → empty treatment.
+  configNodes: (tenantId: string, storeId: string) =>
+    requestJsonOrNull<ConfigNodes>(
+      `/admin/stores/${encodeURIComponent(storeId)}/config/nodes?${tenantQuery(tenantId)}`,
+    ).then((read) => read ?? { current_version_id: null, nodes: [] }),
   configVersionEffective: (tenantId: string, storeId: string, versionId: string) =>
     requestJson<Json>(
       "GET",

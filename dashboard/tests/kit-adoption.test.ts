@@ -29,6 +29,20 @@ function exportedNames(source: string): string[] {
   return [...source.matchAll(/export function ([A-Z]\w+)/g)].map((match) => match[1] as string);
 }
 
+/**
+ * Screens that publish a config node (Wave 4 · PR-5b, finding **F13**).
+ *
+ * Thirteen of them had written their own publish control — a button, a sentence, sometimes a store
+ * name, sometimes a warning, never the same two the same way — and not one said whether the thing
+ * in front of the operator was already on the shop floor. `PublishBar` is the shared rendering.
+ *
+ * Listed rather than "every screen that calls `api.publish*`", for the same reason the Refresh rule
+ * is a list: PR-6 finishes the adoption in the same pass that moves those screens onto the resource
+ * helper, and a gate that fails on the ones still waiting would have to be switched off until then.
+ * A screen joins this list when it adopts, and can never leave it.
+ */
+const PUBLISHES_THROUGH_THE_BAR = ["TaxRates.tsx"];
+
 describe("every component the kit exports", () => {
   it("has a caller, so nothing ships that no screen asked for", () => {
     const names = exportedNames(kitSource);
@@ -74,5 +88,21 @@ describe("a screen whose Refresh button has gone", () => {
       (name) => !Object.keys(sources).some((path) => path.endsWith(name)),
     );
     expect(missing).toEqual([]);
+  });
+});
+
+describe("a screen that publishes a config node", () => {
+  it("does it through the kit's bar, not a button and a sentence of its own", () => {
+    const offenders = PUBLISHES_THROUGH_THE_BAR.filter((name) => {
+      const entry = Object.entries(sources).find(([path]) => path.endsWith(`screens/${name}`));
+      return !entry || !(entry[1] as string).includes("<PublishBar");
+    });
+    expect(offenders).toEqual([]);
+  });
+
+  it("is a list that only grows, so an adopted screen cannot quietly un-adopt", () => {
+    // The list is the record of what has moved. Shrinking it is how a migration gets reverted one
+    // screen at a time without anybody noticing, so the count is pinned too.
+    expect(PUBLISHES_THROUGH_THE_BAR.length).toBeGreaterThanOrEqual(1);
   });
 });

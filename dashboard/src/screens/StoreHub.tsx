@@ -43,6 +43,7 @@ import {
   onlineVerdict,
   type Tone,
 } from "../lib/posture";
+import { staleNodes, usePublishedNodes } from "../lib/published";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
@@ -130,6 +131,9 @@ export function StoreHub() {
   const [activity, setActivity] = createSignal<Panel<DailyRollup[]>>(LOADING);
   const [revenue, setRevenue] = createSignal<Panel<DailyRevenue[]>>(LOADING);
   const [alerts, setAlerts] = createSignal<Panel<Alert[]>>(LOADING);
+  // Which nodes the cloud has published, so the Configuration card can name what a store is waiting
+  // for rather than printing two version ULIDs at it (F4).
+  const published = usePublishedNodes();
 
   // `limit: 1` returns the store's newest trading day (the window keeps the newest N, oldest first),
   // which is not necessarily *today* — a shop that has not traded yet reports yesterday. Every card
@@ -340,14 +344,23 @@ export function StoreHub() {
           >
             {(store) => {
               const verdict = configVerdict(store);
-              return {
-                headline: t(verdict.headline),
-                tone: verdict.tone,
-                support: t("hub.config.versions", {
-                  held: store.config_version_held ?? t("hub.config.none"),
-                  published: store.config_version_published ?? t("hub.config.none"),
-                }),
-              };
+              // The support line used to be two ULIDs side by side — "Holding 01J…; published
+              // 01J…" — which is a true statement an operator cannot act on: a store holds one
+              // version covering thirteen nodes, so the difference never said *what* was waiting.
+              // It names the nodes now (F4), and falls back to the version pair only when the
+              // per-node read is unavailable, which is the one case where the ULIDs are still the
+              // most this screen honestly knows.
+              const behind = staleNodes(published.nodes(), store.config_version_held);
+              const support =
+                published.nodes().length === 0
+                  ? t("hub.config.versions", {
+                      held: store.config_version_held ?? t("hub.config.none"),
+                      published: store.config_version_published ?? t("hub.config.none"),
+                    })
+                  : behind.length > 0
+                    ? t("hub.config.stale", { nodes: behind.join(", ") })
+                    : t("hub.config.upToDate");
+              return { headline: t(verdict.headline), tone: verdict.tone, support };
             }}
           </HubCard>
 

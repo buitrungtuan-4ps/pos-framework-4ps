@@ -123,6 +123,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **One publish control, and it says whether the shop already has it (Wave 4 · PR-5b, F13).**
+  Thirteen screens had written their own: a button, a sentence, sometimes a store name, sometimes a
+  warning, never the same two the same way — and not one said whether the thing in front of the
+  operator was already on the shop floor. The run found somebody pressing Publish twice because the
+  screen gave them no way to tell. `PublishBar` is the shared rendering and the state machine; the
+  publish call stays in the screen, because a publish is a domain write with a domain's arguments
+  and putting thirteen of those behind one component means a switch on node keys inside the kit.
+  Tax rates adopt here; the rest adopt in PR-6, in the same pass that moves them onto the resource
+  helper, and `kit-adoption.test.ts` pins the list so an adopted screen cannot un-adopt.
+- **The store hub names which node a shop is waiting for (F4).** Its Configuration card printed two
+  version ULIDs side by side — "Holding 01J…; published 01J…" — which is true and unusable: a store
+  holds one version covering thirteen nodes, so the difference never said *what* was waiting. It
+  lists the nodes now. A node whose publish date is not recorded is **not** called stale, and a
+  store holding no version at all gets the hub's own "not installed yet" rather than a list of
+  thirteen names.
 - **One way to create a store, and it is the wizard (Wave 4 · PR-4, D4).** The Stores screen offered
   two buttons side by side: a panel that wrote the registry row and stopped, and the guided wizard.
   A store made by the panel had no key and no installer, so it could not sync or trade, and nothing
