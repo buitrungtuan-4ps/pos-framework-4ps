@@ -5,8 +5,12 @@
 // same thing three slightly different ways is the finding this wave is closing (F13), and a screen
 // that wants its own wording can still pass its own `describe`.
 
+import { api } from "../api/client";
+import type { NodePreview } from "../api/types";
 import { type PublishState } from "../components/kit";
+import { toast } from "../components/Toast";
 import { locale, t } from "../i18n";
+import { apiMessage } from "./errors";
 import { screenHref } from "../state/screens";
 
 /** The query parameter a publish bar hands the publish centre, naming the node it came from. */
@@ -28,6 +32,34 @@ export function addToRelease(
   return {
     href: `${screenHref("releases", tenant, "")}?${RELEASE_NODE_PARAM}=${encodeURIComponent(node)}`,
     label: t("publish.addToRelease"),
+  };
+}
+
+/**
+ * The `preview` prop for a bar publishing `node` — the dry run behind **Preview changes** (F11).
+ *
+ * `args` is that node's own publish body minus the `(tenant, store)`, so the preview asks for
+ * exactly the document the Publish button beside it would write. A missing tenant or store answers
+ * `null` and the dialog stays shut: there is no store to compare against, which is the same reason
+ * the bar's Publish is disabled. A failure is reported here rather than thrown, because a dry run
+ * that explodes is a worse answer than one that says what went wrong and changes nothing.
+ */
+export function previewNode(
+  node: string,
+  tenant: string,
+  store: string,
+  args?: unknown,
+): () => Promise<NodePreview | null> {
+  return async () => {
+    if (!tenant || !store) {
+      return null;
+    }
+    try {
+      return await api.previewNode(tenant, store, node, args);
+    } catch (caught) {
+      toast.error(apiMessage(caught));
+      return null;
+    }
   };
 }
 

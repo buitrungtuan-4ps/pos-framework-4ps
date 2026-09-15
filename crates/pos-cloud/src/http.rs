@@ -15450,6 +15450,20 @@ fn preview_config_node(
     node_key: &str,
     node_value: serde_json::Value,
 ) -> Result<ConfigPreview, Vec<String>> {
+    preview_config_nodes(state_before, &[(node_key.to_owned(), node_value)])
+}
+
+/// The same dry-run over *several* nodes at once, which is what a compiled plan hands back.
+///
+/// Eleven of the thirteen batchable nodes compile to a single `(key, value)`, but the shape
+/// [`BatchNodePlan::compile_for`] returns is a list, and a preview that took only the first would
+/// quietly under-report a plan that writes two. Setting them all on the Store layer before composing
+/// also gives the honest answer for a plan whose nodes interact — the validator sees the candidate
+/// the publish would actually write, not one node of it.
+fn preview_config_nodes(
+    state_before: Option<&ConfigTreeState>,
+    nodes: &[(String, serde_json::Value)],
+) -> Result<ConfigPreview, Vec<String>> {
     use serde_json::Value;
     let empty = || Value::Object(serde_json::Map::new());
     // The four authored layers as stored (all empty when the store has no tree yet).
@@ -15464,14 +15478,16 @@ fn preview_config_node(
             (Some(v.id.to_string()), v.effective.clone())
         });
 
-    // Set `node_key` on the Store layer, leaving its other keys intact, exactly as the publish route
+    // Set each node on the Store layer, leaving its other keys intact, exactly as the publish route
     // does before composing.
     let mut store_layer = layers[2].clone();
     if !store_layer.is_object() {
         store_layer = empty();
     }
     if let Value::Object(map) = &mut store_layer {
-        map.insert(node_key.to_owned(), node_value);
+        for (node_key, node_value) in nodes {
+            map.insert(node_key.clone(), node_value.clone());
+        }
     }
 
     let candidate = merge_layers(&[&layers[0], &layers[1], &store_layer, &layers[3]]);
@@ -15537,6 +15553,161 @@ where
         Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
         Err(violations) => unprocessable_violations(&violations),
     }
+}
+
+// --- The generic publish preview (`/admin/config/preview`, roadmap-v3 F11) -----------------------
+
+/// The collaborators the generic preview needs: the node registry it compiles through, the config
+/// trees it diffs against, and the admin/clock every `/admin` route authenticates with.
+///
+/// No `AuditRecorder`, and that is the point of the route: a preview mints no version, writes
+/// nothing and changes nothing, so there is nothing for the trail to record. The permission is
+/// still [`ConsolePermission::PublishConfig`] — seeing what a publish *would* do to a store is the
+/// same disclosure as doing it, and the compiled document can carry prices.
+#[derive(Clone)]
+struct ConfigPreviewState<Cfg, A, C> {
+    config_trees: Cfg,
+    nodes: Vec<Arc<dyn BatchNode>>,
+    admin: A,
+    clock: C,
+}
+
+/// A `POST /admin/config/preview` body — the same `(node, arguments)` pair a batch publish takes,
+/// aimed at one store instead of a cohort.
+#[derive(Debug, Clone, Deserialize)]
+struct PreviewNodeRequest {
+    tenant_id: String,
+    store_id: String,
+    /// Which node to compile — one of the thirteen the registry knows.
+    node: String,
+    /// That node's own arguments: the single-store publish body minus the `(tenant, store)`.
+    /// Nodes compiled from tenant-wide authoring take none, and an object is accepted and ignored.
+    #[serde(default)]
+    arguments: serde_json::Value,
+}
+
+/// What a preview answers with: the node it compiled, and the diff a publish of it would apply.
+#[derive(Debug, Clone, Serialize)]
+struct NodePreview {
+    /// Echoed back so a console that fired several previews can tell the answers apart.
+    node: String,
+    /// The version the diff is computed against, or `null` when the store has no tree yet.
+    from_version_id: Option<String>,
+    /// The RFC 7386 merge patch the publish would apply to the store's effective document.
+    diff: serde_json::Value,
+    /// True when nothing would change — there is nothing to publish.
+    unchanged: bool,
+}
+
+/// `POST /admin/config/preview` — what publishing this node to this store *would* change.
+///
+/// # Why this exists when `/admin/config/campaigns/preview` already did
+///
+/// It did, for one node out of sixteen. Every other publish button in the console committed
+/// blind: the operator pressed **Publish** and found out afterwards, from the store, whether the
+/// document was what they meant (roadmap-v3 **F11**). Writing fifteen more preview routes by hand
+/// would have been fifteen more chances for a preview to compile its node differently from the
+/// publish it previews — a dry run that lies is worse than none.
+///
+/// So this route compiles through [`BatchNode`], the same registry ADR-0122's batch publish fans
+/// out, which delegates to the very `*_nodes` function each single-store route calls. A preview
+/// cannot drift from its publish because it is not a second copy of it. The nodes the registry does
+/// not carry have no preview here, and deliberately: `locale` and `store_profile` are per-store by
+/// definition (ADR-0122 §4), so there is no tenant-wide document to compile.
+///
+/// Mints no version, saves nothing, audits nothing. `422` carries the violations a real publish
+/// would refuse the candidate with, verbatim.
+async fn admin_preview_config_node<Cfg, A, C>(
+    State(state): State<ConfigPreviewState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PreviewNodeRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let Some(node) = state
+        .nodes
+        .iter()
+        .find(|candidate| candidate.key() == request.node)
+    else {
+        return unknown_batch_node(&state.nodes, &request.node);
+    };
+
+    // Compile exactly as the publish would: plan the tenant-wide half, then the store's own. Both
+    // refusals are the publish's own words — an unpublishable instruction should read the same
+    // whether it was discovered by previewing or by pressing the button.
+    let plan = match node.plan(tenant_id, &request.arguments).await {
+        Ok(plan) => plan,
+        Err(refusal) => return refusal,
+    };
+    let compiled = match plan.compile_for(store_id).await {
+        Ok(compiled) => compiled,
+        Err(refusal) => return refusal,
+    };
+
+    let loaded = match load_tree_for_write(&state.config_trees, tenant_id, store_id).await {
+        Ok(loaded) => loaded,
+        Err(refusal) => return refusal,
+    };
+    match preview_config_nodes(loaded.state.as_ref(), &compiled) {
+        Ok(preview) => (
+            StatusCode::OK,
+            Json(NodePreview {
+                node: request.node,
+                from_version_id: preview.from_version_id,
+                diff: preview.diff,
+                unchanged: preview.unchanged,
+            }),
+        )
+            .into_response(),
+        Err(violations) => unprocessable_violations(&violations),
+    }
+}
+
+/// The one-route router for the generic preview. Separate from the publish routers because it holds
+/// the node registry and none of them do — and because a route that writes nothing should not be
+/// reachable only through a state that carries an audit recorder.
+pub fn config_preview_router<Cfg, A, C>(
+    config_trees: Cfg,
+    nodes: Vec<Arc<dyn BatchNode>>,
+    admin: A,
+    clock: C,
+) -> Router
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/config/preview",
+            post(admin_preview_config_node::<Cfg, A, C>),
+        )
+        .with_state(ConfigPreviewState {
+            config_trees,
+            nodes,
+            admin,
+            clock,
+        })
 }
 
 // --- OTA rollout levers (`/admin/config/ota`, ADR-0078, Track O3) --------------------------------

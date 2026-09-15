@@ -40,7 +40,7 @@ import {
   TextArea,
 } from "../components/ui";
 import { ConfirmDialog, EmptyState, PublishBar } from "../components/kit";
-import { describePublish } from "../lib/publish-copy";
+import { describePublish, previewNode } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
@@ -463,6 +463,9 @@ export function Config() {
                     busy={busy()}
                     disabled={violatedRules().length > 0}
                     disabledReason={t("config.capabilities.conflicts")}
+                    preview={previewNode("capabilities", tenantId(), storeId(), {
+                      flags: flags(),
+                    })}
                     onPublish={() => void publishCapabilities()}
                   />
                 </div>

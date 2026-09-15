@@ -308,6 +308,11 @@ const UNDOCUMENTED: &[&str] = &[
     // Which other origins a store's edge answers (ADR-0111). Enumerated here rather than annotated,
     // at the fidelity B5 chose: the auth surface is documented, the console surface is enumerated.
     "/admin/config/origins",
+    // The generic publish preview (F11): what publishing one node to one store would change,
+    // computed and discarded. Enumerated with the rest of the console's config surface for the same
+    // reason they are — and it writes nothing, so a fork reading only this list is not missing a way
+    // to change anything.
+    "/admin/config/preview",
     "/admin/config/store-profile",
     // --- release hosting (R2, ADR-0088) ---
     // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
