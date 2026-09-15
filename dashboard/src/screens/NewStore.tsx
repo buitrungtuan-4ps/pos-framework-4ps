@@ -354,17 +354,22 @@ export function NewStore() {
                         )}
                       </For>
                     </fieldset>
-                    <div class="flex gap-2">
+                    <div class="flex flex-wrap gap-2">
                       <Button variant="secondary" onClick={() => setStep(1)}>
                         {t("wizard.back")}
                       </Button>
                       <Button disabled={busy()} onClick={() => void issueKey()}>
                         {t("wizard.issueKey")}
                       </Button>
-                      <Button variant="secondary" onClick={() => setStep(3)}>
+                      {/* The short path, named (decision D4). The Stores screen used to carry a
+                          second create form for exactly this — a registry row and nothing else —
+                          and the operator could not tell from the button that the store it made
+                          could not trade. It is this step instead, and it says so. */}
+                      <Button variant="ghost" onClick={() => setStep(3)}>
                         {t("wizard.skipKey")}
                       </Button>
                     </div>
+                    <p class="text-sm text-ink-muted">{t("wizard.skipKeyHint")}</p>
                   </>
                 }
               >

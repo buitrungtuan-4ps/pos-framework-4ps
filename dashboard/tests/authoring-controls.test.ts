@@ -107,6 +107,38 @@ function authorsOnThePage([, text]: [string, string]): boolean {
   return hasFields && !hasPanel;
 }
 
+/**
+ * A `Card` whose title is an add/create label (Wave 4 · PR-4, decision D4).
+ *
+ * The check above has one blind spot, and People and Floor sat in it for a wave: it stands down as
+ * soon as the screen has *a* panel anywhere, and both screens had one — a Drawer for the role
+ * editor, a Modal for the PIN — while still carrying a card headed "Add employee" / "Add area" with
+ * two fields in it, permanently open beneath the table. That is the owner's original report
+ * unchanged; the first check simply could not see it.
+ *
+ * So: a `Card` whose title is a message key naming an add or a create is a violation when the card
+ * holds a field primitive. Syntactic on purpose — it reads the key, not the translation, so it
+ * cannot be defeated by rewording the English and it does not care what the Vietnamese says. A
+ * legitimate create card does not exist: creating opens a `FormPanel` from the list header (ADR-0121
+ * §6), and there is exactly one way.
+ */
+const CREATE_CARD = /<Card[^>]*\btitle=\{t\(\s*"[^"]*\.(?:add|create)[^"]*"/i;
+
+function cardBody(text: string, from: number): string {
+  // Everything up to the matching `</Card>`; good enough because a create card never nests one.
+  const end = text.indexOf("</Card>", from);
+  return end === -1 ? text.slice(from) : text.slice(from, end);
+}
+
+function authorsInACard([, text]: [string, string]): boolean {
+  const match = CREATE_CARD.exec(text);
+  if (!match) {
+    return false;
+  }
+  const body = cardBody(text, match.index);
+  return FIELD_PRIMITIVES.some((name) => body.includes(`<${name}`));
+}
+
 describe("the authoring kit", () => {
   it("finds the screens, so this suite cannot pass by looking at nothing", () => {
     expect(entries.length).toBeGreaterThan(30);
@@ -122,6 +154,11 @@ describe("the authoring kit", () => {
 
   it("is where the fields are, so no list screen leaves a form standing open under its table", () => {
     const offenders = entries.filter(authorsOnThePage).map(([path]) => path).sort();
+    expect(offenders).toEqual([]);
+  });
+
+  it("is where creating happens, so no screen keeps an \"Add…\" card open beside its list", () => {
+    const offenders = entries.filter(authorsInACard).map(([path]) => path).sort();
     expect(offenders).toEqual([]);
   });
 });

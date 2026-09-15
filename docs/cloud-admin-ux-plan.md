@@ -1246,8 +1246,9 @@ dashboard `pnpm build` green, 200 tests / 30 files.
 | PR-1 · What the console says wrong | **Delivered** — V10 V11 V12 V13 V15 V17, F1 F2 F3 F12; 216 tests / 34 files |
 | PR-2 · Visual foundation | **Delivered** — D1 D2 D3, V1 V2 V3 V7; 218 tests / 34 files |
 | PR-3 · The kit, completed | **Delivered** — D5 D6, V16 V20, and V19 on the Stores table; 229 tests / 36 files. Five of the planned components; see the delivery note below for the four that moved to PR-4/PR-6 |
-| PR-4 | Next |
-| PR-5 … PR-8 | Planned, in the order below |
+| PR-4 · One way to create | **Delivered** — D4, V4, ADR-0121 §6; 230 tests / 36 files |
+| PR-5 | Next |
+| PR-6 … PR-8 | Planned, in the order below |
 
 **One measurement corrected.** D2 estimated "three weights, about 150 kB". Google serves Noto Sans
 as one *variable* file per subset covering every weight, so what shipped is six files and 331 kB in
@@ -1499,6 +1500,29 @@ Depends on: PR-3 (`RowActions`, `Toolbar`). Size: 1–2 days.
 2. `Stores.tsx` — one "New store" that opens the wizard; the wizard gains a "create the record
    only" step (D4, V4); the Organisation card shrinks and "Archive organisation" moves to a kebab.
 3. `tests/authoring-controls.test.ts` (gate U3) extended to the three screens.
+
+**Delivered (2026-09-15).** All three, plus the Refresh buttons D5 left on People and Floor. Two
+notes on what turned out differently from the plan.
+
+*The wizard already had the step.* Its second page carried "Skip for now", which is exactly D4's
+"create the record only" — a registry row, no key, no installer. What was missing was that the
+button did not say so, and that the Stores screen offered a second button doing the same thing with
+no warning at all. So the work was to delete the duplicate and rename the survivor: "Skip the key —
+create the record only", with a line saying the store exists but cannot sync or trade until a key is
+issued from its own row. The Stores header's Create is a link to the wizard now, and its `FormPanel`
+is an edit panel.
+
+*The U3 gate had a blind spot, and this is what closed it.* `authoring-controls.test.ts` stood down
+as soon as a screen had any panel — and People and Floor had one each (a Drawer for roles, a Modal
+for PINs) while still carrying an "Add employee" / "Add area" card permanently open under the table.
+That is the owner's original report, unchanged, passing a gate written for it. The new check reads
+the `Card`'s **message key**: a title naming an add or a create, on a card holding a field
+primitive, is a violation. Syntactic on purpose — rewording the English cannot defeat it.
+
+**Correction to PR-3's delivery note.** It said `FormSection` and `StickyActions` would land with
+PR-4. They have not: the two panels this PR opens hold one and two fields, and a section header over
+a single field is furniture. The form that wants them is Store settings, whose remaining V16 work is
+**PR-8**'s; they go there, with their caller, or not at all.
 
 ### PR-5 · Which node is stale (small backend, unlocks everything after)
 
