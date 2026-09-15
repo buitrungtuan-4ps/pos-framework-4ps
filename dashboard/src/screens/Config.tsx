@@ -4,7 +4,7 @@
 // the server composes + validates and either appends a new version or rejects with the violations,
 // keeping the last good version current.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
@@ -25,7 +25,9 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
   store: "config.level.store",
   device: "config.level.device",
 };
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { usePublishedNodes } from "../lib/published";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
   Banner,
@@ -37,7 +39,8 @@ import {
   StatusBadge,
   TextArea,
 } from "../components/ui";
-import { ConfirmDialog, EmptyState } from "../components/kit";
+import { ConfirmDialog, EmptyState, PublishBar } from "../components/kit";
+import { describePublish } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
@@ -60,7 +63,6 @@ const CONFLICT_CHECKS: Record<string, (on: (key: string) => boolean) => boolean>
 };
 
 export function Config() {
-  const [effective, setEffective] = createSignal<Json | null>(null);
 
   // Whether this admin's role carries `console.reports.revenue`. Prices are T2, so the server strips
   // the priced nodes — the menu price book and the campaign amounts — from the effective document for
@@ -71,21 +73,78 @@ export function Config() {
     const role = actingAdmin()?.role;
     return role === "owner" || role === "admin";
   };
-  const [loaded, setLoaded] = createSignal(false);
   const [level, setLevel] = createSignal<ConfigLevel>("store");
   const [document, setDocument] = createSignal("{\n}\n");
   const [error, setError] = createSignal("");
   const [ok, setOk] = createSignal("");
   const [busy, setBusy] = createSignal(false);
-  const [versions, setVersions] = createSignal<ConfigVersion[]>([]);
   const [viewing, setViewing] = createSignal<string | null>(null);
   const [viewingDoc, setViewingDoc] = createSignal<Json | null>(null);
   const [compare, setCompare] = createSignal(false);
   const [rollbackTo, setRollbackTo] = createSignal<string | null>(null);
-  const [catalogue, setCatalogue] = createSignal<CapabilityCatalogue | null>(null);
   const [flags, setFlags] = createSignal<Record<string, boolean>>({});
   const [capError, setCapError] = createSignal("");
   const [capOk, setCapOk] = createSignal("");
+
+  // The §10 catalogue is static platform data, so it is read once per session rather than on every
+  // re-read of the tree. Kept in a plain variable because nothing renders from it directly — it is
+  // handed back inside the resource's value, which is what the screen reads.
+  let catalogueCache: CapabilityCatalogue | null = null;
+
+  /**
+   * What this screen opens on: the store's effective (composed) config and its version history.
+   *
+   * One resource, because the two are read together and the second is a precondition for writing
+   * the first — a screen that had the document but not the version it was read at could offer a
+   * publish it has no safe way to make.
+   *
+   * The catalogue rides along but tolerates its own failure. It is static data, and a screen that
+   * refused to draw the effective document because a *labels* read failed would be worse than one
+   * whose toggles are missing while the JSON editor still works.
+   */
+  const read = createAdminResource(
+    async (tenant, store) => {
+      if (!store) {
+        return null;
+      }
+      const [effective, versions] = await Promise.all([
+        api.effectiveConfig(tenant, store),
+        api.configVersions(tenant, store),
+      ]);
+      if (catalogueCache === null) {
+        try {
+          catalogueCache = await api.capabilityCatalogue();
+        } catch {
+          // Non-fatal: the toggles stay unseeded, the rest of the screen is unaffected.
+        }
+      }
+      return { effective, versions, catalogue: catalogueCache };
+    },
+    { scope: "tenant" },
+  );
+
+  const effective = () => read.value()?.effective ?? null;
+  const versions = (): ConfigVersion[] => read.value()?.versions ?? [];
+  const catalogue = () => read.value()?.catalogue ?? null;
+
+  /**
+   * When the capability flags last reached this store.
+   *
+   * Capability flags are published as **top-level keys**, one node per flag, not as a single
+   * `capabilities` node — so the honest answer is the newest of them. A flag the operator has never
+   * touched contributes nothing, which is right: it has never been published.
+   */
+  const published = usePublishedNodes();
+  const capabilitiesPublishedAtMs = (): number | null => {
+    const keys = new Set((catalogue()?.flags ?? []).map((flag) => flag.key));
+    let newest: number | null = null;
+    for (const row of published.nodes()) {
+      if (keys.has(row.node) && row.at_ms !== null && (newest === null || row.at_ms > newest)) {
+        newest = row.at_ms;
+      }
+    }
+    return newest;
+  };
 
   // Read a top-level boolean flag from the current effective (composed) config, falling to the flag's
   // declared default when the document does not name it — the same "unnamed falls to default" contract
@@ -101,40 +160,28 @@ export function Config() {
     return defaultOn;
   };
 
-  // Fetch the static §10 catalogue once, then seed the toggle state from the store's current effective
-  // profile. Re-seeding on every load (store change / after a publish) keeps the toggles showing the
-  // live baseline. A catalogue read failure leaves the editor unseeded rather than erroring the whole
-  // screen — the JSON publish still works.
-  const loadCapabilities = async () => {
-    try {
-      let cat = catalogue();
-      if (cat === null) {
-        cat = await api.capabilityCatalogue();
-        setCatalogue(cat);
-      }
-      const seeded: Record<string, boolean> = {};
-      for (const flag of cat.flags) {
-        seeded[flag.key] = flagInEffective(flag.key, flag.default_on);
-      }
-      setFlags(seeded);
-      setCapError("");
-      setCapOk("");
-    } catch {
-      // The catalogue is static data; a read failure is non-fatal to the rest of the screen.
+  /**
+   * Seed the toggles from the store's current effective profile, every time the read lands.
+   *
+   * Re-seeding on every read — a store change, a publish — keeps the toggles showing the live
+   * baseline rather than what the last store happened to have on.
+   */
+  createEffect(() => {
+    const value = read.value();
+    if (value === null || value.catalogue === null) {
+      return;
     }
-  };
-
-  const loadVersions = async () => {
-    try {
-      setVersions(await api.configVersions(tenantId(), storeId()));
-    } catch {
-      // A store with no published config has no versions yet; leave the list empty rather than erroring.
-      setVersions([]);
+    const seeded: Record<string, boolean> = {};
+    for (const flag of value.catalogue.flags) {
+      seeded[flag.key] = flagInEffective(flag.key, flag.default_on);
     }
-  };
+    setFlags(seeded);
+    setCapError("");
+    setCapOk("");
+  });
 
   // The precondition the two authored writes carry (ADR-0095): the version this screen last read the
-  // tree at, or `null` for a store that has never been published to. A failed version read leaves the
+  // tree at, or `null` for a store that has never been published to. A read that failed leaves the
   // list empty, so this reads `null` and the server refuses the write — the safe way round, because
   // the alternative is publishing over a version we never saw.
   const currentVersion = () => versions().find((version) => version.current)?.version_id ?? null;
@@ -147,7 +194,7 @@ export function Config() {
       const message = t("config.stale");
       setError(message);
       toast.error(message);
-      await load();
+      await reload();
       return;
     }
     const message = apiMessage(caught);
@@ -155,22 +202,19 @@ export function Config() {
     toast.error(message);
   };
 
-  const load = async () => {
+  /**
+   * Re-read the tree, and drop whatever version was being viewed.
+   *
+   * What a write calls when it succeeds. The viewed version is cleared because it is a snapshot of
+   * a history the write just added to, and leaving it on screen beside a fresh document is how a
+   * diff comes to compare two things that are no longer adjacent.
+   */
+  const reload = async () => {
     setError("");
     setOk("");
-    setBusy(true);
     setViewing(null);
     setViewingDoc(null);
-    try {
-      setEffective(await api.effectiveConfig(tenantId(), storeId()));
-      setLoaded(true);
-      await loadCapabilities();
-      await loadVersions();
-    } catch (caught) {
-      setError(apiMessage(caught));
-    } finally {
-      setBusy(false);
-    }
+    await Promise.all([read.refetch(), published.refresh()]);
   };
 
   const viewVersion = async (versionId: string) => {
@@ -200,7 +244,7 @@ export function Config() {
         currentVersion(),
       );
       toast.ok(t("config.rolledBack", { version: result.config_version_id }));
-      await load();
+      await reload();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -220,7 +264,6 @@ export function Config() {
   };
 
   // Load on open and whenever the tenant/store changes — never with an empty context (F0).
-  onScopedContext("store", () => void load());
 
   const toggleFlag = (key: string, value: boolean) => {
     setFlags((prev) => ({ ...prev, [key]: value }));
@@ -271,7 +314,7 @@ export function Config() {
       const message = t("config.capabilities.published", { version: result.config_version_id });
       setCapOk(message);
       toast.ok(message);
-      await load();
+      await reload();
     } catch (caught) {
       const message = apiMessage(caught);
       setCapError(message);
@@ -301,7 +344,7 @@ export function Config() {
         currentVersion(),
       );
       setOk(t("config.published", { version: result.config_version_id }));
-      await load();
+      await reload();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -412,14 +455,16 @@ export function Config() {
                     {(message) => <Banner tone="danger" message={message()} />}
                   </Show>
                   <Show when={capOk()}>{(message) => <Banner tone="ok" message={message()} />}</Show>
-                  <div>
-                    <Button
-                      disabled={busy() || violatedRules().length > 0}
-                      onClick={() => void publishCapabilities()}
-                    >
-                      {t("config.capabilities.publish")}
-                    </Button>
-                  </div>
+                  <PublishBar
+                    label={t("config.capabilities.title")}
+                    publishedAtMs={capabilitiesPublishedAtMs()}
+                    describe={describePublish}
+                    publishLabel={t("config.capabilities.publish")}
+                    busy={busy()}
+                    disabled={violatedRules().length > 0}
+                    disabledReason={t("config.capabilities.conflicts")}
+                    onPublish={() => void publishCapabilities()}
+                  />
                 </div>
               </Card>
             </div>
@@ -427,16 +472,12 @@ export function Config() {
         </Show>
 
         <div class="grid gap-6 lg:grid-cols-2">
-          <Card
-            title={t("config.effective")}
-            actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
-            }
-          >
+          <Card title={t("config.effective")}>
+            <Show when={failureOf(read)}>
+              {(message) => <Banner tone="danger" message={message()} />}
+            </Show>
             <Show
-              when={loaded()}
+              when={read.value() !== null}
               fallback={<p class="text-sm text-ink-muted">{t("config.loadHint")}</p>}
             >
               <Show

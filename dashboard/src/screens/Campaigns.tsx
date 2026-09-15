@@ -26,6 +26,8 @@ import {
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
 import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
@@ -45,6 +47,7 @@ import {
   Drawer,
   EmptyState,
   Modal,
+  PublishBar,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -131,6 +134,10 @@ export function Campaigns() {
   );
   const campaigns = () => campaignState.value()?.campaigns ?? null;
   const scheduled = () => campaignState.value()?.scheduled ?? [];
+  // When the `campaigns` node last reached this store. A campaign carries no `updated_at` on the
+  // wire, so the bar is told nothing about edits and answers "published" rather than guessing at
+  // staleness — the honest half of the three states, until the wire grows the other one.
+  const published = usePublishedNodes();
   // The form's own complaints and the stale-write notice; the read's refusal is `failureOf`.
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -443,6 +450,7 @@ export function Campaigns() {
       const result = await api.publishCampaigns(tenantId(), storeId());
       setPreview(null);
       toast.ok(t("campaigns.published", { store: storeName(), version: result.config_version_id }));
+      await published.refresh();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -602,15 +610,19 @@ export function Campaigns() {
               fallback={<p class="text-sm text-ink-muted">{t("campaigns.publishNeedsStore")}</p>}
             >
               <div class="flex flex-col gap-4">
-                <p class="text-sm text-ink">{t("campaigns.publishTo", { store: storeName() })}</p>
-                <div class="flex flex-wrap gap-2">
-                  <Button variant="secondary" disabled={busy()} onClick={() => void runPreview()}>
-                    {t("campaigns.preview")}
-                  </Button>
-                  <Button disabled={busy()} onClick={() => void publish()}>
-                    {t("campaigns.publish")}
-                  </Button>
-                </div>
+                <PublishBar
+                  label={t("campaigns.publishTo", { store: storeName() })}
+                  publishedAtMs={published.publishedAtMs("campaigns")}
+                  describe={describePublish}
+                  publishLabel={t("campaigns.publish")}
+                  busy={busy()}
+                  preview={
+                    <Button variant="secondary" disabled={busy()} onClick={() => void runPreview()}>
+                      {t("campaigns.preview")}
+                    </Button>
+                  }
+                  onPublish={() => void publish()}
+                />
 
                 <div class="border-t border-line pt-4">
                   <span class="mb-1 block text-sm font-medium text-ink">

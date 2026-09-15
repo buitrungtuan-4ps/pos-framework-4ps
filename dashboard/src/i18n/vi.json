@@ -1518,6 +1518,7 @@
   "storeSettings.country": "Quốc gia",
   "storeSettings.countryHint": "Cửa hàng này ở nước nào. Bắt buộc — vùng đặt máy của một cửa hàng hosted được so với giá trị này, và bảng điều khiển đội tàu không trả lời được “dữ liệu cửa hàng này đang ở đâu?” nếu thiếu.",
   "storeSettings.countryNone": "Chọn một quốc gia…",
+  "storeSettings.countryRequired": "Chọn quốc gia cửa hàng này kinh doanh trước khi phát hành.",
   "storeSettings.currency": "Tiền tệ (mã 3 chữ)",
   "storeSettings.cutoff": "Giờ chốt ngày kinh doanh",
   "storeSettings.cutoffHint": "0–23. Trước giờ này, ngày kinh doanh vẫn là ngày dương lịch trước đó.",
