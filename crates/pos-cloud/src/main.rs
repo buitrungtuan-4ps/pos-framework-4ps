@@ -547,6 +547,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Releases (ADR-0125): a name over a set of publishes — nodes × stores, timed once. Creating
+        // one is a draft; scheduling it snapshots each node, expands the cohort to concrete stores,
+        // converts "Monday 04:00, local" to one instant per store's published timezone, and writes a
+        // `scheduled_publishes` pair per (node, store). The activator above applies them and settles
+        // the release's state. It shares the store-group router's node table for exactly the reason
+        // ADR-0125 §1 gives: a node publishable through a release but not directly would be a second
+        // way for a config version to be born.
+        .merge(http::config_release_router(
+            store.config_releases(),
+            store.scheduled_publishes(),
+            store.store_groups(),
+            store.registry(),
+            store.config_trees(),
+            http::batch_nodes(
+                store.catalog(),
+                store.tax_rates(),
+                store.campaigns(),
+                store.inventory(),
+                store.reason_codes(),
+                store.people(),
+                store.floor(),
+            ),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
         // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
         // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.

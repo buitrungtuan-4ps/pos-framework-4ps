@@ -130,6 +130,11 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_read_store_group_batch,
         crate::http::admin_list_store_archives,
         crate::http::admin_config_nodes,
+        crate::http::admin_list_releases,
+        crate::http::admin_create_release,
+        crate::http::admin_read_release,
+        crate::http::admin_schedule_release,
+        crate::http::admin_cancel_release,
     ),
     components(schemas(ErrorResponse, ErrorBody, ErrorDetail)),
     modifiers(&SessionCookie),
@@ -139,6 +144,15 @@ pub(crate) struct ErrorResponse {
             description = "Two-factor sign-in, the session it issues, and the second-factor levers \
                            (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
                            session these routes establish."
+        ),
+        (
+            name = "config releases",
+            description = "A release is one decision and many writes (ADR-0125): a named set of \
+                           config publishes, aimed at a cohort or an explicit store list, timed \
+                           once — in each store's own clock or at a single instant. Scheduling one \
+                           expands it to a `scheduled_publishes` row per (node, store) pair, which \
+                           ADR-0077's activator applies. These routes write no config versions of \
+                           their own."
         ),
         (
             name = "store groups",
