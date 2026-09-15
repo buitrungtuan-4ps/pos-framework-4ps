@@ -335,6 +335,11 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/catalog/display-subcategories",
     "/admin/catalog/display-subcategories/{display_subcategory_id}",
     "/admin/catalog/export/items",
+    // The item-master CSV import (F15), beside the export it round-trips with. Enumerated rather
+    // than annotated, at B5's chosen fidelity; the body is a CSV upload whose columns are the
+    // export's, which `docs/guides` describes better than a schema stub would.
+    "/admin/catalog/import/items/apply",
+    "/admin/catalog/import/items/dry-run",
     "/admin/catalog/item-categories",
     "/admin/catalog/item-categories/{item_category_id}",
     "/admin/catalog/item-subcategories",
