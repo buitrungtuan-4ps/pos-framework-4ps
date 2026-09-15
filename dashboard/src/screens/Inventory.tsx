@@ -13,7 +13,6 @@ import { createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import {
   UNITS,
-  type CatalogItem,
   type ETag,
   type Ingredient,
   type IngredientInput,
@@ -26,7 +25,10 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { describePublish } from "../lib/publish-copy";
+import { usePublishedNodes } from "../lib/published";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -44,6 +46,7 @@ import {
   DataTable,
   Drawer,
   EmptyState,
+  PublishBar,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -75,10 +78,27 @@ function amountToMilli(text: string): number | null {
 type LineDraft = { ingredient: string; amount: string };
 
 export function Inventory() {
-  const [ingredients, setIngredients] = createSignal<Ingredient[] | null>(null);
-  const [recipes, setRecipes] = createSignal<Recipe[]>([]);
-  const [suppliers, setSuppliers] = createSignal<Supplier[]>([]);
-  const [items, setItems] = createSignal<CatalogItem[]>([]);
+  // The four reads as one state. A recipe names an ingredient and an item, and a stock receipt
+  // names a supplier, so a screen holding half of them renders ULIDs where names belong.
+  const inventory = createAdminResource(
+    async (tenant) => {
+      const [ingredients, recipes, suppliers, items] = await Promise.all([
+        api.listIngredients(tenant),
+        api.listRecipes(tenant),
+        api.listSuppliers(tenant),
+        api.listItems(tenant),
+      ]);
+      return { ingredients, recipes, suppliers, items };
+    },
+    { scope: "tenant" },
+  );
+  const ingredients = () => inventory.value()?.ingredients ?? null;
+  const recipes = () => inventory.value()?.recipes ?? [];
+  const suppliers = () => inventory.value()?.suppliers ?? [];
+  const items = () => inventory.value()?.items ?? [];
+  const published = usePublishedNodes();
+  // The form's own complaints, and the stale-write notice — what the operator can act on. The
+  // read's refusal is `failureOf(inventory)`; they are different failures with different fixes.
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
@@ -116,33 +136,12 @@ export function Inventory() {
     setError(message);
     toast.error(message);
     if (stale) {
-      await load();
+      await inventory.refetch();
     }
   };
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      const [ing, rec, sup, cat] = await Promise.all([
-        api.listIngredients(tenantId()),
-        api.listRecipes(tenantId()),
-        api.listSuppliers(tenantId()),
-        api.listItems(tenantId()),
-      ]);
-      setIngredients(ing);
-      setRecipes(rec);
-      setSuppliers(sup);
-      setItems(cat);
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   // Load on open and whenever the tenant or store changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   /** The name of a menu item by id, falling back to the id when the catalog has no such item. */
   const itemName = (id: string): string => items().find((i) => i.menu_item_id === id)?.name ?? id;
@@ -181,7 +180,7 @@ export function Inventory() {
         toast.ok(t("inventory.ingredientSaved"));
       }
       setIngOpen(false);
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -199,7 +198,7 @@ export function Inventory() {
       await api.deleteIngredient(tenantId(), row.id);
       setPendingIngDelete(null);
       toast.ok(t("inventory.ingredientDeleted"));
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -268,7 +267,7 @@ export function Inventory() {
       }
       toast.ok(t("inventory.recipeSaved"));
       setRecOpen(false);
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -286,7 +285,7 @@ export function Inventory() {
       await api.deleteRecipe(tenantId(), row.item);
       setPendingRecDelete(null);
       toast.ok(t("inventory.recipeDeleted"));
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -326,7 +325,7 @@ export function Inventory() {
         toast.ok(t("inventory.supplierSaved"));
       }
       setSupOpen(false);
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -344,7 +343,7 @@ export function Inventory() {
       await api.deleteSupplier(tenantId(), row.id);
       setPendingSupDelete(null);
       toast.ok(t("inventory.supplierDeleted"));
-      await load();
+      await inventory.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -359,6 +358,8 @@ export function Inventory() {
     try {
       const result = await api.publishInventory(tenantId(), storeId());
       toast.ok(t("inventory.published", { store: storeName(), version: result.config_version_id }));
+      // The bar reads the store's node dates, so it only stops saying "stale" once re-read.
+      await published.refresh();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -438,6 +439,13 @@ export function Inventory() {
       <PageHeader title={t("inventory.title")} description={t("inventory.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
+          {/* Two failures, two banners. The read's refusal is the resource's — "we could not look"
+              is not the operator's to correct. `error` keeps what is: the form's own complaints
+              ("a name is required", "that threshold is not a number") and the stale-write notice,
+              which are theirs to act on (the split PR-6b made on Stations and Floor). */}
+          <Show when={failureOf(inventory)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
           {/* Ingredients */}
@@ -447,9 +455,6 @@ export function Inventory() {
               <div class="flex gap-2">
                 <Button disabled={busy()} onClick={openIngCreate}>
                   {t("inventory.newIngredient")}
-                </Button>
-                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.refresh")}
                 </Button>
               </div>
             }
@@ -578,19 +583,16 @@ export function Inventory() {
           {/* Publish */}
           <Card title={t("inventory.publishTitle")}>
             <p class="mb-3 text-sm text-ink-muted">{t("inventory.publishHint")}</p>
-            <Show
-              when={storeId()}
-              fallback={<p class="text-sm text-ink-muted">{t("inventory.publishNeedsStore")}</p>}
-            >
-              <div class="flex flex-col gap-3">
-                <p class="text-sm text-ink">{t("inventory.publishTo", { store: storeName() })}</p>
-                <div>
-                  <Button disabled={busy()} onClick={() => void publish()}>
-                    {t("inventory.publish")}
-                  </Button>
-                </div>
-              </div>
-            </Show>
+            <PublishBar
+              label={t("inventory.publishTo", { store: storeName() })}
+              publishedAtMs={published.publishedAtMs("inventory")}
+              describe={describePublish}
+              publishLabel={t("inventory.publish")}
+              busy={busy()}
+              disabled={!storeId()}
+              disabledReason={t("inventory.publishNeedsStore")}
+              onPublish={() => void publish()}
+            />
           </Card>
         </div>
 

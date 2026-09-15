@@ -25,7 +25,8 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -115,8 +116,22 @@ function describeAction(action: CampaignAction): string {
 }
 
 export function Campaigns() {
-  const [campaigns, setCampaigns] = createSignal<Campaign[] | null>(null);
-  const [scheduled, setScheduled] = createSignal<ScheduledPublish[]>([]);
+  // The authored campaigns and the publishes already queued for this store, as one state. The
+  // scheduled list is per-store, so it is empty until a store is chosen — a fact about the context,
+  // not a failure, which is why the read returns an empty list rather than refusing.
+  const campaignState = createAdminResource(
+    async (tenant, store) => {
+      const [campaigns, scheduled] = await Promise.all([
+        api.listCampaigns(tenant),
+        store ? api.listScheduled(tenant, store) : Promise.resolve([] as ScheduledPublish[]),
+      ]);
+      return { campaigns, scheduled };
+    },
+    { scope: "tenant" },
+  );
+  const campaigns = () => campaignState.value()?.campaigns ?? null;
+  const scheduled = () => campaignState.value()?.scheduled ?? [];
+  // The form's own complaints and the stale-write notice; the read's refusal is `failureOf`.
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
 
@@ -172,25 +187,12 @@ export function Campaigns() {
     setError(message);
     toast.error(message);
     if (stale) {
-      await load();
+      await campaignState.refetch();
     }
   };
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      setCampaigns(await api.listCampaigns(tenantId()));
-      setScheduled(storeId() ? await api.listScheduled(tenantId(), storeId()) : []);
-    } catch (caught) {
-      await fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   // Load on open and whenever the tenant or store changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
 
   const openCreate = () => {
     setEditing(null);
@@ -363,7 +365,7 @@ export function Campaigns() {
         toast.ok(t("campaigns.created"));
       }
       setFormOpen(false);
-      await load();
+      await campaignState.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -381,7 +383,7 @@ export function Campaigns() {
       await api.deleteCampaign(tenantId(), campaign.id);
       setPendingDelete(null);
       toast.ok(t("campaigns.deleted"));
-      await load();
+      await campaignState.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -464,7 +466,7 @@ export function Campaigns() {
       await api.scheduleCampaigns(tenantId(), storeId(), ms);
       setScheduleAt("");
       toast.ok(t("campaigns.scheduled", { store: storeName() }));
-      await load();
+      await campaignState.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -482,7 +484,7 @@ export function Campaigns() {
       await api.cancelScheduled(tenantId(), row.id);
       setPendingCancel(null);
       toast.ok(t("campaigns.scheduleCancelled"));
-      await load();
+      await campaignState.refetch();
     } catch (caught) {
       await fail(caught);
     } finally {
@@ -543,12 +545,14 @@ export function Campaigns() {
                 <Button disabled={busy()} onClick={openCreate}>
                   {t("campaigns.new")}
                 </Button>
-                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.refresh")}
-                </Button>
               </div>
             }
           >
+            {/* Two failures, two banners: the read's refusal is not the operator's to correct;
+                the form's complaints are (the split PR-6b made on Stations and Floor). */}
+            <Show when={failureOf(campaignState)}>
+              {(message) => <Banner tone="danger" message={message()} />}
+            </Show>
             <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
             <Show
               when={campaigns()}

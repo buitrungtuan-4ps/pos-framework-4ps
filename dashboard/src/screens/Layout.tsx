@@ -13,7 +13,6 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type {
-  CatalogItem,
   DisplayCategory,
   DisplaySubcategory,
   ETag,
@@ -22,7 +21,8 @@ import type {
 } from "../api/types";
 import { SALES_CHANNELS } from "../api/types";
 import { t } from "../i18n";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import {
   Banner,
@@ -50,11 +50,24 @@ import { CHANNEL_LABEL, errorMessage, isStale, StatusCell } from "./catalog/shar
 const MAX_GRID = 20;
 
 export function Layout() {
-  const [items, setItems] = createSignal<CatalogItem[]>([]);
-  const [categories, setCategories] = createSignal<DisplayCategory[] | null>(null);
-  const [subcategories, setSubcategories] = createSignal<DisplaySubcategory[] | null>(null);
-  const [buttons, setButtons] = createSignal<LayoutButton[] | null>(null);
-  const [error, setError] = createSignal("");
+  // The four reads as one state. A button names an item and a sub-category names its parent, so a
+  // grid drawn from a half-arrived set renders ULIDs where names belong.
+  const layout = createAdminResource(
+    async (tenant) => {
+      const [items, categories, subcategories, buttons] = await Promise.all([
+        api.listItems(tenant),
+        api.listDisplayCategories(tenant),
+        api.listDisplaySubcategories(tenant),
+        api.listLayoutButtons(tenant),
+      ]);
+      return { items, categories, subcategories, buttons };
+    },
+    { scope: "tenant" },
+  );
+  const items = () => layout.value()?.items ?? [];
+  const categories = () => layout.value()?.categories ?? null;
+  const subcategories = () => layout.value()?.subcategories ?? null;
+  const buttons = () => layout.value()?.buttons ?? null;
   const [busy, setBusy] = createSignal(false);
 
   const [channel, setChannel] = createSignal<SalesChannel>("SALES_CHANNEL_DINE_IN");
@@ -105,33 +118,15 @@ export function Layout() {
       (row) => row.status === "active" && row.display_category_id === categoryId,
     );
 
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      const [loadedItems, loadedCategories, loadedSubcategories, loadedButtons] = await Promise.all([
-        api.listItems(tenantId()),
-        api.listDisplayCategories(tenantId()),
-        api.listDisplaySubcategories(tenantId()),
-        api.listLayoutButtons(tenantId()),
-      ]);
-      setItems(loadedItems);
-      setCategories(loadedCategories);
-      setSubcategories(loadedSubcategories);
-      setButtons(loadedButtons);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
 
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
-
-  const reloadButtons = async () => {
-    setButtons(await api.listLayoutButtons(tenantId()));
-  };
+  /**
+   * Re-read after a button write.
+   *
+   * The whole state rather than the buttons alone: a button names an item and a display category,
+   * so the four reads are one answer, and re-reading a quarter of it is how a grid comes to disagree
+   * with itself about a category somebody archived in another tab.
+   */
+  const reloadButtons = () => layout.refetch();
 
   // --- per-channel button views ---
 
@@ -419,7 +414,7 @@ export function Layout() {
       await api.createDisplayCategory(tenantId(), name);
       toast.ok(t("layout.categoryCreated"));
       setCreatingCategory(false);
-      await load();
+      await layout.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -442,13 +437,13 @@ export function Layout() {
         name,
         status: fields.status ?? row.status,
       }, row.etag);
-      await load();
+      await layout.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await layout.refetch();
       }
       return false;
     } finally {
@@ -502,7 +497,7 @@ export function Layout() {
       await api.createDisplaySubcategory(tenantId(), newSubcategoryParent(), name);
       toast.ok(t("layout.subcategoryCreated"));
       setCreatingSubcategory(false);
-      await load();
+      await layout.refetch();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -526,13 +521,13 @@ export function Layout() {
         name,
         status: fields.status ?? row.status,
       }, row.etag);
-      await load();
+      await layout.refetch();
       return true;
     } catch (caught) {
       toast.error(errorMessage(caught));
       // A stale copy is recovered by reloading, so the reader sees what actually changed.
       if (isStale(caught)) {
-        await load();
+        await layout.refetch();
       }
       return false;
     } finally {
@@ -596,7 +591,10 @@ export function Layout() {
       <PageHeader title={t("layout.title")} description={t("layout.description")} />
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          {/* A refusal is its own state, not an empty grid (D5). */}
+          <Show when={failureOf(layout)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
 
           <Card
             title={t("layout.buttons")}
@@ -616,9 +614,6 @@ export function Layout() {
                 />
                 <Button disabled={busy()} onClick={openAddButton}>
                   {t("layout.addButton")}
-                </Button>
-                <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                  {t("action.refresh")}
                 </Button>
               </div>
             }

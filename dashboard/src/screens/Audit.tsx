@@ -21,8 +21,7 @@ import {
   TextField,
 } from "../components/ui";
 import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
-import { toast } from "../components/Toast";
-import { apiMessage } from "../lib/errors";
+import { createAdminResource, failureOf } from "../lib/resource";
 
 /**
  * How many entries one page of the table carries.
@@ -51,11 +50,9 @@ function pretty(value: unknown): string {
 }
 
 export function Audit() {
-  const [entries, setEntries] = createSignal<readonly AuditEntry[] | null>(null);
-  const [total, setTotal] = createSignal(0);
+  // The window the reader is looking at, and the filters narrowing it. View parameters, not load
+  // state: the read closure below reads them, so applying one is a set followed by `show(0)`.
   const [offset, setOffset] = createSignal(0);
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
   const [selected, setSelected] = createSignal<AuditEntry | null>(null);
 
   // The applied filters. Empty strings mean "no filter"; the client drops absent fields.
@@ -76,40 +73,44 @@ export function Audit() {
   // is a re-read rather than a re-sort of the page (ADR-0098 B3-3).
   const [order, setOrder] = createSignal<TrailOrder>("newest");
 
-  const load = async (from = offset()) => {
-    setError("");
-    setBusy(true);
-    try {
-      const page = await api.listAuditPage(
-        {
-          entityType: entityType().trim() || undefined,
-          action: action().trim() || undefined,
-          actorAdminId: actor().trim() || undefined,
-        },
-        { limit: PAGE_SIZE, offset: from },
-        order(),
-      );
-      // A page that came back empty from somewhere other than the start means the matching set
-      // shrank under the pager — usually a filter that just narrowed. Step back rather than showing
-      // an empty table over a non-zero count.
-      if (page.items.length === 0 && from > 0) {
-        await load(Math.max(0, from - PAGE_SIZE));
+  // The trail. Un-scoped: the audit log is console-wide, not a tenant's — an admin reads it to ask
+  // who did what across the whole installation, and scoping it to the chosen organisation would
+  // silently answer a narrower question than the one asked.
+  const trail = createAdminResource((_tenant, _store) =>
+    api.listAuditPage(
+      {
+        entityType: entityType().trim() || undefined,
+        action: action().trim() || undefined,
+        actorAdminId: actor().trim() || undefined,
+      },
+      { limit: PAGE_SIZE, offset: offset() },
+      order(),
+    ),
+  );
+  const entries = () => trail.value()?.items ?? null;
+  const total = () => trail.value()?.total ?? 0;
+
+  /**
+   * Move the pager and read that window, stepping back off a window that no longer exists.
+   *
+   * A page empty from somewhere other than the start means the matching set shrank under the pager
+   * — usually a filter that just narrowed. Walking back beats an empty table over a non-zero count.
+   */
+  const show = async (from: number): Promise<void> => {
+    let at = Math.max(0, from);
+    for (;;) {
+      setOffset(at);
+      await trail.refetch();
+      const page = trail.value();
+      if (at === 0 || page === null || page.items.length > 0) {
         return;
       }
-      setEntries(page.items);
-      setTotal(page.total);
-      setOffset(page.offset);
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setBusy(false);
+      at = Math.max(0, at - PAGE_SIZE);
     }
   };
 
+
   onMount(() => {
-    void load(0);
     // The roster fills the actor picker. A failure here is not worth a banner over the trail: the
     // picker degrades to "any admin" and the rest of the screen works, so it is logged and dropped.
     void api
@@ -130,7 +131,7 @@ export function Audit() {
    */
   const applyOrder = (_field: string, columnDescends: boolean) => {
     setOrder(columnDescends ? "newest" : "oldest");
-    void load(0);
+    void show(0);
   };
 
   const columns = (): Column<AuditEntry>[] => [
@@ -192,14 +193,7 @@ export function Audit() {
   return (
     <div>
       <PageHeader title={t("audit.title")} description={t("audit.description")} />
-      <Card
-        title={t("audit.recent")}
-        actions={
-          <Button variant="secondary" disabled={busy()} onClick={() => void load(0)}>
-            {t("action.refresh")}
-          </Button>
-        }
-      >
+      <Card title={t("audit.recent")}>
         <div class="mb-4 grid gap-3 sm:grid-cols-3">
           <TextField
             label={t("audit.filter.entityType")}
@@ -224,7 +218,11 @@ export function Audit() {
             placeholder={t("audit.filter.anyActor")}
           />
         </div>
-        <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+        {/* A refusal is its own state, not an empty trail: "nobody did anything" and "we could not
+            look" are opposite answers on the screen that exists to answer who did what (D5). */}
+        <Show when={failureOf(trail)}>
+          {(message) => <Banner tone="danger" message={message()} />}
+        </Show>
         <Show when={entries()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
           {(loaded) => (
             // No `searchText`: a client-side box would filter this page rather than the log, which
@@ -240,7 +238,7 @@ export function Audit() {
               rows={loaded()}
               pageSize={PAGE_SIZE}
               serverTotal={total()}
-              onPage={(next) => void load(next)}
+              onPage={(next) => void show(next)}
               onSort={applyOrder}
               empty={<EmptyState title={t("audit.empty")} description={t("audit.emptyHint")} />}
               actionsHeader={t("common.actions")}
