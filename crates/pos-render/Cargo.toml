@@ -20,7 +20,7 @@ pos-ports = { path = "../pos-ports" }
 # share one font parser — `read-fonts` — so the tree gains no second one.
 harfrust = { version = "0.13.3", default-features = false, features = ["std"] }
 # Outlines, over the same `read-fonts` parser harfrust uses.
-skrifa = { version = "0.46.2", default-features = false, features = ["std"] }
+skrifa = { version = "0.47.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
