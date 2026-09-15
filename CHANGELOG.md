@@ -47,8 +47,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **`createAdminResource`, a read that knows its own context (D5).** `dashboard/src/lib/resource.ts`
   holds the shape every screen wrote by hand: loading/ready/failed, a refetch that is a no-op before
   the first read, optional revalidation on focus and on a timer, and a generation counter so a slow
-  read landing after a fast one is discarded rather than overwriting it. Applied to Alerts here; the
-  remaining screens follow.
+  read landing after a fast one is discarded rather than overwriting it. Six screens drop their
+  Refresh button here by hand-writing the re-read; the helper acquires its first callers in PR-6,
+  and the rest of the screens follow it.
 
 - **An asset-weight gate (`pnpm assets`).** Self-hosting a typeface put a third of a megabyte of
   binary into a front end that had none — the right trade, and one that stops being right silently
@@ -123,6 +124,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **Five screens onto the read that knows its own context (Wave 4 · PR-6, D5).** Media, Reconcile,
+  My sessions, Admins and Activation. Reconcile stops hand-rolling a thirty-second poll with its own
+  `setInterval` and in-flight guard — it asks for an interval and for focus revalidation, which is
+  bounded by staleness, so alt-tabbing back does not cost a request. My sessions gains focus
+  revalidation it never had: a session revoked from another browser stops being listed without being
+  asked. All five lose their Refresh button, which was only ever the apology for not re-reading
+  after a write.
+
+  The gate that was supposed to stop a shared surface shipping ahead of its callers only swept
+  `components/kit.tsx`, and `lib/` walked through the gap — `createAdminResource` shipped with a
+  test file and no screen calling it. The sweep covers both directories now.
+
 - **One publish control, and it says whether the shop already has it (Wave 4 · PR-5b, F13).**
   Thirteen screens had written their own: a button, a sentence, sometimes a store name, sometimes a
   warning, never the same two the same way — and not one said whether the thing in front of the

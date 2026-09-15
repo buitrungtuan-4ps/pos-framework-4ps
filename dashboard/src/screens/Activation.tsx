@@ -19,7 +19,8 @@ import { api } from "../api/client";
 import type { Device } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
-import { onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import {
   Banner,
@@ -58,9 +59,12 @@ const kindLabel = (wire: string) => {
 };
 
 export function Activation() {
-  const [devices, setDevices] = createSignal<Device[] | null>(null);
-  const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
+  // The store's named devices. Store-scoped, so the read never runs with an empty context (F0) and
+  // re-runs when the operator changes shop.
+  const roster = createAdminResource((tenant, store) => api.listDevices(tenant, store), {
+    scope: "store",
+  });
+  const devices = () => roster.value();
 
   // Four lifecycles: the device form, the archive confirm, the code issue, and the restore. Separate
   // so that issuing a code does not disable the roster's buttons (ADR-0121 §3).
@@ -77,27 +81,10 @@ export function Activation() {
   const [chosen, setChosen] = createSignal("");
   const [code, setCode] = createSignal("");
 
-  const load = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      setDevices(await api.listDevices(tenantId(), storeId()));
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Load on open and whenever the tenant/store changes — never with an empty context (F0).
-  onScopedContext("store", () => void load());
-
   // Every edit here is conditional on the version the row was read at (ADR-0094), so a refusal owes
   // the reader a reload and a sentence of its own; `withStaleReload` carries both.
   const conditional = <T,>(write: () => Promise<T>) =>
-    withStaleReload(write, load, t("activation.stale"));
+    withStaleReload(write, () => roster.refetch(), t("activation.stale"));
 
   const openCreate = () => {
     setName("");
@@ -140,7 +127,7 @@ export function Activation() {
       .then((saved) => {
         if (saved) {
           toast.ok(target ? t("activation.deviceRenamed") : t("activation.deviceAdded"));
-          void load();
+          void roster.refetch();
         }
       });
   };
@@ -175,7 +162,7 @@ export function Activation() {
             setChosen("");
           }
           toast.ok(t("activation.deviceArchived"));
-          void load();
+          void roster.refetch();
         } else {
           // The confirm stays open carrying the refusal; a page banner would say it twice.
           toast.error(archival.error());
@@ -184,7 +171,6 @@ export function Activation() {
   };
 
   const restore = async (device: Device) => {
-    setError("");
     setRestoring(device.device_id);
     try {
       await conditional(() =>
@@ -197,11 +183,9 @@ export function Activation() {
         ),
       );
       toast.ok(t("activation.deviceRestored"));
-      await load();
+      await roster.refetch();
     } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
+      toast.error(apiMessage(caught));
     } finally {
       setRestoring("");
     }
@@ -276,13 +260,12 @@ export function Activation() {
               >
                 {t("action.issue")}
               </Button>
-              <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
             </div>
           }
         >
-          <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={failureOf(roster)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           {/* The trap the runbook has a callout for and this screen said nothing about: a code is
               issued per named device, but the store *machine* redeems exactly one — a second code
               presented to an activated box is refused (ADR-0118). Said here, next to the roster,
