@@ -1396,6 +1396,9 @@ them apart.
 - V9 · Phone width clips eight tables with no horizontal scroll container.
 - V14 · Technical details (ULIDs, ETags) open inline and push the row down.
 - V16 · Hub KPIs are plain paragraphs; nothing is a number at a glance.
+  *(Closed: `KpiTile` on the hub in PR-3, and **PR-8** finished it — `FormSection` and
+  `StickyActions` landed with Store settings as their caller, which is exactly where PR-4's
+  correction sent them.)*
 - V18 · `DataTable` has one density; no compact rows, no card mode below `md`.
 - V19 · Row actions are five inline buttons; no kebab.
 - V20 · Date and time inputs are bare `<input type="date">` with no timezone hint.
@@ -1414,7 +1417,9 @@ them apart.
   instead of one `PublishBar`; no CSV import for items; no cross-entity search.
   *(F13 closed in PR-5; **F11 closed in PR-8** — `POST /admin/config/preview` compiles any node the
   cloud's node table knows and the bar shows the diff before the write. **F15 closed in PR-8** — the
-  item master imports over ADR-0075's dry-run-first rail, round-tripping the export's own columns.)*
+  item master imports over ADR-0075's dry-run-first rail, round-tripping the export's own columns.
+  **F16 closed in PR-8** — the palette searches shops and items by name; the employee roster is
+  excluded as a T1 call, so people are still found on the People screen behind its own permission.)*
 
 ## 4w.2 The plan — eight PRs, in dependency order
 

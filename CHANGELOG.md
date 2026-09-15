@@ -58,6 +58,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The command palette finds the tenant's things, not only its screens** (Wave 4 PR-8, finding
+  F16). Cmd/Ctrl-K now also searches **shops** and **items** by name inside the working tenant.
+  Choosing a shop sets it as the working store *before* opening its hub, so the hub answers about the
+  shop that was asked for rather than whichever was open before; choosing an item opens the catalogue
+  with that name already in its search box, because the console has no route to a single item and a
+  filter beats a link nothing serves. The query is debounced, a stale answer is dropped, and a
+  one-letter query asks the server nothing.
+  - **The employee roster is not searched, deliberately.** A name in a roster is personal data, and a
+    global search box is the one place in the console where it would be typed casually and read by
+    whoever is standing there. People are found on the People screen, behind its own permission and
+    its own audit trail.
+
+- **A long settings form is grouped, and its publish button stays reachable** (Wave 4 PR-8, V16).
+  The kit gained `FormSection` (a labelled group of fields inside one card — not a card each, because
+  the groups cannot be saved separately: one publish writes the whole node) and `StickyActions` (the
+  write control pinned to the bottom of its own card). Store settings is their caller: fifteen
+  controls are now five named groups, and **Publish** no longer sits below the fold, where a change
+  made at the top is easy to leave unpublished.
+
 - **The item master imports from a spreadsheet, dry run first** (Wave 4 PR-8, finding F15,
   [ADR-0075](docs/adr/0075-media-and-file-rail.md)). The console could export the catalogue's items to
   CSV and had no way to bring them back: renaming two hundred items meant two hundred trips through a
