@@ -654,6 +654,10 @@ where
             get(admin_config_effective::<S, R, K, C, A, T, W>),
         )
         .route(
+            "/admin/stores/{store_id}/config/nodes",
+            get(admin_config_nodes::<S, R, K, C, A, T, W>),
+        )
+        .route(
             "/admin/stores/{store_id}/config/versions",
             get(admin_config_versions::<S, R, K, C, A, T, W>),
         )
@@ -4068,6 +4072,27 @@ where
     }
 }
 
+/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-store-groups-and-batch-publish.md) §7.
+///
+/// One table, read by both publish paths. The batch path had these rules from the day store groups
+/// landed; the single-store path did not, so the same menu that a batch would *skip* for want of a
+/// tax table published happily from the Menus screen and produced a shop that boots, syncs, shows
+/// the menu, takes the order, and raises `TaxRateNotConfigured` at the payment screen (finding
+/// **F7**). Two paths with two answers is the bug; one table is the fix.
+///
+/// §7 seeds it with exactly the rules below and says the rest are added as nodes acquire
+/// dependencies. [`BatchNode::prerequisites`] explains the four candidates that were examined and
+/// deliberately not adopted.
+const NODE_PREREQUISITES: &[(&str, &[&str])] = &[("menu", &["tax", "locale"])];
+
+/// What `node` must already be published before it can be, or an empty slice.
+fn prerequisites_for(node: &str) -> &'static [&'static str] {
+    NODE_PREREQUISITES
+        .iter()
+        .find(|(key, _)| *key == node)
+        .map_or(&[], |(_, needs)| *needs)
+}
+
 /// The `menu` node (and the `layout` node it moves with): a compiled price book (ADR-0066).
 ///
 /// The one node with prerequisites. A menu published to a store whose tree has no `tax` produces a
@@ -4098,7 +4123,7 @@ where
     }
 
     fn prerequisites(&self) -> &'static [&'static str] {
-        &["tax", "locale"]
+        prerequisites_for(self.key())
     }
 
     fn plan<'a>(
@@ -14883,7 +14908,11 @@ where
             tracing::error!("could not read OS entropy to mint a config version id");
             return Err(service_unavailable("configuration"));
         };
-        let id = match tree.publish(level, layer, version_id) {
+        // The keys this publish set, recorded on the version so the console can say which node is
+        // stale rather than only which tree is (F6).
+        let node_keys: Vec<String> = nodes.iter().map(|(key, _)| key.clone()).collect();
+        check_prerequisites(tree.current_effective(), &node_keys)?;
+        let id = match tree.publish(level, layer, version_id, node_keys) {
             Ok(id) => id,
             Err(ConfigError::Invalid(violations)) => {
                 return Err(unprocessable_violations(&violations));
@@ -14907,6 +14936,48 @@ where
         );
     }
     Err(version_mismatch())
+}
+
+/// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../docs/adr/0122-store-groups-and-batch-publish.md) §7, finding **F7**).
+///
+/// Checked against the **effective** document — every layer merged — because that is what the store
+/// receives: a `tax` node inherited from the tenant layer satisfies a menu's prerequisite exactly as
+/// a store-level one does, and refusing it would be refusing a correctly configured shop.
+///
+/// A publish that writes its own prerequisite in the same call satisfies it: the four nodes a wizard
+/// writes in one go should not have to be four calls in a particular order to get past a rule meant
+/// to stop a *missing* node, not a simultaneous one.
+///
+/// The refusal names the node and what it is waiting for, because "the configuration is invalid" is
+/// the message that sent the operator to the logs.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
+)]
+fn check_prerequisites(
+    effective_before: Option<&serde_json::Value>,
+    publishing: &[String],
+) -> Result<(), Response> {
+    let held = |key: &str| {
+        effective_before
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|map| map.get(key).is_some_and(|value| !value.is_null()))
+    };
+    for node in publishing {
+        for need in prerequisites_for(node) {
+            if held(need) || publishing.iter().any(|other| other == need) {
+                continue;
+            }
+            return Err(api_error(
+                ErrorStatus::Unprocessable,
+                format!(
+                    "`{node}` cannot be published to this store until `{need}` is: \
+                     publish `{need}` first"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Sets `nodes` on the layer at `level`, preserving every other key.
@@ -14965,7 +15036,14 @@ where
         tracing::error!("could not read OS entropy to mint a config version id");
         return Err(service_unavailable("configuration"));
     };
-    match tree.publish(level, layer, version_id) {
+    // A typed layer names no single node, so the version records the layer's own top-level keys:
+    // that is what the operator replaced, and it is the best answer available without asking them
+    // to annotate their own JSON.
+    let node_keys: Vec<String> = layer
+        .as_object()
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    match tree.publish(level, layer, version_id, node_keys) {
         Ok(id) => match config_trees
             .save(tenant_id, store_id, &tree.state(), loaded.version.as_ref())
             .await
@@ -23861,6 +23939,38 @@ struct ConfigVersionView {
     current: bool,
 }
 
+/// One node of a store's published configuration, as the console lists it (finding **F6**).
+///
+/// The console's question has always been per node — "is the menu this store is running the menu I
+/// last edited?" — and until now the only answer available was per tree: one version id covering
+/// thirteen nodes, so publishing a tax change made the menu look freshly published too. Every
+/// version now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigNodeView {
+    /// The node key — `locale`, `tax`, `menu`, `permissions`, and so on.
+    node: String,
+    /// The version that last published this node, or `null` when no recorded version names it.
+    ///
+    /// `null` is *not* "never published": the node is in the effective document, so it was. It means
+    /// the version that put it there predates this field, or was a whole-layer replace that named
+    /// nothing. The console says "published, when is not recorded" rather than inventing a date.
+    version_id: Option<String>,
+    /// When that version was published (from its ULID's own timestamp, Unix ms), or `null` with it.
+    at_ms: Option<i64>,
+}
+
+/// The per-node publish state of one store's configuration.
+///
+/// `current_version_id` is the tree's newest version, which is what a store *should* be holding. The
+/// version it *is* holding is on the fleet read (`GET /admin/fleet/stores/{id}`), which every screen
+/// that asks this question has already loaded — so it is not repeated here, and the comparison
+/// happens where both numbers already are.
+#[derive(Debug, Clone, serde::Serialize)]
+struct ConfigNodesView {
+    current_version_id: Option<String>,
+    nodes: Vec<ConfigNodeView>,
+}
+
 /// A super-admin rolls a store's config back to a past version.
 #[derive(Debug, Clone, Deserialize)]
 struct RollbackConfigRequest {
@@ -23871,6 +23981,89 @@ struct RollbackConfigRequest {
 /// Lists a store's published config versions newest-first (super-admin only). The version history is
 /// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
 /// timestamp column is needed. `404` if the store has no tree yet.
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config/nodes",
+    params(
+        ("store_id" = String, Path, description = "The store whose published nodes to list (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "The tree's current version id and, per node of the effective \
+                                      document, the version that last published it and when. A \
+                                      node whose version is null is published but by a version \
+                                      that does not record which nodes it wrote"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "This store has never published a configuration", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
+/// `GET /admin/stores/{store_id}/config/nodes` — which node was published when (finding **F6**).
+///
+/// Read-only and `console.data.read`, the same as the version history beside it. The effective
+/// document is not returned, only its node **keys**, so this route carries no configuration values
+/// at all and needs none of [`strip_tree_version`]'s redaction: a caller learns that a store has a
+/// `permissions` node and when it was published, never what is in it.
+async fn admin_config_nodes<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    Query(query): Query<ConfigTenantQuery>,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    T: ConfigTreeStore + Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    if let Err(denied) =
+        require_permission(&app.admin, &app.clock, &headers, ConsolePermission::Read).await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) =
+        match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
+            Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+            Err(refusal) => return refusal,
+        };
+    match app
+        .config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    {
+        Ok(Some(state)) => {
+            let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
+            let nodes = tree
+                .published_nodes()
+                .into_iter()
+                .map(|(node, version)| ConfigNodeView {
+                    node,
+                    version_id: version.map(|id| id.to_string()),
+                    at_ms: version
+                        .map(|id| i64::try_from(id.as_ulid().timestamp_ms()).unwrap_or(i64::MAX)),
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                Json(ConfigNodesView {
+                    current_version_id: tree.current_version().map(|id| id.to_string()),
+                    nodes,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => no_published_configuration(),
+        Err(error) => config_store_error_response(&error),
+    }
+}
+
 async fn admin_config_versions<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
@@ -25672,10 +25865,62 @@ mod preview_diff_tests {
             layers: [empty(), empty(), store_layer.clone(), empty()],
             history: vec![PublishedVersion {
                 id: version("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+                nodes: store_layer
+                    .as_object()
+                    .map(|map| map.keys().cloned().collect())
+                    .unwrap_or_default(),
                 effective: store_layer,
             }],
             k: 8,
         }
+    }
+
+    /// The node keys a publish names, as `publish_config_nodes_with` computes them.
+    fn publishing(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_menu_is_refused_to_a_store_with_no_tax_table_and_the_refusal_says_which() {
+        // Finding F7: the batch path skipped this store; the single-store path published happily
+        // and produced a shop that raises TaxRateNotConfigured at the payment screen.
+        let before = json!({"locale": {"currency": "VND"}});
+        let refusal = super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+            .expect_err("a menu with no tax table is refused");
+        assert_eq!(
+            refusal.status(),
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[test]
+    fn a_menu_publishes_when_the_prerequisites_are_inherited_rather_than_store_level() {
+        // The check reads the effective document, so a tax node from the tenant layer counts. It
+        // has to: refusing it would be refusing a store that is correctly configured.
+        let before = json!({"locale": {"currency": "VND"}, "tax": {"rates": []}});
+        super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+            .expect("the inherited nodes satisfy the rule");
+    }
+
+    #[test]
+    fn a_publish_that_writes_its_own_prerequisite_in_the_same_call_is_not_refused() {
+        super::check_prerequisites(None, &publishing(&["menu", "tax", "locale"]))
+            .expect("one call writing all three is one call, not three out of order");
+    }
+
+    #[test]
+    fn a_node_with_no_prerequisites_is_never_refused_even_on_an_empty_store() {
+        super::check_prerequisites(None, &publishing(&["locale"])).expect("locale needs nothing");
+        super::check_prerequisites(None, &publishing(&["tax"])).expect("nor does tax");
+    }
+
+    #[test]
+    fn a_null_prerequisite_counts_as_absent() {
+        // A node explicitly set to null is a node the store does not have; treating the key's
+        // presence as enough would pass a menu whose tax table is the word "null".
+        let before = json!({"locale": {"currency": "VND"}, "tax": Value::Null});
+        super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+            .expect_err("a null tax node is no tax node");
     }
 
     #[test]
