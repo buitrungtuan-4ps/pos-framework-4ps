@@ -366,6 +366,29 @@ impl<V: ConfigValidator> ConfigTree<V> {
         self.history.last().map(|version| &version.effective)
     }
 
+    /// The four layers merged as they stand — what a store would receive if it synced now.
+    ///
+    /// The difference from [`current_effective`](Self::current_effective) is where it reads from:
+    /// that one returns the document the last *publish* recorded, this one composes the layers
+    /// themselves. On a tree built only by publishes the two agree, because every publish records
+    /// exactly this merge. They part company on a tree whose layers were set some other way — a
+    /// restore flattens into the base layer, and a store seeded by a migration or a fixture has
+    /// layers and no history at all — and there the layers are the honest answer: the sync path
+    /// composes them, so they are what the shop gets.
+    ///
+    /// Used by the publish-time prerequisite check
+    /// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7), which is
+    /// asking what the store *holds*, not what it was last told.
+    #[must_use]
+    pub fn effective(&self) -> Value {
+        merge_layers(&[
+            &self.layers[0],
+            &self.layers[1],
+            &self.layers[2],
+            &self.layers[3],
+        ])
+    }
+
     /// Decides what to send a store that reports holding `held` (or `None` if it has never synced).
     ///
     /// A snapshot when the store has nothing, holds an unknown version, or is more than *K* versions

@@ -14911,7 +14911,7 @@ where
         // The keys this publish set, recorded on the version so the console can say which node is
         // stale rather than only which tree is (F6).
         let node_keys: Vec<String> = nodes.iter().map(|(key, _)| key.clone()).collect();
-        check_prerequisites(tree.current_effective(), &node_keys)?;
+        check_prerequisites(&tree.effective(), &node_keys)?;
         let id = match tree.publish(level, layer, version_id, node_keys) {
             Ok(id) => id,
             Err(ConfigError::Invalid(violations)) => {
@@ -14940,9 +14940,17 @@ where
 
 /// Refuses a publish whose node needs one the store has not got yet ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**).
 ///
-/// Checked against the **effective** document — every layer merged — because that is what the store
-/// receives: a `tax` node inherited from the tenant layer satisfies a menu's prerequisite exactly as
-/// a store-level one does, and refusing it would be refusing a correctly configured shop.
+/// Checked against the **effective** document — every layer merged as they stand — because that is
+/// what the store receives: a `tax` node inherited from the tenant layer satisfies a menu's
+/// prerequisite exactly as a store-level one does, and refusing it would be refusing a correctly
+/// configured shop. The layers rather than the last published version's document, because the
+/// question is what the store *holds*: a tree whose layers were set by a restore or a fixture has
+/// the nodes even where no history entry names them, and the sync path composes those same layers.
+///
+/// The batch path asks the same question one notch narrower — [`publish_batch_member`] reads the
+/// store's own layer, so a cohort member inheriting `tax` from its tenant is skipped with a reason
+/// rather than published to. That is the stricter of the two and it runs first, so a batch never
+/// reaches a refusal here; the one table both read is what finding **F7** was about.
 ///
 /// A publish that writes its own prerequisite in the same call satisfies it: the four nodes a wizard
 /// writes in one go should not have to be four calls in a particular order to get past a rule meant
@@ -14955,12 +14963,12 @@ where
     reason = "the Err is an axum Response by design — it *is* the refusal the caller returns"
 )]
 fn check_prerequisites(
-    effective_before: Option<&serde_json::Value>,
+    effective_before: &serde_json::Value,
     publishing: &[String],
 ) -> Result<(), Response> {
     let held = |key: &str| {
         effective_before
-            .and_then(serde_json::Value::as_object)
+            .as_object()
             .is_some_and(|map| map.get(key).is_some_and(|value| !value.is_null()))
     };
     for node in publishing {
@@ -25885,7 +25893,7 @@ mod preview_diff_tests {
         // Finding F7: the batch path skipped this store; the single-store path published happily
         // and produced a shop that raises TaxRateNotConfigured at the payment screen.
         let before = json!({"locale": {"currency": "VND"}});
-        let refusal = super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+        let refusal = super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect_err("a menu with no tax table is refused");
         assert_eq!(
             refusal.status(),
@@ -25898,20 +25906,21 @@ mod preview_diff_tests {
         // The check reads the effective document, so a tax node from the tenant layer counts. It
         // has to: refusing it would be refusing a store that is correctly configured.
         let before = json!({"locale": {"currency": "VND"}, "tax": {"rates": []}});
-        super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+        super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect("the inherited nodes satisfy the rule");
     }
 
     #[test]
     fn a_publish_that_writes_its_own_prerequisite_in_the_same_call_is_not_refused() {
-        super::check_prerequisites(None, &publishing(&["menu", "tax", "locale"]))
+        super::check_prerequisites(&json!({}), &publishing(&["menu", "tax", "locale"]))
             .expect("one call writing all three is one call, not three out of order");
     }
 
     #[test]
     fn a_node_with_no_prerequisites_is_never_refused_even_on_an_empty_store() {
-        super::check_prerequisites(None, &publishing(&["locale"])).expect("locale needs nothing");
-        super::check_prerequisites(None, &publishing(&["tax"])).expect("nor does tax");
+        super::check_prerequisites(&json!({}), &publishing(&["locale"]))
+            .expect("locale needs nothing");
+        super::check_prerequisites(&json!({}), &publishing(&["tax"])).expect("nor does tax");
     }
 
     #[test]
@@ -25919,7 +25928,7 @@ mod preview_diff_tests {
         // A node explicitly set to null is a node the store does not have; treating the key's
         // presence as enough would pass a menu whose tax table is the word "null".
         let before = json!({"locale": {"currency": "VND"}, "tax": Value::Null});
-        super::check_prerequisites(Some(&before), &publishing(&["menu"]))
+        super::check_prerequisites(&before, &publishing(&["menu"]))
             .expect_err("a null tax node is no tax node");
     }
 
