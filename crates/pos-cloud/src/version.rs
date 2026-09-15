@@ -70,13 +70,45 @@ pub struct Versioned<T> {
     /// The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header
     /// a single-resource read would carry, so a client never reformats it.
     pub etag: Version,
+    /// When the row was last written, in Unix milliseconds — `None` where the adapter does not
+    /// project it.
+    ///
+    /// Every one of these tables has carried an `updated_at` since it was created; not one read
+    /// ever returned it, so the console had no way to tell an operator whether what is on their
+    /// screen is newer than what the shop is running. The publish bar asked that question and had
+    /// to answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).
+    ///
+    /// `Option` and skipped when absent, so this is additive twice over: the 80-odd existing
+    /// [`new`](Self::new) call sites compile untouched, and a read that does not project the
+    /// column serialises exactly the bytes it did before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at_ms: Option<i64>,
 }
 
 impl<T> Versioned<T> {
-    /// Pairs a record with its version.
+    /// Pairs a record with its version, saying nothing about when it was last written.
     #[must_use]
     pub fn new(record: T, etag: Version) -> Self {
-        Self { record, etag }
+        Self {
+            record,
+            etag,
+            updated_at_ms: None,
+        }
+    }
+
+    /// Pairs a record with its version and the instant it was last written.
+    ///
+    /// What a read uses once its adapter projects `updated_at`. The distinction from
+    /// [`new`](Self::new) is deliberate: "this row was written at T" and "when this row was
+    /// written is not recorded" are different answers, and a default of `0` or `now()` would
+    /// turn the second into a convincing lie about the first.
+    #[must_use]
+    pub fn edited(record: T, etag: Version, updated_at_ms: i64) -> Self {
+        Self {
+            record,
+            etag,
+            updated_at_ms: Some(updated_at_ms),
+        }
     }
 }
 

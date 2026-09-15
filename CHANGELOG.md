@@ -124,11 +124,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **A reason code says when it was last edited, and the answer survives a reload (Wave 4, F13).**
+  Every one of these tables has carried an `updated_at` since the day it was created, and not one
+  read ever returned it. So the publish bar — whose whole job is "is what I am looking at newer than
+  what the shop is running?" — had to approximate from a signal that only lived as long as the tab:
+  an operator who edited yesterday and came back today was told the store was up to date. The
+  reason-code read now projects the column, and the bar compares the newest edit across the list
+  against the publish. A read from a cloud that does not send it still says "not recorded" rather
+  than inventing a date.
+
 - **The store's operational nodes say whether the shop already has them (Wave 4 · PR-6b, F13/D5).**
   Reason codes, Stations and Floor take the two edits that touch the same lines in one pass: the
-  read onto `createAdminResource`, and the publish control onto the shared `PublishBar`. As on Tax
-  rates, "edited at" is within-session — none of these records carries an `updated_at`, and
-  inventing one would be a claim the screen cannot see.
+  read onto `createAdminResource`, and the publish control onto the shared `PublishBar`. Reason
+  codes answer "edited at" from the row itself (see the entry above); on Stations and Floor it is
+  still within-session, because those reads do not yet project their `updated_at`.
 
   Stations and Floor had one `error` signal doing two jobs: the read's refusal and the form's own
   ("a station needs a name", "seats must be a number"). Those are different failures with different

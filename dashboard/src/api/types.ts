@@ -570,6 +570,15 @@ export interface ReasonCode {
   readonly applies_to: ReasonAction[];
   readonly active: boolean;
   readonly etag: ETag;
+  /**
+   * When this entry was last written, in Unix milliseconds.
+   *
+   * Optional because a read from a cloud that predates the column reaching the wire omits it, and
+   * the honest answer there is "not recorded" rather than a date the server did not send. The
+   * publish bar takes the newest across the list to answer "is what I am looking at newer than
+   * what the shop is running?", which before this it could only guess at within the session.
+   */
+  readonly updated_at_ms?: number;
 }
 
 /**
@@ -591,7 +600,7 @@ export interface ReasonCodePublishResult {
  * The authoring fields of a reason-code create/update — a `ReasonCode` without its server-minted id
  * or the version it was read at (a write sends that as `If-Match`, not in the body).
  */
-export type ReasonCodeInput = Omit<ReasonCode, "id" | "etag">;
+export type ReasonCodeInput = Omit<ReasonCode, "id" | "etag" | "updated_at_ms">;
 
 /** One ingredient held in stock (`PublishedIngredient`) — id, display name, and the unit it is counted in. */
 export interface Ingredient {

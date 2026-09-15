@@ -24,7 +24,7 @@ import { apiMessage, withStaleReload } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
 import { describePublish } from "../lib/publish-copy";
-import { usePublishedNodes } from "../lib/published";
+import { lastEditedMs, usePublishedNodes } from "../lib/published";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -66,10 +66,11 @@ export function ReasonCodes() {
   // The tenant's authored list. Tenant-scoped, so the read never runs with an empty context (F0).
   const codes = createAdminResource((tenant) => api.listReasonCodes(tenant), { scope: "tenant" });
   const rows = () => codes.value();
-  // What a save last wrote, so the publish bar can say whether the store already has it. Within the
-  // session only: a `ReasonCode` carries no `updated_at`, and inventing one would be a claim the
-  // screen cannot see (the same call PR-5b made on Tax rates).
-  const [savedAtMs, setSavedAtMs] = createSignal<number | null>(null);
+  // When this list was last edited, from the rows themselves — the newest `updated_at_ms` across
+  // the collection the node is compiled from. It survives a reload, which the within-session
+  // signal this replaces did not: an operator who edited yesterday and came back today was told
+  // the store was up to date.
+  const lastEdited = () => lastEditedMs(codes.value());
   const published = usePublishedNodes();
 
   // Three independent lifecycles, so publishing does not disable the editor and retiring one row
@@ -156,7 +157,6 @@ export function ReasonCodes() {
         if (saved) {
           toast.ok(t("reasonCodes.saved"));
           void codes.refetch();
-          setSavedAtMs(Date.now());
         }
       });
   };
@@ -175,7 +175,6 @@ export function ReasonCodes() {
         }),
       );
       toast.ok(standing ? t("reasonCodes.restored") : t("reasonCodes.retired"));
-      setSavedAtMs(Date.now());
       await codes.refetch();
     } catch (caught) {
       toast.error(apiMessage(caught));
@@ -193,7 +192,6 @@ export function ReasonCodes() {
       if (deleted) {
         toast.ok(t("reasonCodes.deleted"));
         void codes.refetch();
-          setSavedAtMs(Date.now());
       } else {
         // The confirm stays open carrying the refusal; a page banner would say it twice.
         toast.error(deletion.error());
@@ -325,7 +323,7 @@ export function ReasonCodes() {
             <PublishBar
               label={t("reasonCodes.publishTo", { store: storeName() })}
               publishedAtMs={published.publishedAtMs("reason_codes")}
-              editedAtMs={savedAtMs()}
+              editedAtMs={lastEdited()}
               describe={describePublish}
               publishLabel={t("reasonCodes.publish")}
               busy={publishing.saving()}
