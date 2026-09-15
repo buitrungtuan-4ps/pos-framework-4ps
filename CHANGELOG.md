@@ -18,6 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **ReorderList buttons carry focus-visible outlines.** Added `focus-visible:outline-2 focus-visible:outline-accent rounded-token` to up/down buttons in `dashboard/src/components/kit.tsx` for keyboard focus visibility.
 - **The notification bell and dropdown carry ARIA labels and popup roles.** Added `aria-haspopup="true"` to the NotificationBell trigger and `role="region"` with `aria-label` to the history popup in `dashboard/src/components/Toast.tsx` for screen-reader accessibility.
 - **Combobox active options auto-scroll during keyboard navigation.** `ComboboxField` and
   `MultiComboboxField` now call `scrollIntoView({ block: "nearest" })` on active option updates,
