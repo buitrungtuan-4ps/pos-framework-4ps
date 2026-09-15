@@ -4,7 +4,7 @@
 // `AccountMenu.tsx` for why they were folded in rather than standing beside it. The context inputs persist per browser (state/session.ts) and are a
 // convenience, not an authorisation — the server's session cookie is what gates every call.
 
-import { createEffect, createSignal, For, onMount, type ParentProps, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onMount, type ParentProps, Show } from "solid-js";
 import { A, useLocation, useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
@@ -182,7 +182,7 @@ export function Shell(props: ParentProps) {
           <div class="flex flex-col gap-0.5 p-2">
             <For each={NAV_GROUPS}>
               {(group) => {
-                const items = () => group.items.filter(navItemVisible);
+                const items = createMemo(() => group.items.filter(navItemVisible));
                 const open = () =>
                   groupOpen({
                     key: group.key,

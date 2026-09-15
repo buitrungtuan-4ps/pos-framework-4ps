@@ -2,7 +2,7 @@
 // screens — type to filter, ↑/↓ to move, Enter to jump. Screens only for now; entity search (jump
 // straight to a store, item, or key by name) arrives with the CRUD kit's data layer (F2).
 
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { t } from "../i18n";
@@ -33,7 +33,8 @@ export function CommandPalette() {
   let input: HTMLInputElement | undefined;
   const optionRefs: HTMLButtonElement[] = [];
 
-  const matches = () => {
+  // Memoize search matching to prevent redundant TARGETS.map, t() translations, and array filter calls on every render / key event
+  const matches = createMemo(() => {
     const needle = query().trim().toLowerCase();
     // Each target is resolved against the live context, so jumping from the palette keeps the
     // tenant the operator is working in rather than dropping them at a bare path.
@@ -43,7 +44,7 @@ export function CommandPalette() {
       icon: specOf(id).icon,
     }));
     return needle ? all.filter((item) => item.label.toLowerCase().includes(needle)) : all;
-  };
+  });
 
   const close = () => {
     setOpen(false);
