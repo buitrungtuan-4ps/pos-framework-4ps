@@ -30,11 +30,11 @@ import type {
   Json,
   Menu,
   QrGuardrails,
-  Store,
   StoreGroup,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
+import { createAdminResource, failureOf } from "../lib/resource";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import {
@@ -208,12 +208,25 @@ async function copyArguments(
 }
 
 export function StoreGroups() {
-  const [rows, setRows] = createSignal<StoreGroup[] | null>(null);
-  const [stores, setStores] = createSignal<Store[]>([]);
+  // The cohorts and the store registry as one state: a group is a list of store ids, and a table
+  // that got the groups but not the registry names its members in ULIDs.
+  const cohorts = createAdminResource(
+    async (tenant) => {
+      const [groups, stores] = await Promise.all([
+        api.listStoreGroups(tenant),
+        api.listStores(tenant),
+      ]);
+      return { groups, stores };
+    },
+    { scope: "tenant" },
+  );
+  const rows = () => cohorts.value()?.groups ?? null;
+  const stores = () => cohorts.value()?.stores ?? [];
+  // The publish pickers' options. A separate, best-effort lifecycle: a failure here costs the
+  // operator a picker, not the screen, so it degrades to an empty list rather than a banner.
   const [menus, setMenus] = createSignal<Menu[]>([]);
   const [capabilityKeys, setCapabilityKeys] = createSignal<string[]>([]);
   const [error, setError] = createSignal("");
-  const [loading, setLoading] = createSignal(false);
 
   // Four independent lifecycles (ADR-0121 §3), so editing a cohort's name does not grey out the
   // publish, and one slow publish does not disable the membership editor.
@@ -233,24 +246,6 @@ export function StoreGroups() {
   const [report, setReport] = createSignal<ConfigBatchReport | null>(null);
   const [batches, setBatches] = createSignal<ConfigBatchReport[]>([]);
 
-  const load = async () => {
-    setError("");
-    setLoading(true);
-    try {
-      const [groups, storeRows] = await Promise.all([
-        api.listStoreGroups(tenantId()),
-        api.listStores(tenantId()),
-      ]);
-      setRows(groups);
-      setStores(storeRows);
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // The menu list and the capability catalogue are only needed once the publish panel is open, and
   // a failure to load either is not a reason to hide the cohorts — so they load quietly beside the
@@ -267,12 +262,9 @@ export function StoreGroups() {
   };
 
   const conditional = <T,>(write: () => Promise<T>) =>
-    withStaleReload(write, load, t("storeGroups.stale"));
+    withStaleReload(write, () => cohorts.refetch(), t("storeGroups.stale"));
 
-  onScopedContext("tenant", () => {
-    void load();
-    loadPublishOptions();
-  });
+  onScopedContext("tenant", loadPublishOptions);
 
   const storeName = (id: string) => stores().find((row) => row.store_id === id)?.name ?? id;
 
@@ -319,7 +311,7 @@ export function StoreGroups() {
       .then((saved) => {
         if (saved) {
           toast.ok(t("storeGroups.saved"));
-          void load();
+          void cohorts.refetch();
         }
       });
   };
@@ -338,7 +330,7 @@ export function StoreGroups() {
       .then((saved) => {
         if (saved) {
           toast.ok(t("storeGroups.membersSaved", { count: String(members().length) }));
-          void load();
+          void cohorts.refetch();
         }
       });
   };
@@ -359,7 +351,7 @@ export function StoreGroups() {
       .then((saved) => {
         if (saved) {
           toast.ok(active ? t("storeGroups.restored") : t("storeGroups.archived"));
-          void load();
+          void cohorts.refetch();
         } else {
           setError(editor.error());
           toast.error(editor.error());
@@ -535,13 +527,14 @@ export function StoreGroups() {
           actions={
             <div class="flex gap-2">
               <Button onClick={openCreate}>{t("storeGroups.new")}</Button>
-              <Button variant="secondary" disabled={loading()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
             </div>
           }
         >
           <p class="mb-3 text-sm text-ink-muted">{t("storeGroups.listHint")}</p>
+          {/* Two failures, two banners: the read's refusal is not the operator's to correct. */}
+          <Show when={failureOf(cohorts)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={rows()}>
             {(loaded) => (

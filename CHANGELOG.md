@@ -124,6 +124,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
   the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
   not refused; an inherited prerequisite counts, because the check reads the effective document.
+- **Six operational screens re-read what they change (Wave 4 · PR-6c-2, D5).** Audit, Fleet,
+  Layout, Inventory, Campaigns and Store groups onto `createAdminResource`. Inventory adopts
+  `PublishBar`.
+
+  Fleet is the one that was doing real work by hand: a fifteen-second `setInterval` with its own
+  in-flight guard and context check, which is what the helper's `intervalMs` and
+  `revalidateOnFocus` are for. It keeps itself true on the wall-mounted screen an operator opens
+  during an incident, and returning to the tab now costs one request rather than one per switch.
+
+  Three screens had one `error` signal doing two jobs — the read's refusal and the form's own
+  complaints. Those are different failures: "a name is required" is the operator's to correct and
+  "we could not look" is not. The read's refusal moved to `failureOf`; the signal kept the
+  validation it was always also holding.
+
+  Store groups keeps its own publish control rather than adopting the bar. It publishes to a
+  **cohort** — many stores, each with its own publish date — and the bar answers "is this store
+  running what I am looking at?", which is not a question a cohort has one answer to. Campaigns,
+  Config, Store settings and Channels are held back for the same family of reason: Channels alone
+  publishes five distinct nodes from one screen, and what a multi-node publish control should look
+  like is a design question, not a migration.
+
 - **The catalogue's five screens re-read what they change (Wave 4 · PR-6c, D5/F13).** Items, Menus,
   Modifiers, Tax classes and Taxonomy onto `createAdminResource`, and their Refresh buttons go with
   it. Each was reading two to four lists into separate signals; each is now one state, because the

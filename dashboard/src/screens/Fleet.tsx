@@ -4,7 +4,7 @@
 // tenant-scoped (the fleet) plus a fleet-wide health strip; it polls so the answer stays current
 // without a manual refresh.
 
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type {
@@ -12,12 +12,12 @@ import type {
   FleetStore,
   StoreArchive,
   TaskHealthEntry,
-  TaskHealthReport,
 } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatCount, formatRelativeAge } from "../lib/format";
 import { configVerdict, onlineVerdict, type Tone } from "../lib/posture";
-import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import {
@@ -71,10 +71,19 @@ function ageSeconds(atMs: number): number {
 }
 
 export function Fleet() {
-  const [stores, setStores] = createSignal<FleetStore[] | null>(null);
-  const [health, setHealth] = createSignal<TaskHealthReport | null>(null);
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
+  // The fleet and the background-task health as one state, on an interval, revalidated on focus.
+  // This is the screen an operator opens during an incident, so it keeps itself true without being
+  // asked — and the staleness bound means alt-tabbing back costs one request, not one per tab.
+  const fleet = createAdminResource(
+    async (tenant) => {
+      // Independent reads (fleet is tenant-scoped, health is fleet-wide), so fetch them together.
+      const [stores, health] = await Promise.all([api.listFleet(tenant), api.taskHealth()]);
+      return { stores, health };
+    },
+    { scope: "tenant", intervalMs: POLL_MS, revalidateOnFocus: true },
+  );
+  const stores = () => fleet.value()?.stores ?? null;
+  const health = () => fleet.value()?.health ?? null;
   const [selected, setSelected] = createSignal<FleetStore | null>(null);
   // The lease bump (ADR-0108) is the one destructive act on this screen: it supersedes whatever box
   // holds the store's current generation, which stops it taking updates. It therefore asks for the
@@ -181,42 +190,10 @@ export function Fleet() {
     }
   };
 
+  /** A write that failed, said out loud. The *read*'s refusal is `failureOf(fleet)`. */
   const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-    toast.error(message);
+    toast.error(apiMessage(caught));
   };
-
-  const load = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      // The two reads are independent (fleet is tenant-scoped, health is fleet-wide); fetch together.
-      const [loadedStores, loadedHealth] = await Promise.all([
-        api.listFleet(tenantId()),
-        api.taskHealth(),
-      ]);
-      setStores(loadedStores);
-      setHealth(loadedHealth);
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Load on open and whenever the tenant changes (never with an empty context, F0).
-  onScopedContext("tenant", () => void load());
-
-  // Poll while the screen is open, but only once a tenant is chosen — an empty context never fetches.
-  onMount(() => {
-    const handle = setInterval(() => {
-      if (contextReady("tenant") && !busy()) {
-        void load();
-      }
-    }, POLL_MS);
-    onCleanup(() => clearInterval(handle));
-  });
 
   // The hub's posture rules (`lib/posture.ts`), not the raw booleans: a store that has never been
   // installed is "not installed yet", not "offline", and a store nobody has published to is
@@ -320,7 +297,7 @@ export function Fleet() {
       await api.settleHandover(tenantId(), row.store_id, superseded);
       toast.ok(t("fleet.handoverSettledOk"));
       setSettling(null);
-      await load();
+      await fleet.refetch();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -334,7 +311,7 @@ export function Fleet() {
       await api.retireHandover(tenantId(), row.store_id);
       toast.ok(t("fleet.handoverRetiredOk"));
       setRetiring(null);
-      await load();
+      await fleet.refetch();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -355,7 +332,7 @@ export function Fleet() {
       );
       toast.ok(t("fleet.leaseBumped"));
       setBumping(null);
-      await load();
+      await fleet.refetch();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -510,15 +487,12 @@ export function Fleet() {
             </Show>
           </Card>
 
-          <Card
-            title={t("fleet.stores")}
-            actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
-              </Button>
-            }
-          >
-            <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Card title={t("fleet.stores")}>
+            {/* A refusal is its own state, not an empty table: an incident is the worst moment to
+                be told a fleet has no stores when the truth is that the read was refused (D5). */}
+            <Show when={failureOf(fleet)}>
+              {(message) => <Banner tone="danger" message={message()} />}
+            </Show>
             <Show
               when={stores()}
               fallback={<Skeleton label={t("common.loading")} rows={4} />}
