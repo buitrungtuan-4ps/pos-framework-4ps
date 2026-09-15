@@ -4072,26 +4072,12 @@ where
     }
 }
 
-/// What a node needs the store to already hold before it can be published — [ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7.
-///
-/// One table, read by both publish paths. The batch path had these rules from the day store groups
-/// landed; the single-store path did not, so the same menu that a batch would *skip* for want of a
-/// tax table published happily from the Menus screen and produced a shop that boots, syncs, shows
-/// the menu, takes the order, and raises `TaxRateNotConfigured` at the payment screen (finding
-/// **F7**). Two paths with two answers is the bug; one table is the fix.
-///
-/// §7 seeds it with exactly the rules below and says the rest are added as nodes acquire
-/// dependencies. [`BatchNode::prerequisites`] explains the four candidates that were examined and
-/// deliberately not adopted.
-const NODE_PREREQUISITES: &[(&str, &[&str])] = &[("menu", &["tax", "locale"])];
-
-/// What `node` must already be published before it can be, or an empty slice.
-fn prerequisites_for(node: &str) -> &'static [&'static str] {
-    NODE_PREREQUISITES
-        .iter()
-        .find(|(key, _)| *key == node)
-        .map_or(&[], |(_, needs)| *needs)
-}
+// The prerequisite table moved to `config_tree` when releases became its third reader: a release has
+// to apply `tax` before `menu` as well as refuse a `menu` without one, and a table beside any one of
+// its readers is a table the other two can drift from ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §6).
+// [`BatchNode::prerequisites`] explains the four candidate rules that were examined and deliberately
+// not adopted.
+use crate::config_tree::prerequisites_for;
 
 /// The `menu` node (and the `layout` node it moves with): a compiled price book (ADR-0066).
 ///
@@ -17001,6 +16987,9 @@ where
         node_value,
         effective_at_ms: request.effective_at_ms,
         created_by: context.admin.id.clone(),
+        // Authored one node at a time from the Campaigns screen, so it belongs to no release
+        // ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+        release_id: None,
     };
     match state.scheduled.schedule(&publish).await {
         Ok(()) => {

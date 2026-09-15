@@ -95,6 +95,7 @@ pub mod reason_codes;
 pub mod reconcile;
 pub mod registry;
 pub mod relay;
+pub mod releases;
 pub mod retention;
 pub mod scheduling;
 pub mod store_groups;

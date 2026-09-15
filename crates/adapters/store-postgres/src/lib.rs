@@ -27,6 +27,7 @@ mod archives;
 mod audit;
 mod campaigns;
 mod catalog;
+mod config_releases;
 mod config_trees;
 mod devices;
 mod fleet;
@@ -65,6 +66,7 @@ pub use catalog::{
     CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
     ItemOrder, PostgresCatalog,
 };
+pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 pub use config_trees::{
     BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
     StoredRetire, StoredSettle,

@@ -227,6 +227,12 @@ const MIGRATION_0061: &str = include_str!("../migrations/0061_store_groups.sql")
 const MIGRATION_0062: &str = include_str!("../migrations/0062_store_archives.sql");
 const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expiry.sql");
 
+/// Releases: one decision, many writes
+/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)). The table holds the
+/// identity and the roll-up; the writes themselves stay `scheduled_publishes` rows, which gain a
+/// nullable `release_id` so ADR-0077's per-store schedule keeps working unchanged.
+const MIGRATION_0064: &str = include_str!("../migrations/0064_releases.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -538,6 +544,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0063)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0064)
+            .await
             .map_err(unavailable)
     }
 
@@ -799,6 +809,16 @@ impl PostgresStore {
     #[must_use]
     pub fn scheduled_publishes(&self) -> crate::scheduling::PostgresScheduledPublishes {
         crate::scheduling::PostgresScheduledPublishes::new(self.pool.clone())
+    }
+
+    /// The config-release store over this pool
+    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    ///
+    /// Holds the identity and the roll-up only; a release's writes are the `scheduled_publishes` rows
+    /// carrying its id, read through [`Self::scheduled_publishes`].
+    #[must_use]
+    pub fn config_releases(&self) -> crate::config_releases::PostgresConfigReleases {
+        crate::config_releases::PostgresConfigReleases::new(self.pool.clone())
     }
 
     /// Every `(tenant, store)` that has ever recorded an event — the fleet the rollup projector keeps

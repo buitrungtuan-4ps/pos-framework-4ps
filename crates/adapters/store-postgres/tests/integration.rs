@@ -143,7 +143,7 @@ impl EventStoreHarness for StoreHarness {
                  catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
                  employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
                  inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-                 reason_codes, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+                 reason_codes, releases, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
              store_liveness, stores, \
                  subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
@@ -194,7 +194,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_tax_rates, config_trees, device_credentials, device_proposals, devices, \
              employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
              inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-             reason_codes, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
+             reason_codes, releases, role_templates, rollups, scheduled_publishes, station_routing_rules, store_lease, \
              store_liveness, stores, \
              subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
@@ -3603,6 +3603,7 @@ mod scheduled_publishes {
             node_value_json: "{\"campaigns\":[]}",
             effective_at_ms,
             created_by: "admin-1",
+            release_id: None,
         }
     }
 
@@ -7953,6 +7954,277 @@ mod reason_code_timestamps {
             assert!(
                 edited >= written,
                 "the edit restamped the row: {written} then {edited}"
+            );
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A release's pairs: the release id, the report, and the failure a row carries (ADR-0125).
+// ---------------------------------------------------------------------------
+
+mod release_pairs {
+    use store_postgres::NewScheduledPublishRow;
+
+    use super::{TENANT_A, block_on, prepared};
+
+    const STORE: &str = "store-1";
+    const RELEASE: &str = "01RELEASEAAAAAAAAAAAAAAAAA";
+
+    fn pair<'a>(
+        id: &'a str,
+        node_key: &'a str,
+        release_id: Option<&'a str>,
+    ) -> NewScheduledPublishRow<'a> {
+        NewScheduledPublishRow {
+            id,
+            tenant_id: TENANT_A,
+            store_id: STORE,
+            node_key,
+            node_value_json: "{}",
+            effective_at_ms: 1_000,
+            created_by: "admin-1",
+            release_id,
+        }
+    }
+
+    /// The report reads every pair of one release and nothing else, and a row that fails carries
+    /// its reason until it succeeds.
+    ///
+    /// Both halves are what a release's `partial` is *derived* from
+    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §4): a failure
+    /// only the log can see is a release that reports itself as still trying, and a reason that
+    /// outlived its failure is a release that looks broken after it recovered.
+    #[test]
+    fn a_release_reports_its_own_pairs_and_a_failure_clears_when_it_lands() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let scheduled = store.scheduled_publishes();
+
+            scheduled
+                .schedule(&pair("rp-tax", "tax", Some(RELEASE)))
+                .await
+                .expect("tax");
+            scheduled
+                .schedule(&pair("rp-menu", "menu", Some(RELEASE)))
+                .await
+                .expect("menu");
+            // A standalone schedule in the same store and tenant: ADR-0077's shape, which must not
+            // appear in any release's report.
+            scheduled
+                .schedule(&pair("rp-solo", "campaigns", None))
+                .await
+                .expect("solo");
+
+            let report = scheduled
+                .list_for_release(TENANT_A, RELEASE)
+                .await
+                .expect("report");
+            assert_eq!(report.len(), 2, "the standalone row is not in the release");
+            assert!(
+                report
+                    .iter()
+                    .all(|row| row.release_id.as_deref() == Some(RELEASE)),
+                "every reported pair belongs to the release"
+            );
+            // Ordered by store then node, so the grid reads the same on every load.
+            let nodes: Vec<&str> = report.iter().map(|row| row.node_key.as_str()).collect();
+            assert_eq!(nodes, vec!["menu", "tax"]);
+
+            // A failure lands on the row and the row stays pending, to be retried.
+            scheduled
+                .mark_failed("rp-menu", "the store's configuration changed")
+                .await
+                .expect("mark failed");
+            let after_failure = scheduled
+                .list_for_release(TENANT_A, RELEASE)
+                .await
+                .expect("report after failure");
+            let menu = after_failure
+                .iter()
+                .find(|row| row.id == "rp-menu")
+                .expect("the menu pair");
+            assert_eq!(menu.status, "PENDING", "a failure is not terminal");
+            assert!(
+                menu.failure
+                    .as_deref()
+                    .is_some_and(|said| said.contains("configuration changed")),
+                "the reason is on the row: {:?}",
+                menu.failure
+            );
+
+            // The retry succeeds, and the row stops explaining itself.
+            scheduled
+                .mark_applied("rp-menu", "ver-9")
+                .await
+                .expect("apply");
+            let settled = scheduled
+                .list_for_release(TENANT_A, RELEASE)
+                .await
+                .expect("report after apply");
+            let menu = settled
+                .iter()
+                .find(|row| row.id == "rp-menu")
+                .expect("the menu pair");
+            assert_eq!(menu.status, "APPLIED");
+            assert_eq!(
+                menu.failure, None,
+                "a row that recovered must not keep reporting the failure it survived"
+            );
+            assert_eq!(menu.applied_version_id.as_deref(), Some("ver-9"));
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Releases: create, list, read one, the status roll-up, and the in-flight scan (ADR-0125).
+// ---------------------------------------------------------------------------
+
+mod releases {
+    use store_postgres::NewReleaseRow;
+
+    use super::{TENANT_A, TENANT_B, block_on, prepared};
+
+    const WALL: &str = "01RELWALLAAAAAAAAAAAAAAAAA";
+    const INSTANT: &str = "01RELINSTANTAAAAAAAAAAAAAA";
+
+    fn wall_clock<'a>(id: &'a str, tenant_id: &'a str, name: &'a str) -> NewReleaseRow<'a> {
+        NewReleaseRow {
+            id,
+            tenant_id,
+            name,
+            status: "DRAFT",
+            target_group_id: Some("01GROUPAAAAAAAAAAAAAAAAAAA"),
+            wall_clock_date: Some("2027-02-08"),
+            wall_clock_time: Some("04:00"),
+            instant_at_ms: None,
+            created_by: "admin-1",
+        }
+    }
+
+    fn instant<'a>(id: &'a str, tenant_id: &'a str, name: &'a str) -> NewReleaseRow<'a> {
+        NewReleaseRow {
+            id,
+            tenant_id,
+            name,
+            status: "DRAFT",
+            target_group_id: None,
+            wall_clock_date: None,
+            wall_clock_time: None,
+            instant_at_ms: Some(1_800_000_000_000),
+            created_by: "admin-1",
+        }
+    }
+
+    /// The two kinds of moment survive a round trip and stay distinguishable, the roll-up moves, and
+    /// neither the tenant-scoped reads nor the fleet-wide in-flight scan mixes tenants up.
+    ///
+    /// The two kinds matter because only one of them is safe at a store whose timezone nobody
+    /// recorded ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §2): a
+    /// wall-clock release is refused there by name, an instant release is not. If the columns came
+    /// back indistinguishable the refusal could not be made.
+    #[test]
+    fn the_two_kinds_of_moment_survive_and_the_rollup_moves() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let releases = store.config_releases();
+
+            releases
+                .create(&wall_clock(WALL, TENANT_A, "Tết 2027"))
+                .await
+                .expect("wall clock");
+            releases
+                .create(&instant(INSTANT, TENANT_A, "Price fix"))
+                .await
+                .expect("instant");
+            // Another tenant's release, which must not appear in tenant A's list.
+            releases
+                .create(&instant(
+                    "01RELOTHERAAAAAAAAAAAAAAAA",
+                    TENANT_B,
+                    "Someone else's",
+                ))
+                .await
+                .expect("other tenant");
+
+            let listed = releases.list_for_tenant(TENANT_A).await.expect("list");
+            assert_eq!(listed.len(), 2, "the other tenant's release is not listed");
+
+            let wall = releases
+                .fetch_one(TENANT_A, WALL)
+                .await
+                .expect("read")
+                .expect("the wall-clock release");
+            assert_eq!(
+                wall.name, "Tết 2027",
+                "the operator's name comes back as typed"
+            );
+            assert_eq!(wall.wall_clock_date.as_deref(), Some("2027-02-08"));
+            assert_eq!(wall.wall_clock_time.as_deref(), Some("04:00"));
+            assert_eq!(
+                wall.instant_at_ms, None,
+                "a wall-clock release has no single instant: its instants are per store"
+            );
+            assert_eq!(
+                wall.target_group_id.as_deref(),
+                Some("01GROUPAAAAAAAAAAAAAAAAAAA"),
+                "the cohort it was aimed at is recorded for the report"
+            );
+
+            let moment = releases
+                .fetch_one(TENANT_A, INSTANT)
+                .await
+                .expect("read")
+                .expect("the instant release");
+            assert_eq!(moment.instant_at_ms, Some(1_800_000_000_000));
+            assert_eq!(
+                moment.wall_clock_date, None,
+                "an instant release carries no local date to resolve"
+            );
+
+            // Nothing is in flight while both are drafts — a draft fires nothing.
+            assert!(
+                releases.in_flight().await.expect("in flight").is_empty(),
+                "a draft is not in flight"
+            );
+
+            assert!(
+                releases
+                    .set_status(TENANT_A, WALL, "SCHEDULED")
+                    .await
+                    .expect("schedule it")
+            );
+            let in_flight = releases.in_flight().await.expect("in flight");
+            assert_eq!(in_flight.len(), 1);
+            assert_eq!(in_flight.first().expect("row").id, WALL);
+
+            // A terminal status leaves the in-flight scan again.
+            assert!(
+                releases
+                    .set_status(TENANT_A, WALL, "PARTIAL")
+                    .await
+                    .expect("settle it")
+            );
+            assert!(
+                releases.in_flight().await.expect("in flight").is_empty(),
+                "a settled release is no longer in flight"
+            );
+
+            // A release of another tenant cannot be moved through this tenant's handle.
+            assert!(
+                !releases
+                    .set_status(TENANT_A, "01RELOTHERAAAAAAAAAAAAAAAA", "SCHEDULED")
+                    .await
+                    .expect("cross-tenant write"),
+                "the write names the tenant, so it changes nothing"
+            );
+            assert!(
+                releases
+                    .fetch_one(TENANT_A, "01RELOTHERAAAAAAAAAAAAAAAA")
+                    .await
+                    .expect("cross-tenant read")
+                    .is_none(),
+                "and the read cannot see it either"
             );
         });
     }

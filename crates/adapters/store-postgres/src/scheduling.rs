@@ -34,6 +34,8 @@ pub struct NewScheduledPublishRow<'a> {
     pub effective_at_ms: i64,
     /// The admin who scheduled it (id string).
     pub created_by: &'a str,
+    /// The release this pair belongs to, or `None` for a standalone schedule (ADR-0125).
+    pub release_id: Option<&'a str>,
 }
 
 /// One stored scheduled-publish row.
@@ -57,6 +59,10 @@ pub struct ScheduledPublishRow {
     pub created_at_ms: i64,
     /// The config version it produced, once applied.
     pub applied_version_id: Option<String>,
+    /// The release this pair belongs to, or `None` for a standalone schedule.
+    pub release_id: Option<String>,
+    /// Why it last failed to apply, or `None`.
+    pub failure: Option<String>,
 }
 
 /// The scheduled-publish store over a shared pool. Built by
@@ -68,7 +74,7 @@ pub struct PostgresScheduledPublishes {
 
 const SELECT_COLUMNS: &str = "id, tenant_id, store_id, node_key, node_value::text, \
      (extract(epoch from effective_at) * 1000)::bigint, status, \
-     (extract(epoch from created_at) * 1000)::bigint, applied_version_id";
+     (extract(epoch from created_at) * 1000)::bigint, applied_version_id, release_id, failure";
 
 fn row_from(row: &tokio_postgres::Row) -> ScheduledPublishRow {
     ScheduledPublishRow {
@@ -81,6 +87,8 @@ fn row_from(row: &tokio_postgres::Row) -> ScheduledPublishRow {
         status: row.get(6),
         created_at_ms: row.get(7),
         applied_version_id: row.get(8),
+        release_id: row.get(9),
+        failure: row.get(10),
     }
 }
 
@@ -99,9 +107,9 @@ impl PostgresScheduledPublishes {
         connection
             .execute(
                 "INSERT INTO scheduled_publishes \
-                 (id, tenant_id, store_id, node_key, node_value, effective_at, created_by) \
+                 (id, tenant_id, store_id, node_key, node_value, effective_at, created_by, release_id) \
                  VALUES ($1, $2, $3, $4, $5::text::jsonb, \
-                 to_timestamp($6::bigint::double precision / 1000.0), $7)",
+                 to_timestamp($6::bigint::double precision / 1000.0), $7, $8)",
                 &[
                     &row.id,
                     &row.tenant_id,
@@ -110,6 +118,7 @@ impl PostgresScheduledPublishes {
                     &row.node_value_json,
                     &row.effective_at_ms,
                     &row.created_by,
+                    &row.release_id,
                 ],
             )
             .await
@@ -189,12 +198,61 @@ impl PostgresScheduledPublishes {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "UPDATE scheduled_publishes SET status = 'APPLIED', applied_version_id = $2 \
+                "UPDATE scheduled_publishes SET status = 'APPLIED', applied_version_id = $2, \
+                 failure = NULL \
                  WHERE id = $1 AND status = 'PENDING'",
                 &[&id, &version_id],
             )
             .await
             .map_err(unavailable)?;
         Ok(())
+    }
+
+    /// Records why a pending publish last failed. The row stays pending and the activator retries it;
+    /// this is what a release's report reads to say which pairs are struggling
+    /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
+    ///
+    /// Only a pending row is written, so a late failure from a pass that raced a successful one
+    /// cannot put a reason on a publish that has already landed — and `mark_applied` clears the
+    /// column, so a row that failed once and then succeeded does not keep explaining itself.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn mark_failed(&self, id: &str, failure: &str) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        connection
+            .execute(
+                "UPDATE scheduled_publishes SET failure = $2 \
+                 WHERE id = $1 AND status = 'PENDING'",
+                &[&id, &failure],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
+    /// Every pair of one release, for the node × store report — in every status, because a report
+    /// that hid the applied ones could not tell an operator how far a release had got.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_for_release(
+        &self,
+        tenant_id: &str,
+        release_id: &str,
+    ) -> Result<Vec<ScheduledPublishRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let query = format!(
+            "SELECT {SELECT_COLUMNS} FROM scheduled_publishes \
+             WHERE tenant_id = $1 AND release_id = $2 \
+             ORDER BY store_id ASC, node_key ASC"
+        );
+        let rows = connection
+            .query(&query, &[&tenant_id, &release_id])
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(row_from).collect())
     }
 }
