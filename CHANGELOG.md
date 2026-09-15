@@ -104,6 +104,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Five emoji became icons (V7).** The nav toggle, the palette's search button, the notification
   bell, the media placeholder and the subject-request warning rendered as a different picture on
   every operating system; `icons.tsx` gains `bell`, `menu` and `search`.
+- **The cloud records which node each config version published (Wave 4 · PR-5, F6).** A store's
+  configuration is thirteen nodes under one version id, so publishing a tax change moved the id and
+  made the menu look freshly published too — and the console's question has always been per node:
+  "is the menu this store is running the menu I last edited?" Every published version now records
+  the node keys it wrote, and `GET /admin/stores/{id}/config/nodes` answers per node. The read
+  carries no configuration values, only which nodes exist and when each was last published, so it
+  needs none of the redaction the effective-document read does.
+
+  **Upgrade note.** No migration: the config tree is stored as one JSON document and the field is
+  additive, so every existing row still reads. A version written before this change names no nodes,
+  which the read reports as "published, when is not recorded" rather than as "never published" —
+  the distinction the whole feature turns on.
+- **A menu can no longer be published to a store with no tax table (F7).** The batch path has
+  refused this since store groups landed ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)
+  §7); the single-store path did not, so the same menu a batch would skip published happily from the
+  Menus screen and produced a shop that boots, syncs, shows the menu, takes the order, and raises
+  `TaxRateNotConfigured` at the payment screen. Both paths now read one table, and the refusal names
+  the node and what it is waiting for. A publish that writes its own prerequisite in the same call is
+  not refused; an inherited prerequisite counts, because the check reads the effective document.
 - **One way to create a store, and it is the wizard (Wave 4 · PR-4, D4).** The Stores screen offered
   two buttons side by side: a panel that wrote the registry row and stopped, and the guided wizard.
   A store made by the panel had no key and no installer, so it could not sync or trade, and nothing
