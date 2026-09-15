@@ -6,7 +6,8 @@
 // Tax class, category and sub-category are set at create and preserved on every edit, exactly as the
 // monolith did (a rename or a status flip re-sends the item's existing taxonomy untouched).
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
 
 import { api } from "../../api/client";
 import type { CatalogItem, ItemImportReport, ItemSort } from "../../api/types";
@@ -143,6 +144,23 @@ export function CatalogItems() {
     setSearch(searchDraft());
     void show(0);
   };
+
+  // A name handed over by the command palette (roadmap-v3 **F16**). The console has no route to one
+  // item, so the palette sends the catalogue the words and the catalogue searches for them — which
+  // is also the more useful landing, because an operator looking for "Phở" usually wants the four
+  // things called that rather than one row.
+  //
+  // Reactive on the parameter, not on the box: it fires when the palette navigates here and does not
+  // fire again, so an operator who then clears the search box is not fought by the URL.
+  const [params] = useSearchParams<{ q?: string }>();
+  createEffect(() => {
+    const handed = (params.q ?? "").trim();
+    if (handed) {
+      setSearchDraft(handed);
+      setSearch(handed);
+      void show(0);
+    }
+  });
 
   /** Re-reads the set in a new order, from its first page. */
   const applySort = (field: string, wantsDescending: boolean) => {

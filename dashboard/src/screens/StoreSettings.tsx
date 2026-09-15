@@ -31,7 +31,7 @@ import {
   TextArea,
   TextField,
 } from "../components/ui";
-import { PublishBar, type PublishState } from "../components/kit";
+import { FormSection, PublishBar, type PublishState, StickyActions } from "../components/kit";
 import { describePublish } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
@@ -463,6 +463,7 @@ export function StoreSettings() {
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
           <Show when={read.value() !== null}>
             <div class="grid max-w-xl gap-4">
+              <FormSection title={t("storeSettings.sectionWhere")}>
               {/* Which country this store is in (ADR-0114). Required: the publish refuses without
                   it, because it is the value a hosted store's region is compared against — and a
                   store whose country nobody recorded reads as "country not recorded" on the fleet
@@ -501,6 +502,9 @@ export function StoreSettings() {
                 hint={t("storeSettings.fromCountryHint")}
               />
 
+              </FormSection>
+
+              <FormSection title={t("storeSettings.sectionClock")}>
               {/* Upper-cased on the way in, not by CSS. The hand-rolled field had `class="uppercase"`,
                   which changes what an operator sees and not what gets sent: a typed `vnd` looked
                   right and published lower-case. */}
@@ -537,6 +541,9 @@ export function StoreSettings() {
                 hint={t("storeSettings.languageHint")}
               />
 
+              </FormSection>
+
+              <FormSection title={t("storeSettings.sectionMoney")}>
               <CheckboxField
                 label={t("storeSettings.pricesIncludeTaxLabel")}
                 checked={pricesIncludeTax()}
@@ -561,6 +568,7 @@ export function StoreSettings() {
               <Show when={tillMoneyRejected()}>
                 <Banner tone="danger" message={t("storeSettings.tillMoneyRejected")} />
               </Show>
+              </FormSection>
 
               <div class="rounded-token border border-line bg-surface-raised p-3 text-sm">
                 <span class="text-ink-muted">{t("storeSettings.businessDate")}</span>{" "}
@@ -572,6 +580,7 @@ export function StoreSettings() {
               {/* Whose values these are, and whether the store is running them. A form that
                   silently shows defaults for a store running something else is worse than an
                   empty one, because it reads as an answer. */}
+              <StickyActions>
               <PublishBar
                 label={t("storeSettings.locale")}
                 publishedAtMs={published.publishedAtMs("locale")}
@@ -582,6 +591,7 @@ export function StoreSettings() {
                 disabledReason={t("storeSettings.countryRequired")}
                 onPublish={() => void publish()}
               />
+              </StickyActions>
             </div>
           </Show>
         </Card>
@@ -590,6 +600,7 @@ export function StoreSettings() {
             {t("storeSettings.identityHint")}
           </p>
           <div class="grid max-w-xl gap-4">
+            <FormSection title={t("storeSettings.sectionEntity")}>
             <TextField
               label={t("storeSettings.legalName")}
               value={legalName()}
@@ -626,6 +637,9 @@ export function StoreSettings() {
               hint={t("storeSettings.registrationHint")}
             />
 
+            </FormSection>
+
+            <FormSection title={t("storeSettings.sectionReceipt")}>
             <TextArea
               label={t("storeSettings.contact")}
               value={contactText()}
@@ -640,6 +654,9 @@ export function StoreSettings() {
               rows={2}
             />
 
+            </FormSection>
+
+            <StickyActions>
             <PublishBar
               label={t("storeSettings.identity")}
               publishedAtMs={published.publishedAtMs("store_profile")}
@@ -648,6 +665,7 @@ export function StoreSettings() {
               busy={busy()}
               onPublish={() => void publishProfile()}
             />
+            </StickyActions>
           </div>
         </Card>
       </RequireContext>

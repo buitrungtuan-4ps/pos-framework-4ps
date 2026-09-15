@@ -1172,6 +1172,48 @@ function PublishPreview(props: {
   );
 }
 
+/**
+ * A labelled group of fields inside a form (V16).
+ *
+ * A settings form of fifteen controls is not a list, it is three or four subjects — where the shop
+ * is, how it counts a day, what prints on a receipt — and an operator looking for one of them should
+ * not have to read the other twelve labels to find out which. The heading is the answer.
+ *
+ * Deliberately not a `Card`: these are divisions *within* one card, and a card per group would say
+ * they can be saved separately, which they cannot — one publish writes the whole node.
+ */
+export function FormSection(props: ParentProps<{ title: string; hint?: string }>) {
+  return (
+    <section class="flex flex-col gap-4 border-t border-line pt-4 first:border-t-0 first:pt-0">
+      <div class="flex flex-col gap-1">
+        <h3 class="text-sm font-semibold text-ink">{props.title}</h3>
+        <Show when={props.hint}>{(hint) => <p class="text-sm text-ink-muted">{hint()}</p>}</Show>
+      </div>
+      {props.children}
+    </section>
+  );
+}
+
+/**
+ * The form's write control, kept reachable (V16).
+ *
+ * On a long form the publish bar sits below the fold, so an operator who has changed the second
+ * field scrolls past thirteen they did not touch to reach it — and the scroll is where "did I
+ * publish that?" comes from. This pins it to the bottom of the viewport while the form is on screen,
+ * on the surface colour with a top rule, so it reads as belonging to the form rather than floating
+ * over it.
+ *
+ * `position: sticky` rather than `fixed`: it stays inside its card, so it scrolls away with the card
+ * it belongs to instead of hovering over the next one.
+ */
+export function StickyActions(props: ParentProps) {
+  return (
+    <div class="sticky bottom-0 -mx-4 mt-2 border-t border-line bg-surface px-4 py-3">
+      {props.children}
+    </div>
+  );
+}
+
 export function PublishBar(props: {
   /** What is being published, in the operator's words — "Tax rates", "The menu". */
   label: string;

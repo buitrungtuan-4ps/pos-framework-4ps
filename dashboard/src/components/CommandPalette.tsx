@@ -1,14 +1,49 @@
 // The command palette (ADR-0060, Track F1): Cmd/Ctrl-K opens a quick switcher over the console's
-// screens — type to filter, ↑/↓ to move, Enter to jump. Screens only for now; entity search (jump
-// straight to a store, item, or key by name) arrives with the CRUD kit's data layer (F2).
+// screens — type to filter, ↑/↓ to move, Enter to jump.
+//
+// Since Wave 4 · PR-8 it also searches the tenant's **entities** (roadmap-v3 F16): a shop by name,
+// an item by name in any locale. That was the half the header of this file promised and F2 did not
+// deliver — a console whose search box only finds its own screens sends an operator who knows the
+// shop's name to a list to scroll.
+//
+// # What it does not search, and why
+//
+// The **employee roster**. A name in a roster is personal data (T1,
+// [ADR-0076](../../../docs/adr/0076-subject-requests.md)), and a global search box is the one place
+// in the console where it would be typed casually and read by whoever is standing there. People are
+// found on the People screen, which is behind its own permission and its own audit. That is a
+// deliberate exclusion, not an omission.
 
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
+import { api } from "../api/client";
 import { t } from "../i18n";
 import { SCREENS, type ScreenId, screenHref, specOf } from "../state/screens";
-import { Icon } from "./icons";
-import { storeId, tenantId } from "../state/session";
+import { type IconName, Icon } from "./icons";
+import { selectStore, storeId, tenantId } from "../state/session";
+
+/** How long a keystroke rests before the palette asks the server. */
+const SEARCH_DEBOUNCE_MS = 200;
+
+/** Below this, a search would match most of the master and tell the operator nothing. */
+const MIN_QUERY = 2;
+
+/** How many of each kind to offer. The palette is a shortcut, not a table. */
+const PER_KIND = 5;
+
+/** One row in the palette: a screen to jump to, or an entity to open. */
+interface Entry {
+  /** Where Enter goes. */
+  readonly href: string;
+  /** What the row reads. */
+  readonly label: string;
+  readonly icon: IconName;
+  /** The kind, said in the operator's words ("Shop", "Item") — absent for a screen. */
+  readonly hint?: string;
+  /** Run before navigating: a shop sets the working store, so the screen opens on it (ADR-0120). */
+  readonly before?: () => void;
+}
 
 // The palette's entries come from the one screen table, filtered to those worth a quick jump — so a
 // screen can never be in the palette under a path the router does not serve, which was possible when
@@ -34,11 +69,11 @@ export function CommandPalette() {
   const optionRefs: HTMLButtonElement[] = [];
 
   // Memoize search matching to prevent redundant TARGETS.map, t() translations, and array filter calls on every render / key event
-  const matches = createMemo(() => {
+  const screens = createMemo(() => {
     const needle = query().trim().toLowerCase();
     // Each target is resolved against the live context, so jumping from the palette keeps the
     // tenant the operator is working in rather than dropping them at a bare path.
-    const all = TARGETS.map((id) => ({
+    const all: Entry[] = TARGETS.map((id) => ({
       href: screenHref(id, tenantId(), storeId()),
       label: t(specOf(id).key),
       icon: specOf(id).icon,
@@ -46,15 +81,84 @@ export function CommandPalette() {
     return needle ? all.filter((item) => item.label.toLowerCase().includes(needle)) : all;
   });
 
+  // The entity half (F16). Held rather than derived because it is a round-trip: the query is
+  // debounced, and an answer that arrives after a newer one was asked for is dropped, so a fast
+  // typist never sees the results of a prefix they have already moved past.
+  const [entities, setEntities] = createSignal<Entry[]>([]);
+  let asked = 0;
+
+  const findEntities = async (needle: string, tenant: string, token: number) => {
+    const [stores, items] = await Promise.allSettled([
+      api.listStores(tenant),
+      api.listItemsPage(tenant, { limit: PER_KIND, offset: 0 }, { q: needle }),
+    ]);
+    if (token !== asked) {
+      return;
+    }
+    const found: Entry[] = [];
+    if (stores.status === "fulfilled") {
+      // The store list is small and unpaged, so the match is made here; every other kind asks the
+      // server, which is where the index is.
+      found.push(
+        ...stores.value
+          .filter(
+            (store) =>
+              store.status === "active" && store.name.toLowerCase().includes(needle.toLowerCase()),
+          )
+          .slice(0, PER_KIND)
+          .map((store) => ({
+            href: screenHref("storeHub", tenant, store.store_id),
+            label: store.name,
+            icon: specOf("storeHub").icon,
+            hint: t("palette.kindStore"),
+            before: () => selectStore(store.store_id, store.name),
+          })),
+      );
+    }
+    if (items.status === "fulfilled") {
+      found.push(
+        ...items.value.items.map((item) => ({
+          // The catalog opens on its items tab, with the search box carrying the same words — the
+          // palette hands the screen the query rather than an id it has no route for.
+          href: `${screenHref("catalog", tenant, storeId())}?q=${encodeURIComponent(item.name)}`,
+          label: item.name,
+          icon: specOf("catalog").icon,
+          hint: t("palette.kindItem"),
+        })),
+      );
+    }
+    setEntities(found);
+  };
+
+  // A failure here is silence, not a toast: the palette is a shortcut over reads that have their own
+  // screens, and a red box over the search box for a read that will be retried on the next keystroke
+  // would be louder than the problem.
+  createEffect(() => {
+    const needle = query().trim();
+    const tenant = tenantId();
+    const token = (asked += 1);
+    if (needle.length < MIN_QUERY || !tenant) {
+      setEntities([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void findEntities(needle, tenant, token).catch(() => setEntities([]));
+    }, SEARCH_DEBOUNCE_MS);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  const matches = createMemo(() => [...screens(), ...entities()]);
+
   const close = () => {
     setOpen(false);
     setQuery("");
     setActive(0);
   };
 
-  const go = (href: string) => {
+  const go = (entry: Entry) => {
+    entry.before?.();
     close();
-    navigate(href);
+    navigate(entry.href);
   };
 
   const onGlobalKey = (event: KeyboardEvent) => {
@@ -97,7 +201,7 @@ export function CommandPalette() {
       event.preventDefault();
       const chosen = items[active()];
       if (chosen) {
-        go(chosen.href);
+        go(chosen);
       }
     }
   };
@@ -146,13 +250,16 @@ export function CommandPalette() {
                       role="option"
                       aria-selected={index() === active()}
                       onMouseEnter={() => setActive(index())}
-                      onClick={() => go(item.href)}
+                      onClick={() => go(item)}
                       class={`flex w-full items-center gap-2 rounded-token px-3 py-2 text-left text-base text-ink transition-colors ${
                         index() === active() ? "bg-surface-raised" : ""
                       }`}
                     >
                       <Icon name={item.icon} />
-                      {item.label}
+                      <span class="flex-1 truncate">{item.label}</span>
+                      <Show when={item.hint}>
+                        {(hint) => <span class="text-sm text-ink-muted">{hint()}</span>}
+                      </Show>
                     </button>
                   </li>
                 )}
