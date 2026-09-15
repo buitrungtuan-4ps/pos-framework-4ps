@@ -53,7 +53,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
-- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
+- **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying SIIT IPv4-translated (`::ffff:0:a.b.c.d`), local NAT64 (`64:ff9b:1::/48`), ISATAP (`::5efe:a.b.c.d`), well-known NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and
   `X-Frame-Options: DENY` response headers when serving static UI assets on `pos-edge`
   (`crates/pos-edge/src/http/assets.rs`) to prevent MIME-sniffing and clickjacking.

@@ -295,13 +295,41 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         return classify_v4(Ipv4Addr::new(a, b, c, d));
     }
 
-    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`).
+    // SIIT IPv4-translated IPv6 address (`::ffff:0:a.b.c.d`, RFC 6145).
+    if segments[0] == 0
+        && segments[1] == 0
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0xffff
+        && segments[5] == 0
+    {
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    }
+
+    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`, RFC 6052) or local-use prefix (`64:ff9b:1::a.b.c.d`, RFC 8215).
     if segments[0] == 0x0064
         && segments[1] == 0xff9b
-        && segments[2] == 0
+        && (segments[2] == 0 || segments[2] == 0x0001)
         && segments[3] == 0
         && segments[4] == 0
         && segments[5] == 0
+    {
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    }
+
+    // ISATAP address (`::5efe:a.b.c.d`, RFC 5214).
+    if segments[0] == 0
+        && segments[1] == 0
+        && segments[2] == 0
+        && segments[3] == 0
+        && (segments[4] == 0 || segments[4] == 0x0200)
+        && segments[5] == 0x5efe
     {
         let [a, b, c, d] = ip.octets()[12..16] else {
             unreachable!()
@@ -540,6 +568,51 @@ mod tests {
             classify_ip(ip("2002:a9fe:a9fe::")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("2002:a9fe:a9fe::"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // SIIT IPv4-translated smuggling cases (`::ffff:0:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("::ffff:0:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::ffff:0:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("::ffff:0:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::ffff:0:169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // Local NAT64 prefix smuggling cases (`64:ff9b:1::a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("64:ff9b:1::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:1::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b:1::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:1::169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // ISATAP smuggling cases (`::5efe:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("::5efe:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::5efe:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("::5efe:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("::5efe:169.254.169.254"),
                 ForbiddenReason::LinkLocal
             ))
         );
