@@ -115,6 +115,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The till's primary buttons stop wearing the fork's brand colour** (backlog item 6; decision D1,
+  now true on both surfaces). `tokens.css` split `--primary` from `--accent` in Wave 4 so that a
+  fork sets one token and repaints nothing else, and it says so at the declaration: the accent
+  belongs to the logo, the focus ring, the selected tint and a link — "never on a button". The
+  console followed that from PR-2. The till did not, and thirteen buttons across sign-in, shift,
+  pairing, setup, order, takeaway, expo and pay took `bg-accent` — including **Charge**, so a fork
+  choosing a loud brand colour was repainting the key that takes money during service. They now
+  take `bg-primary` / `text-primary-ink`, a pair the till's contrast gate already measures in all
+  three palettes.
+  - What did **not** move: `border-accent` on the tip and the tender the operator has chosen, and
+    the one `text-accent` link. A border and a fill are different claims — the accent still marks
+    what is selected, it just no longer paints the control.
+  - `pnpm tokens` (`ui/scripts/token-roles.mjs`) now gates the rule the prose stated. It reads each
+    `<button>` out of the syntax tree — `bg-accent` in a file says nothing about which element wears
+    it, and the selected-state borders sit two lines from the buttons — and fails if one carries
+    `bg-accent` or `text-accent-ink`. It fails equally if the till runs out of primary buttons, so
+    it cannot pass by deletion. `pnpm build` runs it, so the `ui` CI job does.
+  - Both token files carried a second, older sentence still calling the accent "the brand at full
+    strength — used for a primary button", six lines under the rule that forbids exactly that; it is
+    gone. `docs/ui-ux.md` §2 no longer records the till as the surface that has not caught up.
+
 - **A list stops being a table when there is no room for one** (Wave 4 PR-3's deferred table work;
   findings V9, V18). Eight console tables clipped at phone width with no horizontal scroll container
   at all, and the obvious fix — wrap it in `overflow-x-auto` — would only have made the clipping

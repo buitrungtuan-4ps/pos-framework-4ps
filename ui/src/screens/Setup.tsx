@@ -120,7 +120,7 @@ export function Setup() {
           )}
           <button
             type="button"
-            class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink disabled:opacity-50"
+            class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
             disabled={busy() || symbolCount(code()) !== CODE_LENGTH}
             onClick={() => void submit()}
           >

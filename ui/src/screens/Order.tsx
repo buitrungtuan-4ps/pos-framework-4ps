@@ -184,7 +184,7 @@ export function Order() {
                 <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
                   <button
                     type="button"
-                    class="rounded-token bg-accent px-3 py-1 text-accent-ink"
+                    class="rounded-token bg-primary px-3 py-1 text-primary-ink"
                     data-step="fire"
                     onClick={() => void guard(() => fire(line.orderLineId))}
                   >
@@ -292,7 +292,7 @@ export function Order() {
 
         <button
           type="button"
-          class="mt-4 min-h-touch w-full rounded-token bg-accent px-4 text-lg font-semibold text-accent-ink"
+          class="mt-4 min-h-touch w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink"
           data-step="takePayment"
           onClick={() => void takePayment()}
         >

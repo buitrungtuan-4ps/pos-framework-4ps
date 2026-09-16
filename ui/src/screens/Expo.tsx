@@ -60,7 +60,7 @@ export function Expo() {
               </ul>
               <button
                 type="button"
-                class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+                class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
                 data-step="runAway"
                 onClick={() => runAway(group.lines)}
               >

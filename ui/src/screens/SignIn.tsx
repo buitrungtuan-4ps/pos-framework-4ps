@@ -107,7 +107,7 @@ export function SignIn() {
 
       <button
         type="button"
-        class="mt-4 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink disabled:opacity-50"
+        class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
         disabled={busy() || code().trim().length === 0 || pin().length === 0}
         data-step="submit"
         onClick={() => void submit()}

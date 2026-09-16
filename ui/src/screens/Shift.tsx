@@ -56,7 +56,7 @@ export function Shift() {
         />
         <button
           type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink disabled:opacity-50"
+          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
           disabled={parsed() === null}
           data-step="openShift"
           onClick={() => {
@@ -86,7 +86,7 @@ export function Shift() {
         />
         <button
           type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink disabled:opacity-50"
+          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
           disabled={parsed() === null}
           data-step="countShift"
           onClick={() => {
@@ -107,7 +107,7 @@ export function Shift() {
         </p>
         <button
           type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
           data-step="closeShift"
           onClick={() => {
             const current = shift();
