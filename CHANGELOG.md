@@ -134,6 +134,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     default is already 36 px, so the density worth adding was the tighter one and the touch floor
     stayed on the controls where it belongs.)
 
+- **The Refresh button is gone from the console, and the rule is no longer a list** (decision D5).
+  Thirty screens once carried one. Not one was there because an operator wanted it: each screen had
+  hand-written its own signal pair, fetched once, and had no idea what to do after a save — so the
+  button was the answer to "the list I am looking at is now wrong", asked thirty times. PR-3 dropped
+  six by hand, PR-6 moved eleven onto `createAdminResource`, and the gate that enforces the rule was
+  written against an explicit allowlist, deliberately, "because PR-6 finishes the migration". It did
+  not. Two screens were still holding it open.
+  - **OTA** hand-rolled a `setInterval` and a Refresh button over its fleet-progress pane — which is
+    precisely what the helper's `intervalMs` and `revalidateOnFocus` exist for. The pane is now a
+    resource: it re-reads on a timer, on focus, and when the tenant changes, and a fleet that could
+    not be read says so instead of rendering as a fleet with no shops in it.
+  - **Reports' button was never a Refresh at all.** It runs the date window the operator has just
+    composed in the two fields beside it, and it was wearing `action.refresh` because that was the
+    label to hand. It now says **Apply**, and the windowed read moved onto the helper so a shop
+    change re-runs it without anyone pressing anything. No timer and no focus revalidation there: a
+    closed date window does not move, and re-reading last month on a schedule spends an operator's
+    link on an answer that cannot have changed.
+  - **The gate is now universal**: no screen anywhere may carry a Refresh button, and the
+    `action.refresh` translation is deleted in both locales so the next screen that wants one does
+    not find a string waiting for it.
+
+  People keeps its hand-rolled reads and that is deliberate: it has no Refresh button and already
+  re-reads after each mutation, which is the behaviour D5 asks for, while its roster is server-paged
+  and `createAdminResource` is not a paging helper. There is no defect there to fix.
+
 - **A row's verbs move behind a kebab where a row actually has verbs** (finding V19). The plan
   asked for this across "~25 tables". Measured first: of the 22 rows in the console that render an
   action cell, **16 carry two verbs** — Edit plus Archive/Restore — where a menu costs a tap to

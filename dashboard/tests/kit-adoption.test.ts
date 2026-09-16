@@ -20,6 +20,9 @@
 
 import { describe, expect, it } from "vitest";
 
+import en from "../src/i18n/en.json";
+import vi from "../src/i18n/vi.json";
+
 const sources: Record<string, string> = import.meta.glob("../src/**/*.{ts,tsx}", {
   query: "?raw",
   import: "default",
@@ -86,59 +89,33 @@ describe("a screen that publishes a config node", () => {
   });
 });
 
-describe("a screen whose Refresh button has gone", () => {
-  // Two groups, and the difference matters when reading this list. The first six dropped the button
-  // in PR-3 by hand-writing a `load()` and calling it after each mutation: the *behaviour* D5 asks
-  // for, without the helper. The five after them are on `createAdminResource` itself (PR-6), which
-  // is also where the helper acquired its first caller at all.
+describe("the Refresh button", () => {
+  // D5's rule, and it is no longer a list.
   //
-  // PR-6b migrates the authoring screens and extends this list as it goes; a gate that failed today
-  // on the screens still waiting would have to be disabled, which is how a gate stops meaning
-  // anything.
-  const MIGRATED = [
-    "screens/ApiKeys.tsx",
-    "screens/Webhooks.tsx",
-    "screens/Devices.tsx",
-    "screens/Stores.tsx",
-    "screens/Translations.tsx",
-    "screens/Alerts.tsx",
-    "screens/Media.tsx",
-    "screens/Reconcile.tsx",
-    "screens/MySessions.tsx",
-    "screens/Admins.tsx",
-    "screens/Activation.tsx",
-    "screens/ReasonCodes.tsx",
-    "screens/Stations.tsx",
-    "screens/Floor.tsx",
-    "screens/catalog/TaxClasses.tsx",
-    "screens/catalog/Modifiers.tsx",
-    "screens/catalog/Taxonomy.tsx",
-    "screens/catalog/Items.tsx",
-    "screens/catalog/Menus.tsx",
-    "screens/Inventory.tsx",
-    "screens/Channels.tsx",
-    "screens/TaxRates.tsx",
-    "screens/Audit.tsx",
-    "screens/Fleet.tsx",
-    "screens/Layout.tsx",
-    "screens/Campaigns.tsx",
-    "screens/StoreGroups.tsx",
-    "screens/Config.tsx",
-    "screens/StoreSettings.tsx",
-  ];
-
-  it("has no Refresh button, because it re-reads what it changes", () => {
-    const offenders = MIGRATED.filter((name) => {
-      const entry = Object.entries(sources).find(([path]) => path.endsWith(name));
-      return entry !== undefined && entry[1].includes('t("action.refresh")');
-    });
+  // Thirty screens carried a Refresh button. Not one was there because an operator wanted it: each
+  // screen had hand-written its own signal pair, fetched once on the context gate, and had no idea
+  // what to do after a save — so the button was the answer to "the list I am looking at is now
+  // wrong", asked thirty times. PR-3 dropped the first six by hand; PR-6 moved eleven more onto
+  // `createAdminResource`. The list this rule used to carry was explicitly provisional — "a gate
+  // that failed today on the screens still waiting would have to be disabled, which is how a gate
+  // stops meaning anything" — and it was waiting on PR-6b, which never came.
+  //
+  // The last two went together: **Ota**, which hand-rolled a `setInterval` the helper exists to
+  // own, and **Reports**, whose button was never a Refresh at all — it applies a date window the
+  // operator composes, and now says so. With none left, the rule can be what it always wanted to
+  // be: every screen, no exceptions to keep current.
+  it("does not exist on any screen, because a screen re-reads what it changes", () => {
+    const offenders = Object.entries(sources)
+      .filter(([path]) => path.includes("/screens/"))
+      .filter(([, source]) => source.includes('t("action.refresh")'))
+      .map(([path]) => path.replace(/^.*\/src\//, ""));
     expect(offenders).toEqual([]);
   });
 
-  it("is actually in the tree, so a renamed screen cannot silently leave this list", () => {
-    const missing = MIGRATED.filter(
-      (name) => !Object.keys(sources).some((path) => path.endsWith(name)),
-    );
-    expect(missing).toEqual([]);
+  // The key itself goes when its last caller does. Leaving it in the catalogue is how the button
+  // comes back: the next screen that wants one finds a translated string waiting for it.
+  it("has no translation left to reach for", () => {
+    expect(Object.keys(en)).not.toContain("action.refresh");
+    expect(Object.keys(vi)).not.toContain("action.refresh");
   });
 });
