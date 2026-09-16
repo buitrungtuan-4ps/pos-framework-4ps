@@ -368,6 +368,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **P0 · a mistyped PIN unpaired the till.** The edge answers `401` for two opposite things on
+  `POST /api/session/sign-in`: the paired gate refusing a device that must pair again, and the
+  sign-in check refusing a badge code or a PIN
+  ([`crates/pos-edge/src/http/auth.rs`](crates/pos-edge/src/http/auth.rs)). The client read the
+  status and not the body, so it took every refusal for the first case — it dropped the device token
+  and sent the operator back to the pairing screen. One wrong digit during service cost a manager,
+  a fresh six-digit code and a re-pair, and a store whose roster had not been published yet could
+  never get past sign-in at all, because an unknown code is refused the same way.
+  - **The body decides now**, which needs no wire change: a refusal is JSON carrying `outcome`, the
+    gate is plain text. Only a `401` that is not a refusal clears the token. The parse is
+    deliberately strict — anything it cannot read as one of the two outcomes the edge actually sends
+    is treated as *not* a refusal, because guessing the other way would swallow a real unpairing.
+  - **Three translated strings came back to life.** `signin.wrong`, `signin.wrong_remaining` and
+    `signin.locked` were unreachable: the client threw before the screen could render any of them,
+    so the till never once told an operator that the PIN was wrong or that the account was locked.
+  - **Found in the field, not by a gate.** Every declared flow signs in with the right credentials,
+    so the browser replay walked past this on each run. `ui/tests/replay.spec.mjs` now types a wrong
+    PIN and asserts both halves: the refusal is shown, and the device is still paired — proven by
+    signing in properly afterwards with no pairing step in between.
+
 - **P0 · the catalogue's Menus tab was unreachable in a real browser** (found by the new console
   replay harness, backlog item 8). Opening **Menus** on the Catalog screen threw
   `ReferenceError: Cannot access 'menus' before initialization` and the tab never rendered — in the

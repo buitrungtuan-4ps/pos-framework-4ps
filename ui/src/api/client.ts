@@ -135,6 +135,40 @@ export type SignInResult =
   | { ok: true; employeeId: string }
   | { ok: false; outcome: "wrong" | "locked_out"; remaining?: number; untilMs?: number };
 
+/**
+ * A refused sign-in read out of a response body, or `undefined` when the body is not one.
+ *
+ * The edge answers **`401` for two opposite things** on this route: the paired gate refusing a device
+ * that must pair again, and the sign-in check refusing a badge code or PIN
+ * (`crates/pos-edge/src/http/auth.rs`). The status alone cannot separate them, so the body does — a
+ * refusal is the JSON `SignInRefused` shape, the gate sends plain text.
+ *
+ * Deliberately strict: only the two outcomes the edge actually sends count. Anything else is treated
+ * as *not* a refusal, because guessing the other way would swallow a real unpairing and strand the
+ * operator on a screen whose every call then fails.
+ */
+function signInRefusal(body: string): SignInResult | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+  const refusal = parsed as { outcome?: unknown; remaining?: unknown; locked_until_ms?: unknown };
+  if (refusal.outcome !== "wrong" && refusal.outcome !== "locked_out") {
+    return undefined;
+  }
+  return {
+    ok: false,
+    outcome: refusal.outcome,
+    remaining: typeof refusal.remaining === "number" ? refusal.remaining : undefined,
+    untilMs: typeof refusal.locked_until_ms === "number" ? refusal.locked_until_ms : undefined,
+  };
+}
+
 export const api = {
   seatTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/seat`),
@@ -293,25 +327,21 @@ export const api = {
       const body = (await response.json()) as { employee_id: string };
       return { ok: true, employeeId: body.employee_id };
     }
-    // A `401` here means the device itself is unpaired (the paired gate, not the sign-in check); let
-    // it surface so the app routes to pairing.
+    // The body decides, not the status: a refused sign-in and an unpaired device are both `401`, and
+    // reading the status alone dropped the device token on every mistyped PIN — the tablet bounced
+    // back to pairing, and the screen's three refusal messages could never be reached.
+    const body = await response.text().catch(() => "");
+    const refusal = signInRefusal(body);
+    if (refusal !== undefined) {
+      return refusal;
+    }
+    // Not a refusal, so a `401` is the paired gate: this device must pair again, which is the one
+    // case that clears the token.
     if (response.status === 401) {
       clearDeviceToken();
       throw new ApiError(401, "pair this device to reach the edge");
     }
-    const refusal = (await response
-      .json()
-      .catch(() => ({}))) as {
-      outcome?: "wrong" | "locked_out";
-      remaining?: number;
-      locked_until_ms?: number;
-    };
-    return {
-      ok: false,
-      outcome: refusal.outcome ?? "wrong",
-      remaining: refusal.remaining,
-      untilMs: refusal.locked_until_ms,
-    };
+    return { ok: false, outcome: "wrong" };
   },
 
   // Sign the current employee out on this device (S0b). The device stays paired; the next command
