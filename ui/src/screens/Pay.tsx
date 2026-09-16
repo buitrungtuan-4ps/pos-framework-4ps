@@ -245,7 +245,7 @@ export function Pay() {
       <p class="mt-1 text-sm text-ink-muted">{t("pay.void_done_hint")}</p>
       <button
         type="button"
-        class="mt-4 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+        class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
         onClick={() => navigate(`/table/${params.id}`)}
       >
         {t("common.back_order")}
@@ -365,7 +365,7 @@ export function Pay() {
               <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button
                 type="button"
-                class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
+                class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink"
                 data-step="payCash"
                 onClick={() => payCash()}
               >
@@ -484,7 +484,7 @@ export function Pay() {
             </Show>
             <button
               type="button"
-              class="mt-4 min-h-touch w-full rounded-token bg-accent font-semibold text-accent-ink"
+              class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
               onClick={() => navigate("/")}
             >
               {t("pay.back_floor")}

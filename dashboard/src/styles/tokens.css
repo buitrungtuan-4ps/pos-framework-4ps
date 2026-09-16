@@ -63,11 +63,11 @@
   --color-accent: var(--accent);
   --color-accent-ink: var(--accent-ink);
   /* Selection: the ground under the thing you are looking at, and the ink that sits on it. A
-     separate role from `accent`, because the accent is the brand at full strength — used for a
-     primary button and a focus ring — and a whole nav row painted in it would shout. `selected` is
-     that hue taken down to a tint a row can wear all day, and `selected-ink` is the one foreground
-     proven against it (scripts/wcag-contrast.mjs gates the pair). Kept apart from
-     `surface-raised`, which is elevation: a card is raised whether or not you chose it. */
+     separate role from `accent`, because the accent is the brand at full strength — the logo, the
+     focus ring — and a whole nav row painted in it would shout. `selected` is that hue taken down
+     to a tint a row can wear all day, and `selected-ink` is the one foreground proven against it
+     (scripts/wcag-contrast.mjs gates the pair). Kept apart from `surface-raised`, which is
+     elevation: a card is raised whether or not you chose it. */
   --color-selected: var(--selected);
   --color-selected-ink: var(--selected-ink);
   --color-danger: var(--danger);

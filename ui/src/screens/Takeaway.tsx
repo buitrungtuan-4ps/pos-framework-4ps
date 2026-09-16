@@ -269,7 +269,7 @@ export function Takeaway() {
                     <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
                       <button
                         type="button"
-                        class="min-h-money rounded-token bg-accent text-lg font-semibold text-accent-ink"
+                        class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink"
                         data-step="payCash"
                         onClick={() => payCash()}
                       >
