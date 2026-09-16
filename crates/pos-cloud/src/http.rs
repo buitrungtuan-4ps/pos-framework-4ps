@@ -194,7 +194,7 @@ use base64::Engine as _;
 use pos_core::lease::LeaseGeneration;
 
 use crate::ota::{
-    ArtifactKind, RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple,
+    ArtifactKind, ArtifactStore, ArtifactStoreError, RecordOutcome, ReleaseArtifact, TargetTriple,
     artifact_key, validate_release_tag,
 };
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
@@ -213,13 +213,12 @@ use crate::registry::{
     StoreRecord, TenantRecord,
 };
 use crate::retention::{RetentionError, SubjectStore};
-// `release` is an overloaded word in this tree: `crate::ota` already exports a `ReleaseStore` for
-// signed edge artifacts, and this file imports it. These are config releases (ADR-0125) — a named
-// set of config publishes — so they are aliased at this one import rather than renamed in their own
-// module, where the plain spelling is the right one. Renaming the OTA pair is its own change.
+// These are ADR-0125 config releases — a named set of config publishes going out to a set of shops.
+// They import under their own plain spelling, which they could not do while `crate::ota` also
+// exported a `ReleaseStore`; that one is `ArtifactStore` now, so the alias this import used to carry
+// is gone and the reader no longer has to hold two meanings of one word at once.
 use crate::releases::{
-    NewRelease as NewConfigRelease, Release as ConfigRelease, ReleaseMoment, ReleaseStatus,
-    ReleaseStore as ConfigReleaseStore, ReleaseStoreError as ConfigReleaseStoreError,
+    NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
     ResolveRefusal, TargetStore, resolve_for_stores,
 };
 use crate::scheduling::{
@@ -1209,7 +1208,7 @@ where
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     B: BlobStore + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -1717,7 +1716,7 @@ where
 /// while still refusing an upload that could only be a mistake. The limit sits on this route rather
 /// than on the reverse proxy so that a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
 /// `external` posture) still gets it.
-const MAX_RELEASE_UPLOAD_BYTES: usize = 128 * 1024 * 1024;
+const MAX_OTA_UPLOAD_BYTES: usize = 128 * 1024 * 1024;
 
 /// The header the upload carries the signature in: the **first base64 line** of the `.minisig` file
 /// minisign wrote (line 2 of the file — line 1 is the untrusted comment).
@@ -1739,7 +1738,7 @@ const MINISIGN_SIGNATURE_LEN: usize = 74;
 /// The collaborators the `/admin` release routes need: the object store the bytes go to, the registry
 /// that records them, and the admin/clock/audit trio every console write carries.
 #[derive(Clone)]
-struct ReleaseAdminState<B, L, A, C> {
+struct OtaReleaseAdminState<B, L, A, C> {
     blobs: B,
     releases: L,
     admin: A,
@@ -1778,7 +1777,7 @@ struct HostedArtifactResponse {
 /// because `UpdateInstaller::apply` writes the bytes it is handed as the next binary — so the
 /// signature the edge checks has to cover *these* bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). Unpacking a tarball server-side would hand `apply` bytes nobody signed.
-pub fn release_admin_router<B, L, A, C>(
+pub fn ota_release_admin_router<B, L, A, C>(
     blobs: B,
     releases: L,
     admin: A,
@@ -1787,20 +1786,21 @@ pub fn release_admin_router<B, L, A, C>(
 ) -> Router
 where
     B: BlobStore + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
-        .route("/admin/releases", post(admin_upload_release::<B, L, A, C>))
         .route(
-            "/admin/releases/{release}",
-            get(admin_list_release::<B, L, A, C>),
+            "/admin/ota/releases",
+            post(admin_upload_ota_release::<B, L, A, C>),
         )
-        .layer(axum::extract::DefaultBodyLimit::max(
-            MAX_RELEASE_UPLOAD_BYTES,
-        ))
-        .with_state(ReleaseAdminState {
+        .route(
+            "/admin/ota/releases/{release}",
+            get(admin_list_ota_release::<B, L, A, C>),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_OTA_UPLOAD_BYTES))
+        .with_state(OtaReleaseAdminState {
             blobs,
             releases,
             admin,
@@ -1940,15 +1940,15 @@ fn parse_release_upload(
 /// bytes answers `200` rather than failing, so a re-run of a release step does not wedge; different
 /// bytes for a release a ring may already have installed are refused, because a version that can
 /// change under a fleet is not a version.
-async fn admin_upload_release<B, L, A, C>(
-    State(state): State<ReleaseAdminState<B, L, A, C>>,
+async fn admin_upload_ota_release<B, L, A, C>(
+    State(state): State<OtaReleaseAdminState<B, L, A, C>>,
     headers: HeaderMap,
     Query(query): Query<ReleaseUploadQuery>,
     body: axum::body::Bytes,
 ) -> Response
 where
     B: BlobStore + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -1987,14 +1987,14 @@ where
     }
     let outcome = match state.releases.record_artifact(&artifact).await {
         Ok(outcome) => outcome,
-        Err(ReleaseStoreError::Immutable { release, target }) => {
+        Err(ArtifactStoreError::Immutable { release, target }) => {
             return api_error_with_details(
                 ErrorStatus::AlreadyExists,
                 format!("release {release} for {target} is already hosted with different bytes"),
                 &[("release", "already hosted with a different digest")],
             );
         }
-        Err(error @ ReleaseStoreError::Unavailable(_)) => {
+        Err(error @ ArtifactStoreError::Unavailable(_)) => {
             tracing::error!(%error, "recording a release artifact failed");
             return service_unavailable("the release registry");
         }
@@ -2033,14 +2033,14 @@ where
 
 /// Which targets a release is hosted for — what an operator checks before promoting it, and what the
 /// promote guard consults on their behalf.
-async fn admin_list_release<B, L, A, C>(
-    State(state): State<ReleaseAdminState<B, L, A, C>>,
+async fn admin_list_ota_release<B, L, A, C>(
+    State(state): State<OtaReleaseAdminState<B, L, A, C>>,
     headers: HeaderMap,
     Path(release): Path<String>,
 ) -> Response
 where
     B: BlobStore + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -2164,7 +2164,7 @@ where
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
     B: BlobStore + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let grant = match authenticate(&state.keys, &state.clock, &headers).await {
         Ok(grant) => grant,
@@ -15838,7 +15838,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -15900,7 +15900,7 @@ where
 /// The [`Response`] to send: `422` naming `target_version` when nothing is hosted for it, or `503`
 /// when the registry could not be read (refusing to publish is right either way — a rollout is not
 /// worth guessing about).
-async fn require_hosted_release<L: ReleaseStore>(
+async fn require_hosted_release<L: ArtifactStore>(
     releases: &L,
     target_version: &str,
 ) -> Result<(), Response> {
@@ -15940,7 +15940,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16005,7 +16005,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16088,7 +16088,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let nodes = vec![(write.key.to_owned(), write.node)];
     let id = match publish_config_nodes(
@@ -16136,7 +16136,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -16195,7 +16195,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16246,7 +16246,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -16398,7 +16398,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16566,7 +16566,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16649,7 +16649,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -16754,7 +16754,7 @@ where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
-    L: ReleaseStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -26179,7 +26179,7 @@ fn rollup_error_response(error: &RollupError) -> Response {
 // the OTA artifact upload (R2, ADR-0088) — signed edge binaries, a different thing with the same
 // English name. Two routers claiming one path is an axum panic at start-up, so the collision had to
 // be resolved one way or the other; qualifying the newcomer is the change that breaks nothing, and
-// renaming the OTA pair (`ota::PostgresReleases`, `ota::ReleaseStore` and those two routes together)
+// renaming the OTA pair (`ota::PostgresReleases`, `ota::ArtifactStore` and those two routes together)
 // is its own change, with its own edit to `docs/release-runbook.md`.
 //
 // They write **no config versions of their own**. Scheduling a release expands to one
@@ -26231,7 +26231,7 @@ struct ReleaseView {
 }
 
 impl ReleaseView {
-    fn of(release: &ConfigRelease) -> Self {
+    fn of(release: &Release) -> Self {
         let (wall_clock_date, wall_clock_time, instant_at_ms) = match &release.moment {
             Some(ReleaseMoment::WallClock { date, time }) => {
                 (Some(date.clone()), Some(time.clone()), None)
@@ -26356,7 +26356,7 @@ pub fn config_release_router<Rel, Sch, Grp, Reg, Cfg, A, C>(
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -26396,7 +26396,7 @@ where
 }
 
 /// The `503` a release persistence failure becomes.
-fn release_error_response(error: &ConfigReleaseStoreError) -> Response {
+fn release_error_response(error: &ReleaseStoreError) -> Response {
     tracing::error!(%error, "a release operation failed");
     api_error(
         ErrorStatus::Unavailable,
@@ -26467,7 +26467,7 @@ async fn admin_create_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     Json(request): Json<CreateReleaseRequest>,
 ) -> Response
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -26512,7 +26512,7 @@ where
     let Some(id) = mint_ulid(now_ms) else {
         return service_unavailable("releases");
     };
-    let release = NewConfigRelease {
+    let release = NewRelease {
         id: id.to_string(),
         tenant_id,
         name: name.clone(),
@@ -26537,7 +26537,7 @@ where
     .await;
     (
         StatusCode::CREATED,
-        Json(ReleaseView::of(&ConfigRelease {
+        Json(ReleaseView::of(&Release {
             id: release.id,
             tenant_id,
             name,
@@ -26708,7 +26708,7 @@ async fn admin_schedule_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     Json(request): Json<ScheduleReleaseRequest>,
 ) -> Response
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -26945,7 +26945,7 @@ async fn admin_cancel_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     Json(request): Json<ReleaseTenantRequest>,
 ) -> Response
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -27051,7 +27051,7 @@ async fn admin_list_releases<Rel, Sch, Grp, Reg, Cfg, A, C>(
     Query(query): Query<ReleaseTenantQuery>,
 ) -> Response
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -27110,7 +27110,7 @@ async fn admin_read_release<Rel, Sch, Grp, Reg, Cfg, A, C>(
     Query(query): Query<ReleaseTenantQuery>,
 ) -> Response
 where
-    Rel: ConfigReleaseStore + Clone + Send + Sync + 'static,
+    Rel: ReleaseStore + Clone + Send + Sync + 'static,
     Sch: ScheduledPublishStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
@@ -27146,7 +27146,7 @@ async fn release_report_response<Rel, Sch, Grp, Reg, Cfg, A, C>(
     release_id: &str,
 ) -> Response
 where
-    Rel: ConfigReleaseStore,
+    Rel: ReleaseStore,
     Sch: ScheduledPublishStore,
 {
     let release = match state.releases.fetch_one(tenant_id, release_id).await {

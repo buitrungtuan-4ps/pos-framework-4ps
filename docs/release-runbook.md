@@ -114,7 +114,7 @@ person decides which key the fleet trusts. Do the one-time setup below before th
      -H "content-type: application/octet-stream" \
      -H "x-pos-minisig: $(sed -n 2p "pos-edge-${TAG}-${TARGET}.bin.minisig")" \
      --data-binary "@pos-edge-${TAG}-${TARGET}.bin" \
-     "https://$DOMAIN/admin/releases?release=${TAG#v}&arch=${TARGET}"
+     "https://$DOMAIN/admin/ota/releases?release=${TAG#v}&arch=${TARGET}"
    ```
 
    Re-running is safe: identical bytes answer `200` instead of `201`. Different bytes for a release
@@ -126,7 +126,7 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    has its own signature and its own consumer; unpacking it server-side would install bytes nobody
    signed.
 
-6. **Check what is hosted, then promote.** `GET /admin/releases/1.2.3` lists the targets the cloud
+6. **Check what is hosted, then promote.** `GET /admin/ota/releases/1.2.3` lists the targets the cloud
    holds. Then publish the rollout (`PUT /admin/config/ota`, or the Fleet screen). Promoting a
    version with no hosted artifact is refused — before the guard existed, a typo published fine and
    then every store in the ring fetched a `404`, which means "install nothing", so the fleet sat
@@ -166,8 +166,8 @@ find nothing and not know which answer is current.
 
 - **Windows is in the matrix.** `x86_64-pc-windows-msvc` builds on a `windows-2022` runner and is
   signed on the Linux job, so the signing key still reaches exactly one runner (R1c).
-- **The cloud hosts the artifacts.** `POST /admin/releases` puts the bare executable and its
-  signature line into the object store, `GET /admin/releases/{release}` says what is held, and
+- **The cloud hosts the artifacts.** `POST /admin/ota/releases` puts the bare executable and its
+  signature line into the object store, `GET /admin/ota/releases/{release}` says what is held, and
   promoting a version with nothing hosted is refused (R2). The cloud is still a dumb host: it never
   holds the signing key, and it never re-signs.
 

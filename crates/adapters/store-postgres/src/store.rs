@@ -646,10 +646,10 @@ impl PostgresStore {
 
     /// The OTA release registry over this pool ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
     ///
-    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ReleaseStore` seam over it.
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ArtifactStore` seam over it.
     #[must_use]
-    pub fn releases(&self) -> crate::ota::PostgresReleases {
-        crate::ota::PostgresReleases::new(self.pool.clone())
+    pub fn ota_artifacts(&self) -> crate::ota::PostgresArtifacts {
+        crate::ota::PostgresArtifacts::new(self.pool.clone())
     }
 
     /// The device-proposal store over this pool ([ADR-0041](../../../docs/adr/0041-device-onboarding.md)).

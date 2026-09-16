@@ -7,7 +7,7 @@
 //! Rows only. The artifact bytes live in the object store — a 30 MB binary per release per target in
 //! the transactional database would ride along in every WAL archive, for data that is immutable and
 //! content-addressable. What is here is the small record that says a release exists for a target, and
-//! how big and what digest its bytes are; `pos-cloud` implements its `ReleaseStore` seam over this
+//! how big and what digest its bytes are; `pos-cloud` implements its `ArtifactStore` seam over this
 //! type and derives the blob keys from the tag and target rather than storing them.
 //!
 //! The immutability rule is **not** in this SQL. `pos_cloud::ota::admit_artifact` owns it, and the
@@ -39,11 +39,11 @@ pub struct ReleaseArtifactRow {
 /// The release registry over a shared pool. Built by
 /// [`PostgresStore::releases`](crate::PostgresStore::releases).
 #[derive(Clone, Debug)]
-pub struct PostgresReleases {
+pub struct PostgresArtifacts {
     pool: Pool,
 }
 
-impl PostgresReleases {
+impl PostgresArtifacts {
     pub(crate) fn new(pool: Pool) -> Self {
         Self { pool }
     }

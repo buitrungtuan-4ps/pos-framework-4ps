@@ -157,3 +157,39 @@ refusal.
 The guard reads the registry, not the object store, so it works on a deployment with no `[artifacts]`
 block configured — such a deployment simply cannot upload, and therefore cannot promote, which is the
 correct posture for a cloud that ships no edge releases.
+
+## Amendment 3 — the route moves to where this ADR always put it (2026-09-16)
+
+§4 of this record specifies `POST /admin/ota/releases`. The implementation shipped it at
+`POST /admin/releases`, and nothing noticed until a second, unrelated kind of release arrived.
+
+ADR-0125 gave the cloud *config* releases — a named set of config publishes aimed at a cohort of
+shops. Two routers cannot claim one path (axum panics at start-up), so that newcomer was qualified
+to `/admin/config-releases` and the collision was written down rather than resolved: the drift here
+was load-bearing for a path it had no business owning.
+
+Both halves now say which release they mean.
+
+- **The routes.** `POST /admin/releases` → `POST /admin/ota/releases`, and
+  `GET /admin/releases/{release}` → `GET /admin/ota/releases/{release}`. This is not a new decision;
+  it is the code catching up with §4. Both are `/admin` routes behind a console session and
+  `console.ota.publish`, with no edge, console or programmatic caller — the store-facing fetch is
+  `POST /sync/stores/{store_id}/artifact` (Amendment 1) and is untouched. The one consumer is step 5
+  of `docs/release-runbook.md`, updated with them. `docs/snapshots/routes.txt` and ADR-0111's
+  additive-route gate cover the edge's `/api/*` surface only and are unaffected.
+
+- **The seam.** `ota::ReleaseStore` is `ota::ArtifactStore`, and its error `ArtifactStoreError`;
+  `store-postgres`'s `PostgresReleases` is `PostgresArtifacts`, reached by `store.ota_artifacts()`.
+  The record type was already `ReleaseArtifact`, which is the tell: a store of artifacts, keyed by
+  release tag and target triple, had been given the name of its key rather than of its contents.
+  `ArtifactStore` is also what this ADR's own title calls it.
+
+- **What did *not* move.** `crate::releases` — ADR-0125's config releases — keeps the plain
+  `ReleaseStore`, `Release`, `NewRelease` spelling, and the `ConfigRelease*` import aliases that
+  `http.rs` and `persistence.rs` carried purely to dodge the collision are gone. `/admin/config-releases`
+  also keeps its qualifier: among config nodes it is the only release there is, but `/admin` now
+  visibly carries two kinds and each should say which.
+
+No storage, wire format, signature or trust decision in this record changes. This is naming and one
+route, and it is only worth an amendment because a future reader hitting `/admin/releases` in an old
+runbook copy deserves to find out here where it went.

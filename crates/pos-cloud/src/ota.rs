@@ -282,7 +282,7 @@ pub enum RecordOutcome {
 
 /// A failure of the release registry.
 #[derive(Debug, thiserror::Error)]
-pub enum ReleaseStoreError {
+pub enum ArtifactStoreError {
     /// The registry could not be reached.
     #[error("the release registry failed: {0}")]
     Unavailable(String),
@@ -299,7 +299,7 @@ pub enum ReleaseStoreError {
     },
 }
 
-impl ReleaseStoreError {
+impl ArtifactStoreError {
     /// A registry failure carrying a human-readable reason, for the server's log.
     #[must_use]
     pub fn unavailable(message: impl Into<String>) -> Self {
@@ -312,20 +312,20 @@ impl ReleaseStoreError {
 ///
 /// The immutability rule lives here, as one pure function, rather than in the adapter's SQL — so the
 /// registry cannot drift from the fake, and so the rule can be read without a database. Every
-/// [`ReleaseStore`] implementation is expected to consult it.
+/// [`ArtifactStore`] implementation is expected to consult it.
 ///
 /// # Errors
 ///
-/// [`ReleaseStoreError::Immutable`] if the release/target is already recorded with a different
+/// [`ArtifactStoreError::Immutable`] if the release/target is already recorded with a different
 /// digest.
 pub fn admit_artifact(
     stored_sha256: Option<&str>,
     incoming: &ReleaseArtifact,
-) -> Result<RecordOutcome, ReleaseStoreError> {
+) -> Result<RecordOutcome, ArtifactStoreError> {
     match stored_sha256 {
         None => Ok(RecordOutcome::Recorded),
         Some(stored) if stored == incoming.sha256 => Ok(RecordOutcome::AlreadyRecorded),
-        Some(_different) => Err(ReleaseStoreError::Immutable {
+        Some(_different) => Err(ArtifactStoreError::Immutable {
             release: incoming.release.clone(),
             target: incoming.target.to_string(),
         }),
@@ -338,17 +338,17 @@ pub fn admit_artifact(
 /// and the console lists. Nothing updates and nothing deletes — a release is immutable, and
 /// collecting old artifacts is a retention concern ADR-0088 defers until there is more than one
 /// release to collect.
-pub trait ReleaseStore {
+pub trait ArtifactStore {
     /// Records one artifact, honouring [`admit_artifact`].
     ///
     /// # Errors
     ///
-    /// [`ReleaseStoreError::Immutable`] if the release/target already carries different bytes, or
-    /// [`ReleaseStoreError::Unavailable`] if the registry could not be written.
+    /// [`ArtifactStoreError::Immutable`] if the release/target already carries different bytes, or
+    /// [`ArtifactStoreError::Unavailable`] if the registry could not be written.
     fn record_artifact(
         &self,
         artifact: &ReleaseArtifact,
-    ) -> impl Future<Output = Result<RecordOutcome, ReleaseStoreError>> + Send;
+    ) -> impl Future<Output = Result<RecordOutcome, ArtifactStoreError>> + Send;
 
     /// The artifact recorded for `release` on `target`, or `None` if there is none.
     ///
@@ -357,28 +357,28 @@ pub trait ReleaseStore {
     ///
     /// # Errors
     ///
-    /// [`ReleaseStoreError::Unavailable`] if the registry could not be read.
+    /// [`ArtifactStoreError::Unavailable`] if the registry could not be read.
     fn find_artifact(
         &self,
         release: &str,
         target: &TargetTriple,
-    ) -> impl Future<Output = Result<Option<ReleaseArtifact>, ReleaseStoreError>> + Send;
+    ) -> impl Future<Output = Result<Option<ReleaseArtifact>, ArtifactStoreError>> + Send;
 
     /// Every artifact recorded for `release`, ordered by target.
     ///
     /// # Errors
     ///
-    /// [`ReleaseStoreError::Unavailable`] if the registry could not be read.
+    /// [`ArtifactStoreError::Unavailable`] if the registry could not be read.
     fn list_artifacts(
         &self,
         release: &str,
-    ) -> impl Future<Output = Result<Vec<ReleaseArtifact>, ReleaseStoreError>> + Send;
+    ) -> impl Future<Output = Result<Vec<ReleaseArtifact>, ArtifactStoreError>> + Send;
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactKind, RecordOutcome, ReleaseArtifact, ReleaseStoreError, ReleaseTagError,
+        ArtifactKind, ArtifactStoreError, RecordOutcome, ReleaseArtifact, ReleaseTagError,
         TargetTriple, TargetTripleError, admit_artifact, artifact_key, validate_release_tag,
     };
     use pos_proto::Timestamp;
@@ -532,11 +532,11 @@ mod tests {
         let refused = admit_artifact(Some("abc123"), &artifact("v1.2.3", "def456"))
             .expect_err("an immutable release");
         match refused {
-            ReleaseStoreError::Immutable { release, target } => {
+            ArtifactStoreError::Immutable { release, target } => {
                 assert_eq!(release, "v1.2.3");
                 assert_eq!(target, "x86_64-unknown-linux-gnu");
             }
-            other @ ReleaseStoreError::Unavailable(_) => {
+            other @ ArtifactStoreError::Unavailable(_) => {
                 panic!("expected an immutability refusal, got {other:?}")
             }
         }
