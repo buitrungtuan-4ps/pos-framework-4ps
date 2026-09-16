@@ -15,6 +15,8 @@ import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ComboboxField, MultiComboboxField } from "../src/components/ui";
+import { ImagePicker, MediaThumbnail } from "../src/components/ImagePicker";
+import { api } from "../src/api/client";
 
 // Deliberately non-ASCII and deliberately sharing prefixes: the collation and the substring match
 // are the two things a picker over this catalogue has to get right.
@@ -221,5 +223,39 @@ describe("the multi-choice picker", () => {
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect([...values()]).toEqual(["i3"]);
+  });
+});
+
+describe("the image picker", () => {
+  it("renders fallback placeholder with role='img'", () => {
+    render(() => (
+      <MediaThumbnail tenantId="t1" mediaId={null} alt="Test Image" />
+    ));
+    expect(screen.getByRole("img", { name: "No image" })).toBeTruthy();
+  });
+
+  it("renders image options in modal with media_id in aria-label and focus visible styles", async () => {
+    vi.spyOn(api, "listMedia").mockResolvedValue([
+      { media_id: "m1", content_type: "image/jpeg", detail_bytes: 1024, created_at_ms: 1000 },
+      { media_id: "m2", content_type: "image/png", detail_bytes: 2048, created_at_ms: 2000 },
+    ]);
+
+    render(() => (
+      <ImagePicker
+        tenantId="t1"
+        value={null}
+        onChange={vi.fn()}
+        canManage={true}
+      />
+    ));
+
+    fireEvent.click(screen.getByRole("button", { name: "Set image" }));
+
+    const optionBtn1 = await screen.findByRole("button", { name: /m1/ });
+    expect(optionBtn1.getAttribute("aria-label")).toContain("m1");
+    expect(optionBtn1.className).toContain("focus-visible:outline-2");
+
+    const optionBtn2 = await screen.findByRole("button", { name: /m2/ });
+    expect(optionBtn2.getAttribute("aria-label")).toContain("m2");
   });
 });

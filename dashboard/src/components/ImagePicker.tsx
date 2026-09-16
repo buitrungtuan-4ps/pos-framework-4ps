@@ -31,6 +31,7 @@ export function MediaThumbnail(props: {
       when={props.mediaId && !broken()}
       fallback={
         <div
+          role="img"
           class={`flex items-center justify-center rounded-token border border-line bg-surface-raised text-ink-muted ${box()}`}
           aria-label={t("media.noImage")}
           title={t("media.noImage")}
@@ -146,8 +147,9 @@ export function ImagePicker(props: {
                     {(asset) => (
                       <button
                         type="button"
-                        aria-label={t("media.selectThisImage")}
-                        class="rounded-token border border-line p-1 transition-colors hover:border-accent"
+                        aria-label={`${t("media.selectThisImage")}: ${asset.media_id}`}
+                        title={asset.media_id}
+                        class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
                         onClick={() => {
                           props.onChange(asset.media_id);
                           setOpen(false);
