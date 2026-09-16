@@ -42,6 +42,7 @@ import {
   EmptyState,
   FormPanel,
   PublishBar,
+  RowActions,
   TechnicalDetails,
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -295,21 +296,31 @@ export function ReasonCodes() {
                 }
                 actionsHeader={t("common.actions")}
                 actions={(row) => (
-                  <div class="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => openEdit(row)}>
+                  <RowActions label={t("common.actions")}>
+                    <Button
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost" onClick={() => openEdit(row)}
+                    >
                       {t("action.edit")}
                     </Button>
                     <Button
-                      variant="secondary"
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost"
                       disabled={flipping() === row.id}
                       onClick={() => void setStanding(row, !row.active)}
                     >
                       {row.active ? t("reasonCodes.retire") : t("reasonCodes.restore")}
                     </Button>
-                    <Button variant="danger-ghost" onClick={() => deletion.confirm(row)}>
+                    <Button
+                      size="sm"
+                      class="justify-start"
+                      variant="danger-ghost" onClick={() => deletion.confirm(row)}
+                    >
                       {t("action.delete")}
                     </Button>
-                  </div>
+                  </RowActions>
                 )}
               />
             )}

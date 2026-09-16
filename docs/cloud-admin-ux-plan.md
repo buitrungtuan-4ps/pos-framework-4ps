@@ -1513,10 +1513,33 @@ data-flow change in the same diff. They go with PR-6.
 **Caught up (2026-09-16).** V9 and V18 are closed: below `md` a row is a card, and `density:
 compact` exists for reference grids. `Toolbar` landed with its three callers at the same time —
 Audit, Reports' X/Z panel and Catalog → Items, which had each rolled the same filter row by hand,
-and which is the "screens that want them" this note was waiting on. **Still open from this list:
-`TechnicalDetails` into the row kebab (V14) and the rest of the `RowActions` sweep across the
-remaining ~25 tables (V19).** Those two are one mechanical pass per screen rather than a kit change,
-and they are the next slice.
+and which is the "screens that want them" this note was waiting on.
+
+**V19 is closed at three tables, not twenty-five, and the "~25" line above is retired.** The sweep
+was attempted mechanically and the result was measured before it was kept. Of the 22 rows in the
+console that render an action cell:
+
+- **16 carry two verbs** — almost always Edit plus Archive/Restore. V19's case is a row "whose
+  widest column is its verbs", counted at up to five; a row with two is not that row. A kebab there
+  costs a tap to reach *either* verb and saves a few pixels of width. Left inline.
+- **3 more carry three or more but lead with the row's own primary action** — Catalog → Menus opens
+  with "Open placements", which is step 3 of the flow D7 measures. Folding a row's primary action
+  into a menu is not what `RowActions` is for (its own docstring lists Edit, Archive, Revoke,
+  Details, Resend — all secondary), and here it would have cost the price flow a tap that the step
+  budget cannot see, which is [#432](https://github.com/buitrungtuan-4ps/pos-framework-4ps/issues)'s
+  blind spot exactly. Left inline.
+- **3 qualify and are folded**: Campaigns (Edit · Vouchers · Delete), Reason codes (Edit · Retire ·
+  Delete) and Store groups (Edit · Edit shops · History · Archive). Stores' shop table was already
+  folded in PR-3.
+
+The finding was written when rows did carry five verbs. Waves since have moved most of that weight
+into drawers and detail panels, so the premise expired before the sweep ran. **The rule to apply
+from here is three or more *distinct* verbs, none of them the row's primary action** — counting
+`<Button>` elements overcounts, because one verb that reads "Archive" or "Restore" is two elements
+behind a `Show`.
+
+**Still open: `TechnicalDetails` into the row kebab (V14)**, which is now a smaller job than it
+looked — it only applies where a kebab exists, which is four tables.
 
 `createAdminResource` is on Alerts only. The helper is the deliverable here; the migration is
 per-screen and explicitly PR-6's, as §Sequencing already said.

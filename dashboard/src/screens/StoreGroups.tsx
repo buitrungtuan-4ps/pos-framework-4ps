@@ -52,6 +52,7 @@ import {
   DataTable,
   EmptyState,
   FormPanel,
+  RowActions,
   TechnicalDetails,
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -551,25 +552,39 @@ export function StoreGroups() {
                 }
                 actionsHeader={t("common.actions")}
                 actions={(row) => (
-                  <div class="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => openEdit(row)}>
+                  <RowActions label={t("common.actions")}>
+                    <Button
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost" onClick={() => openEdit(row)}
+                    >
                       {t("action.edit")}
                     </Button>
-                    <Button variant="secondary" onClick={() => openMembers(row)}>
+                    <Button
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost" onClick={() => openMembers(row)}
+                    >
                       {t("storeGroups.editMembers")}
                     </Button>
-                    <Button variant="secondary" onClick={() => openHistory(row)}>
+                    <Button
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost" onClick={() => openHistory(row)}
+                    >
                       {t("storeGroups.history")}
                     </Button>
                     <Button
-                      variant="secondary"
+                      size="sm"
+                      class="justify-start"
+                      variant="ghost"
                       onClick={() => setStanding(row, row.status !== "active")}
                     >
                       {row.status === "active"
                         ? t("storeGroups.archive")
                         : t("storeGroups.restore")}
                     </Button>
-                  </div>
+                  </RowActions>
                 )}
               />
             )}

@@ -47,6 +47,7 @@ import {
   EmptyState,
   Modal,
   PublishBar,
+  RowActions,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -581,23 +582,33 @@ export function Campaigns() {
                   }
                   actionsHeader={t("common.actions")}
                   actions={(row) => (
-                    <div class="flex flex-wrap gap-2">
-                      <Button variant="secondary" disabled={busy()} onClick={() => openEdit(row)}>
+                    <RowActions label={t("common.actions")}>
+                      <Button
+                        size="sm"
+                        class="justify-start"
+                        variant="ghost" disabled={busy()} onClick={() => openEdit(row)}
+                      >
                         {t("action.edit")}
                       </Button>
                       <Show when={row.kind === "voucher"}>
                         <Button
-                          variant="secondary"
+                          size="sm"
+                          class="justify-start"
+                          variant="ghost"
                           disabled={busy()}
                           onClick={() => void openVouchers(row)}
                         >
                           {t("campaigns.vouchers")}
                         </Button>
                       </Show>
-                      <Button variant="danger-ghost" disabled={busy()} onClick={() => setPendingDelete(row)}>
+                      <Button
+                        size="sm"
+                        class="justify-start"
+                        variant="danger-ghost" disabled={busy()} onClick={() => setPendingDelete(row)}
+                      >
                         {t("action.delete")}
                       </Button>
-                    </div>
+                    </RowActions>
                   )}
                 />
               )}

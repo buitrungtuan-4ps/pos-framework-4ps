@@ -134,6 +134,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     default is already 36 px, so the density worth adding was the tighter one and the touch floor
     stayed on the controls where it belongs.)
 
+- **A row's verbs move behind a kebab where a row actually has verbs** (finding V19). The plan
+  asked for this across "~25 tables". Measured first: of the 22 rows in the console that render an
+  action cell, **16 carry two verbs** — Edit plus Archive/Restore — where a menu costs a tap to
+  reach either one and saves a few pixels, and **3 more lead with the row's own primary action**,
+  including Catalog → Menus, where folding "Open placements" would have quietly added a tap to the
+  one flow D7 measures. Three qualify and are folded: Campaigns, Reason codes and Store groups.
+  The finding was written when rows did carry five verbs; the waves since moved that weight into
+  drawers, so its premise expired before the sweep ran, and `docs/cloud-admin-ux-plan.md` now says
+  so with the count.
+
 - **One filter row instead of three spellings of one** (`Toolbar`). Audit, Reports' X/Z panel and
   Catalog → Items had each rolled the same bar by hand — `mb-4 grid gap-3 sm:grid-cols-3` and two
   variants of `mb-4 flex flex-wrap items-end gap-N` — which is how a console stops looking like one
