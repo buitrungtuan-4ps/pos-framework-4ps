@@ -47,6 +47,10 @@ export function CatalogShell() {
                       : "text-ink-muted hover:text-ink"
                   }`}
                   data-step="setTab"
+                  // Which tab, for a declared step that names one: `setTab` sits on five buttons
+                  // that go to five different places, so "the first match" is not a rule here the
+                  // way it is for a row of equivalent keys.
+                  data-step-value={entry.key}
                   onClick={() => setTab(entry.key)}
                 >
                   {t(entry.label)}

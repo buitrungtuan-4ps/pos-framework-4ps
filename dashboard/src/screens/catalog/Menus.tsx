@@ -104,21 +104,6 @@ export function CatalogMenus() {
   // Publish.
   const [publishMenu, setPublishMenu] = createSignal("");
 
-  // Memoized maps for O(1) lookups instead of O(N) linear scans on every table cell render/filter.
-  const menuMap = createMemo(
-    () => new Map((menus() ?? []).map((menu) => [menu.menu_id, menu.name])),
-  );
-  const itemMap = createMemo(
-    () => new Map(items().map((item) => [item.menu_item_id, item.name])),
-  );
-  const sectionMap = createMemo(
-    () => new Map(sections().map((row) => [row.menu_section_id, row.name])),
-  );
-
-  const menuName = (id: string) => menuMap().get(id) ?? id;
-  const itemName = (id: string) => itemMap().get(id) ?? id;
-  const sectionName = (id: string | null) => (id ? (sectionMap().get(id) ?? id) : "—");
-
   // The currency codes the operator can pick, from the country registry (deduped, sorted); VND is the
   // v1 default and the fallback while the list loads.
   const currencyOptions = () => {
@@ -159,6 +144,29 @@ export function CatalogMenus() {
   const menus = () => catalogue.value()?.menus ?? null;
   const items = () => catalogue.value()?.items ?? [];
   const countries = () => catalogue.value()?.countries ?? [];
+
+  // Memoized maps for O(1) lookups instead of O(N) linear scans on every table cell render/filter.
+  //
+  // **Below the three accessors, and that is the whole point.** `createMemo` runs its computation
+  // when it is created, not when it is first read, so a memo written above `menus` reached a `const`
+  // in its temporal dead zone and threw `ReferenceError: Cannot access … before initialization`
+  // while the tab was mounting — taking the whole Menus sub-screen down with it. The browser gate
+  // found it (`tests/replay.spec.mjs`); the unit tests never mounted this screen, and neither the
+  // type-checker nor the step budget can see an ordering fault. Same shape as the `serverSorted`
+  // TDZ the list screens carried before Wave 4.
+  const menuMap = createMemo(
+    () => new Map((menus() ?? []).map((menu) => [menu.menu_id, menu.name])),
+  );
+  const itemMap = createMemo(
+    () => new Map(items().map((item) => [item.menu_item_id, item.name])),
+  );
+  const sectionMap = createMemo(
+    () => new Map(sections().map((row) => [row.menu_section_id, row.name])),
+  );
+
+  const menuName = (id: string) => menuMap().get(id) ?? id;
+  const itemName = (id: string) => itemMap().get(id) ?? id;
+  const sectionName = (id: string | null) => (id ? (sectionMap().get(id) ?? id) : "—");
 
   const loadMenuDetail = async (menuId: string) => {
     const [loadedPlacements, loadedSections] = await Promise.all([

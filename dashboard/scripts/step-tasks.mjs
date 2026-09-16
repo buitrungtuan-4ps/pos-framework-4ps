@@ -11,7 +11,10 @@
 //
 //  * `task` — what an operator is doing, in their words. The test's name, too.
 //  * `budget` — the decided ceiling (D7, or the note's reasoning where D7's number does not fit).
-//  * `steps` — the clicks, in order. Four shapes; `step-budget.mjs` documents each.
+//  * `steps` — the clicks, in order. Four shapes; `step-budget.mjs` documents each. A step may add
+//    `value` when its action sits on several controls that are *not* interchangeable — the catalog
+//    tabs, where one `setTab` handler serves five destinations. The element then carries
+//    `data-step-value`, and the browser gate clicks that one rather than the first.
 //  * `outcome` — `{ screen | file, mark }`: what becomes true when the flow has worked. The screen
 //    must carry a `data-outcome="<mark>"` element, and the browser gate waits for it. A flow with
 //    no outcome is one the browser could only walk, asserting nothing — the blind spot with extra
@@ -27,7 +30,7 @@ export const TASKS = [
     note: "The flow Q7 exists to measure, and D7's publish ceiling of 6 does not fit it — see the top of this file. The last step is the operational risk: a price saved and not published leaves the till charging the old one, and neither screen says so. Any proposal to shorten this should shorten the *first* six, not merge the publish into the save. It was eight until `openMenuDetail` started selecting the opened menu in the publish card, which removed the one tap that was asking the operator to say twice which menu they were working on.",
     steps: [
       { nav: "catalog" },
-      { file: "screens/catalog/CatalogShell.tsx", action: "setTab" },
+      { file: "screens/catalog/CatalogShell.tsx", action: "setTab", value: "menus" },
       { file: "screens/catalog/Menus.tsx", action: "openMenuDetail" },
       { file: "screens/catalog/Menus.tsx", action: "openEditPlacement" },
       { file: "screens/catalog/Menus.tsx", action: "setChannelAmount" },
@@ -45,13 +48,14 @@ export const TASKS = [
   },
   {
     task: "Provision a new store and get its installer",
-    budget: 5,
-    note: "Five, and none of them is removable: the wizard is not in the sidebar (this gate caught that), so it is reached through Stores, and inside it the store must exist before a key can be scoped to it and the key must exist before the installer can embed it. The wizard's three steps are the dependency order, not a form split for looks. That is the one flow D7's create ceiling of 4 cannot hold without unscoping the key from its store, which is why the ceiling here is 5.",
+    budget: 6,
+    note: "Six, and it was declared as five until the browser gate ran it. The missing one is **Next**, between the key and the files: the key is shown exactly once, so the wizard holds that step until the operator says they have it — which is a real safeguard and not an accidental click. None of the six is removable: the wizard is not in the sidebar (this gate caught that too), so it is reached through Stores; the store must exist before a key can be scoped to it; the key must exist before the installer can embed it; and the key must be acknowledged before the screen moves past it. That is the flow D7's create ceiling of 4 cannot hold without unscoping the key from its store or showing the key twice.",
     steps: [
       { nav: "stores" },
       { link: { from: "stores", to: "newStore" } },
       { screen: "newStore", action: "createStore" },
       { screen: "newStore", action: "issueKey" },
+      { screen: "newStore", action: "setStep", value: "handoff" },
       { screen: "newStore", action: "downloadInstaller" },
     ],
     outcome: { screen: "newStore", mark: "installer-ready" },
@@ -70,12 +74,13 @@ export const TASKS = [
   },
   {
     task: "Publish one menu to a whole cohort of shops",
-    budget: 4,
-    note: "Four, against 3N for the same change made shop by shop — 150 taps at fifty shops, of which 147 are repetition (ADR-0122). The two pickers in the middle are the instruction itself and are not removable: which cohort, and what to send it. What this number does not show is the half the record is actually about — the fourth tap answers with an outcome per shop, where fifty separate publishes answered fifty times and nobody counted.",
+    budget: 5,
+    note: "Five, and it was declared as four until the browser gate ran it: the node picker says *what kind* of thing to send, and a menu node then needs a second picker saying *which* menu — `menuId` starts empty, so the publish refuses without it. The static gate could not see that, which is the whole reason the browser half exists. The number still stands against 3N for the same change made shop by shop — 150 taps at fifty shops, of which 147 are repetition (ADR-0122) — and the three pickers are the instruction itself: which cohort, what kind, which one. What the count does not show is the half the record is actually about: the last tap answers with an outcome per shop, where fifty separate publishes answered fifty times and nobody counted.",
     steps: [
       { nav: "storeGroups" },
       { screen: "storeGroups", action: "setTarget" },
       { screen: "storeGroups", action: "setNode" },
+      { screen: "storeGroups", action: "setMenuId" },
       { screen: "storeGroups", action: "publish" },
     ],
     outcome: { screen: "storeGroups", mark: "batch-report" },

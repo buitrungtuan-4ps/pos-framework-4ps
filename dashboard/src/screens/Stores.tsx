@@ -541,6 +541,9 @@ export function Stores() {
                     second button that looks like the first. Add still sits in the header of the
                     list it adds to (ADR-0121 §6). */}
                 <A
+                  // The declared link step's handle, the same vocabulary the sidebar uses: a step
+                  // that says `{ link: { from: "stores", to: "newStore" } }` is a click on this.
+                  data-nav="newStore"
                   href={screenHref("newStore", tenantId(), "")}
                   class="inline-flex h-10 items-center justify-center rounded-token bg-primary px-3.5 text-base font-medium text-primary-ink transition hover:brightness-95"
                 >

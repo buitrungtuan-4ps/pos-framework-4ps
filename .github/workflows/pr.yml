@@ -268,6 +268,73 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
+  # The browser half of the *console's* step gate (ADR-0109). `dashboard` below
+  # resolves each declared click against the source; this one clicks it in a real
+  # browser, against a real `pos_cloud` on a real PostgreSQL, and asserts the
+  # flow still reaches its outcome. That is the half that catches a click nobody
+  # declared — a picker added to the cohort publish leaves the static gate green
+  # and turns this one red with the declaration untouched.
+  #
+  # The step order is load-bearing: `pos_cloud` embeds `dashboard/dist` at
+  # compile time (rust-embed, ADR-0060), so the console is built first and the
+  # binary second, or the browser drives a placeholder page.
+  # ---------------------------------------------------------------------------
+  console-replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      # Same pinned digest the `postgres` job uses: two gates disagreeing on the
+      # database version would be worse than one.
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: poscloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pos -d poscloud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The *server*, not a database: the harness creates one of its own per run
+      # and drops it afterwards, because `/admin/setup` enrols once per
+      # installation and its TOTP secret is returned once (ADR-0045).
+      POS_E2E_POSTGRES: "postgres://pos:pos@127.0.0.1:5432"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+      - name: install pnpm
+        run: npm install --global pnpm@10
+      - name: install dependencies
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: build the console
+        working-directory: dashboard
+        run: pnpm build
+      - name: build the cloud
+        run: cargo build -p pos-cloud --locked
+      # Chromium only, and only the browser this project drives. `--with-deps`
+      # installs the shared libraries a headless Chromium needs on a bare runner.
+      - name: install the browser
+        working-directory: dashboard
+        run: pnpm exec playwright install --with-deps chromium
+      - name: replay every declared console flow
+        working-directory: dashboard
+        run: pnpm replay
+      # The trace of a failed replay is the difference between "a click did not
+      # land" and knowing which one. Only on failure, and only for a fortnight.
+      - name: keep the traces of whatever failed
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: console-replay-traces
+          path: dashboard/test-results/
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
   # The back-office dashboard (ADR-0060). Like `ui`, the Rust build embeds a
   # placeholder on a fresh checkout (dashboard/dist is gitignored), so this is
   # the only job that compiles the SolidJS app: it type-checks, runs the

@@ -355,7 +355,12 @@ export function NewStore() {
                       </For>
                     </fieldset>
                     <div class="flex flex-wrap gap-2">
-                      <Button variant="secondary" onClick={() => setStep(1)}>
+                      <Button
+                        data-step="setStep"
+                        data-step-value="details"
+                        variant="secondary"
+                        onClick={() => setStep(1)}
+                      >
                         {t("wizard.back")}
                       </Button>
                       <Button data-step="issueKey" disabled={busy()} onClick={() => void issueKey()}>
@@ -365,7 +370,12 @@ export function NewStore() {
                           second create form for exactly this — a registry row and nothing else —
                           and the operator could not tell from the button that the store it made
                           could not trade. It is this step instead, and it says so. */}
-                      <Button variant="ghost" onClick={() => setStep(3)}>
+                      <Button
+                        data-step="setStep"
+                        data-step-value="handoff-without-key"
+                        variant="ghost"
+                        onClick={() => setStep(3)}
+                      >
                         {t("wizard.skipKey")}
                       </Button>
                     </div>
@@ -380,7 +390,12 @@ export function NewStore() {
                       {key().token}
                     </div>
                     <div>
-                      <Button onClick={() => setStep(3)}>{t("wizard.next")}</Button>
+                      {/* The click the step budget did not know about until the browser gate ran
+                          the flow: the key is shown once, and moving past it to the files is its
+                          own decision. Three buttons share `setStep`, so each says which. */}
+                      <Button data-step="setStep" data-step-value="handoff" onClick={() => setStep(3)}>
+                        {t("wizard.next")}
+                      </Button>
                     </div>
                   </>
                 )}
