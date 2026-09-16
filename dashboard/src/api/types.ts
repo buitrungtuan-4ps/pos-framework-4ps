@@ -1289,6 +1289,49 @@ export interface PublishPlacementRequest {
 }
 
 /**
+ * One release artifact the cloud hosts, from `GET /admin/ota/releases/{release}` (ADR-0088).
+ *
+ * `arch` is the target triple the binary was compiled for; a store fetches the one matching its own.
+ * `sha256` is an integrity check over the stored bytes and emphatically **not** what makes an update
+ * safe to install — only the minisign signature does that, and only the edge checks it.
+ */
+export interface HostedArtifact {
+  readonly arch: string;
+  readonly size_bytes: number;
+  readonly sha256: string;
+  readonly recorded_at_ms: number;
+}
+
+/** What `GET /admin/ota/releases/{release}` answers: the version, and every target hosted for it. */
+export interface HostedRelease {
+  readonly release: string;
+  readonly artifacts: readonly HostedArtifact[];
+}
+
+/**
+ * One artifact a fetch put in the cloud, from `POST /admin/ota/releases/fetch`
+ * ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+ *
+ * `outcome` is `recorded` for a new artifact and `already_hosted` for one the cloud already held
+ * with these exact bytes, so pressing the button twice reads as a no-op rather than as work.
+ */
+export interface FetchedArtifact {
+  readonly arch: string;
+  readonly size_bytes: number;
+  readonly sha256: string;
+  readonly outcome: string;
+  readonly asset: string;
+}
+
+/** What `POST /admin/ota/releases/fetch` answers: the version, the tag the forge published it under,
+ *  and what was taken. */
+export interface FetchedRelease {
+  readonly release: string;
+  readonly tag: string;
+  readonly artifacts: readonly FetchedArtifact[];
+}
+
+/**
  * One reconciliation run from `GET /admin/reconcile` (ADR-0078, Track O3): counts and a timestamp per
  * diff (ADR-0040), never event contents. `missing_found` of zero means the store was fully in sync.
  */

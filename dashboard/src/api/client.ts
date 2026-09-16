@@ -71,6 +71,8 @@ import type {
   SalesChannel,
   OtaPlacement,
   OtaRollout,
+  HostedRelease,
+  FetchedRelease,
   PublishPlacementRequest,
   PublishRolloutRequest,
   ReasonCode,
@@ -2206,6 +2208,21 @@ export const api = {
     ),
   publishOtaPlacement: (request: PublishPlacementRequest) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/ota/placement", request),
+
+  // --- what the cloud hosts, and how it gets there (ADR-0088) ---
+  // A release is fleet-wide, not per store: the same signed binary serves every tenant, so neither
+  // call carries a tenant or a store. Reading what is hosted is behind console.data.read; fetching
+  // is behind console.ota.publish, like publishing the rollout that will point at it.
+  //
+  // Promoting a version the cloud does not host is refused, so this is the step before the rollout:
+  // put the artifact there, then point a ring at it.
+  listHostedRelease: (release: string) =>
+    requestJson<HostedRelease>(
+      "GET",
+      `/admin/ota/releases/${encodeURIComponent(release)}`,
+    ),
+  fetchRelease: (release: string) =>
+    requestJson<FetchedRelease>("POST", "/admin/ota/releases/fetch", { release }),
 
   // --- reconciliation run history (ADR-0078, Track O3) ---
   // The trail of reconciliation diffs (ADR-0040): counts and a timestamp per run, newest first,

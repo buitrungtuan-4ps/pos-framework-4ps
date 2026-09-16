@@ -19932,7 +19932,7 @@ fn minisig_bytes() -> Vec<u8> {
 /// one shared registry — so a test can upload and then download the same release, which is the whole
 /// point of the pair.
 fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
-    release_app_with_source(admin, FakeReleaseSource::publishes_nothing())
+    release_app_with_source(admin, Some(FakeReleaseSource::publishes_nothing()))
 }
 
 /// The same three routers over one shared object store and registry, with the forge scripted.
@@ -19940,7 +19940,7 @@ fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
 /// All three doors in one app on purpose: what the cloud *holds* has to be identical whether an
 /// artifact was uploaded or fetched, and the only way to assert that is to serve both to the same
 /// store-facing route (ADR-0088 Amendment 4).
-fn release_app_with_source<S>(admin: FakeAdmin, source: S) -> (axum::Router, FakeKeys)
+fn release_app_with_source<S>(admin: FakeAdmin, source: Option<S>) -> (axum::Router, FakeKeys)
 where
     S: ReleaseSource + Clone + Send + Sync + 'static,
 {
@@ -20265,11 +20265,11 @@ async fn a_fetched_release_is_what_a_store_downloads() {
     let binary = b"the next pos-edge, fetched".to_vec();
     let (router, keys) = release_app_with_source(
         provisioned_admin(),
-        FakeReleaseSource::holding(
+        Some(FakeReleaseSource::holding(
             "v1.6.0",
             &[TEST_TARGET, "aarch64-unknown-linux-gnu"],
             &binary,
-        ),
+        )),
     );
     let cookie = admin_cookie(&router).await;
 
@@ -20314,7 +20314,11 @@ async fn a_fetched_release_is_what_a_store_downloads() {
 async fn fetching_the_same_release_twice_reports_it_already_hosted() {
     let (router, _keys) = release_app_with_source(
         provisioned_admin(),
-        FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"same"),
+        Some(FakeReleaseSource::holding(
+            "v1.6.0",
+            &[TEST_TARGET],
+            b"same",
+        )),
     );
     let cookie = admin_cookie(&router).await;
 
@@ -20346,7 +20350,7 @@ async fn a_fetch_without_the_ota_permission_is_refused() {
     let admin = provisioned_admin();
     let (router, _keys) = release_app_with_source(
         admin.clone(),
-        FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"x"),
+        Some(FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"x")),
     );
     let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-fetch").await;
 
@@ -20361,8 +20365,10 @@ async fn a_fetch_without_the_ota_permission_is_refused() {
 /// typed, or the token in `cloud.toml`.
 #[tokio::test]
 async fn a_fetch_that_finds_nothing_says_which_tags_it_tried() {
-    let (missing, _keys) =
-        release_app_with_source(provisioned_admin(), FakeReleaseSource::publishes_nothing());
+    let (missing, _keys) = release_app_with_source(
+        provisioned_admin(),
+        Some(FakeReleaseSource::publishes_nothing()),
+    );
     let cookie = admin_cookie(&missing).await;
     let refused = missing
         .oneshot(fetch_request("9.9.9", &cookie))
@@ -20379,7 +20385,7 @@ async fn a_fetch_that_finds_nothing_says_which_tags_it_tried() {
 
     let (unauthorized, _keys) = release_app_with_source(
         provisioned_admin(),
-        FakeReleaseSource::refuses_the_credentials(),
+        Some(FakeReleaseSource::refuses_the_credentials()),
     );
     let cookie = admin_cookie(&unauthorized).await;
     let refused = unauthorized
@@ -20403,7 +20409,7 @@ async fn a_fetch_that_finds_nothing_says_which_tags_it_tried() {
 async fn a_release_holding_no_signed_executable_is_refused() {
     let (router, _keys) = release_app_with_source(
         provisioned_admin(),
-        FakeReleaseSource::holding("v1.6.0", &[], b""),
+        Some(FakeReleaseSource::holding("v1.6.0", &[], b"")),
     );
     let cookie = admin_cookie(&router).await;
 
@@ -20415,6 +20421,29 @@ async fn a_release_holding_no_signed_executable_is_refused() {
     assert_eq!(
         json_body(refused).await["error"]["details"][0]["field"],
         "release"
+    );
+}
+
+/// A cloud with no `[release_source]` says so, rather than answering the bare `404` an unmerged
+/// route would — which a console cannot tell apart from "that version was never released".
+#[tokio::test]
+async fn a_fetch_with_no_release_source_configured_names_the_missing_block() {
+    let (router, _keys) = release_app_with_source(provisioned_admin(), None::<FakeReleaseSource>);
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "release_source");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/admin/ota/releases"),
+        "and points at the door that needs no forge at all"
     );
 }
 

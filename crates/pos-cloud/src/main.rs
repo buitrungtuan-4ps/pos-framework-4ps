@@ -482,21 +482,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     SystemClock,
                     Arc::clone(&audit),
                 ));
-                // The third door needs a forge as well as an object store, so it is merged only when
-                // both are configured (ADR-0088 Amendment 4). Without it the upload route is still
-                // there, needs no outbound network and no credential, and is what the runbook
-                // documents as the way in.
-                match release_source.clone() {
-                    Some(source) => hosting.merge(http::ota_release_fetch_router(
-                        blobs,
-                        store.ota_artifacts(),
-                        store.admin(),
-                        SystemClock,
-                        Arc::clone(&audit),
-                        source,
-                    )),
-                    None => hosting,
-                }
+                // The third door is merged wherever bytes can be stored, with or without a forge:
+                // configured, it fetches; unconfigured, it says which block of `cloud.toml` is
+                // missing, which a console with a person at it can act on where a bare `404` from an
+                // unmerged route could not (ADR-0088 Amendment 4).
+                hosting.merge(http::ota_release_fetch_router(
+                    blobs,
+                    store.ota_artifacts(),
+                    store.admin(),
+                    SystemClock,
+                    Arc::clone(&audit),
+                    release_source.clone(),
+                ))
             }
             None => Router::new(),
         })

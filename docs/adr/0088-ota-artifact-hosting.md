@@ -229,10 +229,13 @@ doing it by hand, through a browser, and then uploading what they downloaded.
   one, the upload is the one with no outbound dependency. Removing either would make a deployment
   that used to work stop working.
 
-- **The forge is configured, and absent means off.** A `[release_source]` block names the repository and,
-  for a private one, a token. With no block the fetch route is **not merged**, exactly as
-  `[artifacts]` gates hosting: a deployment that ships no edge releases gets an honestly absent
-  route rather than one that always answers `503`. The upload route is unaffected by its absence.
+- **The forge is configured, and absent is said out loud.** A `[release_source]` block names the
+  repository and, for a private one, a token. With no block the route still exists and refuses,
+  naming the block — which is the opposite of how `[artifacts]` gates the *store-facing* route, and
+  deliberately so. There, absence is a meaningful answer an edge reads as "install nothing". Here
+  the caller is a console with a person at it, and a bare `404` from an unmerged route is
+  indistinguishable from "that version was never released", which is the worst of both. The upload
+  route is unaffected either way.
 
 - **The tag is tried both ways, and no mapping function is written.** Amendment 2 forbade a mapping
   between the three spellings of one release, and this does not create one: the request names the

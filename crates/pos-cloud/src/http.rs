@@ -2164,7 +2164,7 @@ struct OtaReleaseFetchState<B, L, A, C, S> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
-    source: S,
+    source: Option<S>,
 }
 
 /// A `POST /admin/ota/releases/fetch` body: which version to go and get.
@@ -2193,17 +2193,22 @@ struct FetchedArtifactResponse {
 /// Builds the `/admin` release-fetch sub-router — the door that does not need the operator to hold
 /// the bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
 ///
-/// Merged only when **both** `[artifacts]` and `[release_source]` are configured: without an object
-/// store there is nowhere for the bytes to go, and without a forge there is nowhere to get them. A
-/// deployment missing either keeps the upload route, which needs no outbound network and no
-/// credential, and is what `docs/release-runbook.md` documents as the fallback.
+/// Merged wherever `[artifacts]` is, and `source` is `None` when no `[release_source]` is
+/// configured. That is the opposite posture from the *store-facing* artifact route, deliberately:
+/// there, absence is a meaningful answer an edge reads as "install nothing", and a route answering
+/// `503` would be worse than none. Here the caller is a console with a person at it, and a bare
+/// `404` from an unmerged route is indistinguishable from "that version was never released" — so
+/// the route exists and says which block of `cloud.toml` is missing.
+///
+/// Either way the upload route is unaffected: it needs no outbound network and no credential, and
+/// is what `docs/release-runbook.md` documents as the way in when this one cannot be used.
 pub fn ota_release_fetch_router<B, L, A, C, S>(
     blobs: B,
     releases: L,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
-    source: S,
+    source: Option<S>,
 ) -> Router
 where
     B: BlobStore + Clone + Send + Sync + 'static,
@@ -2299,6 +2304,15 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
+    let Some(source) = state.source.as_ref() else {
+        return api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "this cloud has no release source configured, so it cannot go and get a release: set \
+             [release_source] in cloud.toml, or send the signed pair to POST /admin/ota/releases \
+             (docs/release-runbook.md step 5)",
+            &[("release_source", "not configured in cloud.toml")],
+        );
+    };
     let release = request.release.trim().to_owned();
     if let Err(error) = validate_release_tag(&release) {
         return api_error_with_details(
@@ -2307,7 +2321,7 @@ where
             &[("release", "not usable as a storage key")],
         );
     }
-    let fetched = match state.source.fetch(&release).await {
+    let fetched = match source.fetch(&release).await {
         Ok(fetched) => fetched,
         Err(error) => {
             tracing::warn!(%error, %release, "fetching a release from the release source failed");
