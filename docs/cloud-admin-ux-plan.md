@@ -1635,8 +1635,11 @@ Depends on: PR-5. Size: 1–2 weeks.
    wall-clock time; the cloud converts the wall-clock time to a per-store instant from that
    store's published `locale.timezone` and `business_date_cutoff` (D8, option O2); the snapshot is
    taken at schedule time; states draft → scheduled → applying → applied | partial.
-2. `crates/pos-cloud/src/scheduling.rs`, `http.rs`, migration — `/admin/releases` (create,
-   list for tenant, cancel, report node × store) (F8, F9, F10, F17).
+2. `crates/pos-cloud/src/scheduling.rs`, `http.rs`, migration — `/admin/config-releases` (create,
+   list for tenant, cancel, report node × store) (F8, F9, F10, F17). *Delivered on that path rather
+   than `/admin/releases`: the OTA artifact upload held the shorter one. It has since moved to
+   `/admin/ota/releases`, where ADR-0088 §4 always said it was, but the config path keeps the
+   qualifier — among config nodes it is the only release there is, but `/admin` carries both kinds.*
 3. Console — `Releases.tsx` (publish centre, by store) and `Calendar.tsx` (by tenant);
    `PublishBar` gains "Add to a release"; the wizard asks group + country and offers "as the
    group" (L1–L4).

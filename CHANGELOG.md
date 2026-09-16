@@ -115,6 +115,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **"Release" meant two things, and now each says which** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
+  Amendment 3). The cloud has had an OTA release — a signed edge binary for a version and a CPU —
+  since R2. ADR-0125 then gave it a config release: a named set of config publishes aimed at a
+  cohort of shops. The two shared a word, a trait name, an adapter name and very nearly a URL, and
+  the collision was being worked around rather than resolved — `http.rs` and `persistence.rs` each
+  carried a block of `as ConfigRelease…` import aliases whose only job was to keep them apart.
+  - `POST /admin/releases` is now **`POST /admin/ota/releases`**, and `GET /admin/releases/{release}`
+    is **`GET /admin/ota/releases/{release}`**. That is where ADR-0088 §4 put them when it was
+    written; the implementation had drifted, and the drift was holding a path it had no business
+    owning. `docs/release-runbook.md` step 5 is updated with them.
+  - The seam is named for what it holds rather than for its key: `ota::ReleaseStore` →
+    `ota::ArtifactStore` (its record was already `ReleaseArtifact`), and `store-postgres`'s
+    `PostgresReleases` → `PostgresArtifacts`, reached by `store.ota_artifacts()`.
+  - ADR-0125's config releases keep the plain `ReleaseStore` / `Release` spelling and the
+    `/admin/config-releases` path — among config nodes it is the only release there is, but `/admin`
+    carries both kinds, so the qualifier stays. The import aliases are gone.
+
+  **Upgrade note.** `POST|GET /admin/releases` no longer exists. Both were `/admin` routes behind a
+  console session and `console.ota.publish`, with no edge, console or programmatic caller — the
+  store-facing fetch is `POST /sync/stores/{store_id}/artifact` and is untouched — so no store is
+  affected and `PROTOCOL_VERSION` does not move. An operator script that uploads a release by hand
+  needs the new path.
+
 - **The weekly dependency wave** ([#309](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/309),
   [#310](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/310),
   [#311](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/311)). Three grouped minor/patch

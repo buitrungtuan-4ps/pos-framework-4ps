@@ -29,10 +29,10 @@ use store_postgres::{
     CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, EmployeeOrder, EmployeeRow, FleetStoreRow,
     InventoryRow, ItemOrder, MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow,
     OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts,
-    PostgresApiKeys, PostgresAudit, PostgresCampaigns, PostgresCatalog, PostgresConfigTrees,
-    PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia,
-    PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile, PostgresRegistry,
-    PostgresReleases, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
+    PostgresApiKeys, PostgresArtifacts, PostgresAudit, PostgresCampaigns, PostgresCatalog,
+    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory,
+    PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile,
+    PostgresRegistry, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
     PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
     PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReasonCodeRow, ReleaseArtifactRow,
     RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
@@ -111,7 +111,7 @@ use crate::lease::{
 use crate::media::{MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition};
 use crate::orders::StoreDirectory;
 use crate::ota::{
-    RecordOutcome, ReleaseArtifact, ReleaseStore, ReleaseStoreError, TargetTriple, admit_artifact,
+    ArtifactStore, ArtifactStoreError, RecordOutcome, ReleaseArtifact, TargetTriple, admit_artifact,
 };
 use crate::paging::{Page, PageRequest};
 use crate::people::{
@@ -130,16 +130,15 @@ use crate::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderStatus, PendingOrder, QueuedOrderPayload,
     StoreOutcome,
 };
-// "Release" means two unrelated things in this cloud, and this is the one file that holds both. The
-// OTA seam above is a version of the *software* — a signed edge binary and its artifact
-// ([ADR-0048](../../../docs/adr/0048-ota-rollouts.md)). This one is a set of config nodes going out
-// to a set of shops ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
-// The config seam is aliased rather than the OTA one because the OTA name was here first; both are
-// spelled out at every use below, so nothing here reads as "the release store" without saying which.
+// This file holds both of the things "release" used to mean, and it is why the OTA half was
+// renamed. The seam above is a version of the *software* — a signed edge binary and its artifact
+// ([ADR-0048](../../../docs/adr/0048-ota-rollouts.md)) — and is now spelled `ArtifactStore`, which
+// is what [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) calls the thing it stores. The
+// seam below is a set of config nodes going out to a set of shops
+// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)) and keeps the plain
+// name, because among config it is the only release there is. Neither import needs an alias now.
 use crate::releases::{
-    NewRelease as NewConfigRelease, Release as ConfigRelease, ReleaseMoment as ConfigReleaseMoment,
-    ReleaseStatus as ConfigReleaseStatus, ReleaseStore as ConfigReleaseStore,
-    ReleaseStoreError as ConfigReleaseStoreError,
+    NewRelease, Release, ReleaseMoment, ReleaseStatus, ReleaseStore, ReleaseStoreError,
 };
 use crate::retention::{RetentionError, SubjectRecord, SubjectStore};
 use crate::scheduling::{
@@ -3018,22 +3017,22 @@ impl ScheduledPublishStore for PostgresScheduledPublishes {
 ///
 /// A half-written wall clock (a date and no time, or the reverse) reads as *untimed* rather than as
 /// a guess, because guessing midnight would schedule a publish at an hour nobody chose.
-fn release_from_row(row: ReleaseRow) -> Result<ConfigRelease, ConfigReleaseStoreError> {
+fn release_from_row(row: ReleaseRow) -> Result<Release, ReleaseStoreError> {
     let tenant_id = row
         .tenant_id
         .parse::<Ulid>()
         .map(TenantId::new)
-        .map_err(|_ignored| ConfigReleaseStoreError::new("a release has a non-ULID tenant"))?;
+        .map_err(|_ignored| ReleaseStoreError::new("a release has a non-ULID tenant"))?;
     let moment = match (row.wall_clock_date, row.wall_clock_time, row.instant_at_ms) {
-        (Some(date), Some(time), _) => Some(ConfigReleaseMoment::WallClock { date, time }),
-        (_, _, Some(at_ms)) => Some(ConfigReleaseMoment::Instant(at_ms)),
+        (Some(date), Some(time), _) => Some(ReleaseMoment::WallClock { date, time }),
+        (_, _, Some(at_ms)) => Some(ReleaseMoment::Instant(at_ms)),
         _ => None,
     };
-    Ok(ConfigRelease {
+    Ok(Release {
         id: row.id,
         tenant_id,
         name: row.name,
-        status: ConfigReleaseStatus::from_wire(&row.status),
+        status: ReleaseStatus::from_wire(&row.status),
         target_group_id: row.target_group_id,
         moment,
         created_by: row.created_by,
@@ -3042,16 +3041,16 @@ fn release_from_row(row: ReleaseRow) -> Result<ConfigRelease, ConfigReleaseStore
     })
 }
 
-impl ConfigReleaseStore for PostgresConfigReleases {
-    async fn create(&self, release: &NewConfigRelease) -> Result<(), ConfigReleaseStoreError> {
+impl ReleaseStore for PostgresConfigReleases {
+    async fn create(&self, release: &NewRelease) -> Result<(), ReleaseStoreError> {
         let tenant = release.tenant_id.to_string();
         // The moment splits back into the columns it is stored as. A draft with no moment writes
         // three nulls, which is what "not timed yet" looks like on the way back in too.
         let (wall_clock_date, wall_clock_time, instant_at_ms) = match &release.moment {
-            Some(ConfigReleaseMoment::WallClock { date, time }) => {
+            Some(ReleaseMoment::WallClock { date, time }) => {
                 (Some(date.clone()), Some(time.clone()), None)
             }
-            Some(ConfigReleaseMoment::Instant(at_ms)) => (None, None, Some(*at_ms)),
+            Some(ReleaseMoment::Instant(at_ms)) => (None, None, Some(*at_ms)),
             None => (None, None, None),
         };
         let row = NewReleaseRow {
@@ -3060,7 +3059,7 @@ impl ConfigReleaseStore for PostgresConfigReleases {
             name: &release.name,
             // Every release starts as a draft, whatever it was given: nothing fires until an
             // operator says so (ADR-0125 §4).
-            status: ConfigReleaseStatus::Draft.as_wire(),
+            status: ReleaseStatus::Draft.as_wire(),
             target_group_id: release.target_group_id.as_deref(),
             wall_clock_date: wall_clock_date.as_deref(),
             wall_clock_time: wall_clock_time.as_deref(),
@@ -3069,17 +3068,17 @@ impl ConfigReleaseStore for PostgresConfigReleases {
         };
         self.create(&row)
             .await
-            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))
+            .map_err(|error| ReleaseStoreError::new(error.to_string()))
     }
 
     async fn list_for_tenant(
         &self,
         tenant_id: TenantId,
-    ) -> Result<Vec<ConfigRelease>, ConfigReleaseStoreError> {
+    ) -> Result<Vec<Release>, ReleaseStoreError> {
         let rows = self
             .list_for_tenant(&tenant_id.to_string())
             .await
-            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+            .map_err(|error| ReleaseStoreError::new(error.to_string()))?;
         rows.into_iter().map(release_from_row).collect()
     }
 
@@ -3087,11 +3086,11 @@ impl ConfigReleaseStore for PostgresConfigReleases {
         &self,
         tenant_id: TenantId,
         id: &str,
-    ) -> Result<Option<ConfigRelease>, ConfigReleaseStoreError> {
+    ) -> Result<Option<Release>, ReleaseStoreError> {
         let row = self
             .fetch_one(&tenant_id.to_string(), id)
             .await
-            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+            .map_err(|error| ReleaseStoreError::new(error.to_string()))?;
         row.map(release_from_row).transpose()
     }
 
@@ -3099,18 +3098,18 @@ impl ConfigReleaseStore for PostgresConfigReleases {
         &self,
         tenant_id: TenantId,
         id: &str,
-        status: ConfigReleaseStatus,
-    ) -> Result<bool, ConfigReleaseStoreError> {
+        status: ReleaseStatus,
+    ) -> Result<bool, ReleaseStoreError> {
         self.set_status(&tenant_id.to_string(), id, status.as_wire())
             .await
-            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))
+            .map_err(|error| ReleaseStoreError::new(error.to_string()))
     }
 
-    async fn in_flight(&self) -> Result<Vec<ConfigRelease>, ConfigReleaseStoreError> {
+    async fn in_flight(&self) -> Result<Vec<Release>, ReleaseStoreError> {
         let rows = self
             .in_flight()
             .await
-            .map_err(|error| ConfigReleaseStoreError::new(error.to_string()))?;
+            .map_err(|error| ReleaseStoreError::new(error.to_string()))?;
         rows.into_iter().map(release_from_row).collect()
     }
 }
@@ -4964,16 +4963,16 @@ impl CatalogStore for PostgresCatalog {
 /// The immutability rule is [`admit_artifact`]'s, consulted here with the digest the table already
 /// holds — so the registry and the rule cannot drift, and the refusal a re-upload gets is the one the
 /// unit tests pin rather than a second copy of it written in SQL.
-impl ReleaseStore for PostgresReleases {
+impl ArtifactStore for PostgresArtifacts {
     async fn record_artifact(
         &self,
         artifact: &ReleaseArtifact,
-    ) -> Result<RecordOutcome, ReleaseStoreError> {
+    ) -> Result<RecordOutcome, ArtifactStoreError> {
         let target = artifact.target.to_string();
         let stored = self
             .stored_digest(&artifact.release, &target)
             .await
-            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+            .map_err(|error| ArtifactStoreError::unavailable(error.to_string()))?;
         let outcome = admit_artifact(stored.as_deref(), artifact)?;
         if outcome == RecordOutcome::AlreadyRecorded {
             return Ok(outcome);
@@ -4986,7 +4985,7 @@ impl ReleaseStore for PostgresReleases {
             recorded_at: artifact.recorded_at.as_milliseconds_since_epoch(),
         })
         .await
-        .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+        .map_err(|error| ArtifactStoreError::unavailable(error.to_string()))?;
         Ok(outcome)
     }
 
@@ -4994,26 +4993,26 @@ impl ReleaseStore for PostgresReleases {
         &self,
         release: &str,
         target: &TargetTriple,
-    ) -> Result<Option<ReleaseArtifact>, ReleaseStoreError> {
+    ) -> Result<Option<ReleaseArtifact>, ArtifactStoreError> {
         // Fully qualified deliberately: the inherent method and this trait method share a name, and
         // resolution silently prefers the inherent one. Spelling it out means renaming the inherent
         // method is a compile error rather than an infinite recursion.
-        let row = PostgresReleases::find_artifact(self, release, target.as_str())
+        let row = PostgresArtifacts::find_artifact(self, release, target.as_str())
             .await
-            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+            .map_err(|error| ArtifactStoreError::unavailable(error.to_string()))?;
         row.map(release_artifact_from_row).transpose()
     }
 
     async fn list_artifacts(
         &self,
         release: &str,
-    ) -> Result<Vec<ReleaseArtifact>, ReleaseStoreError> {
+    ) -> Result<Vec<ReleaseArtifact>, ArtifactStoreError> {
         // Fully qualified for the same reason, and more sharply: the inherent `list_artifacts` has
         // the *identical* signature to this one, so a bare `self.list_artifacts(release)` would
         // recurse forever the moment the inherent method went away.
-        let rows = PostgresReleases::list_artifacts(self, release)
+        let rows = PostgresArtifacts::list_artifacts(self, release)
             .await
-            .map_err(|error| ReleaseStoreError::unavailable(error.to_string()))?;
+            .map_err(|error| ArtifactStoreError::unavailable(error.to_string()))?;
         rows.into_iter().map(release_artifact_from_row).collect()
     }
 }
@@ -5025,12 +5024,12 @@ impl ReleaseStore for PostgresReleases {
 /// cloud cannot describe must not silently look like a release that was never uploaded.
 fn release_artifact_from_row(
     row: ReleaseArtifactRow,
-) -> Result<ReleaseArtifact, ReleaseStoreError> {
+) -> Result<ReleaseArtifact, ArtifactStoreError> {
     let target = TargetTriple::parse(&row.target).map_err(|error| {
-        ReleaseStoreError::unavailable(format!("a stored release target is invalid: {error}"))
+        ArtifactStoreError::unavailable(format!("a stored release target is invalid: {error}"))
     })?;
     let recorded_at = Timestamp::from_milliseconds_since_epoch(row.recorded_at).map_err(|_| {
-        ReleaseStoreError::unavailable("a stored release recorded_at is out of range")
+        ArtifactStoreError::unavailable("a stored release recorded_at is out of range")
     })?;
     Ok(ReleaseArtifact {
         release: row.release,

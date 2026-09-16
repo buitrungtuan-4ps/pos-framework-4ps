@@ -78,7 +78,7 @@ pub struct ReleaseRow {
 /// The config-release store over a shared pool. Built by
 /// [`PostgresStore::config_releases`](crate::PostgresStore::config_releases).
 ///
-/// **Config** release, not OTA release. This crate already has a `PostgresReleases` for the OTA side
+/// **Config** release, not OTA release. This crate already has a `PostgresArtifacts` for the OTA side
 /// — a signed edge binary and its artifact ([ADR-0048](../../../docs/adr/0048-ota-rollouts.md)) — and
 /// the word now means two unrelated things: a version of the software, and a set of config nodes
 /// going out to a set of shops. Both names say which, rather than one of them winning and the reader

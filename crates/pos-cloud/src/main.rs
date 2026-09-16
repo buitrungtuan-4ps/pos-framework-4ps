@@ -445,11 +445,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.api_keys(),
                 SystemClock,
                 blobs.clone(),
-                store.releases(),
+                store.ota_artifacts(),
             )
-            .merge(http::release_admin_router(
+            .merge(http::ota_release_admin_router(
                 blobs,
-                store.releases(),
+                store.ota_artifacts(),
                 store.admin(),
                 SystemClock,
                 Arc::clone(&audit),
@@ -848,7 +848,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Arc::clone(&audit),
             // The promote guard's source of truth: a rollout naming a version nobody hosts is
             // refused here rather than discovered as a fleet-wide `404` (ADR-0088 Amendment 2).
-            store.releases(),
+            store.ota_artifacts(),
         ))
         // Countries & locales (ADR-0074, Track M4): the compiled country modules surfaced as
         // read-only master data — the currency picker and the translation grid's locale catalogue.

@@ -320,8 +320,8 @@ const UNDOCUMENTED: &[&str] = &[
     // better home for it than a document that stops short of response schemas anyway. Listed here
     // rather than annotated to stay inside the fidelity B5 chose: the auth surface is documented, the
     // console surface is enumerated.
-    "/admin/releases",
-    "/admin/releases/{release}",
+    "/admin/ota/releases",
+    "/admin/ota/releases/{release}",
     "/admin/config/qr",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",

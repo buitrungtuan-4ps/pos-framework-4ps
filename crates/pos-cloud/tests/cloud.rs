@@ -12086,7 +12086,7 @@ fn ota_app_hosting(
         admin.clone(),
         config_trees.clone(),
     );
-    let releases = FakeReleases::default();
+    let releases = FakeOtaArtifacts::default();
     for release in hosted {
         releases
             .artifacts
@@ -12130,7 +12130,7 @@ fn ota_app_with_audit(
         admin,
         clock(),
         audit,
-        FakeReleases::default(),
+        FakeOtaArtifacts::default(),
     ))
 }
 
@@ -19629,15 +19629,15 @@ impl pos_ports::blob_store::BlobStore for FakeBlobs {
 
 /// A release registry holding whatever a test recorded.
 #[derive(Clone, Default)]
-struct FakeReleases {
+struct FakeOtaArtifacts {
     artifacts: Arc<Mutex<Vec<pos_cloud::ota::ReleaseArtifact>>>,
 }
 
-impl pos_cloud::ota::ReleaseStore for FakeReleases {
+impl pos_cloud::ota::ArtifactStore for FakeOtaArtifacts {
     async fn record_artifact(
         &self,
         artifact: &pos_cloud::ota::ReleaseArtifact,
-    ) -> Result<pos_cloud::ota::RecordOutcome, pos_cloud::ota::ReleaseStoreError> {
+    ) -> Result<pos_cloud::ota::RecordOutcome, pos_cloud::ota::ArtifactStoreError> {
         let mut artifacts = self
             .artifacts
             .lock()
@@ -19659,7 +19659,7 @@ impl pos_cloud::ota::ReleaseStore for FakeReleases {
         &self,
         release: &str,
         target: &pos_cloud::ota::TargetTriple,
-    ) -> Result<Option<pos_cloud::ota::ReleaseArtifact>, pos_cloud::ota::ReleaseStoreError> {
+    ) -> Result<Option<pos_cloud::ota::ReleaseArtifact>, pos_cloud::ota::ArtifactStoreError> {
         Ok(self
             .artifacts
             .lock()
@@ -19672,7 +19672,7 @@ impl pos_cloud::ota::ReleaseStore for FakeReleases {
     async fn list_artifacts(
         &self,
         release: &str,
-    ) -> Result<Vec<pos_cloud::ota::ReleaseArtifact>, pos_cloud::ota::ReleaseStoreError> {
+    ) -> Result<Vec<pos_cloud::ota::ReleaseArtifact>, pos_cloud::ota::ArtifactStoreError> {
         Ok(self
             .artifacts
             .lock()
@@ -19711,7 +19711,7 @@ fn artifact_fixture(
             .as_str(),
         signature,
     );
-    let releases = FakeReleases::default();
+    let releases = FakeOtaArtifacts::default();
     releases
         .artifacts
         .lock()
@@ -19925,7 +19925,7 @@ fn minisig_line() -> String {
 /// point of the pair.
 fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
     let blobs = FakeBlobs::default();
-    let releases = FakeReleases::default();
+    let releases = FakeOtaArtifacts::default();
     let keys = FakeKeys::default();
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -19936,7 +19936,7 @@ fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
         FakeWebhooks::default(),
     );
     let router = http::router(app)
-        .merge(http::release_admin_router(
+        .merge(http::ota_release_admin_router(
             blobs.clone(),
             releases.clone(),
             admin,
@@ -19962,7 +19962,7 @@ fn upload_request(
 ) -> Request<Body> {
     Request::builder()
         .method("POST")
-        .uri(format!("/admin/releases?release={release}&arch={arch}"))
+        .uri(format!("/admin/ota/releases?release={release}&arch={arch}"))
         .header("content-type", "application/octet-stream")
         .header("x-pos-minisig", minisig)
         .header("cookie", cookie)
@@ -23002,11 +23002,11 @@ async fn the_archive_routes_are_a_stores_own_door() {
 
 /// The release identity and roll-up, in memory.
 #[derive(Clone, Default)]
-struct FakeConfigReleases {
+struct FakeReleases {
     rows: Arc<Mutex<Vec<pos_cloud::releases::Release>>>,
 }
 
-impl pos_cloud::releases::ReleaseStore for FakeConfigReleases {
+impl pos_cloud::releases::ReleaseStore for FakeReleases {
     async fn create(
         &self,
         release: &pos_cloud::releases::NewRelease,
@@ -23188,7 +23188,7 @@ impl pos_cloud::scheduling::ScheduledPublishStore for FakeScheduledPublishes {
 /// The console surface a release test needs, over the same node table `main.rs` builds.
 fn config_release_app(
     admin: FakeAdmin,
-    releases: FakeConfigReleases,
+    releases: FakeReleases,
     scheduled: FakeScheduledPublishes,
     groups: FakeStoreGroups,
     registry: FakeRegistry,
@@ -23307,7 +23307,7 @@ async fn one_wall_clock_release_becomes_one_instant_per_store_timezone() {
     let scheduled = FakeScheduledPublishes::default();
     let router = config_release_app(
         provisioned_admin(),
-        FakeConfigReleases::default(),
+        FakeReleases::default(),
         scheduled.clone(),
         groups,
         registry,
@@ -23381,7 +23381,7 @@ async fn a_store_with_no_published_timezone_refuses_a_wall_clock_release_by_name
     let scheduled = FakeScheduledPublishes::default();
     let router = config_release_app(
         provisioned_admin(),
-        FakeConfigReleases::default(),
+        FakeReleases::default(),
         scheduled.clone(),
         groups,
         registry,
@@ -23434,7 +23434,7 @@ async fn an_instant_release_needs_no_timezone_and_cancels_back_to_a_draft() {
     let scheduled = FakeScheduledPublishes::default();
     let router = config_release_app(
         provisioned_admin(),
-        FakeConfigReleases::default(),
+        FakeReleases::default(),
         scheduled.clone(),
         FakeStoreGroups::default(),
         registry,
@@ -23514,7 +23514,7 @@ async fn a_release_carrying_a_menu_without_its_tax_is_refused_before_anything_is
     let scheduled = FakeScheduledPublishes::default();
     let router = config_release_app(
         provisioned_admin(),
-        FakeConfigReleases::default(),
+        FakeReleases::default(),
         scheduled.clone(),
         FakeStoreGroups::default(),
         registry,
@@ -23582,7 +23582,7 @@ async fn a_release_report_shows_only_its_own_pairs() {
     let scheduled = FakeScheduledPublishes::default();
     let router = config_release_app(
         provisioned_admin(),
-        FakeConfigReleases::default(),
+        FakeReleases::default(),
         scheduled.clone(),
         FakeStoreGroups::default(),
         registry,
