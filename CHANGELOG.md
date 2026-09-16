@@ -115,6 +115,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The weekly dependency wave** ([#309](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/309),
+  [#310](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/310),
+  [#311](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/311)). Three grouped minor/patch
+  bumps landed as one change so the tree is compiled and built once against all of them rather than
+  three times against three partial trees: `vite` 8.2.2 → 8.3.0 and `intl-messageformat` 11.2.14 →
+  11.2.15 in both front ends, and `flate2` 1.1.9 → 1.1.10 (which brings `miniz_oxide` 0.9.1 and
+  `zlib-rs` 0.6.8) plus `jiff` 0.2.35 → 0.2.37 in the workspace. No behaviour changes; both bundles
+  and every suite are unchanged.
+  - **A fourth proposal, `skrifa` 0.46.2 → 0.47.0, was declined rather than merged**
+    ([#312](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/312)). `pos-render` exists
+    because `harfrust` shapes text and `skrifa` draws the outlines *over the same `read-fonts`
+    parser* — that shared parser is the reason the tree carries one font stack and not two. `skrifa`
+    0.47 moves to `read-fonts` 0.44 while the newest `harfrust` (0.13.3) still requires `^0.43.3`, so
+    the bump puts two incompatible `FontRef` types in the graph and `shaper()` stops accepting the
+    font it is handed. The build refuses it, which is the gate working; the bump waits for a
+    `harfrust` release on `read-fonts` 0.44.
+
 - **The console's step budget stopped reporting and started refusing** (Wave 4 PR-8, decision D7).
   Seven core admin flows have had their click count measured in CI since Q7 with no ceiling attached,
   so a flow could get slower a tap at a time and the build stayed green. Each now carries a ceiling,
