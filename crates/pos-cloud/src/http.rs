@@ -194,8 +194,9 @@ use base64::Engine as _;
 use pos_core::lease::LeaseGeneration;
 
 use crate::ota::{
-    ArtifactKind, ArtifactStore, ArtifactStoreError, RecordOutcome, ReleaseArtifact, TargetTriple,
-    artifact_key, validate_release_tag,
+    ArtifactKind, ArtifactStore, ArtifactStoreError, MAX_ARTIFACT_BYTES, MINISIGN_SIGNATURE_LEN,
+    RecordOutcome, ReleaseArtifact, TargetTriple, admit_artifact, artifact_key,
+    validate_release_tag,
 };
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
@@ -212,6 +213,7 @@ use crate::registry::{
     BrandId, BrandRecord, DeviceRecord, EntityStatus, RegistryStore, RegistryStoreError,
     StoreRecord, TenantRecord,
 };
+use crate::release_source::{ReleaseSource, ReleaseSourceError};
 use crate::retention::{RetentionError, SubjectStore};
 // These are ADR-0125 config releases — a named set of config publishes going out to a set of shops.
 // They import under their own plain spelling, which they could not do while `crate::ota` also
@@ -1710,14 +1712,6 @@ where
 // The `/admin` release surface: putting an artifact in, and reading what is hosted
 // ---------------------------------------------------------------------------------------------
 
-/// The largest release binary the upload accepts.
-///
-/// A `pos-edge` build with its embedded UI is a few tens of megabytes; 128 MiB leaves room to grow
-/// while still refusing an upload that could only be a mistake. The limit sits on this route rather
-/// than on the reverse proxy so that a fork terminating TLS elsewhere ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s
-/// `external` posture) still gets it.
-const MAX_OTA_UPLOAD_BYTES: usize = 128 * 1024 * 1024;
-
 /// The header the upload carries the signature in: the **first base64 line** of the `.minisig` file
 /// minisign wrote (line 2 of the file — line 1 is the untrusted comment).
 ///
@@ -1725,15 +1719,6 @@ const MAX_OTA_UPLOAD_BYTES: usize = 128 * 1024 * 1024;
 /// with in lowercase hex. Same bytes, two encodings, two directions: reusing one name for both would
 /// make a mis-encoded upload look like a valid download header.
 const UPLOAD_SIGNATURE_HEADER: &str = "x-pos-minisig";
-
-/// Bytes in a minisign signature blob: `algorithm(2) ∥ key_id(8) ∥ ed25519_signature(64)`.
-///
-/// Mirrors `updater-minisign`'s `SIGNATURE_LEN`, which is private to that adapter. Checking the
-/// length here is a **shape** check and emphatically not verification — the cloud never verifies, and
-/// [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) is explicit that it stays a dumb host.
-/// What it buys is that a signature which could never verify is refused at the one moment a human is
-/// watching, instead of at every box in the ring hours later.
-const MINISIGN_SIGNATURE_LEN: usize = 74;
 
 /// The collaborators the `/admin` release routes need: the object store the bytes go to, the registry
 /// that records them, and the admin/clock/audit trio every console write carries.
@@ -1772,7 +1757,7 @@ struct HostedArtifactResponse {
 /// object store there is nowhere for the bytes to go, and a route that always answers `503` is worse
 /// than a route that is honestly absent.
 ///
-/// `POST /admin/releases?release=&arch=` takes the **bare executable** as its body and minisign's
+/// `POST /admin/ota/releases?release=&arch=` takes the **bare executable** as its body and minisign's
 /// signature line in [`UPLOAD_SIGNATURE_HEADER`]. The bare executable, not the release tarball,
 /// because `UpdateInstaller::apply` writes the bytes it is handed as the next binary — so the
 /// signature the edge checks has to cover *these* bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
@@ -1799,7 +1784,7 @@ where
             "/admin/ota/releases/{release}",
             get(admin_list_ota_release::<B, L, A, C>),
         )
-        .layer(axum::extract::DefaultBodyLimit::max(MAX_OTA_UPLOAD_BYTES))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_ARTIFACT_BYTES))
         .with_state(OtaReleaseAdminState {
             blobs,
             releases,
@@ -1934,6 +1919,109 @@ fn parse_release_upload(
     Ok((target, signature))
 }
 
+/// Puts one artifact's bytes in the object store and its row in the registry.
+///
+/// Shared by both intake paths — the upload and the release fetch
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4) — so that whichever door
+/// an artifact arrives through, the same immutability rule, the same keys and the same write order
+/// apply. Only the audit entry differs, and that stays in the handlers where the source is known.
+///
+/// **Immutability is checked before anything is written.** The first version of the upload wrote both
+/// blobs and *then* asked the registry, so re-sending a release tag with different bytes overwrote
+/// the stored executable and its signature and only afterwards answered `409`: the registry kept the
+/// old digest while the object store held the new pair, and an edge fetching that release would have
+/// verified the new signature over the new bytes and installed them happily under a version string
+/// that already meant something else. Reading first closes that, and the write order ADR-0088 relies
+/// on — signature, binary, then the row — is unchanged for a genuinely new artifact.
+///
+/// Identical bytes still write their blobs before answering "already hosted": the digest says the
+/// content is the same, so the write is a no-op except in the one case where it is a repair (a blob
+/// lost under a row that survived).
+///
+/// # Errors
+///
+/// The [`Response`] to send: `409` for a release already hosted with different bytes, `503` for an
+/// object store or registry that could not be reached, `500` if the keys could not be composed.
+async fn admit_release_artifact<B, L, C>(
+    blobs: &B,
+    releases: &L,
+    clock: &C,
+    release: &str,
+    target: TargetTriple,
+    binary: &[u8],
+    signature: &[u8],
+) -> Result<(ReleaseArtifact, RecordOutcome), Response>
+where
+    B: BlobStore,
+    L: ArtifactStore,
+    C: ClockSource,
+{
+    let (Ok(binary_key), Ok(signature_key)) = (
+        artifact_key(release, &target, ArtifactKind::Binary),
+        artifact_key(release, &target, ArtifactKind::Signature),
+    ) else {
+        return Err(api_error(
+            ErrorStatus::Internal,
+            "could not compose the artifact keys",
+        ));
+    };
+    let artifact = ReleaseArtifact {
+        release: release.to_owned(),
+        target,
+        size_bytes: i64::try_from(binary.len()).unwrap_or(i64::MAX),
+        sha256: hex_digest(binary),
+        recorded_at: clock.now(),
+    };
+    let stored = match releases
+        .find_artifact(&artifact.release, &artifact.target)
+        .await
+    {
+        Ok(stored) => stored,
+        Err(error) => {
+            tracing::error!(%error, "reading the release registry before an intake failed");
+            return Err(service_unavailable("the release registry"));
+        }
+    };
+    let admitted = admit_artifact(
+        stored.as_ref().map(|found| found.sha256.as_str()),
+        &artifact,
+    )
+    .map_err(already_hosted_refusal)?;
+    store_artifact_blobs(blobs, &binary_key, &signature_key, binary, signature).await?;
+    if admitted == RecordOutcome::AlreadyRecorded {
+        return Ok((artifact, RecordOutcome::AlreadyRecorded));
+    }
+    match releases.record_artifact(&artifact).await {
+        Ok(outcome) => Ok((artifact, outcome)),
+        // The read above closes the ordinary case; this stays the authority for two intakes racing.
+        Err(error @ ArtifactStoreError::Immutable { .. }) => Err(already_hosted_refusal(error)),
+        Err(error @ ArtifactStoreError::Unavailable(_)) => {
+            tracing::error!(%error, "recording a release artifact failed");
+            Err(service_unavailable("the release registry"))
+        }
+    }
+}
+
+/// The `409` a release already hosted with different bytes earns.
+///
+/// A version a ring may have installed has to keep meaning the same thing, or a rollback target
+/// stops being a known quantity ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)).
+fn already_hosted_refusal(error: ArtifactStoreError) -> Response {
+    match error {
+        ArtifactStoreError::Immutable { release, target } => api_error_with_details(
+            ErrorStatus::AlreadyExists,
+            format!("release {release} for {target} is already hosted with different bytes"),
+            &[("release", "already hosted with a different digest")],
+        ),
+        // `admit_artifact` returns only `Immutable`, and the caller maps `Unavailable` itself; this
+        // arm exists because the type says it can, not because a path reaches it.
+        ArtifactStoreError::Unavailable(reason) => {
+            tracing::error!(%reason, "the release registry was unavailable");
+            service_unavailable("the release registry")
+        }
+    }
+}
+
 /// A super-admin uploads one release artifact: the bare executable, plus its minisign signature.
 ///
 /// Idempotent by [`admit_artifact`]'s rule — re-uploading the same release/target with identical
@@ -1967,37 +2055,19 @@ where
         Ok(parsed) => parsed,
         Err(refusal) => return refusal,
     };
-    let (Ok(binary_key), Ok(signature_key)) = (
-        artifact_key(&query.release, &target, ArtifactKind::Binary),
-        artifact_key(&query.release, &target, ArtifactKind::Signature),
-    ) else {
-        return api_error(ErrorStatus::Internal, "could not compose the artifact keys");
-    };
-    let artifact = ReleaseArtifact {
-        release: query.release.clone(),
+    let (artifact, outcome) = match admit_release_artifact(
+        &state.blobs,
+        &state.releases,
+        &state.clock,
+        &query.release,
         target,
-        size_bytes: i64::try_from(body.len()).unwrap_or(i64::MAX),
-        sha256: hex_digest(&body),
-        recorded_at: state.clock.now(),
-    };
-    if let Err(refusal) =
-        store_artifact_blobs(&state.blobs, &binary_key, &signature_key, &body, &signature).await
+        &body,
+        &signature,
+    )
+    .await
     {
-        return refusal;
-    }
-    let outcome = match state.releases.record_artifact(&artifact).await {
-        Ok(outcome) => outcome,
-        Err(ArtifactStoreError::Immutable { release, target }) => {
-            return api_error_with_details(
-                ErrorStatus::AlreadyExists,
-                format!("release {release} for {target} is already hosted with different bytes"),
-                &[("release", "already hosted with a different digest")],
-            );
-        }
-        Err(error @ ArtifactStoreError::Unavailable(_)) => {
-            tracing::error!(%error, "recording a release artifact failed");
-            return service_unavailable("the release registry");
-        }
+        Ok(admitted) => admitted,
+        Err(refusal) => return refusal,
     };
     audit_action(
         &state.audit,
@@ -2080,6 +2150,232 @@ where
             service_unavailable("the release registry")
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The other door: the cloud fetches the pair the release workflow already published
+// ---------------------------------------------------------------------------------------------
+
+/// The collaborators the release-fetch route needs: everything the upload needs, plus the forge.
+#[derive(Clone)]
+struct OtaReleaseFetchState<B, L, A, C, S> {
+    blobs: B,
+    releases: L,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+    source: S,
+}
+
+/// A `POST /admin/ota/releases/fetch` body: which version to go and get.
+///
+/// `release` is spelled the way the registry keys it and a rollout's `target_version` names it —
+/// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
+/// Amendment 2). Which tag that is on the forge is the source's business, and it tries both.
+#[derive(Debug, Clone, Deserialize)]
+struct FetchReleaseRequest {
+    release: String,
+}
+
+/// One artifact the fetch put in the cloud.
+#[derive(Debug, Clone, Serialize)]
+struct FetchedArtifactResponse {
+    arch: String,
+    size_bytes: i64,
+    sha256: String,
+    /// `recorded` for a new artifact, `already_hosted` for one the cloud already held with these
+    /// exact bytes — so a re-run reads as a no-op rather than as work.
+    outcome: &'static str,
+    /// The asset the bytes came from, so the console can say what it took.
+    asset: String,
+}
+
+/// Builds the `/admin` release-fetch sub-router — the door that does not need the operator to hold
+/// the bytes ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+///
+/// Merged only when **both** `[artifacts]` and `[release_source]` are configured: without an object
+/// store there is nowhere for the bytes to go, and without a forge there is nowhere to get them. A
+/// deployment missing either keeps the upload route, which needs no outbound network and no
+/// credential, and is what `docs/release-runbook.md` documents as the fallback.
+pub fn ota_release_fetch_router<B, L, A, C, S>(
+    blobs: B,
+    releases: L,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+    source: S,
+) -> Router
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    S: ReleaseSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/ota/releases/fetch",
+            post(admin_fetch_ota_release::<B, L, A, C, S>),
+        )
+        .with_state(OtaReleaseFetchState {
+            blobs,
+            releases,
+            admin,
+            clock,
+            audit,
+            source,
+        })
+}
+
+/// Turns a fetch failure into the refusal an operator can act on.
+///
+/// Each one names the thing to go and look at: the version they typed, the token in `cloud.toml`,
+/// the asset that is wrong, or the network. A fetch failure is never fatal to a release — the upload
+/// route is the way past every one of them.
+fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
+    match error {
+        ReleaseSourceError::NoSuchRelease { candidates } => api_error_with_details(
+            ErrorStatus::NotFound,
+            format!(
+                "the release source publishes no release as {} — check the version, or that the \
+                 release workflow finished",
+                candidates.join(" or ")
+            ),
+            &[("release", "no release is published under either spelling")],
+        ),
+        ReleaseSourceError::Unauthorized => api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "the release source refused the cloud's credentials — a private repository needs \
+             release_source.token in cloud.toml, and an expired one reads the same way",
+            &[("release_source.token", "absent, expired, or not permitted")],
+        ),
+        ReleaseSourceError::TooLarge { asset, size_bytes } => api_error_with_details(
+            ErrorStatus::Unprocessable,
+            format!("{asset} is {size_bytes} bytes, past what the cloud will host"),
+            &[("release", "an asset is larger than the cloud hosts")],
+        ),
+        ReleaseSourceError::Malformed { asset, reason } => api_error_with_details(
+            ErrorStatus::Unprocessable,
+            format!("{asset}: {reason}"),
+            &[("release", "an asset is not what it claims to be")],
+        ),
+        ReleaseSourceError::Unavailable(reason) => api_error(
+            ErrorStatus::Unavailable,
+            format!("the release source: {reason}"),
+        ),
+    }
+}
+
+/// A super-admin points the cloud at a release, and it fetches every pair the forge holds for it.
+///
+/// The button behind `docs/release-runbook.md` step 5: instead of downloading six files and running
+/// three `curl`s with a console cookie, the operator names the version. What the cloud *holds*
+/// afterwards is identical either way — the same blobs, the same rows, the same immutability rule —
+/// because both doors go through [`admit_release_artifact`].
+///
+/// Not a transaction. Each target is admitted on its own, so a refusal on the third leaves the first
+/// two hosted; that is the same grain the upload has always had (one call per target), and the
+/// refusal names which target stopped it.
+async fn admin_fetch_ota_release<B, L, A, C, S>(
+    State(state): State<OtaReleaseFetchState<B, L, A, C, S>>,
+    headers: HeaderMap,
+    Json(request): Json<FetchReleaseRequest>,
+) -> Response
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    S: ReleaseSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishOta,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let release = request.release.trim().to_owned();
+    if let Err(error) = validate_release_tag(&release) {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("release: {error}"),
+            &[("release", "not usable as a storage key")],
+        );
+    }
+    let fetched = match state.source.fetch(&release).await {
+        Ok(fetched) => fetched,
+        Err(error) => {
+            tracing::warn!(%error, %release, "fetching a release from the release source failed");
+            return release_fetch_refusal(&error);
+        }
+    };
+    if fetched.artifacts.is_empty() {
+        return api_error_with_details(
+            ErrorStatus::Unprocessable,
+            format!(
+                "{} carries no OTA pair: the cloud installs the bare executable \
+                 (pos-edge-{}-<target>.bin, or .exe on Windows) with its .minisig beside it, and \
+                 neither the archive nor the checksums are that",
+                fetched.tag, fetched.tag
+            ),
+            &[("release", "the release holds no signed executable")],
+        );
+    }
+
+    let mut recorded = Vec::with_capacity(fetched.artifacts.len());
+    for artifact in fetched.artifacts {
+        let asset = artifact.asset_name.clone();
+        let (admitted, outcome) = match admit_release_artifact(
+            &state.blobs,
+            &state.releases,
+            &state.clock,
+            &release,
+            artifact.target,
+            &artifact.binary,
+            &artifact.signature,
+        )
+        .await
+        {
+            Ok(admitted) => admitted,
+            Err(refusal) => return refusal,
+        };
+        recorded.push(FetchedArtifactResponse {
+            arch: admitted.target.to_string(),
+            size_bytes: admitted.size_bytes,
+            sha256: admitted.sha256,
+            outcome: match outcome {
+                RecordOutcome::Recorded => "recorded",
+                RecordOutcome::AlreadyRecorded => "already_hosted",
+            },
+            asset,
+        });
+    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        None,
+        "release.fetch",
+        "release_artifact",
+        &release,
+        None,
+        Some(serde_json::json!({
+            "tag": fetched.tag,
+            "artifacts": recorded,
+        })),
+    )
+    .await;
+    Json(serde_json::json!({
+        "release": release,
+        "tag": fetched.tag,
+        "artifacts": recorded,
+    }))
+    .into_response()
 }
 
 /// Reads a release's two blobs — the executable and its raw detached signature.
@@ -15916,7 +16212,7 @@ async fn require_hosted_release<L: ArtifactStore>(
             ErrorStatus::Unprocessable,
             format!(
                 "no release artifact is hosted for {target_version}, so every store in the ring \
-                 would fetch nothing — upload it first (POST /admin/releases)"
+                 would fetch nothing — put one there first (POST /admin/ota/releases)"
             ),
             &[("target_version", "no artifact hosted for this version")],
         )),
@@ -26193,12 +26489,13 @@ fn rollup_error_response(error: &RollupError) -> Response {
 // discount it, the reason codes the staff void it with, and the layout that shows it — to forty
 // stores, all switching on together. These routes name that set, time it, expand it, and report it.
 //
-// The path is `/admin/config-releases`, not `/admin/releases`, because `/admin/releases` is already
-// the OTA artifact upload (R2, ADR-0088) — signed edge binaries, a different thing with the same
-// English name. Two routers claiming one path is an axum panic at start-up, so the collision had to
-// be resolved one way or the other; qualifying the newcomer is the change that breaks nothing, and
-// renaming the OTA pair (`ota::PostgresReleases`, `ota::ArtifactStore` and those two routes together)
-// is its own change, with its own edit to `docs/release-runbook.md`.
+// The path is `/admin/config-releases`, because `/admin` carries two kinds of release — this one,
+// and the OTA artifact (signed edge binaries, R2/ADR-0088), a different thing with the same English
+// name. Two routers claiming one path is an axum panic at start-up, and the collision was first
+// resolved by qualifying only the newcomer; ADR-0088 Amendment 3 then moved the OTA pair to
+// `/admin/ota/releases`, where §4 of that record had put it all along. Each now says which release
+// it means, and this one keeps its qualifier: among config nodes it is the only release there is,
+// but the prefix it shares is not.
 //
 // They write **no config versions of their own**. Scheduling a release expands to one
 // `scheduled_publishes` row per `(node, store)` pair carrying the release's id, and ADR-0077's
@@ -26297,7 +26594,7 @@ struct ReleaseReport {
     pairs: Vec<ReleasePairView>,
 }
 
-/// A `POST /admin/releases` body: the name, the cohort, and the moment. No nodes — those arrive at
+/// A `POST /admin/config-releases` body: the name, the cohort, and the moment. No nodes — those arrive at
 /// schedule time, with the store list, because both are snapshotted then (ADR-0125 §3).
 #[derive(Debug, Clone, Deserialize)]
 struct CreateReleaseRequest {
@@ -26327,7 +26624,7 @@ struct ReleaseNodeRequest {
     arguments: serde_json::Value,
 }
 
-/// A `POST /admin/releases/{release_id}/schedule` body.
+/// A `POST /admin/config-releases/{release_id}/schedule` body.
 #[derive(Debug, Clone, Deserialize)]
 struct ScheduleReleaseRequest {
     tenant_id: String,

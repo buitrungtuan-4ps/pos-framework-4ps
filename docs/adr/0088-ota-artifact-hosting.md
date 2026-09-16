@@ -193,3 +193,95 @@ Both halves now say which release they mean.
 No storage, wire format, signature or trust decision in this record changes. This is naming and one
 route, and it is only worth an amendment because a future reader hitting `/admin/releases` in an old
 runbook copy deserves to find out here where it went.
+
+## Amendment 4 — the cloud fetches the pair the workflow already published (2026-09-16)
+
+§4 of this record says "the operator's job is to move a *signed* pair from the release to the
+cloud". It never said how, and the implementation answered with the only thing that existed: a
+`curl` per target, carrying a console session cookie, a `--data-binary @file`, and a signature line
+extracted with `sed -n 2p`. Three targets ship, so cutting a release means downloading six files and
+running three of those commands correctly, from a machine that has the console cookie.
+
+An owner cutting `0.11.1` asked the obvious question — why is there no button — and the honest
+answer is that nobody decided there shouldn't be. This record's **Deliberately deferred** list holds
+six items and its **Rejected** list holds six more, and *the console has no way to put an artifact
+in the cloud* is on neither. That is an oversight, not a decision, and this amendment is it being
+taken.
+
+**What this is not.** The Rejected list above contains "Pointing **the edge** at GitHub Releases",
+and the reasoning there stands untouched: a store's install path must not depend on a third party
+being reachable from a shop's network. **That is not this.** The store-facing path is unchanged —
+`POST /sync/stores/{store_id}/artifact`, served by the cloud, one dependency, exactly as
+Amendment 1 put it. What moves is an **operator** step, from a laptop with a cookie to the box that
+is going to serve the bytes anyway. The operator was already fetching from the forge; they were
+doing it by hand, through a browser, and then uploading what they downloaded.
+
+- **`POST /admin/ota/releases/fetch` takes a release and imports every pair the forge holds for
+  it.** Behind a console session and `console.ota.publish`, audited, like the upload beside it. For
+  each target it finds, it stores the same two blobs, writes the same registry row, honours the same
+  immutability rule, and emits an audit entry naming the source it read — it is the upload route's
+  body, reached over the network instead of over a request body. Nothing about what the cloud
+  *holds* changes; only how the bytes arrive.
+
+- **The upload route stays, and stays the documented fallback.** A fork whose box cannot reach the
+  forge, an air-gapped deployment, a release built somewhere with no release page at all: those all
+  still work, and they need no credential. Two ways in is the point — the fetch is the convenient
+  one, the upload is the one with no outbound dependency. Removing either would make a deployment
+  that used to work stop working.
+
+- **The forge is configured, and absent means off.** A `[release_source]` block names the repository and,
+  for a private one, a token. With no block the fetch route is **not merged**, exactly as
+  `[artifacts]` gates hosting: a deployment that ships no edge releases gets an honestly absent
+  route rather than one that always answers `503`. The upload route is unaffected by its absence.
+
+- **The tag is tried both ways, and no mapping function is written.** Amendment 2 forbade a mapping
+  between the three spellings of one release, and this does not create one: the request names the
+  release exactly as the registry keys it and a rollout's `target_version` spells it (`1.2.3`), and
+  the fetch asks the forge for `v1.2.3`, then for `1.2.3`, and refuses naming **both** candidates if
+  neither is a release. A fork that tags differently learns what was looked for from the refusal,
+  which is a better teacher than a config key nobody sets correctly the first time.
+
+- **The asset list is read, not composed.** The workflow names the bare executable `.bin` on Linux
+  and `.exe` on Windows, and a composed filename would have had to know that — the exact class of
+  drift Amendment 2 was written about. Instead the fetch reads the release's assets, keeps each one
+  that carries a `.minisig` beside it, and parses the target triple out of what sits between the
+  tag and the extension, through the same `TargetTriple` validator the upload uses. An asset it
+  cannot read that way is skipped, not guessed at.
+
+- **The cloud still signs nothing and verifies nothing as an authority.** It moves bytes it was
+  pointed at. The edge checks the detached signature against the anchor baked into its own binary
+  ([ADR-0047](0047-minisign-verification.md), [ADR-0092](0092-artifact-trust-chain.md)) before it
+  stages anything, so a compromised forge, a compromised cloud or a swapped asset can make an update
+  **fail** and can never make a box install code. That is the same property §4 rests on, and it is
+  the reason this amendment is a convenience change rather than a trust change: the signing key
+  still never touches a VPS (D1), and the thing the fleet trusts is still a compile-time constant.
+
+**The fetch is bounded, because the thing it dials answers with a redirect it chose.** A release
+asset download lands on a signed URL at another host. So: a hop limit; every hop re-classified by
+the same SSRF vet the webhook sender uses, and dialed at the address that vet approved, so a
+redirect cannot walk the cloud onto its own private network; the `Authorization` header dropped the
+moment the host changes, so a forge token is never handed to whatever the forge redirected to; the
+same size ceiling the upload route enforces; and a timeout, so a slow asset cannot wedge the
+console. It reuses the `hyper`/`rustls` stack [ADR-0038](0038-webhook-tls-sender.md) already put in
+`pos-cloud`, so this adds routes and a config block, not a dependency subtree.
+
+**A correctness fix falls out of writing it.** The upload handler wrote both blobs *before* asking
+the registry to record the row, so re-uploading a release tag with **different** bytes overwrote the
+stored artifact and its signature, and only then answered `409`. The registry kept the old digest
+while the object store held the new bytes — and because the new signature was overwritten beside
+them, an edge would have verified and installed them happily under the old version string. That is
+precisely the "a version that can change under a fleet is not a version" rule failing in the one
+place it was written to hold. Both routes now read the registry first: identical bytes are a
+no-op `200`, different bytes are refused **before** anything is written. The write order §4 relies
+on is unchanged for a genuinely new artifact, and `record_artifact`'s own check stays the authority
+for the concurrent case.
+
+**What it costs.**
+
+- The box needs outbound HTTPS to the forge. It is an operator-triggered call on the console's
+  path, never on a store's, so a forge that is down delays a release and stops no shop trading.
+- A private repository needs a token in `cloud.toml` beside the database password and the S3
+  credentials — the same mode-0600 file, the same custody. A public repository needs none, and the
+  block can name one without the other.
+- A failure mode the upload does not have: "the fetch failed", with the forge, the network and the
+  token as candidate causes. The refusals name which one, and the upload route is the way past it.

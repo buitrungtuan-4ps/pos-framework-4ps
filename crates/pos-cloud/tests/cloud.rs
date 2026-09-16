@@ -86,6 +86,9 @@ use pos_cloud::relay::{
     OrderQueueId, OrderQueueStore, OrderRecord, OrderRelay, OrderStatus, PendingOrder,
     QueuedOrderPayload, StoreOutcome, orders_sync_router_with_cap,
 };
+use pos_cloud::release_source::{
+    FetchedArtifact, FetchedRelease, ReleaseSource, ReleaseSourceError,
+};
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::store_groups::{
     BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId, StoreGroupStore,
@@ -19913,17 +19916,34 @@ async fn a_recorded_release_whose_blob_is_missing_is_not_a_not_found() {
 /// verifies, it only checks the shape ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)).
 fn minisig_line() -> String {
     use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(minisig_bytes())
+}
+
+/// The same 74 bytes, raw — what the fetch path carries, having done the base64 decode itself.
+fn minisig_bytes() -> Vec<u8> {
     let mut blob = Vec::with_capacity(74);
     blob.extend_from_slice(b"ED");
     blob.extend_from_slice(&[7_u8; 8]);
     blob.extend_from_slice(&[9_u8; 64]);
-    base64::engine::general_purpose::STANDARD.encode(&blob)
+    blob
 }
 
 /// The `/admin` release router plus the store-facing artifact route, over one shared object store and
 /// one shared registry — so a test can upload and then download the same release, which is the whole
 /// point of the pair.
 fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
+    release_app_with_source(admin, FakeReleaseSource::publishes_nothing())
+}
+
+/// The same three routers over one shared object store and registry, with the forge scripted.
+///
+/// All three doors in one app on purpose: what the cloud *holds* has to be identical whether an
+/// artifact was uploaded or fetched, and the only way to assert that is to serve both to the same
+/// store-facing route (ADR-0088 Amendment 4).
+fn release_app_with_source<S>(admin: FakeAdmin, source: S) -> (axum::Router, FakeKeys)
+where
+    S: ReleaseSource + Clone + Send + Sync + 'static,
+{
     let blobs = FakeBlobs::default();
     let releases = FakeOtaArtifacts::default();
     let keys = FakeKeys::default();
@@ -19939,9 +19959,17 @@ fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
         .merge(http::ota_release_admin_router(
             blobs.clone(),
             releases.clone(),
+            admin.clone(),
+            clock(),
+            Arc::new(NoopAuditRecorder),
+        ))
+        .merge(http::ota_release_fetch_router(
+            blobs.clone(),
+            releases.clone(),
             admin,
             clock(),
             Arc::new(NoopAuditRecorder),
+            source,
         ))
         .merge(http::ota_artifact_router(
             keys.clone(),
@@ -19950,6 +19978,87 @@ fn release_app(admin: FakeAdmin) -> (axum::Router, FakeKeys) {
             releases,
         ));
     (router, keys)
+}
+
+/// What the scripted forge answers. Three shapes, because three are what an operator meets: the
+/// release is there, it is not, or the credentials are refused.
+#[derive(Clone)]
+enum ReleaseScript {
+    Holds {
+        tag: String,
+        targets: Vec<String>,
+        binary: Vec<u8>,
+    },
+    Missing,
+    Unauthorized,
+}
+
+/// A [`ReleaseSource`] that answers from a script rather than a network, so the route's own
+/// behaviour — permission, admission, idempotence, the refusals — is tested without a socket.
+#[derive(Clone)]
+struct FakeReleaseSource {
+    script: ReleaseScript,
+}
+
+impl FakeReleaseSource {
+    fn holding(tag: &str, targets: &[&str], binary: &[u8]) -> Self {
+        Self {
+            script: ReleaseScript::Holds {
+                tag: tag.to_owned(),
+                targets: targets.iter().map(|target| (*target).to_owned()).collect(),
+                binary: binary.to_vec(),
+            },
+        }
+    }
+
+    fn publishes_nothing() -> Self {
+        Self {
+            script: ReleaseScript::Missing,
+        }
+    }
+
+    fn refuses_the_credentials() -> Self {
+        Self {
+            script: ReleaseScript::Unauthorized,
+        }
+    }
+}
+
+impl ReleaseSource for FakeReleaseSource {
+    async fn fetch(&self, release: &str) -> Result<FetchedRelease, ReleaseSourceError> {
+        match &self.script {
+            ReleaseScript::Holds {
+                tag,
+                targets,
+                binary,
+            } => Ok(FetchedRelease {
+                tag: tag.clone(),
+                artifacts: targets
+                    .iter()
+                    .map(|target| FetchedArtifact {
+                        target: pos_cloud::ota::TargetTriple::parse(target)
+                            .expect("a valid triple"),
+                        binary: binary.clone(),
+                        signature: minisig_bytes(),
+                        asset_name: format!("pos-edge-{tag}-{target}.bin"),
+                    })
+                    .collect(),
+            }),
+            ReleaseScript::Missing => Err(ReleaseSourceError::NoSuchRelease {
+                candidates: vec![format!("v{release}"), release.to_owned()],
+            }),
+            ReleaseScript::Unauthorized => Err(ReleaseSourceError::Unauthorized),
+        }
+    }
+}
+
+/// Asks the cloud to go and get a release.
+fn fetch_request(release: &str, cookie: &str) -> Request<Body> {
+    post_with_cookie(
+        "/admin/ota/releases/fetch",
+        &serde_json::json!({ "release": release }),
+        cookie,
+    )
 }
 
 /// Builds the upload request: the bare executable as the body, the signature line in its header.
@@ -20146,6 +20255,227 @@ async fn re_uploading_is_idempotent_but_changing_the_bytes_is_refused() {
         .await
         .expect("route the changed upload");
     assert_eq!(changed.status(), StatusCode::CONFLICT);
+}
+
+/// The button behind step 5 of the release runbook. What the cloud holds afterwards has to be
+/// byte-for-byte what an upload would have put there — same blobs, same rows — because a store
+/// downloads through one route either way (ADR-0088 Amendment 4).
+#[tokio::test]
+async fn a_fetched_release_is_what_a_store_downloads() {
+    let binary = b"the next pos-edge, fetched".to_vec();
+    let (router, keys) = release_app_with_source(
+        provisioned_admin(),
+        FakeReleaseSource::holding(
+            "v1.6.0",
+            &[TEST_TARGET, "aarch64-unknown-linux-gnu"],
+            &binary,
+        ),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let fetched = router
+        .clone()
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let body = json_body(fetched).await;
+    assert_eq!(body["release"], "1.6.0", "recorded under the bare spelling");
+    assert_eq!(
+        body["tag"], "v1.6.0",
+        "and reports the forge's own spelling"
+    );
+    assert_eq!(
+        body["artifacts"].as_array().map(Vec::len),
+        Some(2),
+        "every target the release holds is hosted in one action — the whole point of the button"
+    );
+    assert_eq!(body["artifacts"][0]["outcome"], "recorded");
+
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let served = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/artifact", store_id()),
+            &artifact_body("1.6.0", TEST_TARGET),
+            &token,
+        ))
+        .await
+        .expect("route the download");
+    assert_eq!(served.status(), StatusCode::OK);
+    let downloaded = axum::body::to_bytes(served.into_body(), usize::MAX)
+        .await
+        .expect("read the body");
+    assert_eq!(downloaded.as_ref(), binary.as_slice());
+}
+
+/// Pressing the button twice is not an error: the digest is the same, so the second answer says the
+/// cloud already held it rather than pretending to work.
+#[tokio::test]
+async fn fetching_the_same_release_twice_reports_it_already_hosted() {
+    let (router, _keys) = release_app_with_source(
+        provisioned_admin(),
+        FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"same"),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let first = router
+        .clone()
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the first fetch");
+    assert_eq!(
+        json_body(first).await["artifacts"][0]["outcome"],
+        "recorded"
+    );
+
+    let again = router
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the repeat");
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(again).await["artifacts"][0]["outcome"],
+        "already_hosted"
+    );
+}
+
+/// Fetching is a `console.ota.publish` action, exactly like uploading: it decides what every store in
+/// a ring will execute, and the door it came through does not change that.
+#[tokio::test]
+async fn a_fetch_without_the_ota_permission_is_refused() {
+    let admin = provisioned_admin();
+    let (router, _keys) = release_app_with_source(
+        admin.clone(),
+        FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"x"),
+    );
+    let cookie = role_session_cookie(&admin, AdminRole::Viewer, "viewer-fetch").await;
+
+    let refused = router
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+}
+
+/// The two refusals an operator actually meets, each naming what to go and look at: the version they
+/// typed, or the token in `cloud.toml`.
+#[tokio::test]
+async fn a_fetch_that_finds_nothing_says_which_tags_it_tried() {
+    let (missing, _keys) =
+        release_app_with_source(provisioned_admin(), FakeReleaseSource::publishes_nothing());
+    let cookie = admin_cookie(&missing).await;
+    let refused = missing
+        .oneshot(fetch_request("9.9.9", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+    let body = json_body(refused).await;
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("v9.9.9") && message.contains("9.9.9"),
+        "both spellings are named, so a fork that tags differently learns what was looked for: \
+         {message}"
+    );
+
+    let (unauthorized, _keys) = release_app_with_source(
+        provisioned_admin(),
+        FakeReleaseSource::refuses_the_credentials(),
+    );
+    let cookie = admin_cookie(&unauthorized).await;
+    let refused = unauthorized
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the fetch");
+    // `FailedPrecondition`, which this tree answers as `409`: the request is well-formed and the
+    // version may well exist — what is not in place is the cloud's own credential, and no retry
+    // mends that until a human edits `cloud.toml`.
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["field"],
+        "release_source.token",
+        "the refusal points at the credential, not at the version"
+    );
+}
+
+/// A release page with no signed executable on it — every asset an archive or a checksum — is a
+/// refusal rather than a silent success, because a silent success is a ring that fetches nothing.
+#[tokio::test]
+async fn a_release_holding_no_signed_executable_is_refused() {
+    let (router, _keys) = release_app_with_source(
+        provisioned_admin(),
+        FakeReleaseSource::holding("v1.6.0", &[], b""),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    let refused = router
+        .oneshot(fetch_request("1.6.0", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["field"],
+        "release"
+    );
+}
+
+/// The regression for the overwrite the immutability rule was supposed to prevent.
+///
+/// Both blobs used to be written *before* the registry was asked, so re-sending a hosted release
+/// with different bytes replaced the executable and its signature and only then answered `409`: the
+/// registry kept naming the old digest while the object store held the new pair, and an edge would
+/// have verified the new signature over the new bytes and installed them under a version string that
+/// already meant something else. The `409` alone never caught it — what catches it is downloading
+/// afterwards.
+#[tokio::test]
+async fn a_refused_change_leaves_the_hosted_artifact_untouched() {
+    let (router, keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let minisig = minisig_line();
+
+    let first = router
+        .clone()
+        .oneshot(upload_request(
+            "1.7.0",
+            TEST_TARGET,
+            b"the promoted bytes".to_vec(),
+            &minisig,
+            &cookie,
+        ))
+        .await
+        .expect("route the first upload");
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let changed = router
+        .clone()
+        .oneshot(upload_request(
+            "1.7.0",
+            TEST_TARGET,
+            b"a different build entirely".to_vec(),
+            &minisig,
+            &cookie,
+        ))
+        .await
+        .expect("route the changed upload");
+    assert_eq!(changed.status(), StatusCode::CONFLICT);
+
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let served = router
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/artifact", store_id()),
+            &artifact_body("1.7.0", TEST_TARGET),
+            &token,
+        ))
+        .await
+        .expect("route the download");
+    assert_eq!(served.status(), StatusCode::OK);
+    let downloaded = axum::body::to_bytes(served.into_body(), usize::MAX)
+        .await
+        .expect("read the body");
+    assert_eq!(
+        downloaded.as_ref(),
+        b"the promoted bytes".as_slice(),
+        "a store downloads what the registry says it hosts, not what the refused upload carried"
+    );
 }
 
 /// The promote guard. Publishing a rollout for a version the cloud does not host used to succeed and

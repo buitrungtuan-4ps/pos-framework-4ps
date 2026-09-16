@@ -55,6 +55,26 @@ const ARTIFACT_STEM: &str = "pos-edge";
 /// The prefix every release artifact sits under in the object store.
 const RELEASES_PREFIX: &str = "releases";
 
+/// The largest release binary either intake path admits.
+///
+/// A `pos-edge` build with its embedded UI is a few tens of megabytes; 128 MiB leaves room to grow
+/// while still refusing bytes that could only be a mistake. One constant for both intakes — the
+/// `/admin` upload's body limit and the ceiling the release fetch stops reading an asset at — so a
+/// binary that is too large to upload cannot arrive by the other door
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4). It lives here rather
+/// than on the route so that a fork terminating TLS elsewhere
+/// ([ADR-0090](../../../docs/adr/0090-tls-postures.md)'s `external` posture) still gets it.
+pub const MAX_ARTIFACT_BYTES: usize = 128 * 1024 * 1024;
+
+/// Bytes in a minisign signature blob: `algorithm(2) ∥ key_id(8) ∥ ed25519_signature(64)`.
+///
+/// Mirrors `updater-minisign`'s `SIGNATURE_LEN`, which is private to that adapter. Checking the
+/// length is a **shape** check and emphatically not verification — the cloud never verifies, and
+/// this record is explicit that it stays a dumb host. What it buys is that a signature which could
+/// never verify is refused at the one moment a human is watching, instead of at every box in the
+/// ring hours later.
+pub const MINISIGN_SIGNATURE_LEN: usize = 74;
+
 // ---------------------------------------------------------------------------------------------
 // The build target
 // ---------------------------------------------------------------------------------------------

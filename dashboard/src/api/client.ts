@@ -1311,8 +1311,8 @@ export const api = {
   // Config releases (ADR-0125, Track Wave 4 PR-7): a name over a set of publishes — nodes × stores,
   // timed once. `createRelease` makes a draft and writes nothing else; `scheduleRelease` is the whole
   // decision, and a refusal from it writes nothing at all. The path is `config-releases` and not
-  // `releases` because `/admin/releases` is the OTA artifact upload, a different thing with the same
-  // English name.
+  // `releases` because `/admin` carries two kinds of release: this one, and `/admin/ota/releases`,
+  // the signed edge binary — a different thing with the same English name.
   listReleases: (tenantId: string) =>
     requestJson<{ releases: Release[] }>(
       "GET",
