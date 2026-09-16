@@ -178,7 +178,7 @@ use crate::floorplan::{
     TableUpdate,
 };
 use crate::health::{TaskHealth, TaskHealthError, TaskHealthStore};
-use crate::images::{self, ImagePipelineError};
+use crate::images::{self, ImagePipelineError, RenderError};
 use crate::import;
 use crate::inventory::{InventoryStore, InventoryStoreError, to_node as inventory_to_node};
 use crate::lease::{
@@ -17473,15 +17473,19 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let renditions = match images::render(&body) {
+    // The render is the most expensive thing this process does per request, so it goes to the
+    // blocking pool under a concurrency cap rather than holding an async worker for the whole walk
+    // (`images::render_blocking`). `body` moves into the task: it is a `Bytes`, so that is a handle,
+    // not a copy of the upload.
+    let renditions = match images::render_blocking(body).await {
         Ok(renditions) => renditions,
-        Err(ImagePipelineError::Decode(_)) => {
+        Err(RenderError::Pipeline(ImagePipelineError::Decode(_))) => {
             return api_error(
                 ErrorStatus::InvalidArgument,
                 "the upload is not a decodable image",
             );
         }
-        Err(ImagePipelineError::Budget { .. }) => {
+        Err(RenderError::Pipeline(ImagePipelineError::Budget { .. })) => {
             // The pipeline understood the image and could not fit it in the budget: well-formed
             // request, unprocessable content (ADR-0096). There is no field to name — the upload is
             // the whole body — so this carries no `details`.
@@ -17490,9 +17494,23 @@ where
                 "the image could not be reduced within the size budget",
             );
         }
-        Err(ImagePipelineError::Encode(_)) => {
+        Err(RenderError::Pipeline(ImagePipelineError::Encode(_))) => {
             tracing::error!("encoding a media rendition failed");
             return api_error(ErrorStatus::Internal, "could not encode the image");
+        }
+        Err(RenderError::Busy { limit, wait }) => {
+            // Nothing is wrong with the upload or the request; the server is at its rendering cap.
+            // `RESOURCE_EXHAUSTED` is the retryable status (ADR-0096), which is the honest answer —
+            // the console can send this one again in a moment and it will work.
+            tracing::warn!(limit, ?wait, "refused a media upload at the rendering cap");
+            return api_error(
+                ErrorStatus::ResourceExhausted,
+                "the server is busy rendering uploads; try this one again shortly",
+            );
+        }
+        Err(RenderError::Join(error)) => {
+            tracing::error!(%error, "the media rendering task did not return");
+            return api_error(ErrorStatus::Internal, "could not render the image");
         }
     };
     let Some(media_id) =

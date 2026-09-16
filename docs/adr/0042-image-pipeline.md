@@ -67,3 +67,41 @@ what does the decoding/resizing/encoding, and how is a *byte* budget (not a dime
   table rather than the `blob-garage` port, which [ADR-0031](0031-cloud-adapter-transports.md)
   schedules for deletion — and the admin route that accepts an upload, calls `render`, and stores the
   output, build on this pure pipeline behind a seam.
+
+## Amendment 1 — where the render runs, and how many at once (2026-09-16)
+
+**Status** Accepted · **Owner** @maintainers-cloud
+
+This ADR ends with "the admin route that accepts an upload, calls `render`, and stores the output" as
+the next slice. That slice shipped, and it called `render` directly from the async handler. The
+transform is unchanged — this amendment is about the thread it runs on and how many run together.
+
+**What was wrong.** `render` is the most expensive thing the cloud does per request: a decode, then up
+to five Lanczos3 resizes and JPEG encodes per rendition, twice. Awaited inline it holds a Tokio worker
+for the whole walk, and a worker that is busy is not polling anything else scheduled on it — so one
+upload delayed unrelated requests that happened to share a thread. Nothing was wrong with the
+pipeline; it was in the wrong place.
+
+**The amendment.**
+
+- The handler calls `images::render_blocking`, which hands the walk to the blocking pool. `render`
+  itself stays exactly what this ADR decided: pure, synchronous, unit-tested without I/O. The async
+  wrapper is the only new surface, and it is where the pool and the cap live, so nothing above it has
+  to remember either.
+- **A concurrency cap, because the pool is not one.** Tokio's blocking pool is hundreds of threads; a
+  browser uploading a folder of photos would put every one of them on a core that does not exist,
+  each holding a decoded bitmap. A process-wide semaphore, sized to
+  `available_parallelism()` clamped to 1–8, bounds how many images decode at once to the cores the
+  process actually has — the cgroup quota in a container, not the host's core count.
+- **A full queue is a `RESOURCE_EXHAUSTED`, not a failure.** An upload waits five seconds for a slot
+  before the server says it is busy, so an ordinary burst queues rather than producing a row of red
+  toasts, and the refusal — when it comes — is the retryable status
+  ([ADR-0096](0096-unprocessable-status.md)) rather than a 500 that reads as "your image
+  is broken".
+
+**What this does not bound.** The cap bounds how many images are decoded at once, not how large a
+decoded image may be. The 8 MB body limit bounds the *upload*, and a JPEG of that size can still
+declare a very large pixel count, so a deliberate decompression bomb is a memory spike this cap
+divides by eight rather than prevents. Refusing an image by its pixel dimensions is a product
+decision — it decides which real photographs stop working — and is recorded here as open rather than
+smuggled in beside a threading change.
