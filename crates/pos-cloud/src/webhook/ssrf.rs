@@ -339,6 +339,23 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
 
     let [first, second, third, ..] = segments;
 
+    // Teredo IPv6 prefix (`2001:0000::/32`, RFC 4380): embeds Server IPv4 and inverted Client IPv4.
+    if first == 0x2001 && second == 0x0000 {
+        let fourth = segments[3];
+        let server_v4 = Ipv4Addr::new(
+            (third >> 8) as u8,
+            (third & 0xff) as u8,
+            (fourth >> 8) as u8,
+            (fourth & 0xff) as u8,
+        );
+        if let Some(reason) = classify_v4(server_v4) {
+            return Some(reason);
+        }
+        let octets = ip.octets();
+        let client_v4 = Ipv4Addr::new(!octets[12], !octets[13], !octets[14], !octets[15]);
+        return classify_v4(client_v4);
+    }
+
     // 6to4 IPv6 prefix (`2002:WWXX:YYZZ::`): embeds IPv4 address WW.XX.YY.ZZ.
     if first == 0x2002 {
         let a = (second >> 8) as u8;
@@ -538,6 +555,28 @@ mod tests {
             classify_ip(ip("::169.254.169.254")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // Teredo smuggling cases (`2001:0::/32`).
+        assert_eq!(
+            classify_ip(ip("2001:0:7f00:1::")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:0:7f00:1::"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:0:1234:5678:0:0:80ff:fffe")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:0:1234:5678:0:0:80ff:fffe"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:0:1234:5678:0:0:5601:5601")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:0:1234:5678:0:0:5601:5601"),
                 ForbiddenReason::LinkLocal
             ))
         );
