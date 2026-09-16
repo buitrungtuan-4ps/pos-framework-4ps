@@ -27,5 +27,7 @@ config.toml
 # replay (ADR-0109). Diagnostic output, regenerated on every run.
 /ui/test-results/
 /ui/playwright-report/
+/dashboard/test-results/
+/dashboard/playwright-report/
 /dashboard/node_modules/
 /dashboard/dist/

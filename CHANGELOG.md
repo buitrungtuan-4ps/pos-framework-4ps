@@ -18,6 +18,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A browser now walks every console flow the step budget declares, against a real cloud** (backlog
+  item 8, second half; [ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)). The till
+  has had this since Q7; the console had a gate that could only read its own source, and a gate that
+  reads the source cannot see a click nobody wrote down. `dashboard/tests/replay.spec.mjs` boots a
+  `pos_cloud` against a throwaway Postgres database, signs in through the browser, seeds a tenant, a
+  shop, a tax class, an item, a menu and a cohort, then presses each declared step by its
+  `data-step` attribute and asserts the flow's `data-outcome` mark appeared. Six of the seven flows
+  run; the seventh declares itself unreplayable in `step-tasks.mjs` with its reason, and a test
+  asserts the skipped set is **exactly** that one, so coverage cannot shrink a flow at a time.
+  - **The run signs in once, on purpose.** A TOTP code is spent the moment it is accepted
+    ([ADR-0034](docs/adr/0034-super-admin-auth.md)), so a harness that authenticated over
+    HTTP for its fixtures and again in the browser would race itself for the same 30-second window.
+    The browser performs the only sign-in and hands its session cookie back to the fixture client.
+  - **`console-replay` joins the PR gate** — thirteenth job, its own Postgres service, pinned to the
+    same image digest as the existing `postgres` job. It builds the console, then
+    `cargo build -p pos-cloud`, because the console ships embedded in the binary
+    ([ADR-0060](docs/adr/0060-cloud-back-office-dashboard.md)) and a stale `dist/` is a green run
+    that tested the previous console. A failure uploads its Playwright trace.
+  - **It found things on its first run, which is the point.** Two declared flows were a click short
+    of what a browser actually has to press — the cohort publish needs its menu picked (ceiling 4 →
+    5) and the new-store wizard needs a **Next** between review and handoff (5 → 6). Both are now
+    declared, so the console's measured cost is 28 clicks rather than 26, and the two extra were
+    always being paid. The third finding is below, under Fixed.
+
 - **A release is one decision and many writes** ([ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md),
   Wave 4 PR-7; findings F8 / F9 / F10 / F17, decision D8). A Tết menu is not one node — it is a
   menu, the tax rates it prices against, the campaigns that discount it, the reason codes the staff
@@ -343,6 +367,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   file under `public/` passes 200 kB or the directory passes 512 kB, with the measurement printed.
 
 ### Fixed
+
+- **P0 · the catalogue's Menus tab was unreachable in a real browser** (found by the new console
+  replay harness, backlog item 8). Opening **Menus** on the Catalog screen threw
+  `ReferenceError: Cannot access 'menus' before initialization` and the tab never rendered — in the
+  shipped bundle, on `main`, for every tenant. Three `createMemo` blocks that index menus, items and
+  sections by id were declared above the `const`s they read, and `createMemo` runs its computation
+  eagerly at creation, so the first one reached into the temporal dead zone before the signal
+  existed. The memo block now sits below its inputs, with a comment saying why the order is load
+  bearing.
+  - **Nothing in the tree could have caught this.** `tsc` is satisfied — the bindings exist, only
+    their order is wrong — and the component tests mount `Menus` directly, which constructs the
+    signals in a different order than the shell does. It took a browser opening the tab the way an
+    operator does, which is the blind spot the harness was built to close and the reason it is worth
+    a CI job.
 
 - **Store settings showed the framework's defaults on every store (Wave 4 · PR-1, V15).** The screen
   read the country registry and nothing else, so a store running JPY at a 06:00 cutoff opened on

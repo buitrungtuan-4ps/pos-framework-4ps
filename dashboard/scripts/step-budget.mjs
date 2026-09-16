@@ -358,6 +358,9 @@ function resolveStep(step) {
     if (!text.includes(`screenHref("${to}"`)) {
       return `claims a link ${from} → ${to}, and src/${source} builds no URL for it (no \`screenHref("${to}"\`) — the link was removed, or it never existed`;
     }
+    if (!text.includes(`data-nav="${to}"`)) {
+      return `claims a link ${from} → ${to}, and the anchor carries no \`data-nav="${to}"\` — add it, or the browser gate cannot tell that link from the others on the screen`;
+    }
     return null;
   }
   const relative =
@@ -378,6 +381,12 @@ function resolveStep(step) {
   }
   if (!found.marked.has(step.action)) {
     return `claims a tap calling \`${step.action}\` in src/${relative}, and the element that calls it carries no \`data-step="${step.action}"\` — add it, or the browser gate has no way to find the click`;
+  }
+  // A step that names *which* control needs the control to say which one it is. The value itself is
+  // computed per element (`data-step-value={entry.key}`), so what can be checked here is that the
+  // attribute exists at all — the browser gate is what proves the value matches.
+  if (step.value !== undefined && !read(`${SRC}/${relative}`).includes("data-step-value")) {
+    return `names \`${step.value}\` among several \`${step.action}\` controls, and src/${relative} carries no \`data-step-value\` — add it, or the browser gate can only take the first`;
   }
   return null;
 }

@@ -622,6 +622,7 @@ export function StoreGroups() {
             />
             <Show when={chosenNode().source === "menu"}>
               <ComboboxField
+                data-step="setMenuId"
                 label={t("storeGroups.menu")}
                 value={menuId()}
                 options={menus().map((menu) => ({ value: menu.menu_id, label: menu.name }))}
