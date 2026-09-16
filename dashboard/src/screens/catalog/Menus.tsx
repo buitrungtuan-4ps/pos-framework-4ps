@@ -6,7 +6,7 @@
 // placements at once. Everything else is behaviour-preserving from the monolith: menu inheritance,
 // section sort, availability, and the publish path that compiles the menu onto the store's config.
 
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../../api/client";
 import type {
@@ -104,11 +104,20 @@ export function CatalogMenus() {
   // Publish.
   const [publishMenu, setPublishMenu] = createSignal("");
 
-  const menuName = (id: string) => menus()?.find((menu) => menu.menu_id === id)?.name ?? id;
-  const itemName = (id: string) =>
-    items().find((item) => item.menu_item_id === id)?.name ?? id;
-  const sectionName = (id: string | null) =>
-    id ? (sections().find((row) => row.menu_section_id === id)?.name ?? id) : "—";
+  // Memoized maps for O(1) lookups instead of O(N) linear scans on every table cell render/filter.
+  const menuMap = createMemo(
+    () => new Map((menus() ?? []).map((menu) => [menu.menu_id, menu.name])),
+  );
+  const itemMap = createMemo(
+    () => new Map(items().map((item) => [item.menu_item_id, item.name])),
+  );
+  const sectionMap = createMemo(
+    () => new Map(sections().map((row) => [row.menu_section_id, row.name])),
+  );
+
+  const menuName = (id: string) => menuMap().get(id) ?? id;
+  const itemName = (id: string) => itemMap().get(id) ?? id;
+  const sectionName = (id: string | null) => (id ? (sectionMap().get(id) ?? id) : "—");
 
   // The currency codes the operator can pick, from the country registry (deduped, sorted); VND is the
   // v1 default and the fallback while the list loads.
