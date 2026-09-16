@@ -18,6 +18,46 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console can fetch an edge release straight from the release that published it** (#340,
+  [ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 4). Cutting a release meant
+  downloading six files and running three `curl`s carrying a console session cookie. **OTA
+  updates → Hosted releases** now takes a version and does it: the cloud reads the release's asset
+  list, takes every bare executable that has a `.minisig` beside it, and hosts all three targets in
+  one action, behind `console.ota.publish` and audited as `release.fetch`. A **Check** button shows
+  what is hosted, which is the thing to know before promoting — a rollout naming a version the cloud
+  does not hold is refused.
+  - **The store's path does not change.** ADR-0088 rejected pointing *the edge* at a forge, because
+    a shop's install path must not depend on a third party being reachable from the shop's network,
+    and that stands: a store still downloads from the cloud. What moved is an operator step, onto
+    the box that was going to serve the bytes anyway.
+  - **The cloud still signs nothing and judges nothing.** It moves bytes it was pointed at; the edge
+    verifies the minisign signature against the anchor baked into its own binary before staging
+    ([ADR-0047](docs/adr/0047-minisign-verification.md)), so the signing key still never touches a
+    VPS.
+  - **The upload route stays, and stays the documented fallback** — it needs no outbound network and
+    no credential, and `docs/release-runbook.md` step 5 now carries both ways in. That step also
+    finally covers **Windows**: the bare executable is `.exe` there and `.bin` on the Linux targets,
+    and the runbook had only ever shown the Linux half although the route always accepted all three.
+  - **Upgrade note.** Optional and off by default. Add a `[release_source]` block to
+    `secrets/cloud.toml` — `repository = "owner/name"`, plus `token` for a private repository — and
+    the box then needs outbound HTTPS to the forge. Leave it out and the button says exactly that
+    rather than failing obscurely; nothing else changes.
+
+### Fixed
+
+- **A refused re-upload no longer replaces the artifact the cloud is hosting** (#340,
+  [ADR-0088](docs/adr/0088-ota-artifact-hosting.md)). Both blobs were written *before* the registry
+  was asked to record the row, so re-sending a hosted release with different bytes overwrote the
+  stored executable **and its signature** and only then answered `409`. The registry kept naming the
+  old digest while the object store held the new pair — and because the matching signature had been
+  overwritten beside them, an edge would have verified and installed those bytes under a version
+  string that already meant something else, which is exactly the rule "a version that can change
+  under a fleet is not a version" exists to prevent. Both intake paths now read the registry first:
+  identical bytes are a no-op `200`, different bytes are refused before anything is written.
+- **Three stale `/admin/releases` references**, left behind when Amendment 3 moved the OTA routes to
+  `/admin/ota/releases` (#340). One of them was the refusal an operator sees when promoting an
+  unhosted version, which told them to POST to a path that answers `404`.
+
 - **A browser now walks every console flow the step budget declares, against a real cloud** (backlog
   item 8, second half; [ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)). The till
   has had this since Q7; the console had a gate that could only read its own source, and a gate that

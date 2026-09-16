@@ -322,6 +322,10 @@ const UNDOCUMENTED: &[&str] = &[
     // console surface is enumerated.
     "/admin/ota/releases",
     "/admin/ota/releases/{release}",
+    // The other door (Amendment 4): a `{ "release": "1.2.3" }` body, and the cloud goes and gets the
+    // pair from the release the workflow published. Enumerated beside its siblings for the same
+    // reason, and the runbook step that carries the upload's `curl` carries this one's too.
+    "/admin/ota/releases/fetch",
     "/admin/config/qr",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",

@@ -95,6 +95,7 @@ pub mod reason_codes;
 pub mod reconcile;
 pub mod registry;
 pub mod relay;
+pub mod release_source;
 pub mod releases;
 pub mod retention;
 pub mod scheduling;
@@ -107,4 +108,4 @@ pub mod wake;
 pub mod webhook;
 
 pub use cloud::{Cloud, DailyRollup, IngestOutcome, StoreOwner, StoreOwners};
-pub use config::{CloudConfig, NatsIngestConfig};
+pub use config::{CloudConfig, NatsIngestConfig, ReleaseToken};

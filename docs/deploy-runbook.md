@@ -129,6 +129,22 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   the one secret here captured rather than generated — but the capture is scripted, not a step for a
   person. Watch the bootstrap log for `create garage artifact credentials`; a `warn` there means the
   block was not written and the artifact route stays off, which affects only OTA.
+- **Fetching a release from the console (optional)**: add a `[release_source]` block to
+  `secrets/cloud.toml` and the Ota screen gains a button that pulls the signed pair straight from the
+  release that published it, instead of an operator moving six files by hand
+  ([ADR-0088](adr/0088-ota-artifact-hosting.md) Amendment 4, `docs/release-runbook.md` step 5).
+  `bootstrap.sh` does **not** write it — the repository is a fork's own, not something a script can
+  guess:
+
+  ```toml
+  [release_source]
+  repository = "your-org/your-fork"
+  # token = "ghp_…"   # only for a private repository; a public one needs none
+  ```
+
+  The box then needs outbound HTTPS to the forge. It is an operator's path and never a store's, so a
+  forge that is unreachable delays a release and stops no shop trading — and the upload route stays
+  as the way past it. Leave the block out and the button says so rather than failing obscurely.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

@@ -100,34 +100,54 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    only ever reaches one runner.** The Windows job hands its unsigned binary over as a run artifact
    with one day of retention.
 
-5. **Upload the OTA pair to the cloud.** The Release is where a human downloads from; the cloud is
+5. **Get the OTA pair into the cloud.** The Release is where a human downloads from; the cloud is
    where a *store* downloads from, and they are separate steps on purpose (the cloud never sees the
-   signing key, [D1](roadmap-v3.md#debates-settled)). For each Linux target, send the **bare
-   executable** and the signature line beside it:
+   signing key, [D1](roadmap-v3.md#debates-settled)). Two ways in, and they leave the cloud holding
+   exactly the same thing.
+
+   **a. From the console (the short way).** Open **OTA updates → Hosted releases**, type the version
+   — bare, without the tag's `v`, the same string the binary reports and a rollout's `target_version`
+   names — and press **Fetch from the release**. The cloud reads the release's assets, takes every
+   bare executable that has a `.minisig` beside it, and hosts all three targets in one action
+   ([ADR-0088](adr/0088-ota-artifact-hosting.md) Amendment 4). It needs a `[release_source]` block in
+   `secrets/cloud.toml` (see `docs/deploy-runbook.md`); without one the button says so, and (b) is
+   the way through.
+
+   **b. By upload (needs no outbound network and no credential).** For **each of the three targets**,
+   send the bare executable and the signature line beside it. The bare executable is `.bin` on the
+   Linux targets and `.exe` on Windows — the extension differs, the step does not:
 
    ```sh
    TAG=v1.2.3
-   TARGET=x86_64-unknown-linux-gnu
    # `release` is the version *without* the tag's `v` — the same string the binary reports and a
    # rollout's `target_version` names (ADR-0088 Amendment 2). One release, one spelling.
-   curl -fsS --cookie "$CONSOLE_COOKIE" \
-     -H "content-type: application/octet-stream" \
-     -H "x-pos-minisig: $(sed -n 2p "pos-edge-${TAG}-${TARGET}.bin.minisig")" \
-     --data-binary "@pos-edge-${TAG}-${TARGET}.bin" \
-     "https://$DOMAIN/admin/ota/releases?release=${TAG#v}&arch=${TARGET}"
+   for pair in \
+     "x86_64-unknown-linux-gnu:bin" \
+     "aarch64-unknown-linux-gnu:bin" \
+     "x86_64-pc-windows-msvc:exe"
+   do
+     TARGET=${pair%%:*}
+     EXT=${pair##*:}
+     curl -fsS --cookie "$CONSOLE_COOKIE" \
+       -H "content-type: application/octet-stream" \
+       -H "x-pos-minisig: $(sed -n 2p "pos-edge-${TAG}-${TARGET}.${EXT}.minisig")" \
+       --data-binary "@pos-edge-${TAG}-${TARGET}.${EXT}" \
+       "https://$DOMAIN/admin/ota/releases?release=${TAG#v}&arch=${TARGET}"
+   done
    ```
 
-   Re-running is safe: identical bytes answer `200` instead of `201`. Different bytes for a release
-   already hosted are refused with `409` — a version a ring has installed has to keep meaning the
-   same thing.
+   Either way, re-running is safe: identical bytes answer `200` instead of `201`. Different bytes for
+   a release already hosted are refused with `409`, and nothing stored changes — a version a ring has
+   installed has to keep meaning the same thing.
 
-   **Why the `.bin` and not the `.tar.gz`.** `UpdateInstaller::apply` writes the bytes it is handed
-   as the next binary, so the signature the edge checks has to cover exactly those bytes. The tarball
-   has its own signature and its own consumer; unpacking it server-side would install bytes nobody
-   signed.
+   **Why the bare executable and not the archive.** `UpdateInstaller::apply` writes the bytes it is
+   handed as the next binary, so the signature the edge checks has to cover exactly those bytes. The
+   `.tar.gz` and the `.zip` have their own signatures and their own consumer — a person, and R3's
+   installer; unpacking one server-side would install bytes nobody signed.
 
-6. **Check what is hosted, then promote.** `GET /admin/ota/releases/1.2.3` lists the targets the cloud
-   holds. Then publish the rollout (`PUT /admin/config/ota`, or the Fleet screen). Promoting a
+6. **Check what is hosted, then promote.** The **Check** button on the same panel lists the targets
+   the cloud holds (`GET /admin/ota/releases/1.2.3` is the same read). Then publish the rollout
+   (`PUT /admin/config/ota`, or the OTA screen's rollout panel below). Promoting a
    version with no hosted artifact is refused — before the guard existed, a typo published fine and
    then every store in the ring fetched a `404`, which means "install nothing", so the fleet sat
    still with nothing in any log saying why.

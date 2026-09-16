@@ -24,12 +24,13 @@ use pos_cloud::http::CloudApp;
 use pos_cloud::qr::TableTokenSecret;
 use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
+use pos_cloud::release_source::GithubReleases;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
-    Cloud, CloudConfig, NatsIngestConfig, alerts, assets, countries, cursor, dashboard, http,
-    orders, relay,
+    Cloud, CloudConfig, NatsIngestConfig, ReleaseToken, alerts, assets, countries, cursor,
+    dashboard, http, orders, relay,
 };
 use store_postgres::PostgresStore;
 
@@ -369,6 +370,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
+    // Where the console fetches a signed release pair from (ADR-0088 Amendment 4). Absent is the
+    // common posture and costs nothing: the `/admin` upload route is unaffected, and cutting a
+    // release stays the `curl` per target `docs/release-runbook.md` documents. Configured, the box
+    // needs outbound HTTPS to the forge — which is an operator's path, never a store's.
+    let release_source = match config.release_source.as_ref() {
+        None => {
+            tracing::info!(
+                "no [release_source] configured; a release artifact reaches the cloud by upload only"
+            );
+            None
+        }
+        Some(source) => {
+            tracing::info!(
+                repository = %source.repository,
+                api_base = %source.api_base,
+                authenticated = source.token.is_some(),
+                "the console can fetch a release artifact from the release source"
+            );
+            Some(GithubReleases::new(
+                &source.api_base,
+                &source.repository,
+                source.token.as_ref().map(ReleaseToken::expose),
+            ))
+        }
+    };
+
     // The store-archive retention sweep (ADR-0124 slice 3). It needs the same object store the
     // archives were uploaded to, which is why it is spawned here rather than beside the subject
     // cron above — and only where archiving is on at all, because a sweep with nothing to sweep is
@@ -441,19 +468,33 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // `[artifacts]` block there is nowhere for bytes to live, so both are honestly absent rather
         // than present and answering `503`.
         .merge(match artifacts.clone() {
-            Some(blobs) => http::ota_artifact_router(
-                store.api_keys(),
-                SystemClock,
-                blobs.clone(),
-                store.ota_artifacts(),
-            )
-            .merge(http::ota_release_admin_router(
-                blobs,
-                store.ota_artifacts(),
-                store.admin(),
-                SystemClock,
-                Arc::clone(&audit),
-            )),
+            Some(blobs) => {
+                let hosting = http::ota_artifact_router(
+                    store.api_keys(),
+                    SystemClock,
+                    blobs.clone(),
+                    store.ota_artifacts(),
+                )
+                .merge(http::ota_release_admin_router(
+                    blobs.clone(),
+                    store.ota_artifacts(),
+                    store.admin(),
+                    SystemClock,
+                    Arc::clone(&audit),
+                ));
+                // The third door is merged wherever bytes can be stored, with or without a forge:
+                // configured, it fetches; unconfigured, it says which block of `cloud.toml` is
+                // missing, which a console with a person at it can act on where a bare `404` from an
+                // unmerged route could not (ADR-0088 Amendment 4).
+                hosting.merge(http::ota_release_fetch_router(
+                    blobs,
+                    store.ota_artifacts(),
+                    store.admin(),
+                    SystemClock,
+                    Arc::clone(&audit),
+                    release_source.clone(),
+                ))
+            }
             None => Router::new(),
         })
         // Store archives (ADR-0124) need **both** halves of the same pair: somewhere for the sealed

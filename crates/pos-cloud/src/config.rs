@@ -420,6 +420,41 @@ pub struct CloudConfig {
     /// key, grants it, and writes the result here. It is not a step anyone performs by hand.
     #[serde(default)]
     pub artifacts: Option<ArtifactsConfig>,
+    /// Where the console fetches a signed release pair from
+    /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+    ///
+    /// **Absent is a valid deployment**, and the common one: without it the `/admin` fetch route is
+    /// not merged, the upload route is unaffected, and cutting a release means moving the pair by
+    /// hand exactly as `docs/release-runbook.md` describes. Set it to give the console a button
+    /// instead — the box then needs outbound HTTPS to the forge, and a private repository needs a
+    /// token.
+    #[serde(default)]
+    pub release_source: Option<ReleaseSourceConfig>,
+}
+
+/// The forge the cloud fetches signed edge releases from
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+///
+/// The cloud reads a release's assets and stores the pairs it finds. It signs nothing and verifies
+/// nothing as an authority — the edge checks the minisign signature against the anchor baked into
+/// its own binary before it stages anything, so a compromised forge can make an update *fail* and
+/// can never make a box install code.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseSourceConfig {
+    /// The repository releases are published to, as `owner/name`.
+    pub repository: String,
+    /// A read token for a **private** repository. Absent for a public one, which needs no
+    /// credential; it is sent to the forge's own API host and to nothing the forge redirects to.
+    #[serde(default)]
+    pub token: Option<ReleaseToken>,
+    /// The forge's REST base, for a self-hosted instance. Defaults to GitHub's.
+    #[serde(default = "default_release_api_base")]
+    pub api_base: String,
+}
+
+/// GitHub's REST base — what a fork hosting its releases anywhere else overrides.
+fn default_release_api_base() -> String {
+    "https://api.github.com".to_owned()
 }
 
 /// The object store OTA release artifacts live in
@@ -611,6 +646,26 @@ impl CloudConfig {
             // Both set is armed; neither is console-only. Both are fine, and neither needs a word.
             (None, None) | (Some(_), Some(_)) => {}
         }
+        // Checked at load rather than at the first fetch: a `owner/name` typo would otherwise surface
+        // as a `404` from the forge, which reads exactly like "that release does not exist" and sends
+        // an operator looking at the wrong thing.
+        if let Some(source) = &self.release_source {
+            let segments: Vec<&str> = source.repository.split('/').collect();
+            if segments.len() != 2 || segments.iter().any(|segment| segment.is_empty()) {
+                return Err(format!(
+                    "release_source.repository must be `owner/name` (got `{}`) — ADR-0088",
+                    source.repository
+                ));
+            }
+            if !source.api_base.starts_with("https://") {
+                return Err(format!(
+                    "release_source.api_base must be an https:// URL (got `{}`): the fetch carries a \
+                     token and reads bytes a fleet will install, and plain http gives an observer \
+                     both — ADR-0088",
+                    source.api_base
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -619,6 +674,36 @@ impl CloudConfig {
 /// gives. `bootstrap.sh` mints twice that; this is the floor below which a hand-set value is refused
 /// rather than the length anyone should choose.
 pub const MIN_INTERNAL_SECRET_LEN: usize = 32;
+
+/// A read token for the release source, redacted from [`fmt::Debug`]
+/// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
+///
+/// Same shape as [`InternalSecret`] and for the same reason: [`CloudConfig`] derives `Debug`, and a
+/// forge token that reached a log would be a credential leaked to wherever that log goes.
+#[derive(Clone, Deserialize)]
+#[serde(transparent)]
+pub struct ReleaseToken(String);
+
+impl ReleaseToken {
+    /// Wraps a token string.
+    #[must_use]
+    pub fn new(token: impl Into<String>) -> Self {
+        Self(token.into())
+    }
+
+    /// The raw token, for the one `Authorization` header that needs it. Named to be conspicuous in
+    /// a diff.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for ReleaseToken {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ReleaseToken(redacted)")
+    }
+}
 
 /// The `/internal` shared secret, redacted from [`fmt::Debug`]
 /// ([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).

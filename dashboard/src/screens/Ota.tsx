@@ -6,12 +6,12 @@
 // levers are store-scoped and behind console.ota.publish (the server enforces it — a viewer sees the
 // progress but a publish returns 403).
 
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
+import type { FleetStore, HostedArtifact, OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { formatRelativeAge } from "../lib/format";
+import { formatCount, formatRelativeAge } from "../lib/format";
 import { onlineVerdict } from "../lib/posture";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -84,7 +84,13 @@ export function Ota() {
   const [placementRing, setPlacementRing] = createSignal<RingWire>("fleet");
   const [canaryBucket, setCanaryBucket] = createSignal("0");
 
+  // What the cloud hosts, and the button that puts it there (ADR-0088 Amendment 4). A release is
+  // fleet-wide rather than per store, so this pane sits outside the store gate below.
+  const [hostedVersion, setHostedVersion] = createSignal("");
+  const [hosted, setHosted] = createSignal<readonly HostedArtifact[] | null>(null);
+
   const [confirmPublish, setConfirmPublish] = createSignal(false);
+  const [confirmFetch, setConfirmFetch] = createSignal(false);
   const [confirmHalt, setConfirmHalt] = createSignal(false);
   const [confirmPlace, setConfirmPlace] = createSignal(false);
 
@@ -107,6 +113,11 @@ export function Ota() {
       // Prime the form from the published rollout, so an edit starts from what is live.
       if (loaded) {
         setTargetVersion(loaded.target_version);
+        // The version most likely to be asked about is the one already live, so the hosting pane
+        // starts there — but never overwrites something the operator has typed.
+        if (hostedVersion().trim().length === 0) {
+          setHostedVersion(loaded.target_version);
+        }
         setMinRing(RINGS.includes(loaded.min_ring as RingWire) ? (loaded.min_ring as RingWire) : "lab");
         setRolloutPercent(String(loaded.rollout_percent));
         setSigningKey(loaded.signing_key_id);
@@ -192,6 +203,44 @@ export function Ota() {
       });
       toast.ok(t("ota.placed"));
       await loadPlacement();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readHosted = async () => {
+    const version = hostedVersion().trim();
+    if (version.length === 0) {
+      setHosted(null);
+      return;
+    }
+    try {
+      const report = await api.listHostedRelease(version);
+      setHosted(report.artifacts);
+    } catch (caught) {
+      setHosted(null);
+      fail(caught);
+    }
+  };
+
+  const checkHosted = async () => {
+    setBusy(true);
+    try {
+      await readHosted();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fetchRelease = async () => {
+    setConfirmFetch(false);
+    setBusy(true);
+    try {
+      const report = await api.fetchRelease(hostedVersion().trim());
+      toast.ok(t("ota.fetched", { count: report.artifacts.length, tag: report.tag }));
+      await readHosted();
     } catch (caught) {
       fail(caught);
     } finally {
@@ -323,6 +372,71 @@ export function Ota() {
                 />
               )}
             </Show>
+          </Card>
+
+          {/* Hosting comes before promoting, on the screen as in the runbook: a store downloads its
+              update from the cloud, and promoting a version the cloud does not hold is refused. */}
+          <Card title={t("ota.hostedTitle")}>
+            <div class="flex flex-col gap-4">
+              <p class="text-sm text-ink-muted">{t("ota.hostedHint")}</p>
+              <TextField
+                label={t("ota.hostedVersion")}
+                value={hostedVersion()}
+                onInput={(value) => {
+                  setHostedVersion(value);
+                  setHosted(null);
+                }}
+                placeholder="1.4.0"
+              />
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={busy() || hostedVersion().trim().length === 0}
+                  onClick={() => void checkHosted()}
+                >
+                  {t("ota.hostedCheck")}
+                </Button>
+                <Button
+                  variant="primary"
+                  disabled={busy() || hostedVersion().trim().length === 0}
+                  onClick={() => setConfirmFetch(true)}
+                >
+                  {t("ota.fetch")}
+                </Button>
+              </div>
+              <p class="text-sm text-ink-muted">{t("ota.fetchHint")}</p>
+              <Show when={hosted()}>
+                {(artifacts) => (
+                  <Show
+                    when={artifacts().length > 0}
+                    fallback={
+                      <EmptyState
+                        title={t("ota.hostedNone")}
+                        description={t("ota.hostedNoneHint")}
+                      />
+                    }
+                  >
+                    <div class="rounded-token border border-line p-4">
+                      <span class="mb-2 block text-sm font-medium text-ink">
+                        {t("ota.hostedFor", { version: hostedVersion().trim() })}
+                      </span>
+                      <For each={artifacts()}>
+                        {(artifact) => (
+                          <>
+                            {currentRow(t("ota.hostedArch"), artifact.arch)}
+                            {currentRow(t("ota.hostedSize"), formatCount(artifact.size_bytes))}
+                            {currentRow(
+                              t("ota.hostedRecorded"),
+                              formatRelativeAge(ageSeconds(artifact.recorded_at_ms)),
+                            )}
+                          </>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                )}
+              </Show>
+            </div>
           </Card>
 
           <Card title={t("ota.placementTitle")}>
@@ -505,6 +619,17 @@ export function Ota() {
           busy={busy()}
           onConfirm={() => void publish()}
           onCancel={() => setConfirmPublish(false)}
+        />
+        <ConfirmDialog
+          open={confirmFetch()}
+          title={t("ota.confirmFetch")}
+          message={t("ota.confirmFetchBody", { version: hostedVersion().trim() })}
+          confirmLabel={t("ota.fetch")}
+          cancelLabel={t("action.cancel")}
+          closeLabel={t("action.close")}
+          busy={busy()}
+          onConfirm={() => void fetchRelease()}
+          onCancel={() => setConfirmFetch(false)}
         />
         <ConfirmDialog
           open={confirmPlace()}
