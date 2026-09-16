@@ -115,6 +115,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A menu-image upload stops holding an async worker, and there is a limit on how many render at
+  once** (backlog item 7; [ADR-0042 Amendment 1](docs/adr/0042-image-pipeline.md)). Rendering an
+  upload is the most expensive thing the cloud does per request — a decode, then up to five Lanczos3
+  resizes and JPEG encodes per rendition, twice — and it was awaited inline in the HTTP handler. A
+  Tokio worker doing that is not polling anything else scheduled on it, so one upload delayed
+  unrelated requests that happened to share a thread. The walk now runs on the blocking pool.
+  - **The pool is not a limit, so there is one.** Tokio's blocking pool is hundreds of threads; a
+    browser uploading a folder of photos would have put every one of them on a core that does not
+    exist, each holding a decoded bitmap. A process-wide cap — `available_parallelism()` clamped to
+    1–8, so it reads the container's quota rather than the host's core count — bounds how many
+    images decode at once.
+  - **A full queue waits, then says so.** An upload waits five seconds for a slot, which a burst of
+    a dozen clears, and only then comes back `RESOURCE_EXHAUSTED` (429, retryable per ADR-0096)
+    rather than a 500 that would read as "your image is broken". Refusing at the door instead would
+    have turned selecting several files into a row of red toasts.
+  - `images::render` itself is untouched: still pure, still synchronous, still unit-tested without
+    I/O. The wrapper `render_blocking` is where the pool and the cap live, so no caller has to
+    remember either. What the cap does **not** bound is how large a single decode may be — the
+    amendment records that as open, because refusing an image by its pixel dimensions decides which
+    real photographs stop working and is a product call, not a threading one.
+
 - **The till's primary buttons stop wearing the fork's brand colour** (backlog item 6; decision D1,
   now true on both surfaces). `tokens.css` split `--primary` from `--accent` in Wave 4 so that a
   fork sets one token and repaints nothing else, and it says so at the declaration: the accent
