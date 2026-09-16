@@ -20,7 +20,14 @@ import {
   StatusBadge,
   TextField,
 } from "../components/ui";
-import { type Column, DataTable, Drawer, EmptyState, TechnicalDetails } from "../components/kit";
+import {
+  type Column,
+  DataTable,
+  Drawer,
+  EmptyState,
+  TechnicalDetails,
+  Toolbar,
+} from "../components/kit";
 import { createAdminResource, failureOf } from "../lib/resource";
 
 /**
@@ -194,7 +201,7 @@ export function Audit() {
     <div>
       <PageHeader title={t("audit.title")} description={t("audit.description")} />
       <Card title={t("audit.recent")}>
-        <div class="mb-4 grid gap-3 sm:grid-cols-3">
+        <Toolbar>
           <TextField
             label={t("audit.filter.entityType")}
             value={entityType()}
@@ -217,7 +224,7 @@ export function Audit() {
             onChange={setActor}
             placeholder={t("audit.filter.anyActor")}
           />
-        </div>
+        </Toolbar>
         {/* A refusal is its own state, not an empty trail: "nobody did anything" and "we could not
             look" are opposite answers on the screen that exists to answer who did what (D5). */}
         <Show when={failureOf(trail)}>

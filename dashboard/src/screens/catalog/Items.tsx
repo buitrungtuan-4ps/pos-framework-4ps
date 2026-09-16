@@ -22,6 +22,7 @@ import {
   EmptyState,
   Modal,
   TechnicalDetails,
+  Toolbar,
 } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
@@ -434,32 +435,35 @@ export function CatalogItems() {
           searches the whole master — including each item's per-locale names (ADR-0074), which is
           what an operator typing Vietnamese needs.
         */}
-        <div class="mb-4 flex flex-wrap items-end gap-2">
-          <div class="min-w-56 flex-1">
-            <TextField
-              label={t("catalog.searchItems")}
-              value={searchDraft()}
-              onInput={setSearchDraft}
-              placeholder={t("catalog.searchItemsHint")}
-            />
-          </div>
-          <Button variant="secondary" disabled={busy()} onClick={applySearch}>
-            {t("action.search")}
-          </Button>
-          <Show when={search()}>
-            <Button
-              variant="secondary"
-              disabled={busy()}
-              onClick={() => {
-                setSearchDraft("");
-                setSearch("");
-                void show(0);
-              }}
-            >
-              {t("action.clear")}
-            </Button>
-          </Show>
-        </div>
+        <Toolbar
+          trailing={
+            <>
+              <Button variant="secondary" disabled={busy()} onClick={applySearch}>
+                {t("action.search")}
+              </Button>
+              <Show when={search()}>
+                <Button
+                  variant="secondary"
+                  disabled={busy()}
+                  onClick={() => {
+                    setSearchDraft("");
+                    setSearch("");
+                    void show(0);
+                  }}
+                >
+                  {t("action.clear")}
+                </Button>
+              </Show>
+            </>
+          }
+        >
+          <TextField
+            label={t("catalog.searchItems")}
+            value={searchDraft()}
+            onInput={setSearchDraft}
+            placeholder={t("catalog.searchItemsHint")}
+          />
+        </Toolbar>
 
         <Show
           when={items()}

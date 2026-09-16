@@ -190,6 +190,9 @@ describe("publishing to a store group", () => {
   it("saves the whole membership under the version it was read at", async () => {
     setStoreGroupMembers.mockResolvedValue({ store_ids: [], etag: "g2" });
     await mount();
+    // This row carries four verbs, so they live behind the kebab now (V19). The operator opens it
+    // first, and so does this test rather than reaching past a menu a real one cannot skip.
+    fireEvent.click(screen.getByRole("button", { name: messages["common.actions"]! }));
     fireEvent.click(screen.getByRole("button", { name: messages["storeGroups.editMembers"]! }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: messages["action.save"]! }));

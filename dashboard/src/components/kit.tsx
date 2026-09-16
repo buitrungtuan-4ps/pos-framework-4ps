@@ -148,6 +148,34 @@ export type Column<T> = {
  */
 export const CLIENT_PAGE_SIZE = 25;
 
+/** The `md` breakpoint, in the one place the table needs to know about it. */
+const WIDE_QUERY = "(min-width: 768px)";
+
+/**
+ * Whether the viewport is at least `md` wide, as a signal.
+ *
+ * The table renders **either** its `<table>` **or** its cards, never both behind a `hidden` class.
+ * Two renders of the same cell would be two DOM subtrees for one row: duplicate `id`s, duplicate
+ * labels for a screen reader walking the whole document, and — for the grids whose cells hold an
+ * uncontrolled input — two edit boxes for one value, of which the user can only see one.
+ *
+ * Falls back to wide when `matchMedia` is missing. That is jsdom under Vitest, where there is no
+ * viewport to ask about and the table is the shape the assertions are written against; it is also
+ * the safe direction generally, since the table degrades to a horizontal scroll while the cards
+ * would simply be the wrong layout on a desktop.
+ */
+function createIsWide() {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return () => true;
+  }
+  const query = window.matchMedia(WIDE_QUERY);
+  const [wide, setWide] = createSignal(query.matches);
+  const onChange = (event: MediaQueryListEvent) => setWide(event.matches);
+  query.addEventListener("change", onChange);
+  onCleanup(() => query.removeEventListener("change", onChange));
+  return wide;
+}
+
 export function DataTable<T>(props: {
   columns: readonly Column<T>[];
   rows: readonly T[];
@@ -190,6 +218,20 @@ export function DataTable<T>(props: {
    * the caller.
    */
   onQuery?: (text: string) => void;
+  /**
+   * Row height. `comfortable` (the default) is what every screen has rendered until now.
+   *
+   * `compact` is for a **reference grid** — a table whose cells are values to read across, like the
+   * translation grid or the tax-rate matrix, where fitting one more row on screen is worth more than
+   * the breathing room. It is not a way to shrink a row that holds controls: the kit's `Button`
+   * carries its own 44 px touch minimum, so a row with actions in it does not get shorter, it just
+   * loses the padding around the buttons.
+   *
+   * (The roadmap's V18 line asks for "compact at 44 px". That describes a *comfortable* row; this
+   * table's default is already 36 px, so the density worth adding was the tighter one, and the
+   * touch floor stayed where it belongs — on the controls, not on the row.)
+   */
+  density?: "comfortable" | "compact";
 }) {
   const [sortKey, setSortKey] = createSignal<string | null>(null);
   const [ascending, setAscending] = createSignal(true);
@@ -283,6 +325,10 @@ export function DataTable<T>(props: {
     }
   };
 
+  const isWide = createIsWide();
+  /** Vertical padding for a header cell and a body cell, from `density`. */
+  const rowPadding = () => (props.density === "compact" ? "py-1" : "py-2");
+
   /** Whether this column's header is a control at all, in the mode the table is in. */
   const sortable = (column: Column<T>) =>
     serverSorted() ? column.sortField !== undefined : column.sortValue !== undefined;
@@ -330,51 +376,87 @@ export function DataTable<T>(props: {
           when={total() > 0}
           fallback={<p class="py-4 text-sm text-ink-muted">{t("table.noMatch")}</p>}
         >
-          <div class="overflow-x-auto">
-            <table class="w-full text-left text-sm">
-              <thead>
-                <tr class="border-b border-line text-ink-muted">
-                  <For each={props.columns}>
-                    {(column) => (
-                      <th class={`py-2 pr-4 font-medium ${column.class ?? ""}`}>
-                        <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
-                          <button
-                            type="button"
-                            class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
-                            onClick={() => toggleSort(column)}
-                          >
-                            <span>{column.header}</span>
-                            <Show when={sortKey() === column.key}>
-                              <span aria-hidden="true">{ascending() ? "▲" : "▼"}</span>
-                            </Show>
-                          </button>
-                        </Show>
-                      </th>
-                    )}
-                  </For>
-                  <Show when={props.actions}>
-                    <th class="py-2 font-medium">{props.actionsHeader}</th>
-                  </Show>
-                </tr>
-              </thead>
-              <tbody>
+          <Show
+            when={isWide()}
+            fallback={
+              /* Below `md` a table cannot be read: eight of them clipped at phone width with no
+                 scroll container at all (V9), and a scroll container would only have made the
+                 clipping swipeable. A row becomes a card of label/value pairs — the header text is
+                 the label, which is why `Column.header` is a plain translated string and not a
+                 node. Sorting and the search box stay above it; the pager stays below. */
+              <ul class="flex list-none flex-col gap-2">
                 <For each={visible()}>
                   {(row) => (
-                    <tr class="border-b border-line text-ink">
+                    <li class="flex flex-col gap-1 rounded-token border border-line bg-surface p-3 text-sm text-ink">
                       <For each={props.columns}>
                         {(column) => (
-                          <td class={`py-2 pr-4 ${column.class ?? ""}`}>{column.cell(row)}</td>
+                          <div class="flex items-baseline justify-between gap-3">
+                            <span class="shrink-0 text-xs font-medium text-ink-muted">
+                              {column.header}
+                            </span>
+                            <span class={`min-w-0 text-right ${column.class ?? ""}`}>
+                              {column.cell(row)}
+                            </span>
+                          </div>
                         )}
                       </For>
                       <Show when={props.actions}>
-                        <td class="py-2">{props.actions?.(row)}</td>
+                        <div class="flex justify-end pt-1">{props.actions?.(row)}</div>
                       </Show>
-                    </tr>
+                    </li>
                   )}
                 </For>
-              </tbody>
-            </table>
-          </div>
+              </ul>
+            }
+          >
+            <div class="overflow-x-auto">
+              <table class="w-full text-left text-sm">
+                <thead>
+                  <tr class="border-b border-line text-ink-muted">
+                    <For each={props.columns}>
+                      {(column) => (
+                        <th class={`${rowPadding()} pr-4 font-medium ${column.class ?? ""}`}>
+                          <Show when={sortable(column)} fallback={<span>{column.header}</span>}>
+                            <button
+                              type="button"
+                              class="inline-flex items-center gap-1 font-medium transition-colors hover:text-ink"
+                              onClick={() => toggleSort(column)}
+                            >
+                              <span>{column.header}</span>
+                              <Show when={sortKey() === column.key}>
+                                <span aria-hidden="true">{ascending() ? "▲" : "▼"}</span>
+                              </Show>
+                            </button>
+                          </Show>
+                        </th>
+                      )}
+                    </For>
+                    <Show when={props.actions}>
+                      <th class={`${rowPadding()} font-medium`}>{props.actionsHeader}</th>
+                    </Show>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={visible()}>
+                    {(row) => (
+                      <tr class="border-b border-line text-ink">
+                        <For each={props.columns}>
+                          {(column) => (
+                            <td class={`${rowPadding()} pr-4 ${column.class ?? ""}`}>
+                              {column.cell(row)}
+                            </td>
+                          )}
+                        </For>
+                        <Show when={props.actions}>
+                          <td class={rowPadding()}>{props.actions?.(row)}</td>
+                        </Show>
+                      </tr>
+                    )}
+                  </For>
+                </tbody>
+              </table>
+            </div>
+          </Show>
           <Pager
             offset={current() * perPage()}
             limit={perPage()}
@@ -911,6 +993,32 @@ export function KpiTile(props: {
       </Show>
       <Show when={props.action}>
         <div class="mt-1">{props.action}</div>
+      </Show>
+    </div>
+  );
+}
+
+/**
+ * The filter row above a list: the controls that narrow it, and — trailing — the buttons that act on
+ * what they narrowed it to.
+ *
+ * Written now rather than in PR-3 because until three screens had rolled the same row by hand there
+ * was nothing to generalise from, and the kit-adoption gate is pointed at exactly that mistake. The
+ * three are Audit (`mb-4 grid gap-3 sm:grid-cols-3`), Reports' X/Z panel and Catalog → Items
+ * (`mb-4 flex flex-wrap items-end gap-4` and `…gap-2`) — the same intent at three spellings, which
+ * is how a console stops looking like one console.
+ *
+ * The split is by *role*, not by position: a control that changes which rows are in the set goes in
+ * `children`, and one that acts on the set as it stands (Search, Clear, View) goes in `trailing`.
+ * That is why Items' Search button is trailing while its text box is not — pressing Search does not
+ * narrow anything, it asks the server for what the box already says.
+ */
+export function Toolbar(props: ParentProps<{ trailing?: JSX.Element }>) {
+  return (
+    <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+      <div class="grid flex-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{props.children}</div>
+      <Show when={props.trailing}>
+        <div class="flex flex-wrap items-end gap-2">{props.trailing}</div>
       </Show>
     </div>
   );

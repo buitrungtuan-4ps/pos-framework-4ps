@@ -31,6 +31,9 @@ export function MediaThumbnail(props: {
       when={props.mediaId && !broken()}
       fallback={
         <div
+          /* A `div` carrying only `aria-label` is skipped: the attribute needs a role to attach to
+             before assistive technology will read it out. */
+          role="img"
           class={`flex items-center justify-center rounded-token border border-line bg-surface-raised text-ink-muted ${box()}`}
           aria-label={t("media.noImage")}
           title={t("media.noImage")}
@@ -143,11 +146,21 @@ export function ImagePicker(props: {
               >
                 <div class="grid grid-cols-4 gap-2">
                   <For each={loaded()}>
-                    {(asset) => (
+                    {(asset, index) => (
                       <button
                         type="button"
-                        aria-label={t("media.selectThisImage")}
-                        class="rounded-token border border-line p-1 transition-colors hover:border-accent"
+                        /* Twelve options that all announce "Select this image" are twelve options a
+                           screen-reader user cannot tell apart. The obvious unique string is the
+                           `media_id`, and it is the wrong one twice over: a ULID is read out
+                           character by character, and putting it in a `title` would hang it in a
+                           tooltip in front of every sighted operator — which is the habit V14 and
+                           `TechnicalDetails` exist to break. Position is short, unique, and matches
+                           the order the grid is actually in. */
+                        aria-label={t("media.selectImageAt", {
+                          n: index() + 1,
+                          total: loaded().length,
+                        })}
+                        class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                         onClick={() => {
                           props.onChange(asset.media_id);
                           setOpen(false);
