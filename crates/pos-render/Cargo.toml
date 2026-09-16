@@ -19,7 +19,11 @@ pos-ports = { path = "../pos-ports" }
 # advisories name, they are actively maintained (HarfBuzz and Google Fonts' fontations), and they
 # share one font parser — `read-fonts` — so the tree gains no second one.
 harfrust = { version = "0.13.3", default-features = false, features = ["std"] }
-# Outlines, over the same `read-fonts` parser harfrust uses.
+# Outlines, over the same `read-fonts` parser harfrust uses. These two versions are coupled and are
+# bumped together or not at all: `shaper()` takes harfrust's `FontRef`, which *is* read-fonts', so a
+# skrifa that resolves a different read-fonts major puts two `FontRef` types in the graph and the
+# call stops compiling. skrifa 0.47 (read-fonts 0.44) is held for that reason — the newest harfrust
+# still asks for `^0.43.3`. Wait for a harfrust on read-fonts 0.44 rather than pinning around it.
 skrifa = { version = "0.46.2", default-features = false, features = ["std"] }
 
 [lints]

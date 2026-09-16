@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
-    "intl-messageformat": "^11.2.14",
+    "intl-messageformat": "^11.2.15",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {
@@ -29,7 +29,7 @@
     "jsdom": "^30.0.1",
     "tailwindcss": "^4.0.9",
     "typescript": "^5.9.3",
-    "vite": "^8.2.2",
+    "vite": "^8.3.0",
     "vite-plugin-solid": "^2.11.2",
     "vitest": "^5.0.0"
   },
