@@ -595,6 +595,7 @@ export function StoreGroups() {
           <p class="mb-3 text-sm text-ink-muted">{t("storeGroups.publishHint")}</p>
           <div class="flex flex-col gap-4">
             <ComboboxField
+              data-step="setTarget"
               label={t("storeGroups.publishTo")}
               value={target()}
               options={(rows() ?? [])
@@ -606,6 +607,7 @@ export function StoreGroups() {
               emptyLabel={t("picker.noMatch")}
             />
             <ComboboxField
+              data-step="setNode"
               label={t("storeGroups.node")}
               value={node()}
               options={NODE_KINDS.map((kind) => ({ value: kind.key, label: t(kind.label) }))}
@@ -662,13 +664,15 @@ export function StoreGroups() {
               {(message) => <Banner tone="danger" message={message()} />}
             </Show>
             <div>
-              <Button disabled={publishing.saving()} onClick={publish}>
+              <Button data-step="publish" disabled={publishing.saving()} onClick={publish}>
                 {t("storeGroups.publish")}
               </Button>
             </div>
             <Show when={report()}>
               {(shown) => (
-                <div class="border-t border-line pt-4">
+                /* The flow's outcome, and the reason ADR-0122 §6 exists: a batch answers per shop,
+                   so what a browser waits for is the report, not the button having been pressed. */
+                <div data-outcome="batch-report" class="border-t border-line pt-4">
                   <h3 class="mb-2 text-sm font-medium text-ink">{t("storeGroups.report")}</h3>
                   {reportRows(shown())}
                 </div>

@@ -115,6 +115,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Every declared console click is now findable in a browser** (backlog item 8, first half;
+  [ADR-0109](docs/adr/0109-counting-the-taps-an-operator-makes.md)). The till has two step gates
+  that lock together — one resolves each declared tap against the source, the other clicks it in a
+  real browser — and the console had only the first. That gate says so itself: it cannot see a click
+  nobody declared, so a confirmation dialog added to the publish flow leaves it green while the flow
+  is one click worse. This is the half that makes the second gate possible.
+  - The seven flows move to `dashboard/scripts/step-tasks.mjs`, read by the budget gate and (next)
+    by the browser one. One declaration, so a flow that grows a click says so in a single place.
+  - Each of the 26 clicks now resolves to an element that **carries `data-step="<action>"` and calls
+    that action**. The attribute cannot name a handler that does not exist, and the handler cannot
+    hide from the browser — which is the lock, and is why the gate checks both halves rather than
+    trusting the attribute. `Button`, `ComboboxField`, `MoneyField` and `PublishBar` forward it, so
+    a screen marks a kit control the same way it marks its own.
+  - Each flow also declares an **outcome**: a `data-outcome` mark that exists only once the flow has
+    worked — the publish bar's freshness line once a node has actually been published, the batch
+    report, the installer block, the acknowledged badge, the store's liveness answer. A flow with no
+    outcome is one a browser could walk while asserting nothing, so the gate refuses it.
+  - The sidebar carries `data-nav={id}`, checked once rather than per screen: it is one attribute in
+    the shell, and a declared `{ nav: … }` step is a click on it.
+  - No flow changed, no ceiling moved: still 7 flows and 26 clicks, each inside its budget.
+
 - **A menu-image upload stops holding an async worker, and there is a limit on how many render at
   once** (backlog item 7; [ADR-0042 Amendment 1](docs/adr/0042-image-pipeline.md)). Rendering an
   upload is the most expensive thing the cloud does per request — a decode, then up to five Lanczos3

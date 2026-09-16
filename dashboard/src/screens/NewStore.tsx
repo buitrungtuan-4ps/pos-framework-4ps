@@ -324,7 +324,7 @@ export function NewStore() {
                 placeholder={t("stores.noBrand")}
               />
               <div>
-                <Button disabled={busy()} onClick={() => void createStore()}>
+                <Button data-step="createStore" disabled={busy()} onClick={() => void createStore()}>
                   {t("wizard.next")}
                 </Button>
               </div>
@@ -358,7 +358,7 @@ export function NewStore() {
                       <Button variant="secondary" onClick={() => setStep(1)}>
                         {t("wizard.back")}
                       </Button>
-                      <Button disabled={busy()} onClick={() => void issueKey()}>
+                      <Button data-step="issueKey" disabled={busy()} onClick={() => void issueKey()}>
                         {t("wizard.issueKey")}
                       </Button>
                       {/* The short path, named (decision D4). The Stores screen used to carry a
@@ -463,12 +463,17 @@ export function NewStore() {
                   operator who takes only this file has everything, and the two separate downloads
                   stay for the cases the script cannot cover: a Windows box, a hand-managed host, or
                   a technician who wants to read the config before it is written. */}
-              <div class="flex flex-col gap-2">
+              {/* The wizard's outcome: the installer block exists only at the last step, with a
+                  store created and its key decided, so waiting on it is waiting for a handoff that
+                  can actually bring a shop online. */}
+              <div data-outcome="installer-ready" class="flex flex-col gap-2">
                 <span class="text-sm font-medium text-ink">{t("wizard.installerTitle")}</span>
                 <p class="text-sm text-ink-muted">{t("wizard.installerHint")}</p>
                 <Banner tone="danger" message={t("wizard.installerSecret")} />
                 <div class="flex gap-2">
-                  <Button onClick={downloadInstaller}>{t("wizard.downloadInstaller")}</Button>
+                  <Button data-step="downloadInstaller" onClick={downloadInstaller}>
+                    {t("wizard.downloadInstaller")}
+                  </Button>
                 </div>
               </div>
 

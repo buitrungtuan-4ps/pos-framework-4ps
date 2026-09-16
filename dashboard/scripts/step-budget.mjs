@@ -57,95 +57,32 @@
 //  * `{ file: "screens/catalog/Menus.tsx", action: "ident" }` — a tap on a component that is not
 //    itself a route (a Catalog tab, a shared panel), named by its path under `src/`.
 //
-// # What this gate does not prove
+// # What this gate does not prove, and who does
 //
-// The same blind spot the till's gate has, and for the same reason: it cannot see a tap nobody
-// declared. Add a confirmation dialog to the publish flow and leave this file alone, and the gate
-// stays green while the flow is one click worse. Catching that needs a browser driving the real
-// console, which needs a running cloud and a signed-in admin — a harness this repo does not have
-// (`docs/gate-register.md`).
+// It cannot see a click nobody declared. Add a confirmation dialog to the publish flow and leave
+// the declaration alone, and this script stays green while the flow is one click worse — a question
+// about the rendered page, not about the syntax tree
+// ([ADR-0109](../../docs/adr/0109-counting-the-taps-an-operator-makes.md)).
+//
+// `tests/replay.spec.mjs` closes it, by clicking the same declared steps in a browser against a
+// real `pos_cloud` and asserting the flow still reaches its outcome. The two gates lock together
+// and neither is sufficient alone: this one requires each resolved element to carry
+// `data-step="<action>"`, so an attribute cannot name a handler that does not exist; the browser
+// one finds the element by that attribute, so an attribute cannot point at something unreachable.
+// This script is also the faster half — it needs no browser, no Postgres and no signed-in admin,
+// and it catches a rename the harness would only report as a missing element.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
+// The one declaration both halves of the gate read (`tests/replay.spec.mjs` is the other). Shared
+// rather than duplicated: a flow that grows a click says so in a single place, and the browser
+// harness cannot drift from the numbers enforced here.
+import { TASKS } from "./step-tasks.mjs";
+
 const SRC = fileURLToPath(new URL("../src", import.meta.url));
 
-// The console's core flows. `budget` is the decided ceiling and `steps` is what the flow costs
-// today, resolved against the source; where the two differ from D7's expected 4 / 6 / 3, the note
-// says why — see the top of this file.
-const TASKS = [
-  {
-    task: "Change an item's price on a menu and publish it to the store",
-    budget: 7,
-    note: "The flow Q7 exists to measure, and D7's publish ceiling of 6 does not fit it — see the top of this file. The last step is the operational risk: a price saved and not published leaves the till charging the old one, and neither screen says so. Any proposal to shorten this should shorten the *first* six, not merge the publish into the save. It was eight until `openMenuDetail` started selecting the opened menu in the publish card, which removed the one tap that was asking the operator to say twice which menu they were working on.",
-    steps: [
-      { nav: "catalog" },
-      { file: "screens/catalog/CatalogShell.tsx", action: "setTab" },
-      { file: "screens/catalog/Menus.tsx", action: "openMenuDetail" },
-      { file: "screens/catalog/Menus.tsx", action: "openEditPlacement" },
-      { file: "screens/catalog/Menus.tsx", action: "setChannelAmount" },
-      { file: "screens/catalog/Menus.tsx", action: "savePlacement" },
-      { file: "screens/catalog/Menus.tsx", action: "doPublish" },
-    ],
-  },
-  {
-    task: "Check whether a shop is online",
-    budget: 1,
-    note: "One click, because the store overview is the tenant-scoped index (ADR-0099). It was five screens before that, which is the whole argument for the hub. D7's find ceiling is 3; this sits at 1 and the ceiling holds it there, because the hub is the reason a second click would be a regression rather than a cost.",
-    steps: [{ nav: "storeHub" }],
-  },
-  {
-    task: "Provision a new store and get its installer",
-    budget: 5,
-    note: "Five, and none of them is removable: the wizard is not in the sidebar (this gate caught that), so it is reached through Stores, and inside it the store must exist before a key can be scoped to it and the key must exist before the installer can embed it. The wizard's three steps are the dependency order, not a form split for looks. That is the one flow D7's create ceiling of 4 cannot hold without unscoping the key from its store, which is why the ceiling here is 5.",
-    steps: [
-      { nav: "stores" },
-      { link: { from: "stores", to: "newStore" } },
-      { screen: "newStore", action: "createStore" },
-      { screen: "newStore", action: "issueKey" },
-      { screen: "newStore", action: "downloadInstaller" },
-    ],
-  },
-  {
-    task: "Replace a store's machine and get its files back",
-    budget: 4,
-    note: "Four, and the middle two are the point rather than overhead: the drawer opens without writing anything (so reading what a dead machine costs cannot mint a credential), and the key is issued deliberately, because it is a new secret and the old one keeps working until somebody revokes it. It was unbounded before this flow existed — the only way to get an installer for an existing store was to create a second store — so the honest comparison is not four against three, it is four against reading a generator's source.",
-    steps: [
-      { nav: "stores" },
-      { screen: "stores", action: "openHandoff" },
-      { screen: "stores", action: "issueHandoffKey" },
-      { screen: "stores", action: "downloadHandoff" },
-    ],
-  },
-  {
-    task: "Publish one menu to a whole cohort of shops",
-    budget: 4,
-    note: "Four, against 3N for the same change made shop by shop — 150 taps at fifty shops, of which 147 are repetition (ADR-0122). The two pickers in the middle are the instruction itself and are not removable: which cohort, and what to send it. What this number does not show is the half the record is actually about — the fourth tap answers with an outcome per shop, where fifty separate publishes answered fifty times and nobody counted.",
-    steps: [
-      { nav: "storeGroups" },
-      { screen: "storeGroups", action: "setTarget" },
-      { screen: "storeGroups", action: "setNode" },
-      { screen: "storeGroups", action: "publish" },
-    ],
-  },
-  {
-    task: "Acknowledge a firing alert",
-    budget: 2,
-    note: "Two. Acknowledging from the list rather than from a detail drawer is what keeps it at two — the drawer offers the same action for someone who opened it to read the detail first.",
-    steps: [{ nav: "alerts" }, { screen: "alerts", action: "acknowledge" }],
-  },
-  {
-    task: "Turn a capability off for a store and publish it",
-    budget: 3,
-    note: "Three. Same shape as the price flow and the same risk: the change is authored and then published, and only the published half reaches the till.",
-    steps: [
-      { nav: "config" },
-      { screen: "config", action: "applyPreset" },
-      { screen: "config", action: "publishCapabilities" },
-    ],
-  },
-];
 
 function read(path) {
   try {
@@ -277,11 +214,16 @@ function componentFiles() {
 }
 
 /**
- * Every identifier called inside an interactive handler in this file.
+ * What one file offers the two gates: the actions its interactive elements call, the ones whose
+ * element also carries `data-step="<action>"`, and the `data-outcome` marks it can render.
  *
  * The *called* identifiers rather than the handler text: a tap is written
  * `onClick={() => void savePlacement()}`, and what the operator is doing is `savePlacement` — the
  * `void` and the arrow are plumbing. Collecting call targets sees through any depth of wrapper.
+ *
+ * `marked` is the half that makes a declared click findable in a browser. The attribute has to sit
+ * on the same element as the handler, and name the same action, so it cannot drift into pointing at
+ * a control that does something else — the lock `tests/replay.spec.mjs` closes from the other side.
  */
 function tapActions(path, text) {
   // The four DOM handlers, plus the kit props that *are* taps one indirection away.
@@ -305,44 +247,79 @@ function tapActions(path, text) {
     "onSelect",
   ]);
   const actions = new Set();
-  const collectCalls = (node) => {
+  const marked = new Set();
+  const outcomes = new Set();
+  const collectCalls = (node, into) => {
     if (ts.isCallExpression(node)) {
       const target = node.expression;
       if (ts.isIdentifier(target)) {
-        actions.add(target.text);
+        into.add(target.text);
       } else if (ts.isPropertyAccessExpression(target)) {
-        actions.add(target.name.text);
+        into.add(target.name.text);
       }
     }
-    ts.forEachChild(node, collectCalls);
+    ts.forEachChild(node, (child) => collectCalls(child, into));
+  };
+  const visitElement = (attributes) => {
+    const called = new Set();
+    let step = null;
+    for (const attribute of attributes.properties) {
+      if (!ts.isJsxAttribute(attribute) || attribute.initializer === undefined) {
+        continue;
+      }
+      const name = attribute.name.getText();
+      if (handlers.has(name)) {
+        collectCalls(attribute.initializer, called);
+        // `onClick={handler}` with no call at all: the identifier itself is the tap.
+        if (
+          ts.isJsxExpression(attribute.initializer) &&
+          attribute.initializer.expression !== undefined &&
+          ts.isIdentifier(attribute.initializer.expression)
+        ) {
+          called.add(attribute.initializer.expression.text);
+        }
+      }
+      if (name === '"data-step"' || name === "data-step") {
+        const value = attribute.initializer;
+        if (ts.isStringLiteral(value)) {
+          step = value.text;
+        }
+      }
+      // An outcome mark carries no handler and needs none: it names something that becomes visible
+      // once a flow has succeeded, which is what the browser gate waits on. Collected per file
+      // rather than per element, because nothing about it has to sit on a control.
+      if (name === '"data-outcome"' || name === "data-outcome") {
+        const value = attribute.initializer;
+        if (ts.isStringLiteral(value)) {
+          outcomes.add(value.text);
+        }
+      }
+    }
+    for (const action of called) {
+      actions.add(action);
+    }
+    // The attribute counts only when the element it sits on really calls what it names. That is the
+    // half of the lock the browser harness cannot check for itself.
+    if (step !== null && called.has(step)) {
+      marked.add(step);
+    }
   };
   const walk = (node) => {
-    if (ts.isJsxAttribute(node) && handlers.has(node.name.getText())) {
-      if (node.initializer !== undefined) {
-        collectCalls(node.initializer);
-      }
-      // `onClick={handler}` with no call at all: the identifier itself is the tap.
-      if (
-        node.initializer !== undefined &&
-        ts.isJsxExpression(node.initializer) &&
-        node.initializer.expression !== undefined &&
-        ts.isIdentifier(node.initializer.expression)
-      ) {
-        actions.add(node.initializer.expression.text);
-      }
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      visitElement(node.attributes);
     }
     ts.forEachChild(node, walk);
   };
   walk(parse(path, text));
-  return actions;
+  return { actions, marked, outcomes };
 }
 
 const { ids, inNav } = screenTable();
 const files = componentFiles();
 const actionCache = new Map();
 
-/** The tap actions in `relative` (a path under `src/`), or `null` if the file is missing. */
-function actionsInFile(relative) {
+/** What `relative` (a path under `src/`) offers, or `null` if the file is missing. */
+function elementsInFile(relative) {
   if (actionCache.has(relative)) {
     return actionCache.get(relative);
   }
@@ -392,18 +369,64 @@ function resolveStep(step) {
   if (relative === undefined) {
     return `names screen "${step.screen}", which SCREENS has but App.tsx's COMPONENTS does not map to a lazy-imported file`;
   }
-  const actions = actionsInFile(relative);
-  if (actions === null) {
+  const found = elementsInFile(relative);
+  if (found === null) {
     return `points at src/${relative}, which does not exist`;
   }
-  if (!actions.has(step.action)) {
+  if (!found.actions.has(step.action)) {
     return `claims a tap calling \`${step.action}\` in src/${relative}, and no interactive element there calls it — the flow changed, or the declaration is stale`;
+  }
+  if (!found.marked.has(step.action)) {
+    return `claims a tap calling \`${step.action}\` in src/${relative}, and the element that calls it carries no \`data-step="${step.action}"\` — add it, or the browser gate has no way to find the click`;
   }
   return null;
 }
 
+/** Resolves a task's outcome mark, returning an error string or `null` when it holds. */
+function resolveOutcome(outcome) {
+  if (outcome === undefined) {
+    return "declares no outcome — say where the flow ends, as { screen | file, mark }, or the replay proves only that the clicks exist";
+  }
+  const relative =
+    outcome.file ?? (outcome.screen !== undefined ? files.get(outcome.screen) : undefined);
+  if (outcome.screen !== undefined && !ids.has(outcome.screen)) {
+    return `ends on screen "${outcome.screen}", which is not in SCREENS`;
+  }
+  if (relative === undefined) {
+    return `ends on screen "${outcome.screen}", which App.tsx's COMPONENTS does not map to a lazy-imported file`;
+  }
+  const found = elementsInFile(relative);
+  if (found === null) {
+    return `ends in src/${relative}, which does not exist`;
+  }
+  if (!found.outcomes.has(outcome.mark)) {
+    return `ends at \`data-outcome="${outcome.mark}"\` in src/${relative}, and nothing there carries it — mark whatever appears once the flow has succeeded, or the browser gate has nothing to wait for`;
+  }
+  return null;
+}
+
+/**
+ * The sidebar's own hook, checked once rather than per screen.
+ *
+ * Every nav entry is one `<A data-nav={id}>` in the shell, so what can rot is that one attribute,
+ * not thirty of them. A declared `{ nav: … }` step is a click on it.
+ */
+function navHook() {
+  const text = read(`${SRC}/components/Shell.tsx`);
+  if (text === null) {
+    return "src/components/Shell.tsx does not exist, so no nav click can be resolved";
+  }
+  return text.includes("data-nav={id}")
+    ? null
+    : 'src/components/Shell.tsx no longer puts `data-nav={id}` on its nav entries, so every declared nav click is unfindable in a browser';
+}
+
 const failures = [];
-for (const { task, budget, steps } of TASKS) {
+const nav = navHook();
+if (nav !== null) {
+  failures.push(nav);
+}
+for (const { task, budget, steps, outcome } of TASKS) {
   if (budget !== null && steps.length > budget) {
     failures.push(
       `"${task}" takes ${steps.length} clicks but its budget is ${budget} — cut a step, or argue the new number into this task's \`note\` (docs/cloud-admin-ux-plan.md D7)`,
@@ -414,6 +437,10 @@ for (const { task, budget, steps } of TASKS) {
     if (failure !== null) {
       failures.push(`"${task}" step ${index + 1} ${failure}`);
     }
+  }
+  const missing = resolveOutcome(outcome);
+  if (missing !== null) {
+    failures.push(`"${task}" ${missing}`);
   }
 }
 
@@ -427,8 +454,9 @@ if (failures.length > 0) {
 
 const clicks = TASKS.reduce((total, { steps }) => total + steps.length, 0);
 const unruled = TASKS.filter(({ budget }) => budget === null);
+const replayed = TASKS.filter(({ unreplayable }) => unreplayable === undefined).length;
 console.log(
-  `step-budget: ok — ${TASKS.length} console flows, ${clicks} clicks, every one resolved to a real handler and inside its ceiling.`,
+  `step-budget: ok — ${TASKS.length} console flows, ${clicks} clicks, every one resolved to a marked handler and inside its ceiling; ${replayed} replayable in a browser.`,
 );
 for (const { task, budget, steps } of TASKS) {
   const against = budget === null ? " (no ceiling decided yet)" : `/${budget}`;

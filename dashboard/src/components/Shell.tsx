@@ -263,6 +263,12 @@ export function Shell(props: ParentProps) {
                             return (
                               <li>
                                 <A
+                                  // The step gate's handle on a nav click: `scripts/step-budget.mjs`
+                                  // requires this attribute to exist, and `tests/replay.spec.mjs`
+                                  // clicks the entry by it. Keyed by screen id rather than by label,
+                                  // because the label is translated and the id is what a declared
+                                  // `{ nav: … }` step names.
+                                  data-nav={id}
                                   // The link carries the working context, so copying it out of the
                                   // address bar gives somebody else the same screen on the same
                                   // tenant.

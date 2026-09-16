@@ -351,6 +351,12 @@ export function ComboboxField(props: {
    * local filtering — see the note above.
    */
   onSearch?: (query: string) => void;
+  /**
+   * The step gate's handle on this control, when a declared flow clicks it
+   * (`scripts/step-tasks.mjs`). Forwarded to the element an operator actually presses, so the
+   * browser harness finds the same thing `scripts/step-budget.mjs` resolved.
+   */
+  "data-step"?: string;
 }) {
   const labelId = createUniqueId();
   const hintId = createUniqueId();
@@ -439,6 +445,9 @@ export function ComboboxField(props: {
       </span>
       <button
         type="button"
+        // The trigger is where a declared click lands: the budget counts choosing in a picker as
+        // one step, so the harness presses this and takes an option rather than counting two.
+        data-step={props["data-step"]}
         class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-left text-base text-ink disabled:cursor-not-allowed disabled:opacity-50"
         disabled={props.disabled}
         aria-labelledby={labelId}
@@ -713,6 +722,12 @@ export function MoneyField(props: {
   value: number | null;
   onChange: (minor: number | null) => void;
   placeholder?: string;
+  /**
+   * The step gate's handle on this control, when a declared flow clicks it
+   * (`scripts/step-tasks.mjs`). Forwarded to the element an operator actually presses, so the
+   * browser harness finds the same thing `scripts/step-budget.mjs` resolved.
+   */
+  "data-step"?: string;
 }) {
   const grouped = () =>
     props.value === null ? "" : new Intl.NumberFormat(locale()).format(props.value);
@@ -721,6 +736,7 @@ export function MoneyField(props: {
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
       <div class="flex items-center gap-2">
         <input
+          data-step={props["data-step"]}
           class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
           inputmode="numeric"
           placeholder={props.placeholder}

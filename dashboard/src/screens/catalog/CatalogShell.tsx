@@ -46,6 +46,7 @@ export function CatalogShell() {
                       ? "border-b-2 border-accent text-ink"
                       : "text-ink-muted hover:text-ink"
                   }`}
+                  data-step="setTab"
                   onClick={() => setTab(entry.key)}
                 >
                   {t(entry.label)}

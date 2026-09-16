@@ -82,6 +82,14 @@ function HubCard<T>(props: {
    * things would be a second copy of five editors, free to drift from the real ones.
    */
   action?: (value: T) => JSXElement;
+  /**
+   * The step gate's outcome mark, carried on the answer rather than on the card.
+   *
+   * The card renders while the panel is still loading and when the read has failed; only the ready
+   * branch below is the shop's actual answer, so that is where the mark goes and what the browser
+   * harness waits for.
+   */
+  "data-outcome"?: string;
 }) {
   return (
     <Card title={props.title}>
@@ -107,13 +115,15 @@ function HubCard<T>(props: {
           // the rest of the console can reach it; the card keeps what is particular to the hub —
           // the panel states and the link out.
           return (
-            <KpiTile
-              label={props.title}
-              value={rendered.headline}
-              support={rendered.support}
-              tone={rendered.tone ?? "plain"}
-              action={props.action?.(ready().value)}
-            />
+            <div data-outcome={props["data-outcome"]}>
+              <KpiTile
+                label={props.title}
+                value={rendered.headline}
+                support={rendered.support}
+                tone={rendered.tone ?? "plain"}
+                action={props.action?.(ready().value)}
+              />
+            </div>
           );
         }}
       </Show>
@@ -235,6 +245,7 @@ export function StoreHub() {
             panel={fleet()}
             link="fleet"
             linkLabel={t("hub.online.link")}
+            data-outcome="store-liveness"
           >
             {(store) => {
               const verdict = onlineVerdict(store);

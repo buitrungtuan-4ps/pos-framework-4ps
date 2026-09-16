@@ -571,6 +571,7 @@ export function Stores() {
                         {t("action.edit")}
                       </Button>
                       <Button
+                        data-step="openHandoff"
                         variant="ghost"
                         size="sm"
                         class="justify-start"
@@ -762,7 +763,11 @@ export function Stores() {
                     fallback={
                       <div class="flex flex-col gap-2">
                         <div class="flex flex-wrap gap-2">
-                          <Button disabled={handoffBusy()} onClick={() => void issueHandoffKey()}>
+                          <Button
+                            data-step="issueHandoffKey"
+                            disabled={handoffBusy()}
+                            onClick={() => void issueHandoffKey()}
+                          >
                             {handoffBusy() ? t("common.saving") : t("handoff.issueKey")}
                           </Button>
                           <Button
@@ -801,7 +806,10 @@ export function Stores() {
                   when={handoffReady()}
                   fallback={<p class="text-sm text-ink-muted">{t("handoff.keyHint")}</p>}
                 >
-                  <section class="flex flex-col gap-3">
+                  {/* The flow's outcome: this section exists only once the key decision is
+                      made, so a browser waiting on it is waiting for a handoff that can actually
+                      produce files rather than for the drawer having opened. */}
+                  <section data-outcome="handoff-ready" class="flex flex-col gap-3">
                     <h3 class="text-sm font-semibold text-ink">{t("handoff.filesTitle")}</h3>
                     <TextField
                       label={t("wizard.bindPort")}
@@ -817,6 +825,7 @@ export function Stores() {
                       {(file) => (
                         <div class="flex flex-col gap-1">
                           <Button
+                            data-step="downloadHandoff"
                             variant="secondary"
                             onClick={() => {
                               const values = handoffValues();

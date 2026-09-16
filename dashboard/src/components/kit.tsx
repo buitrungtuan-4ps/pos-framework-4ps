@@ -1361,6 +1361,18 @@ export function PublishBar(props: {
    */
   addToRelease?: { href: string; label: string };
   onPublish: () => void;
+  /**
+   * The step gate's handle on the Publish button, for a flow that declares this click
+   * (`scripts/step-tasks.mjs`).
+   */
+  "data-step"?: string;
+  /**
+   * The step gate's outcome mark, rendered on the freshness line **only once the node has been
+   * published at least once**. That is what makes it an outcome rather than furniture: a store that
+   * has never had this node has no such element, so a browser waiting on it is waiting for the
+   * publish to have landed, not for the bar to have rendered.
+   */
+  "data-outcome"?: string;
 }) {
   const state = () => publishState(props.publishedAtMs, props.editedAtMs);
   return (
@@ -1368,7 +1380,14 @@ export function PublishBar(props: {
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex flex-col gap-0.5">
           <span class="text-sm font-medium text-ink">{props.label}</span>
-          <span class={`text-sm ${state() === "stale" ? "text-danger" : "text-ink-muted"}`}>
+          <span
+            data-outcome={
+              props.publishedAtMs === null || props.publishedAtMs === undefined
+                ? undefined
+                : props["data-outcome"]
+            }
+            class={`text-sm ${state() === "stale" ? "text-danger" : "text-ink-muted"}`}
+          >
             {props.describe(state(), props.publishedAtMs ?? null)}
           </span>
         </div>
@@ -1393,7 +1412,11 @@ export function PublishBar(props: {
               />
             )}
           </Show>
-          <Button disabled={props.busy || props.disabled} onClick={() => props.onPublish()}>
+          <Button
+            data-step={props["data-step"]}
+            disabled={props.busy || props.disabled}
+            onClick={() => props.onPublish()}
+          >
             {props.publishLabel}
           </Button>
         </div>

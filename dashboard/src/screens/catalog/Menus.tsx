@@ -738,7 +738,11 @@ export function CatalogMenus() {
               actionsHeader={t("common.actions")}
               actions={(row) => (
                 <div class="flex flex-wrap gap-2">
-                  <Button disabled={busy()} onClick={() => void openMenuDetail(row.menu_id)}>
+                  <Button
+                    data-step="openMenuDetail"
+                    disabled={busy()}
+                    onClick={() => void openMenuDetail(row.menu_id)}
+                  >
                     {t("catalog.openPlacements")}
                   </Button>
                   <Button variant="secondary" disabled={busy()} onClick={() => openEditMenu(row)}>
@@ -819,7 +823,12 @@ export function CatalogMenus() {
                 actionsHeader={t("common.actions")}
                 actions={(row) => (
                   <div class="flex flex-wrap gap-2">
-                    <Button variant="secondary" disabled={busy()} onClick={() => openEditPlacement(row)}>
+                    <Button
+                      data-step="openEditPlacement"
+                      variant="secondary"
+                      disabled={busy()}
+                      onClick={() => openEditPlacement(row)}
+                    >
                       {t("action.edit")}
                     </Button>
                     <Button variant="danger-ghost" disabled={busy()} onClick={() => setPendingRemove(row)}>
@@ -860,6 +869,8 @@ export function CatalogMenus() {
             disabled={!storeId()}
             disabledReason={t("catalog.publishStoreNone")}
             onPublish={() => void doPublish()}
+            data-step="doPublish"
+            data-outcome="menu-published"
           />
         </div>
       </Card>
@@ -998,7 +1009,7 @@ export function CatalogMenus() {
             <Button variant="secondary" onClick={resetPlacementEditor}>
               {t("action.cancel")}
             </Button>
-            <Button disabled={busy()} onClick={() => void savePlacement()}>
+            <Button data-step="savePlacement" disabled={busy()} onClick={() => void savePlacement()}>
               {t("catalog.savePlacement")}
             </Button>
           </>
@@ -1044,6 +1055,7 @@ export function CatalogMenus() {
               <For each={SALES_CHANNELS}>
                 {(channel) => (
                   <MoneyField
+                    data-step="setChannelAmount"
                     label={t(CHANNEL_LABEL[channel])}
                     currencyCode={placementCurrency()}
                     value={priceSheet()[channel]}
