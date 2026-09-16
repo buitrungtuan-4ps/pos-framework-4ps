@@ -234,7 +234,7 @@ describe("the image picker", () => {
     expect(screen.getByRole("img", { name: "No image" })).toBeTruthy();
   });
 
-  it("renders image options in modal with media_id in aria-label and focus visible styles", async () => {
+  it("renders image options in modal with position in aria-label and focus visible styles", async () => {
     vi.spyOn(api, "listMedia").mockResolvedValue([
       { media_id: "m1", content_type: "image/jpeg", detail_bytes: 1024, created_at_ms: 1000 },
       { media_id: "m2", content_type: "image/png", detail_bytes: 2048, created_at_ms: 2000 },
@@ -251,11 +251,12 @@ describe("the image picker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Set image" }));
 
-    const optionBtn1 = await screen.findByRole("button", { name: /m1/ });
-    expect(optionBtn1.getAttribute("aria-label")).toContain("m1");
+    const optionBtn1 = await screen.findByRole("button", { name: /1\/2/ });
+    expect(optionBtn1.getAttribute("aria-label")).toContain("1/2");
+    expect(optionBtn1.getAttribute("title")).toBeNull();
     expect(optionBtn1.className).toContain("focus-visible:outline-2");
 
-    const optionBtn2 = await screen.findByRole("button", { name: /m2/ });
-    expect(optionBtn2.getAttribute("aria-label")).toContain("m2");
+    const optionBtn2 = await screen.findByRole("button", { name: /2\/2/ });
+    expect(optionBtn2.getAttribute("aria-label")).toContain("2/2");
   });
 });

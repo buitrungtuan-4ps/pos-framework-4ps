@@ -144,11 +144,10 @@ export function ImagePicker(props: {
               >
                 <div class="grid grid-cols-4 gap-2">
                   <For each={loaded()}>
-                    {(asset) => (
+                    {(asset, index) => (
                       <button
                         type="button"
-                        aria-label={`${t("media.selectThisImage")}: ${asset.media_id}`}
-                        title={asset.media_id}
+                        aria-label={`${t("media.selectThisImage")}, ${index() + 1}/${loaded().length}`}
                         class="rounded-token border border-line p-1 transition-colors hover:border-accent focus-visible:outline-2 focus-visible:outline-accent"
                         onClick={() => {
                           props.onChange(asset.media_id);
