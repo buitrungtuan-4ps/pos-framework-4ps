@@ -193,7 +193,13 @@ export function Alerts() {
       return <StatusBadge tone="archived" label={t("alerts.state.resolved")} />;
     }
     if (state === "acknowledged") {
-      return <StatusBadge tone="neutral" label={t("alerts.state.acknowledged")} />;
+      // The acknowledge flow's outcome: this badge exists only for an alert somebody has taken on,
+      // so a browser waiting for it is waiting for the write, not for the row having rendered.
+      return (
+        <span data-outcome="alert-acknowledged">
+          <StatusBadge tone="neutral" label={t("alerts.state.acknowledged")} />
+        </span>
+      );
     }
     return <StatusBadge tone="danger" label={t("alerts.state.firing")} />;
   };
@@ -253,7 +259,12 @@ export function Alerts() {
           {t("alerts.details")}
         </Button>
         <Show when={canManage() && state === "firing"}>
-          <Button variant="secondary" disabled={busy()} onClick={() => void acknowledge(row)}>
+          <Button
+            data-step="acknowledge"
+            variant="secondary"
+            disabled={busy()}
+            onClick={() => void acknowledge(row)}
+          >
             {t("alerts.acknowledge")}
           </Button>
         </Show>

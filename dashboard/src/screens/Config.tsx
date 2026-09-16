@@ -369,6 +369,7 @@ export function Config() {
                         const key = PRESET_KEY[preset.id];
                         return (
                           <Button
+                            data-step="applyPreset"
                             variant="secondary"
                             disabled={busy()}
                             onClick={() => applyPreset(preset)}
@@ -467,6 +468,8 @@ export function Config() {
                       flags: flags(),
                     })}
                     onPublish={() => void publishCapabilities()}
+                    data-step="publishCapabilities"
+                    data-outcome="capabilities-published"
                   />
                 </div>
               </Card>
