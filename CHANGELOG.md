@@ -18,6 +18,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **ImagePicker media options carry distinct ARIA labels and focus-visible indicators.** Added `media_id` to image thumbnail ARIA labels and title tooltips in `dashboard/src/components/ImagePicker.tsx`, and added `role="img"` to the fallback tile.
+
 - **A release is one decision and many writes** ([ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md),
   Wave 4 PR-7; findings F8 / F9 / F10 / F17, decision D8). A Tết menu is not one node — it is a
   menu, the tax rates it prices against, the campaigns that discount it, the reason codes the staff
