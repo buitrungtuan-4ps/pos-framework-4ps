@@ -120,17 +120,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   [#311](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/311)). Three grouped minor/patch
   bumps landed as one change so the tree is compiled and built once against all of them rather than
   three times against three partial trees: `vite` 8.2.2 → 8.3.0 and `intl-messageformat` 11.2.14 →
-  11.2.15 in both front ends, and `flate2` 1.1.9 → 1.1.10 (which brings `miniz_oxide` 0.9.1 and
-  `zlib-rs` 0.6.8) plus `jiff` 0.2.35 → 0.2.37 in the workspace. No behaviour changes; both bundles
-  and every suite are unchanged.
-  - **A fourth proposal, `skrifa` 0.46.2 → 0.47.0, was declined rather than merged**
+  11.2.15 in both front ends, and `jiff` + `jiff-static` 0.2.35 → 0.2.37 in the workspace. No
+  behaviour changes; both bundles and every suite are unchanged.
+  - **Two of the week's proposals were declined rather than merged, and both refusals were the
+    build's, not a reviewer's.** Recording them because each will be re-proposed every week until
+    upstream moves.
+  - **`skrifa` 0.46.2 → 0.47.0**
     ([#312](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/312)). `pos-render` exists
     because `harfrust` shapes text and `skrifa` draws the outlines *over the same `read-fonts`
     parser* — that shared parser is the reason the tree carries one font stack and not two. `skrifa`
     0.47 moves to `read-fonts` 0.44 while the newest `harfrust` (0.13.3) still requires `^0.43.3`, so
     the bump puts two incompatible `FontRef` types in the graph and `shaper()` stops accepting the
-    font it is handed. The build refuses it, which is the gate working; the bump waits for a
-    `harfrust` release on `read-fonts` 0.44.
+    font it is handed. The bump waits for a `harfrust` release on `read-fonts` 0.44.
+  - **`flate2` 1.1.9 → 1.1.10**, the other half of `cargo-minor`'s group. `flate2` 1.1.10 moves to
+    `miniz_oxide` 0.9, while the newest `png` (0.18.1, under `image`) still requires `^0.8` — so the
+    bump puts *two* `miniz_oxide` lines in the lockfile and `cargo deny`'s `bans.multiple-versions =
+    "deny"` refuses it. `deny.toml` says every skip carries a reason and a review date and that the
+    list should ratchet *down*; a compression-crate patch bump does not earn a fourth entry. `jiff`
+    lands on its own and `flate2` waits for `png` on `miniz_oxide` 0.9.
 
 - **The console's step budget stopped reporting and started refusing** (Wave 4 PR-8, decision D7).
   Seven core admin flows have had their click count measured in CI since Q7 with no ceiling attached,
