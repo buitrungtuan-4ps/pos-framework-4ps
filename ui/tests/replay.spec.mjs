@@ -212,6 +212,43 @@ for (const declared of replayed) {
   });
 }
 
+// Not a flow: the regression for a mistyped PIN, which is the most ordinary event on a shop floor
+// and used to unpair the tablet.
+//
+// The edge answers `401` for a refused sign-in *and* for an unpaired device, and the client read the
+// status alone — so one wrong digit dropped the device token and bounced the operator back to the
+// pairing screen, needing a manager and a fresh six-digit code mid-service. Every declared flow signs
+// in with the right credentials, so no flow above could ever have caught it.
+//
+// Both halves are asserted, because fixing only the visible one would leave the damage: the screen
+// has to *say* the PIN was wrong, and the device has to still be paired afterwards — proven by
+// signing in properly with no second pairing in between.
+test("a wrong PIN is refused on the sign-in screen and leaves the device paired", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+
+    await page.locator("#signin-code").fill(edge.staffCode);
+    // Not `edge.staffPin`, and longer than it, so it cannot collide with the demo one.
+    await page.locator("#signin-pin").fill("999999");
+    await page.locator('[data-step="submit"]').click();
+
+    // The refusal is shown, on the screen the operator is already standing on.
+    await expect(
+      page.getByRole("alert"),
+      "a wrong PIN showed no refusal — the client threw on the `401` instead of reading the body, which sends the till back to pairing and leaves the screen's three refusal messages unreachable",
+    ).toBeVisible();
+
+    // And the device is still paired, proven the only way that counts: the right PIN goes straight
+    // in, with no pairing step in between.
+    await signIn(page, edge);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
