@@ -10,6 +10,7 @@ import { api } from "../api/client";
 import type { DailyRevenue, DailyRollup, Store, XzReport } from "../api/types";
 import { t } from "../i18n";
 import { formatCount, formatMoney } from "../lib/format";
+import { createAdminResource, failureOf } from "../lib/resource";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
@@ -70,8 +71,6 @@ export function Reports() {
   const [from, setFrom] = createSignal("");
   const [to, setTo] = createSignal("");
 
-  const [rows, setRows] = createSignal<DailyRollup[]>([]);
-  const [revenue, setRevenue] = createSignal<DailyRevenue[]>([]);
   const [xz, setXz] = createSignal<XzReport | null>(null);
   const [xzDate, setXzDate] = createSignal("");
   const [cross, setCross] = createSignal<{ name: string; net: number; currency: string }[] | null>(
@@ -85,30 +84,38 @@ export function Reports() {
     setError(message);
   };
 
-  const load = async () => {
-    if (!storeId()) {
-      return;
-    }
-    setError("");
-    setBusy(true);
-    try {
-      const jobs: Promise<unknown>[] = [
-        api.dailyRollups(tenantId(), storeId(), win()).then(setRows),
-      ];
-      if (canReadRevenue()) {
-        jobs.push(api.dailyRevenue(tenantId(), storeId(), win()).then(setRevenue));
-        jobs.push(api.xzReport(tenantId(), storeId(), xzDate() || undefined).then(setXz));
-      }
-      await Promise.all(jobs);
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
-  };
+  /**
+   * The windowed read: activity for everyone, revenue for a role that may see money.
+   *
+   * On `createAdminResource` for the same four reasons every other screen is (D5) — the read re-runs
+   * on a context change, `loading` / `ready` / `failed` stay apart so a window that could not be
+   * read is not drawn as a window with no trading in it, and `refetch()` is what the Apply button
+   * below calls. It reads `win()` inside the closure rather than taking it as an argument, so a
+   * refetch runs the window the operator has composed *now*.
+   *
+   * No `intervalMs` and no focus revalidation, unlike the fleet panes: a closed date window does not
+   * move, and re-reading last month on a timer would be spending the operator's link on an answer
+   * that cannot have changed.
+   */
+  const windowed = createAdminResource(
+    async (tenant, store) => {
+      const rollups = await api.dailyRollups(tenant, store, win());
+      const money = canReadRevenue() ? await api.dailyRevenue(tenant, store, win()) : [];
+      return { rollups, revenue: money };
+    },
+    { scope: "store" },
+  );
 
-  // Load on open and whenever the tenant/store changes — never with an empty context (F0).
-  onScopedContext("store", () => void load());
+  const rows = (): DailyRollup[] => windowed.value()?.rollups ?? [];
+  const revenue = (): DailyRevenue[] => windowed.value()?.revenue ?? [];
+
+  // The X/Z report is its own question with its own date, so it stays a separate read rather than
+  // riding the window above — see its panel near the bottom of this file.
+  onScopedContext("store", () => {
+    if (canReadRevenue()) {
+      void loadXz();
+    }
+  });
 
   const loadXz = async () => {
     setBusy(true);
@@ -182,6 +189,9 @@ export function Reports() {
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={failureOf(windowed)}>
+            {(message) => <Banner tone="danger" message={message()} />}
+          </Show>
 
           {/* Window */}
           <Card title={t("reports.window")}>
@@ -199,8 +209,16 @@ export function Reports() {
                   setTo(nextTo);
                 }}
               />
-              <Button disabled={busy()} onClick={() => void load()}>
-                {t("action.refresh")}
+              {/* Not the Refresh button D5 killed, and it is relabelled here to stop reading like
+                  one. Those thirty buttons existed because a screen had no idea how to re-read what
+                  it had changed; this one runs the query the operator has just composed in the two
+                  date fields beside it. A window nobody has changed needs no button, and does not
+                  get one — the read above re-runs on its own when the shop changes. */}
+              <Button
+                disabled={windowed.loading()}
+                onClick={() => void windowed.refetch()}
+              >
+                {t("reports.applyWindow")}
               </Button>
             </div>
             <p class="mt-2 text-sm text-ink-muted">{t("reports.windowHint")}</p>

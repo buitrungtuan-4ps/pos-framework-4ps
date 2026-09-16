@@ -6,14 +6,15 @@
 // levers are store-scoped and behind console.ota.publish (the server enforces it — a viewer sees the
 // progress but a publish returns 403).
 
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { FleetStore, OtaPlacement, OtaRollout } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { formatRelativeAge } from "../lib/format";
 import { onlineVerdict } from "../lib/posture";
-import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
+import { createAdminResource, failureOf } from "../lib/resource";
+import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, storeName, tenantId } from "../state/session";
 import {
   Banner,
@@ -55,7 +56,15 @@ function ageSeconds(atMs: number): number {
 }
 
 export function Ota() {
-  const [stores, setStores] = createSignal<FleetStore[] | null>(null);
+  // The progress pane: a tenant-wide read of something that moves, which is the case
+  // `createAdminResource` was written for. It owns the poll and the focus revalidation that this
+  // screen used to hand-roll, and the `loading`/`ready`/`failed` split means a fleet that could not
+  // be read no longer renders as a fleet with no stores in it (D5).
+  const fleet = createAdminResource((tenant) => api.listFleet(tenant), {
+    scope: "tenant",
+    revalidateOnFocus: true,
+    intervalMs: POLL_MS,
+  });
   const [rollout, setRollout] = createSignal<OtaRollout | null>(null);
   const [rolloutLoaded, setRolloutLoaded] = createSignal(false);
   const [placement, setPlacement] = createSignal<OtaPlacement | null>(null);
@@ -83,18 +92,6 @@ export function Ota() {
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
-  };
-
-  const loadFleet = async () => {
-    setError("");
-    setBusy(true);
-    try {
-      setStores(await api.listFleet(tenantId()));
-    } catch (caught) {
-      fail(caught);
-    } finally {
-      setBusy(false);
-    }
   };
 
   const loadRollout = async () => {
@@ -144,23 +141,13 @@ export function Ota() {
   };
 
   const load = () => {
-    void loadFleet();
     void loadRollout();
     void loadPlacement();
   };
 
-  // Load on open and whenever the tenant/store changes (never with an empty context, F0).
+  // The levers' two reads still load on open and on a context change (never with an empty context,
+  // F0). The progress pane above no longer appears here: its resource carries its own scope.
   onScopedContext("tenant", () => load());
-
-  // Poll the progress pane while the screen is open, but only once a tenant is chosen.
-  onMount(() => {
-    const handle = setInterval(() => {
-      if (contextReady("tenant") && !busy()) {
-        void loadFleet();
-      }
-    }, POLL_MS);
-    onCleanup(() => clearInterval(handle));
-  });
 
   // Split the revoked-keys textarea on commas and newlines into a trimmed, non-empty list.
   const revokedList = (): string[] =>
@@ -315,16 +302,15 @@ export function Ota() {
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
 
-          <Card
-            title={t("ota.progress")}
-            actions={
-              <Button variant="secondary" disabled={busy()} onClick={() => void loadFleet()}>
-                {t("action.refresh")}
-              </Button>
-            }
-          >
+          {/* No Refresh button (D5). The pane re-reads on a timer, when the tab regains focus, and
+              when the tenant changes; a button here would be asking the operator to do what the
+              screen already does. */}
+          <Card title={t("ota.progress")}>
+            <Show when={failureOf(fleet)}>
+              {(message) => <Banner tone="danger" message={message()} />}
+            </Show>
             <Show
-              when={stores()}
+              when={fleet.value()}
               fallback={<Skeleton label={t("common.loading")} rows={4} />}
             >
               {(loaded) => (
