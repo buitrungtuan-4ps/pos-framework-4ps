@@ -1046,7 +1046,7 @@
   "media.noImage": "No image",
   "media.pickTitle": "Choose an image",
   "media.remove": "Remove",
-  "media.selectThisImage": "Select this image",
+  "media.selectImageAt": "Select this image, {n} of {total}",
   "media.setImage": "Set image",
   "media.sizeKb": "{kb} KB",
   "media.title": "Media",

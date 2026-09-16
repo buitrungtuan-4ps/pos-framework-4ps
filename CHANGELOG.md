@@ -115,6 +115,43 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A list stops being a table when there is no room for one** (Wave 4 PR-3's deferred table work;
+  findings V9, V18). Eight console tables clipped at phone width with no horizontal scroll container
+  at all, and the obvious fix — wrap it in `overflow-x-auto` — would only have made the clipping
+  swipeable. Below the `md` breakpoint `DataTable` now renders one card per row instead: a stack of
+  label/value pairs, the label being the column's header. Sorting and the search box stay above it,
+  the pager stays below, and the rest of the screen is unchanged.
+  - It is **either/or**, not a `hidden` class on each. Rendering both would put two copies of every
+    cell in the document — duplicate ids, a screen reader walking the page twice, and on the grids
+    whose cells hold an input, two edit boxes for one value of which the operator can see one. The
+    breakpoint is read through `matchMedia`, and where there is none to ask (jsdom, and any
+    environment without a viewport) the table is what renders, because it degrades to a scroll while
+    cards on a desktop are simply the wrong layout.
+  - `DataTable` also takes `density="compact"`, for a **reference grid** — a table whose cells are
+    values to read across, like the translation grid or the tax-rate matrix. It is not a way to
+    shrink a row that holds controls: the kit's `Button` keeps its own 44 px touch minimum. (The
+    plan's V18 line asks for "compact at 44 px", which describes a *comfortable* row; this table's
+    default is already 36 px, so the density worth adding was the tighter one and the touch floor
+    stayed on the controls where it belongs.)
+
+- **One filter row instead of three spellings of one** (`Toolbar`). Audit, Reports' X/Z panel and
+  Catalog → Items had each rolled the same bar by hand — `mb-4 grid gap-3 sm:grid-cols-3` and two
+  variants of `mb-4 flex flex-wrap items-end gap-N` — which is how a console stops looking like one
+  console. They now share a component, which is also why it is written *now* rather than in PR-3:
+  until three screens had the same row there was nothing to generalise from, and the kit-adoption
+  gate is aimed at exactly that mistake. The split is by role — a control that changes which rows
+  are in the set is a child, one that acts on the set as it stands (Search, Clear, View) is
+  trailing.
+
+- **The image picker's options can be told apart** (from [#329](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/329),
+  reworked). Twelve thumbnails that all announced "Select this image" were twelve options a
+  screen-reader user could not distinguish, and the picker's fallback tile carried an `aria-label`
+  on a bare `div`, where it is skipped. The tile gets `role="img"`, the grid buttons get a visible
+  focus ring, and each option announces its **position** — "Select this image, 3 of 12". The
+  original proposal used the `media_id`: a ULID is read out character by character, and it was also
+  going into a `title`, which would hang it in a tooltip in front of every sighted operator — the
+  habit `TechnicalDetails` and finding V14 exist to break.
+
 - **"Release" meant two things, and now each says which** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md)
   Amendment 3). The cloud has had an OTA release — a signed edge binary for a version and a CPU —
   since R2. ADR-0125 then gave it a config release: a named set of config publishes aimed at a

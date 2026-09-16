@@ -13,7 +13,7 @@ import { formatCount, formatMoney } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
-import { DateField, DateRange } from "../components/kit";
+import { DateField, DateRange, Toolbar } from "../components/kit";
 import { apiMessage } from "../lib/errors";
 
 /** Owner/Admin see money (revenue is T2); the server re-checks, so this only hides what would 403. */
@@ -382,14 +382,17 @@ export function Reports() {
             {/* X/Z report */}
             <Card title={t("reports.xzTitle")}>
               <p class="mb-3 text-sm text-ink-muted">{t("reports.xzHint")}</p>
-              <div class="mb-4 flex flex-wrap items-end gap-4">
+              <Toolbar
+                trailing={
+                  <Button variant="secondary" disabled={busy()} onClick={() => void loadXz()}>
+                    {t("reports.xzView")}
+                  </Button>
+                }
+              >
                 {/* The kit's date field, like the window above it (V20): the same control, in the
                     same shape, on the two date questions this screen asks. */}
                 <DateField label={t("reports.xzDate")} value={xzDate()} onChange={setXzDate} />
-                <Button variant="secondary" disabled={busy()} onClick={() => void loadXz()}>
-                  {t("reports.xzView")}
-                </Button>
-              </div>
+              </Toolbar>
               <Show when={xz()} fallback={<p class="text-sm text-ink-muted">{t("reports.empty")}</p>}>
                 {(report) => (
                   <dl class="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">

@@ -1510,6 +1510,14 @@ tables" line lands. All four are changes to the table every list screen already 
 rewrites how those screens read their data — doing both at once would put a layout change and a
 data-flow change in the same diff. They go with PR-6.
 
+**Caught up (2026-09-16).** V9 and V18 are closed: below `md` a row is a card, and `density:
+compact` exists for reference grids. `Toolbar` landed with its three callers at the same time —
+Audit, Reports' X/Z panel and Catalog → Items, which had each rolled the same filter row by hand,
+and which is the "screens that want them" this note was waiting on. **Still open from this list:
+`TechnicalDetails` into the row kebab (V14) and the rest of the `RowActions` sweep across the
+remaining ~25 tables (V19).** Those two are one mechanical pass per screen rather than a kit change,
+and they are the next slice.
+
 `createAdminResource` is on Alerts only. The helper is the deliverable here; the migration is
 per-screen and explicitly PR-6's, as §Sequencing already said.
 

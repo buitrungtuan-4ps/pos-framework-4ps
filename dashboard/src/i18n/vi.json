@@ -1046,7 +1046,7 @@
   "media.noImage": "Không có ảnh",
   "media.pickTitle": "Chọn một hình ảnh",
   "media.remove": "Gỡ",
-  "media.selectThisImage": "Chọn ảnh này",
+  "media.selectImageAt": "Chọn ảnh này, ảnh {n} trong {total}",
   "media.setImage": "Đặt ảnh",
   "media.sizeKb": "{kb} KB",
   "media.title": "Hình ảnh",
