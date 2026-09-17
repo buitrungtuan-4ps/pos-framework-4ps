@@ -104,14 +104,6 @@ export function CatalogMenus() {
   // Publish.
   const [publishMenu, setPublishMenu] = createSignal("");
 
-  // The currency codes the operator can pick, from the country registry (deduped, sorted); VND is the
-  // v1 default and the fallback while the list loads. Memoized to avoid rebuilding and sorting the set on every render/access.
-  const currencyOptions = createMemo(() => {
-    const codes = new Set(countries().map((country) => country.currency_code));
-    codes.add("VND");
-    return [...codes].sort((a, b) => a.localeCompare(b));
-  });
-
   // The screen's top level: the menu tree, the item master, and the country list. One read, because
   // the table names a menu's parent and a placement's item, and a half-arrived set renders ULIDs.
   //
@@ -163,6 +155,18 @@ export function CatalogMenus() {
   const sectionMap = createMemo(
     () => new Map(sections().map((row) => [row.menu_section_id, row.name])),
   );
+
+  // The currency codes the operator can pick, from the country registry (deduped, sorted); VND is the
+  // v1 default and the fallback while the list loads. Memoized below accessors to avoid TDZ errors.
+  const currencyOptions = createMemo(() => {
+    const codes = new Set(countries().map((country) => country.currency_code));
+    codes.add("VND");
+    return [...codes].sort((a, b) => a.localeCompare(b));
+  });
+
+  // Memoized filters to avoid re-running O(N) array filtering on every render/picker access.
+  const activeItems = createMemo(() => items().filter((item) => item.status === "active"));
+  const activeSections = createMemo(() => sections().filter((row) => row.status === "active"));
 
   const menuName = (id: string) => menuMap().get(id) ?? id;
   const itemName = (id: string) => itemMap().get(id) ?? id;
@@ -639,10 +643,6 @@ export function CatalogMenus() {
       setBusy(false);
     }
   };
-
-  // Memoized filters to avoid re-running O(N) array filtering on every render/picker access.
-  const activeItems = createMemo(() => items().filter((item) => item.status === "active"));
-  const activeSections = createMemo(() => sections().filter((row) => row.status === "active"));
 
   const menuColumns = (): Column<Menu>[] => [
     {
