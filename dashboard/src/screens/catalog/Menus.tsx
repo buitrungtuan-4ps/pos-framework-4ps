@@ -105,12 +105,12 @@ export function CatalogMenus() {
   const [publishMenu, setPublishMenu] = createSignal("");
 
   // The currency codes the operator can pick, from the country registry (deduped, sorted); VND is the
-  // v1 default and the fallback while the list loads.
-  const currencyOptions = () => {
+  // v1 default and the fallback while the list loads. Memoized to avoid rebuilding and sorting the set on every render/access.
+  const currencyOptions = createMemo(() => {
     const codes = new Set(countries().map((country) => country.currency_code));
     codes.add("VND");
     return [...codes].sort((a, b) => a.localeCompare(b));
-  };
+  });
 
   // The screen's top level: the menu tree, the item master, and the country list. One read, because
   // the table names a menu's parent and a placement's item, and a half-arrived set renders ULIDs.
@@ -640,8 +640,9 @@ export function CatalogMenus() {
     }
   };
 
-  const activeItems = () => items().filter((item) => item.status === "active");
-  const activeSections = () => sections().filter((row) => row.status === "active");
+  // Memoized filters to avoid re-running O(N) array filtering on every render/picker access.
+  const activeItems = createMemo(() => items().filter((item) => item.status === "active"));
+  const activeSections = createMemo(() => sections().filter((row) => row.status === "active"));
 
   const menuColumns = (): Column<Menu>[] => [
     {
