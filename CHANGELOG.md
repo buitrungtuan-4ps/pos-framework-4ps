@@ -18,6 +18,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Theme toggle and sign out buttons carry explicit ARIA labels.** Added dynamic `aria-label` to theme toggle and `aria-label` to sign out button in `ui/src/components/StatusBar.tsx` for screen-reader accessibility.
+
 - **The console can fetch an edge release straight from the release that published it** (#340,
   [ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 4). Cutting a release meant
   downloading six files and running three `curl`s carrying a console session cookie. **OTA
