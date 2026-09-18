@@ -93,6 +93,7 @@ export function StatusBar() {
       <button
         type="button"
         class="rounded-token border border-line px-3 py-1 text-ink"
+        aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
         onClick={cycleTheme}
       >
         {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
@@ -100,6 +101,7 @@ export function StatusBar() {
       <button
         type="button"
         class="rounded-token border border-line px-3 py-1 text-ink"
+        aria-label={t("nav.signout")}
         onClick={() => void signOut()}
       >
         {t("nav.signout")}
