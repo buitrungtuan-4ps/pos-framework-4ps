@@ -16,6 +16,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
+  includeSubDomains`, beside the `nosniff`, `DENY` and `no-referrer` headers the same middleware
+  already sets. Caddy redirects `http` to `https` already; what this closes is the redirect itself —
+  the one plain-text request a listener on the same network can answer first.
+
+  **Upgrade note.** This is remembered *by the browser*, for a year, for the console's hostname and
+  every name under it. Two consequences worth knowing before the first deploy that carries it:
+  a browser that has seen this header will refuse a plain-`http` subdomain of `$DOMAIN` with no way
+  for the operator to click through, and if the certificate ever expires there is no "proceed
+  anyway" into the console — the certificate has to be fixed first. Undoing it means serving
+  `max-age=0` and waiting for each browser to come back, so it is worth being sure every name under
+  `$DOMAIN` is HTTPS. Today the bundled proxy serves exactly one host and no subdomains.
+
 ### Changed
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
