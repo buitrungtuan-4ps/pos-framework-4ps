@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Add Strict-Transport-Security (HSTS) header to `pos-cloud` responses**: Enforces HTTPS transport security across all responses in the cloud application.
+
 ### Added
 
 - **The console can fetch an edge release straight from the release that published it** (#340,
