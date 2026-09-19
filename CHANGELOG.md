@@ -378,6 +378,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 - **Notification history clear action is disabled when empty.** The "Clear all" button in the console's notification bell is now visually and functionally disabled when there are no notification items in history.
 
+- **Memoized category lookup map and activeCategories filter in taxonomy screen.** `dashboard/src/screens/catalog/Taxonomy.tsx`
+  pre-indexes categories into a `createMemo` Map for $O(1)$ lookups per subcategory row and memoizes active categories.
 - **Memoized sorted keys and completion rates in the translation editor.** `dashboard/src/screens/Translations.tsx`
   pre-calculates locale completion percentages in a single memoized lookup table and memoizes sorted keys to avoid
   redundant $O(K \times L)$ evaluations on keystrokes in large grids.
