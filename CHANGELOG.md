@@ -16,6 +16,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A till that reloads, or a kitchen display switched on mid-service, no longer draws an empty
+  screen over live food.** A device learned order lines from the fan-out, and the fan-out carries
+  what happens *next* — so a browser reload, a tablet waking from sleep, or a kitchen display turned
+  on at five o'clock left the order screen showing no lines, the payment screen unable to resume an
+  open bill, and the kitchen board reading "clear" while the food existed. The till now reads
+  `GET /api/orders/live` at boot and again whenever the live link says it fell behind, and merges
+  what comes back over whatever the fan-out has since established.
+  - **What the read carries** is what a screen needs to *act*, not only to draw: the id a fire, a
+    void or a bump is addressed to, the state each line has reached, whether a station already made
+    it, and the bill already open on the order so the payment screen settles that one rather than
+    asking for a second the edge would refuse.
+  - **It is the shop, not the day.** A settled order leaves the list, so what a device reads at boot
+    is bounded by the tables the store has open plus the counter orders it has not yet been paid
+    for.
+  - **Upgrade note.** None. The route is additive and the till tolerates its absence — an edge built
+    before it answers 404 and the screens behave exactly as they did.
+
 ### Changed
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.

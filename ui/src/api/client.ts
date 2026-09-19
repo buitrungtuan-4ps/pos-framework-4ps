@@ -22,6 +22,7 @@ import type {
   LineRequest,
   LineResponse,
   LayoutResponse,
+  LiveOrder,
   LocaleResponse,
   MenuResponse,
   MintedCode,
@@ -238,6 +239,11 @@ export const api = {
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
+
+  // What is open right now, with the line ids to act on it. The read a device has instead of the
+  // fan-out events it was not running to hear: without it a reloaded till draws an empty order and
+  // a kitchen display switched on mid-service draws an empty board.
+  liveOrders: () => request<LiveOrder[]>("GET", "/api/orders/live"),
 
   // What an order owes, for an order that sits on no table.
   checkOrder: (orderId: string) =>
