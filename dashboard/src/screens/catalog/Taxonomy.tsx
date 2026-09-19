@@ -5,7 +5,7 @@
 // and rename in a `Drawer` and status through the shared `StatusCell`. A sub-category's parent is
 // chosen at create and carried through on edit, exactly as the monolith did (rename does not move it).
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
 import type { ItemCategory, ItemSubcategory } from "../../api/types";
@@ -48,9 +48,17 @@ export function CatalogTaxonomy() {
   // The single draft-name signal both edit drawers write to (only one is open at a time).
   const [draftName, setDraftName] = createSignal("");
 
-  const categoryName = (id: string) =>
-    (categories() ?? []).find((row) => row.item_category_id === id)?.name ?? id;
-  const activeCategories = () => (categories() ?? []).filter((row) => row.status === "active");
+  // Optimization: Index categories into a Map using createMemo for O(1) lookups instead of O(C) searches per subcategory row.
+  const categoryMap = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of categories() ?? []) {
+      map.set(row.item_category_id, row.name);
+    }
+    return map;
+  });
+
+  const categoryName = (id: string) => categoryMap().get(id) ?? id;
+  const activeCategories = createMemo(() => (categories() ?? []).filter((row) => row.status === "active"));
 
 
   // --- categories ---
