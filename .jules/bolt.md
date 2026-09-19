@@ -1,3 +1,9 @@
+## 2026-09-17 - Ordering createMemo Declarations to Prevent TDZ Errors in SolidJS
+
+**Learning:** In SolidJS, `createMemo` evaluates immediately upon component initialization. Defining `createMemo` accessors above the signal/resource getters they reference (e.g. `countries()`) causes a Temporal Dead Zone error (`ReferenceError: Cannot access ... before initialization`) when mounted. Placing `createMemo` declarations below their dependent accessor definitions prevents TDZ runtime failures while maintaining cached performance benefits.
+
+**Action:** Always place `createMemo` declarations below the signals, resources, and derived accessor functions they depend on.
+
 ## 2026-04-01 - Memoizing Keys & Locale Completion Map in SolidJS Translations Editor
 
 **Learning:** In SolidJS table components rendering matrix-like translation grids ($K$ keys $\times$ $L$ locales), un-memoized getters for key sorting (`Object.keys().sort()`) and per-locale completion calculations (`keys().filter(...)` per header column) re-execute $O(L \cdot K)$ string checks on every input stroke or re-render. Pre-building a `completionMap` with `createMemo` in a single $O(K \cdot L)$ pass and memoizing sorted `keys` prevents redundant array sorting/filtering and removes render stutter on large grids.
