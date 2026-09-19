@@ -249,6 +249,47 @@ test("a wrong PIN is refused on the sign-in screen and leaves the device paired"
   }
 });
 
+test("a refusal does not wipe the PIN the operator has already started retyping", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+
+    // Hold the answer back, so "while the request is in flight" is a moment the test can act in
+    // rather than a race it has to win. This is the moment a busy store server gives an operator
+    // for free.
+    await page.route("**/api/session/sign-in", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue();
+    });
+
+    await page.locator("#signin-code").fill(edge.staffCode);
+    await page.locator("#signin-pin").fill("999999");
+    await page.locator('[data-step="submit"]').click();
+
+    // The operator does not wait: the button is disabled while the request is out, the field is
+    // not, and they have already started the next attempt.
+    await page.locator("#signin-pin").fill("4321");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+
+    // What they typed is still there. It used to be cleared out from under them when the refusal
+    // landed — digits vanishing mid-typing, so they typed again, and every confused attempt counts
+    // toward the lockout (ADR-0030): a badge locked in the middle of service by the screen rather
+    // than by the person.
+    await expect(
+      page.locator("#signin-pin"),
+      "the refusal cleared a PIN the operator had already retyped",
+    ).toHaveValue("4321");
+
+    // And the cursor is where the next attempt is typed, so recovering costs no tap.
+    await expect(page.locator("#signin-pin")).toBeFocused();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.

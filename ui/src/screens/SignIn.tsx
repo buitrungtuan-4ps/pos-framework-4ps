@@ -13,6 +13,8 @@ import { loadStore } from "../state/store";
 // (ADR-0030). Once signed in, the device goes to the floor.
 export function SignIn() {
   const navigate = useNavigate();
+  // The PIN field, so a refusal can hand the cursor back to it.
+  let pinField: HTMLInputElement | undefined;
   const [code, setCode] = createSignal("");
   const [pin, setPin] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
@@ -38,8 +40,12 @@ export function SignIn() {
   const submit = async () => {
     setError(null);
     setBusy(true);
+    // The PIN this attempt is for. Held because the field stays live while the request is out, and
+    // what the operator types next must not be thrown away by this attempt's refusal — see the
+    // clear below.
+    const attempted = pin();
     try {
-      const result = await api.signIn(code().trim(), pin());
+      const result = await api.signIn(code().trim(), attempted);
       if (result.ok) {
         // The device can sell now, so read what it sells: the floor, the price book, the button plan
         // and the money settings. `App`'s boot gate loads the same set, but it runs once on page
@@ -56,7 +62,20 @@ export function SignIn() {
       } else {
         setError(t("signin.wrong"));
       }
-      setPin("");
+      // Clear the field for the retype — but only if it still holds the PIN that was refused.
+      //
+      // A sign-in takes a moment on a busy store server, and the button is disabled while it does
+      // while the field is not. An operator who has already started retyping had those keystrokes
+      // wiped when the refusal landed: digits vanished mid-typing, so they typed again, and each
+      // confused attempt counts toward the lockout (ADR-0030) — a badge locked in the middle of
+      // service by the screen rather than by the person.
+      if (pin() === attempted) {
+        setPin("");
+      }
+      // And put the cursor back where the next attempt is typed. A refusal that costs a tap to
+      // recover from is a refusal that costs a tap every time, and this screen is where a shift
+      // starts.
+      pinField?.focus();
     } catch (caught) {
       if (caught instanceof ApiError && caught.isUnauthorized) {
         navigate("/pair", { replace: true });
@@ -89,6 +108,7 @@ export function SignIn() {
       </label>
       <input
         id="signin-pin"
+        ref={pinField}
         type="password"
         inputmode="numeric"
         autocomplete="current-password"
