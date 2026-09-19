@@ -16,6 +16,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refused sign-in no longer wipes the PIN the operator has already started retyping.** The
+  sign-in button is disabled while the request is out; the PIN field is not. An operator who typed
+  the next attempt during that moment had it cleared out from under them when the refusal landed —
+  digits vanishing mid-typing, so they typed again, and every confused attempt counts toward the
+  lockout ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)). A badge locked in the middle
+  of service, by the screen rather than by the person. The field is now cleared only if it still
+  holds the PIN that was refused, and the cursor goes back to it so recovering costs no tap.
+  - **Upgrade note.** None.
+
 ### Changed
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
