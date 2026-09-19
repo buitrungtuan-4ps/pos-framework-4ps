@@ -476,6 +476,78 @@ async fn a_table_is_sold_end_to_end_on_the_composed_edge() {
     assert_eq!(cleaned["state"], "TABLE_STATE_FREE");
 }
 
+/// One tap sends the whole order, and sending it twice is not an error.
+///
+/// The operator's act is "send this order". It was one tap and one round trip per line, because the
+/// screen carried a Send button on every row — a table of six was six taps, and a failure halfway
+/// left three lines with the kitchen and three not, with nothing on the screen saying which.
+///
+/// What this pins is the shape that replaces it: every unsent line moves in one call, a line already
+/// with the kitchen is left alone rather than sent twice, and an order with nothing to send answers
+/// `200` with an empty list. That last one is the case two devices tapping Send on the same table
+/// produce, and a refusal there would be a refusal nobody could act on.
+#[tokio::test]
+async fn one_send_moves_every_unsent_line_and_sending_again_is_a_no_op() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(702));
+    let (status, seated) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(seated["state"], "TABLE_STATE_OCCUPIED");
+
+    let mut order_id = String::new();
+    for _ in 0..3 {
+        let (status, line) = post(
+            store.app.clone(),
+            Some(&store.token),
+            &format!("/api/tables/{table}/lines"),
+            Some(a_line_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        order_id = line["order_id"].as_str().expect("an order id").to_owned();
+    }
+
+    let station = StationId::new(Ulid::from_u128(9));
+    let (status, sent) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/fire"),
+        Some(json!({ "station_id": station })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the order-fire route is mounted");
+    let fired = sent.as_array().expect("a list of lines");
+    assert_eq!(fired.len(), 3, "one tap sent all three: {sent}");
+    for line in fired {
+        assert_eq!(
+            line["state"], "ORDER_LINE_STATE_FIRED",
+            "every line reached the kitchen: {line}"
+        );
+    }
+
+    // Two devices tapping Send on the same table. The second finds the work done, which is an
+    // answer, not a refusal.
+    let (status, again) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/fire"),
+        Some(json!({ "station_id": station })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        again.as_array().expect("a list").len(),
+        0,
+        "nothing left unsent, so nothing is sent twice: {again}"
+    );
+}
+
 /// Takeaway: an order relayed from the cloud is accepted, priced by the store, given a queue number,
 /// and idempotent under retry.
 ///

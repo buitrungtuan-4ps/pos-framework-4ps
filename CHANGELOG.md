@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The order screen shows what the table owes, and sends the whole order in one tap.** Two things
+  the till had never done, on the screen an order is taken on.
+  - **The running total.** The only way to answer a guest's "how much so far?" was to press **Take
+    payment** — and that opens a bill. A question about the order changed the order's state. The
+    screen now reads `GET /api/tables/{id}/check` and shows subtotal, tax and total, refreshed on
+    every act. The figures are the edge's own `billing::assemble`, the same calculation the settle
+    runs ([ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)), so what the guest is
+    quoted is what the bill will charge.
+  - **One Send button, with the count on it.** The screen carried a Send on every row, so a table of
+    six cost six taps and six round trips — and a failure halfway left three lines with the kitchen
+    and three not, with nothing on the screen saying which. `POST /api/orders/{id}/fire` sends every
+    unsent line in one transaction: all of them reach the kitchen, or none do. Each line is still
+    decided and routed individually — a batch is a transaction boundary, not a shortcut past a
+    decision. Sending an order with nothing unsent answers `200` with an empty list, because two
+    devices tapping Send on one table is an ordinary race.
+  - **The step budget's map now matches the code.** `ui/scripts/step-tasks.mjs` declared this flow
+    at two taps and its note described "the fire button… shows the unfired count". No such button
+    existed. The gate could not see it: a declaration naming an action is satisfied by any element
+    calling it, however many of them there are. One button makes the declared two honest.
+  - **Upgrade note.** None. `POST /api/lines/{id}/fire` is unchanged and still mounted; the new route
+    is additive.
+
 ### Changed
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
