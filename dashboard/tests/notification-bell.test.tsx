@@ -9,7 +9,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { NotificationBell, toast } from "../src/components/Toast";
+import { NotificationBell, ToastHost, toast } from "../src/components/Toast";
 
 afterEach(cleanup);
 
@@ -57,5 +57,19 @@ describe("the notification bell", () => {
       expect(clear.disabled).toBe(true);
     });
     expect(screen.getByText("No notifications yet.")).toBeTruthy();
+  });
+
+  it("renders live toast with accessible dismiss button carrying focus visible styles", () => {
+    toast.error("An error occurred");
+    render(() => <ToastHost />);
+
+    const dismissButtons = screen.getAllByRole("button", { name: "Dismiss" });
+    expect(dismissButtons.length).toBeGreaterThan(0);
+    const btn = dismissButtons[0];
+    expect(btn).toBeDefined();
+    if (btn) {
+      expect(btn.className).toContain("focus-visible:outline-2");
+      expect(btn.className).toContain("focus-visible:outline-accent");
+    }
   });
 });

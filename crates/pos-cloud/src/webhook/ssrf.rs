@@ -309,11 +309,10 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         return classify_v4(Ipv4Addr::new(a, b, c, d));
     }
 
-    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`, RFC 6052) or local-use prefix (`64:ff9b:1::a.b.c.d`, RFC 8215).
+    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`, RFC 6052) or local-use prefix (`64:ff9b:1::/48`, RFC 8215).
     if segments[0] == 0x0064
         && segments[1] == 0xff9b
-        && (segments[2] == 0 || segments[2] == 0x0001)
-        && segments[3] == 0
+        && ((segments[2] == 0 && segments[3] == 0) || segments[2] == 0x0001)
         && segments[4] == 0
         && segments[5] == 0
     {
@@ -532,6 +531,21 @@ mod tests {
             classify_ip(ip("fe80::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("fe80::1"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // Local NAT64 subnet prefix smuggling cases (`64:ff9b:1:<subnet>::a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("64:ff9b:1:1::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:1:1::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b:1:abcd::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:1:abcd::169.254.169.254"),
                 ForbiddenReason::LinkLocal
             ))
         );

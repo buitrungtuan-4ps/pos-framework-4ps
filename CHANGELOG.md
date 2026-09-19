@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
+
 ### Added
 
 - **The console can fetch an edge release straight from the release that published it** (#340,
@@ -378,6 +382,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 - **Notification history clear action is disabled when empty.** The "Clear all" button in the console's notification bell is now visually and functionally disabled when there are no notification items in history.
 
+- **Memoized category lookup map and activeCategories filter in taxonomy screen.** `dashboard/src/screens/catalog/Taxonomy.tsx`
+  pre-indexes categories into a `createMemo` Map for $O(1)$ lookups per subcategory row and memoizes active categories.
 - **Memoized sorted keys and completion rates in the translation editor.** `dashboard/src/screens/Translations.tsx`
   pre-calculates locale completion percentages in a single memoized lookup table and memoizes sorted keys to avoid
   redundant $O(K \times L)$ evaluations on keystrokes in large grids.
@@ -793,6 +799,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 ### Security
 
 - **Refuse embedded user credentials in origin validation.** Prohibit `@` (userinfo) in `validate_origin` (`crates/pos-proto/src/origins.rs`) to prevent user credentials / userinfo smuggling or URL origin parsing confusion.
+- **Fix SSRF bypass for IPv6 NAT64 local-use prefix (`64:ff9b:1::/48`).** Updated IPv6 address classification in `crates/pos-cloud/src/webhook/ssrf.rs` to correctly handle non-zero subnet IDs (`segments[3]`) within `64:ff9b:1::/48` prefix, extracting embedded IPv4 addresses for classification against forbidden ranges.
 - **Enhance SSRF validation for Teredo IPv6 addresses.** Added classification and filtering for Teredo IPv6 tunneling prefix (`2001:0000::/32`) addresses by extracting and validating both Server IPv4 and inverted Client IPv4 addresses to prevent SSRF bypasses via Teredo tunneling in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying SIIT IPv4-translated (`::ffff:0:a.b.c.d`), local NAT64 (`64:ff9b:1::/48`), ISATAP (`::5efe:a.b.c.d`), well-known NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Security headers on pos-edge UI assets.** Added `X-Content-Type-Options: nosniff` and

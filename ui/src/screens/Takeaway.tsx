@@ -187,7 +187,12 @@ export function Takeaway() {
       >
         {(order) => (
           <>
-            <button type="button" class="border-0 bg-transparent p-0 text-sm text-ink-muted" onClick={back}>
+            <button
+              type="button"
+              class="border-0 bg-transparent p-0 text-sm text-ink-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-token"
+              aria-label={t("counter.back")}
+              onClick={back}
+            >
               {t("counter.back")}
             </button>
 
