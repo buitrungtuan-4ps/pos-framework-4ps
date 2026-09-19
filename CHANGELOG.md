@@ -798,6 +798,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Refuse embedded user credentials in origin validation.** Prohibit `@` (userinfo) in `validate_origin` (`crates/pos-proto/src/origins.rs`) to prevent user credentials / userinfo smuggling or URL origin parsing confusion.
 - **Fix SSRF bypass for IPv6 NAT64 local-use prefix (`64:ff9b:1::/48`).** Updated IPv6 address classification in `crates/pos-cloud/src/webhook/ssrf.rs` to correctly handle non-zero subnet IDs (`segments[3]`) within `64:ff9b:1::/48` prefix, extracting embedded IPv4 addresses for classification against forbidden ranges.
 - **Enhance SSRF validation for Teredo IPv6 addresses.** Added classification and filtering for Teredo IPv6 tunneling prefix (`2001:0000::/32`) addresses by extracting and validating both Server IPv4 and inverted Client IPv4 addresses to prevent SSRF bypasses via Teredo tunneling in `crates/pos-cloud/src/webhook/ssrf.rs`.
 - **Enhance SSRF validation in webhook IPv6 handling.** Added classification and filtering for IPv6 addresses carrying SIIT IPv4-translated (`::ffff:0:a.b.c.d`), local NAT64 (`64:ff9b:1::/48`), ISATAP (`::5efe:a.b.c.d`), well-known NAT64 (`64:ff9b::/96`) and 6to4 (`2002::/16`) prefixes to prevent potential SSRF smuggling bypasses via IPv6 translation mechanisms in `crates/pos-cloud/src/webhook/ssrf.rs`.
