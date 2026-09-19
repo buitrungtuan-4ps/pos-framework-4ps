@@ -56,7 +56,7 @@ export function ToastHost() {
             <button
               type="button"
               aria-label={t("toast.dismiss")}
-              class="shrink-0 text-ink-muted transition-colors hover:text-ink"
+              class="shrink-0 rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => dismiss(note.id)}
             >
               <span aria-hidden="true">✕</span>

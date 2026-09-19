@@ -80,6 +80,7 @@ impl core::error::Error for OriginsError {}
 ///   `Origin: null`. Allow-listing it allow-lists all of them at once and names none of them.
 /// - **`http` or `https` only.** Any other scheme is not something a browser sends as an `Origin` to
 ///   an edge, so allow-listing one can only ever be a mistake nobody sees.
+/// - **No user credentials.** Userinfo (`user:pass@`) is forbidden in an origin string.
 /// - **Scheme and authority only.** An origin is `scheme://host[:port]` and nothing else: a trailing
 ///   path, a query or a fragment means the publisher wrote a URL, and a URL compared against an
 ///   `Origin` header never matches — a silent no-op is worse than a refusal they can see.
@@ -115,6 +116,9 @@ pub fn validate_origin(entry: &str) -> Result<String, OriginsError> {
     }
     if authority.is_empty() {
         return refuse("an origin is `scheme://host[:port]`");
+    }
+    if authority.contains('@') {
+        return refuse("an origin carries no user credentials (@)");
     }
     if authority.contains('/') || authority.contains('?') || authority.contains('#') {
         return refuse(
@@ -229,6 +233,8 @@ mod tests {
             "https://till.example.com/app",
             "https://till.example.com?x=1",
             "https://till.example.com#f",
+            "https://user:pass@till.example.com",
+            "https://user@till.example.com",
             "ftp://till.example.com",
             "till.example.com",
             "https://",
