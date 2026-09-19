@@ -476,6 +476,141 @@ async fn a_table_is_sold_end_to_end_on_the_composed_edge() {
     assert_eq!(cleaned["state"], "TABLE_STATE_FREE");
 }
 
+/// What `GET /api/orders/live` answers right now.
+///
+/// A helper because the flow below asks the same question four times — before a bill, after one,
+/// and after the money — and the point of each is the *answer*, not the request.
+async fn live_orders(store: &Store) -> Value {
+    let (status, live) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/orders/live",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the live-orders route is mounted");
+    live
+}
+
+/// A device that was not running when the order was taken can still draw it.
+///
+/// The bug this pins: lines reach a device on the fan-out, and the fan-out carries what happens
+/// *next*. A till that reloaded, a tablet that woke from sleep and a kitchen display switched on
+/// mid-service had nothing to ask — so each drew an empty order, and an empty board, over food that
+/// existed. `GET /api/orders/live` is what they ask instead of the events they missed, and the three
+/// facts it has to carry are asserted here: the id to act on a line, where the line has got to, and
+/// whether a station already made it.
+///
+/// The settle at the end is the other half of the contract. The list is the store's live trading,
+/// not its log: an order that has been paid for leaves it, which is what keeps a device's first read
+/// the size of the shop rather than the size of the day.
+#[tokio::test]
+async fn a_device_that_missed_the_events_reads_what_is_open() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(701));
+    a_fired_and_prepared_order(&store, table).await;
+
+    // A second line, left unfired, so the read has both states to tell apart.
+    let (status, second) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_line = second["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+
+    let live = live_orders(&store).await;
+    let orders = live.as_array().expect("a list of orders");
+    assert_eq!(orders.len(), 1, "one order is open: {live}");
+    let open = &orders[0];
+    assert_eq!(
+        open["table_id"],
+        table.to_string(),
+        "named with its table, so the order screen knows which table it belongs to"
+    );
+    assert!(
+        open["bill_id"].is_null(),
+        "no bill open on it yet, so a device that reloads opens one rather than resuming"
+    );
+
+    let lines = open["lines"].as_array().expect("the order's lines");
+    assert_eq!(lines.len(), 2, "both lines come back: {open}");
+    assert_eq!(
+        lines[0]["state"], "ORDER_LINE_STATE_FIRED",
+        "the first is with the kitchen"
+    );
+    assert_eq!(
+        lines[0]["bumped"], true,
+        "and already made — without this a kitchen display coming online re-shows a ticket the \
+         cooks have finished"
+    );
+    assert_eq!(
+        lines[1]["order_line_id"], second_line,
+        "the second is the one just added, named by the id a fire or a void is addressed to"
+    );
+    assert_eq!(
+        lines[1]["state"], "ORDER_LINE_STATE_ADDED",
+        "and it has not been sent"
+    );
+    assert_eq!(
+        lines[1]["bumped"], false,
+        "nor made, because it was never sent"
+    );
+    assert_eq!(
+        lines[1]["display_name"], "Margherita",
+        "with the name the store's menu spells"
+    );
+    assert_eq!(
+        lines[1]["line_total"]["amount_minor"], UNIT_PRICE,
+        "and the figure captured when it was added, not a fresh lookup"
+    );
+
+    // Open a bill: a device that reloads on the payment screen has to resume this one rather than
+    // ask for a second, which the domain refuses.
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let live = live_orders(&store).await;
+    assert_eq!(
+        live[0]["bill_id"], bill_id,
+        "the open bill comes with the order: {live}"
+    );
+
+    // Settled, and gone: what a device reads at boot is the shop, not the day.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX * 2),
+                "applied_to_bill": vnd(WITH_TAX * 2),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let live = live_orders(&store).await;
+    assert_eq!(
+        live.as_array().expect("a list").len(),
+        0,
+        "a paid order leaves the list: {live}"
+    );
+}
+
 /// Takeaway: an order relayed from the cloud is accepted, priced by the store, given a queue number,
 /// and idempotent under retry.
 ///
