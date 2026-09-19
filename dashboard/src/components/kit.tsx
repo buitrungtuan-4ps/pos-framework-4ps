@@ -503,7 +503,7 @@ export function Modal(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted transition-colors hover:text-ink"
+              class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
@@ -549,7 +549,7 @@ export function Drawer(
             <button
               type="button"
               aria-label={props.closeLabel}
-              class="text-ink-muted transition-colors hover:text-ink"
+              class="rounded-token text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               onClick={() => props.onClose()}
             >
               <span aria-hidden="true">✕</span>
