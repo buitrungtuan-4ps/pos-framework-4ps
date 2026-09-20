@@ -18,6 +18,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Improve keyboard focus visibility and ARIA label in pos-edge-ui's StatusBar.** Added explicit `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` rings to interactive links and buttons, and a dynamic `aria-label` to the theme toggle button in `ui/src/components/StatusBar.tsx`.
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 
 ### Added
