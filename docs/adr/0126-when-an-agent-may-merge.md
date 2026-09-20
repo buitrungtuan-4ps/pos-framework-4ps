@@ -2,33 +2,30 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-20
 **Amends** [`AGENTS.md`](../../AGENTS.md) §6, whose rule was *"A human merges. Always."*
-**Relates to** [ADR-0109](0109-counting-the-taps-an-operator-makes.md) (the browser gate that makes "green" mean a flow really works, not that a unit test passed)
 
-**Context.** `AGENTS.md` §6 has said *"A human merges. Always."* since the file was written, and §8 says a rule in it beats a request that conflicts with it. Both are right about the thing they were protecting: **somebody accountable looks at what lands on `main`.** A machine that can open a change and also land it can walk the whole distance alone, and the first anyone hears of a mistake is a shop that will not sell.
+**Context.** `AGENTS.md` §6 has said *"A human merges. Always."* since the file was written, and §8 says a rule in it beats a request that conflicts with it. Both were right about the thing they protected: **somebody accountable looks at what lands on `main`.** A machine that can open a change and also land it walks the whole distance alone, and the first anyone hears of a mistake is a shop that will not sell.
 
-What the rule did not anticipate is the shape the work actually took. Five pull requests sat green, mergeable and unreviewed-because-there-was-nothing-to-review for nineteen hours, while the one person who could press the button was asleep. The rule was not protecting anything during those nineteen hours; it was queueing.
+What the rule did not anticipate is the shape the work took. Five pull requests sat green, mergeable, and unreviewed-because-there-was-nothing-left-to-review for **nineteen hours**, while the one person who could press the button was asleep. The rule was not protecting anything during those hours. It was queueing.
 
-It is also worth stating the arithmetic that forced this record to exist, because it is not obvious: **a rule that lives in the repository can only be changed by a merge, and under the old rule that merge must be human.** There is no sequence of events in which an agent grants itself this. The first press is a person's, always — the question is only whether it is one press or one per pull request.
+Worth recording, because it is not obvious and it decided the sequence: **a rule that lives in the repository can only be changed by a merge, and under the old rule that merge had to be human.** There was no sequence of events in which an agent granted itself this. The first press was a person's.
 
-**Decision.**
+**Decision.** The repo owner may permit an agent to merge. §6 now reads:
 
-1. **An agent may merge a pull request it opened itself, when a human has authorised that session to merge, and every one of these holds:**
-   - every required check is green on the pull request's **current head**, and it is mergeable with no conflict;
-   - no review thread is unresolved, and no review requests changes;
-   - it touches none of `crates/pos-core/`, `crates/pos-ports/`, `crates/pos-proto/`, `.github/`, or `deploy/` — the four §6 already sends to an owner, plus deployment;
-   - it touches neither `AGENTS.md` nor `docs/adr/`, so an agent can never widen its own authority or retire a decision;
-   - it needs no ADR under §7;
-   - it is squash-merged, like everything else.
+> A human merges. Always. Exception for Repo Owner can allow AI auto merged
 
-   **Anything failing any one of those is a human's to merge**, and so is any pull request the agent did not open. An agent merging somebody else's work is not review, it is a rubber stamp with no one behind it.
+The permission is the owner's to give and to withdraw, and it is given to a working session rather than configured once — an agent that cannot point at the moment it was authorised has not been.
 
-2. **The authorisation is per session, and it is not inherited.** A new session starts without it. This is deliberate: the grant is a person deciding about a specific body of work in front of them, not a setting somebody flips once and forgets. An agent that cannot point at the moment it was authorised has not been.
+**What the exception does not touch.** Three things in §6 are unchanged and still bind every merge an agent makes:
 
-3. **Nothing here lowers the review bar.** The `ai-assisted` label, the mandatory template fields and the owner review on the backbone crates are all unchanged. What changes is who presses a button on a change that has already satisfied every one of them.
+- **`pos-core`, `pos-ports`, `pos-proto` and `.github/` require an owner review.** The exception is about who presses the button, not about who reviews the backbone.
+- **Squash merge only.** This is what keeps the blast radius at one revert, and it is the main reason the risk is acceptable.
+- **The `ai-assisted` label, and the mandatory template fields.** §6 already says the label does not lower the review bar.
+
+**The discipline an agent applies inside the permission** — practice, not rule, and therefore the part to argue with rather than the part to obey. An agent merging under this record should merge only a pull request that is **green on its current head**, **mergeable with no conflict**, and has **no unresolved review thread**; should resolve a conflict by merging `main` into the branch and re-running the gates rather than trusting a clean-looking diff; and should not merge a pull request it did not open, because an agent approving somebody else's work is a rubber stamp with no one behind it.
 
 **Consequences accepted.**
 
-- **A bad change can now reach `main` without a second pair of eyes** — but only a bad change that is green across the full gate, conflict-free, outside the backbone, and needing no ADR. That is the class of change CI was built to judge, and if CI cannot be trusted for it, the gate is the thing to fix, not the merge button.
-- **The blast radius is a revert.** Squash merge keeps history linear, so backing out an agent merge is one commit. This is the main reason the risk is acceptable and the main reason it would not be if history were not linear.
-- **The exclusions will chafe.** A one-line `pos-proto` doc fix will sit waiting for a person. That is the intended cost: the boundary is drawn by directory rather than by judgement precisely so an agent cannot argue itself across it.
-- **"Authorised session" is a weaker record than a signed approval.** It lives in a conversation, not in the repository. Tightening it — a label, a check, a bot that verifies the grant — is left until this has been lived with, rather than designed in advance for a problem nobody has had yet.
+- **A bad change can reach `main` without a second pair of eyes.** That is the cost, stated plainly. What bounds it is that CI here is unusually broad — 122 test suites, a browser gate that drives a real edge, `cargo deny`, and nine `xtask` checks — so the class of defect that passes all of it and still breaks a shop is small, and the class that a tired human would have caught by eye is smaller still.
+- **The blast radius is a revert.** Squash merge keeps history linear, so backing out an agent's merge is one commit.
+- **The permission is broad as written.** It names no conditions, so the discipline above is the agent's own and a future reader cannot tell the two apart from `AGENTS.md` alone — which is exactly why this record exists and says which is which.
+- **Nothing here lets an agent widen its own authority.** Changing this rule means changing `AGENTS.md`, and the harness an agent runs under refuses to let it modify the file that governs it. That refusal is not part of this decision and cannot be relied on by it; it is simply the reason the owner wrote the line by hand.
