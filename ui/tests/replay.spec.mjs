@@ -99,9 +99,9 @@ async function addItem(page) {
   await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 }
 
-/** Fires the first unfired line to the kitchen. */
-async function fireLine(page) {
-  await page.locator('[data-step="fire"]').first().click();
+/** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
+async function sendOrder(page) {
+  await page.locator('[data-step="fireOrder"]').click();
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
 }
 
@@ -143,13 +143,13 @@ const PRECONDITIONS = {
   "Bump a ticket on the kitchen display": async (page) => {
     await seatTable(page);
     await addItem(page);
-    await fireLine(page);
+    await sendOrder(page);
     await navigateTo(page, "/kds");
   },
   "Run away a course from the expo screen": async (page) => {
     await seatTable(page);
     await addItem(page);
-    await fireLine(page);
+    await sendOrder(page);
     await navigateTo(page, "/expo");
   },
   "Open the cash shift with a float": async (page) => {
@@ -244,6 +244,47 @@ test("a wrong PIN is refused on the sign-in screen and leaves the device paired"
     // And the device is still paired, proven the only way that counts: the right PIN goes straight
     // in, with no pairing step in between.
     await signIn(page, edge);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a refusal does not wipe the PIN the operator has already started retyping", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+
+    // Hold the answer back, so "while the request is in flight" is a moment the test can act in
+    // rather than a race it has to win. This is the moment a busy store server gives an operator
+    // for free.
+    await page.route("**/api/session/sign-in", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue();
+    });
+
+    await page.locator("#signin-code").fill(edge.staffCode);
+    await page.locator("#signin-pin").fill("999999");
+    await page.locator('[data-step="submit"]').click();
+
+    // The operator does not wait: the button is disabled while the request is out, the field is
+    // not, and they have already started the next attempt.
+    await page.locator("#signin-pin").fill("4321");
+
+    await expect(page.getByRole("alert")).toBeVisible();
+
+    // What they typed is still there. It used to be cleared out from under them when the refusal
+    // landed — digits vanishing mid-typing, so they typed again, and every confused attempt counts
+    // toward the lockout (ADR-0030): a badge locked in the middle of service by the screen rather
+    // than by the person.
+    await expect(
+      page.locator("#signin-pin"),
+      "the refusal cleared a PIN the operator had already retyped",
+    ).toHaveValue("4321");
+
+    // And the cursor is where the next attempt is typed, so recovering costs no tap.
+    await expect(page.locator("#signin-pin")).toBeFocused();
   } finally {
     await edge.stop();
   }

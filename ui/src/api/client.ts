@@ -22,6 +22,7 @@ import type {
   LineRequest,
   LineResponse,
   LayoutResponse,
+  LiveOrder,
   LocaleResponse,
   MenuResponse,
   MintedCode,
@@ -202,6 +203,12 @@ export const api = {
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),
   fireLine: (lineId: string, fire: FireRequest) =>
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
+
+  // Send every unsent line on an order in one transaction. The operator's act is "send this order",
+  // and the per-line route made it one tap and one round trip each — with half the order reaching
+  // the kitchen when one of them failed.
+  fireOrder: (orderId: string, fire: FireRequest) =>
+    request<LineResponse[]>("POST", `/api/orders/${orderId}/fire`, fire),
   bumpTicket: (bump: BumpRequest) =>
     request<BumpResponse>("POST", "/api/kds/bump", bump),
 
@@ -238,6 +245,11 @@ export const api = {
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
+
+  // What is open right now, with the line ids to act on it. The read a device has instead of the
+  // fan-out events it was not running to hear: without it a reloaded till draws an empty order and
+  // a kitchen display switched on mid-service draws an empty board.
+  liveOrders: () => request<LiveOrder[]>("GET", "/api/orders/live"),
 
   // What an order owes, for an order that sits on no table.
   checkOrder: (orderId: string) =>

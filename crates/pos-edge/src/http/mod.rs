@@ -24,6 +24,7 @@ pub mod health;
 pub mod kds;
 pub mod layout;
 pub mod lines;
+mod live;
 pub mod locale;
 pub mod menu;
 pub mod pair;
@@ -289,9 +290,16 @@ where
         .route("/api/tables/{id}/check", get(check::read::<S>))
         // The same read keyed on the order, for a counter order that sits on no table (ADR-0093).
         .route("/api/orders/{id}/check", get(check::read_for_order::<S>))
+        // What is open right now, with the line ids to act on it. A device learns lines from the
+        // fan-out, which carries what happens next — so without this read a till that reloads and a
+        // kitchen display switched on mid-service both draw an empty screen over live food.
+        .route("/api/orders/live", get(live::read::<S>))
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))
+        // And the whole order in one tap. Firing line by line cost an operator one tap per line and
+        // left half an order with the kitchen when one of them failed; this commits them together.
+        .route("/api/orders/{id}/fire", post(lines::fire_order::<S>))
         // The staff-confirmation queue (ADR-0116). A guest's tabled QR order cannot be fired until
         // one of these two decisions lands, which is the guardrail ADR-0012 promised.
         .route("/api/orders/awaiting-confirmation", get(qr::awaiting::<S>))
