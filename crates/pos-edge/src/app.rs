@@ -1552,6 +1552,25 @@ impl Projection {
         orders
     }
 
+    /// The lines on an order that have not been sent yet, each with the id it is sent by, in id
+    /// order — so a send goes out in the order the operator typed it.
+    ///
+    /// The set one tap on "send" acts on. Kept as a query rather than filtered at the call site
+    /// because "unfired" is a projection fact: [`OrderLineState::Added`] is the only state a fire is
+    /// legal from, and the decision refuses the rest anyway.
+    fn unfired_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
+        let mut lines: Vec<(OrderLineId, LineRecord)> = self
+            .lines
+            .iter()
+            .filter(|(_, record)| {
+                record.order_id == order_id && record.state == OrderLineState::Added
+            })
+            .map(|(id, record)| (*id, record.clone()))
+            .collect();
+        lines.sort_by_key(|(id, _)| *id);
+        lines
+    }
+
     fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
         self.bills.get(&bill_id).copied()
     }
@@ -2869,6 +2888,107 @@ impl<S: EventStore> Edge<S> {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Sends every unsent line on an order to the kitchen, in one transaction.
+    ///
+    /// The operator's act is "send this order", and it was costing one tap and one round trip per
+    /// line: a table of six was six taps, and a failure halfway left three lines with the kitchen
+    /// and three not, with nothing on the screen saying which. This commits every line's
+    /// `sales.order_line.fired` together or none of them, so the kitchen is told about an order the
+    /// same way an operator thinks about one.
+    ///
+    /// Each line is still decided **individually** by `decide_line` and routed individually by the
+    /// published station plan (ADR-0072) — a batch is a transaction boundary, never a shortcut past
+    /// a decision. The staff-confirmation gate (ADR-0116) is asked once, because it is a fact about
+    /// the order rather than about a line.
+    ///
+    /// An order with nothing unsent is not an error: it returns an empty list. Two devices tapping
+    /// send on the same table is an ordinary race, and the second one finding the work done is the
+    /// right outcome, not a refusal to explain to whoever tapped.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if a line refuses the fire, [`AppError::UnroutableLine`] if a line
+    /// reaches no station, and the confirmation errors when a guest's order is still waiting on
+    /// staff. An order this edge has never heard of is not one of them: it has nothing unsent, and
+    /// so is answered the same way an order already sent is.
+    pub async fn fire_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        station_id: Option<StationId>,
+    ) -> Result<Vec<LineView>, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+
+        // Asked once, for the order. A guest's tabled QR order that nobody has confirmed cannot
+        // reach the kitchen, and doing this per line would ask the same question six times.
+        match self.lock_projection().staff_standing(order_id, &session) {
+            StaffStanding::Waiting => return Err(AppError::AwaitingStaffConfirmation),
+            StaffStanding::Refused => return Err(AppError::OrderRejected),
+            StaffStanding::Fireable => {}
+        }
+
+        let unfired = self.lock_projection().unfired_lines_for_order(order_id);
+        if unfired.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut envelopes = Vec::with_capacity(unfired.len());
+        let mut messages = Vec::with_capacity(unfired.len());
+        let mut applied = Vec::with_capacity(unfired.len());
+        for (order_line_id, record) in unfired {
+            let station_id = session
+                .resolve_station(record.menu_item_id, record.course_id)
+                .or(station_id)
+                .ok_or(AppError::UnroutableLine)?;
+            let command = LineCommand::Fire {
+                base_item: record.menu_item_id,
+                modifiers: record.modifier_menu_item_ids.clone(),
+                quantity: record.quantity,
+                course: record.course_id,
+            };
+            let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
+            let (envelope, message) = self.prepare(
+                &ctx,
+                &SalesOrderLineFired {
+                    order_id: record.order_id,
+                    order_line_id,
+                    station_id,
+                    fire_time: ctx.now,
+                },
+            )?;
+            envelopes.push(envelope);
+            messages.push(message);
+            applied.push((order_line_id, record, station_id, decision));
+        }
+
+        // Nothing above has written or told anybody: a refusal on the last line leaves the first
+        // five unsent, which is the whole point of doing this in one transaction.
+        self.append_and_publish(envelopes, messages).await?;
+
+        let mut views = Vec::with_capacity(applied.len());
+        {
+            let mut projection = self.lock_projection();
+            for (order_line_id, record, station_id, decision) in applied {
+                projection.set_line_state(order_line_id, decision.next_state);
+                // §8: stock leaves at fire, not at payment — per line, as the single-line path does.
+                projection.consume(&decision.stock_movements);
+                views.push(LineView {
+                    order_id: record.order_id,
+                    order_line_id,
+                    state: decision.next_state,
+                    fired: Some(FiredLine {
+                        station_id,
+                        menu_item_id: record.menu_item_id,
+                        quantity: record.quantity,
+                        modifier_menu_item_ids: record.modifier_menu_item_ids,
+                    }),
+                });
+            }
+        }
+        Ok(views)
     }
 
     /// What an **order** owes right now — the primitive [`Self::check_totals`] delegates to.

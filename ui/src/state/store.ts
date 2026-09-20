@@ -189,6 +189,12 @@ export function linesForTable(tableId: string): OrderLine[] {
   return Object.values(state.lines).filter((line) => line.orderId === orderId);
 }
 
+// The lines on this table that the kitchen has not been told about yet — what one tap on Send acts
+// on, and the number the button carries. `docs/ui-ux.md` §3 has asked for that count since P6.
+export function unfiredLinesForTable(tableId: string): OrderLine[] {
+  return linesForTable(tableId).filter((line) => line.state === "ORDER_LINE_STATE_ADDED");
+}
+
 export function openBillFor(tableId: string): string | undefined {
   return state.openBill[tableId];
 }
@@ -642,6 +648,32 @@ export async function loadStore(): Promise<void> {
     loadReasonCodes(),
     loadLiveOrders(),
   ]);
+}
+
+// Sends every unsent line on this table's order in one act — the operator's own unit of work.
+//
+// One tap and one request, where the screen used to put a Send button on every row: a table of six
+// was six taps and six round trips, and a failure halfway left three lines with the kitchen and
+// three not, with nothing on screen saying which. The edge commits them together or not at all.
+//
+// A table with no order, or nothing unsent, is not an error here any more than it is on the edge:
+// there is nothing to send, and the button that calls this is disabled anyway.
+export async function fireOrder(tableId: string): Promise<void> {
+  const orderId = state.tableOrder[tableId];
+  if (orderId === undefined) {
+    return;
+  }
+  const fired = await api.fireOrder(orderId, { station_id: state.defaultStation });
+  setState(
+    produce((draft) => {
+      for (const line of fired) {
+        const held = draft.lines[line.order_line_id];
+        if (held !== undefined) {
+          held.state = line.state;
+        }
+      }
+    }),
+  );
 }
 
 export async function fire(lineId: string): Promise<void> {

@@ -203,6 +203,12 @@ export const api = {
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),
   fireLine: (lineId: string, fire: FireRequest) =>
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
+
+  // Send every unsent line on an order in one transaction. The operator's act is "send this order",
+  // and the per-line route made it one tap and one round trip each — with half the order reaching
+  // the kitchen when one of them failed.
+  fireOrder: (orderId: string, fire: FireRequest) =>
+    request<LineResponse[]>("POST", `/api/orders/${orderId}/fire`, fire),
   bumpTicket: (bump: BumpRequest) =>
     request<BumpResponse>("POST", "/api/kds/bump", bump),
 

@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
@@ -8,12 +8,14 @@ import { formatMoney } from "../lib/money";
 import type { LayoutButton, MenuItemResponse } from "../api/types";
 import {
   addItem,
-  fire,
+  fireOrder,
   linesForTable,
+  loadCheck,
   openBill,
   reasonsFor,
   state,
   tableState,
+  unfiredLinesForTable,
   voidLine,
   type OrderLine,
 } from "../state/store";
@@ -40,6 +42,28 @@ export function Order() {
       setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
     }
   };
+
+  // What the table owes right now, asked of the edge — the same `billing::assemble` the settle runs,
+  // so the guest is quoted the figure the bill will charge (roadmap-v3 E5).
+  //
+  // Until this screen showed it, the only way to answer "how much so far?" was to press Take
+  // payment, and that **opens a bill**: a guest's question changed the order's state. The
+  // fingerprint below is what the edge would price differently — a line appearing, disappearing, or
+  // changing state — so the figure refreshes on every act without polling.
+  //
+  // Written below `params` deliberately: a `createMemo` runs when it is created, so one placed above
+  // the `const`s it reads dies in their temporal dead zone and takes the screen down (`.jules/bolt.md`).
+  const priceable = createMemo(() =>
+    linesForTable(params.id)
+      .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
+      .join(","),
+  );
+  const [check] = createResource(priceable, () => loadCheck(params.id));
+
+  // The lines the kitchen has not been told about. The count rides on the Send button, because the
+  // question an operator asks before pressing it is "what is about to go" — and the answer used to
+  // be a row count they made themselves (`docs/ui-ux.md` §3).
+  const unfired = () => unfiredLinesForTable(params.id);
 
   const takePayment = () =>
     guard(async () => {
@@ -181,15 +205,11 @@ export function Order() {
                 <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) }}>
                   {formatMoney(line.lineTotal)}
                 </span>
+                {/* A line waiting to be sent says so and nothing more: the Send button below acts on
+                    every one of them at once, so a control per row would be one tap out of six
+                    doing what one tap now does for all. */}
                 <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
-                  <button
-                    type="button"
-                    class="rounded-token bg-primary px-3 py-1 text-primary-ink"
-                    data-step="fire"
-                    onClick={() => void guard(() => fire(line.orderLineId))}
-                  >
-                    {t("order.fire")}
-                  </button>
+                  <span class="text-sm text-ink-muted">{t("order.unsent")}</span>
                 </Show>
                 <Show when={line.state === "ORDER_LINE_STATE_FIRED"}>
                   <span class="text-sm text-ok" data-outcome="line-fired">
@@ -290,9 +310,57 @@ export function Order() {
           )}
         </Show>
 
+        {/*
+          What the table owes, on the screen the order is taken on. `docs/ui-ux.md` §8 asks for the
+          total to be the largest thing on a money screen; until now this screen carried no figure at
+          all, and the only way to read one was to press Take payment — which opens a bill. Asking a
+          guest's question should not change the order's state.
+
+          The three lines are the edge's, not a sum this app made: one calculation, in the domain
+          (ADR-0028). A read that has not landed shows a dash rather than a zero, because a zero is a
+          number and "I do not know yet" is not.
+        */}
+        <div class="mt-4 rounded-token border border-line bg-surface p-3" data-outcome="check-total">
+          <Show
+            when={check()}
+            fallback={<p class="text-right text-2xl font-semibold tabular-nums">{"—"}</p>}
+          >
+            {(totals) => (
+              <>
+                <div class="flex justify-between text-sm text-ink-muted">
+                  <span>{t("order.subtotal")}</span>
+                  <span class="tabular-nums">{formatMoney(totals().subtotal)}</span>
+                </div>
+                <div class="flex justify-between text-sm text-ink-muted">
+                  <span>{t("order.tax")}</span>
+                  <span class="tabular-nums">{formatMoney(totals().tax_total)}</span>
+                </div>
+                <div class="mt-1 flex items-baseline justify-between">
+                  <span class="text-sm font-semibold">{t("order.total")}</span>
+                  <span class="text-2xl font-semibold tabular-nums">
+                    {formatMoney(totals().total_due)}
+                  </span>
+                </div>
+              </>
+            )}
+          </Show>
+        </div>
+
         <button
           type="button"
-          class="mt-4 min-h-touch w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink"
+          class="mt-4 min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
+          disabled={unfired().length === 0}
+          data-step="fireOrder"
+          onClick={() => void guard(() => fireOrder(params.id))}
+        >
+          {unfired().length === 0
+            ? t("order.send")
+            : t("order.send_count", { count: unfired().length })}
+        </button>
+
+        <button
+          type="button"
+          class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink"
           data-step="takePayment"
           onClick={() => void takePayment()}
         >
