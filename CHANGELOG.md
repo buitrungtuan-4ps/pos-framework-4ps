@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.
+
 ### Changed
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
