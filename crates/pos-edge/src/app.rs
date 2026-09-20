@@ -1057,6 +1057,52 @@ pub struct CounterOrderView {
     pub bill_id: Option<BillId>,
 }
 
+/// One line of an open order, as a device rebuilding its screens reads it.
+///
+/// Everything a screen needs to draw the line **and act on it**: the id a fire, a void or a bump is
+/// addressed to, what the guest sees, and where the line has got to. Deliberately the same facts
+/// the fan-out carries, because the two have to agree — this read is what a device has instead of
+/// the events it was not running to hear.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveOrderLine {
+    /// The line, so the device can fire, void or bump it.
+    pub order_line_id: OrderLineId,
+    /// The item's name as the store's published menu spells it, falling back to the id for an item
+    /// the store has since removed — the same rule [`CounterOrderLine`] follows, and for the same
+    /// reason: an order that can no longer be read is worse than one naming an id.
+    pub display_name: DisplayName,
+    /// How many.
+    pub quantity: Quantity,
+    /// The extended total the device captured when the line was added (§14.2), never a fresh
+    /// lookup — so a screen that rebuilds shows the figure the guest was quoted.
+    pub line_total: Money,
+    /// Where the line has got to: added, fired, voided.
+    pub state: OrderLineState,
+    /// Whether a station has marked it prepared (`kitchen.ticket.bumped`). Orthogonal to `state`,
+    /// and the reason a kitchen display coming online does not re-show tickets already made.
+    pub bumped: bool,
+}
+
+/// An order still owing money, with its lines — what a device reads to rebuild its screens.
+///
+/// The till's boot already loads the floor, the price book, the button plan and the money settings;
+/// what it never loaded is **what is open right now**, so an order, a check and a kitchen board all
+/// came back empty after a reload. One read answers for all of them, which is why it is keyed on
+/// the order rather than the table: a counter order sits on no table
+/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)) and the kitchen works from both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveOrderView {
+    /// The order.
+    pub order_id: OrderId,
+    /// The table it sits on, or `None` for a counter order.
+    pub table_id: Option<TableId>,
+    /// A bill already open on it, so a device that reloads on the payment screen settles **that**
+    /// bill rather than asking for a second one the domain would refuse.
+    pub bill_id: Option<BillId>,
+    /// Its lines, in id order.
+    pub lines: Vec<LiveOrderLine>,
+}
+
 /// What a cash shift looks like to a caller after a command.
 ///
 /// The close is **blind** (§11.1): counting reveals nothing, so `expected_amount` and `variance` are
@@ -1421,6 +1467,18 @@ impl Projection {
     /// The lines on an order, in id order so the assembly (and its rounding residual) is
     /// deterministic across runs regardless of the hash map's iteration order.
     fn lines_for_order(&self, order_id: OrderId) -> Vec<LineRecord> {
+        self.identified_lines_for_order(order_id)
+            .into_iter()
+            .map(|(_, record)| record)
+            .collect()
+    }
+
+    /// The same lines, still carrying the id each one is addressed by.
+    ///
+    /// A screen that has to *act* on a line — fire it, void it, bump it — needs the id, and a
+    /// screen rebuilding after a restart has no other way to learn one: the ids reach a device on
+    /// the fan-out, and a device that was not running when the line was added never saw it.
+    fn identified_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
         let mut lines: Vec<(OrderLineId, LineRecord)> = self
             .lines
             .iter()
@@ -1428,7 +1486,7 @@ impl Projection {
             .map(|(id, record)| (*id, record.clone()))
             .collect();
         lines.sort_by_key(|(id, _)| *id);
-        lines.into_iter().map(|(_, record)| record).collect()
+        lines
     }
 
     /// Records a bill and indexes it by the order it bills.
@@ -1462,11 +1520,27 @@ impl Projection {
     /// still has to take the money and the screen must be able to resume rather than start again.
     fn open_counter_orders(&self) -> Vec<OrderId> {
         let on_a_table: HashSet<OrderId> = self.table_orders.values().copied().collect();
+        self.open_orders()
+            .into_iter()
+            .filter(|order_id| !on_a_table.contains(order_id))
+            .collect()
+    }
+
+    /// Every order still owing money, table **and** counter, in id order.
+    ///
+    /// The set a device has to be able to rebuild from nothing: a till that reloads, or a kitchen
+    /// display that is switched on mid-service, learns lines only from the fan-out, and the fan-out
+    /// carries what happens *next*, never what already happened. Without this read such a screen
+    /// draws an empty order and an empty board while the food exists.
+    ///
+    /// "Still owing" is [`Self::open_counter_orders`]'s rule, which this one now supplies: no bill,
+    /// or a bill that has not settled. A settled order is finished and drops out, which is what
+    /// bounds this list — it is the store's live trading, not a log.
+    fn open_orders(&self) -> Vec<OrderId> {
         let mut orders: Vec<OrderId> = self
             .lines
             .values()
             .map(|record| record.order_id)
-            .filter(|order_id| !on_a_table.contains(order_id))
             .filter(|order_id| {
                 self.bill_for_order(*order_id)
                     .and_then(|bill_id| self.bill(bill_id))
@@ -2765,6 +2839,55 @@ impl<S: EventStore> Edge<S> {
             });
         }
         Ok(views)
+    }
+
+    /// Every open order with its lines — what a device reads to rebuild its screens.
+    ///
+    /// The gap this closes: a device learns lines from the fan-out, and the fan-out carries what
+    /// happens next. A till that reloaded, a tablet that slept, a kitchen display switched on at
+    /// five o'clock — each drew an empty order and an empty board while the food existed, because
+    /// nothing it could ask answered "what is open right now". `loadStore` read the floor, the price
+    /// book, the button plan and the money settings; this is the fifth read it was missing.
+    ///
+    /// One read for every screen that needs it, keyed on the order: the floor's orders and the
+    /// counter's both appear, because the kitchen works from both and a counter order sits on no
+    /// table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)).
+    ///
+    /// The list is the store's **live trading**, not its log: a settled order drops out of
+    /// [`Projection::open_orders`], so what this returns is bounded by the tables the store has
+    /// open plus the counter orders it has not yet taken money for.
+    ///
+    /// # Panics
+    ///
+    /// If the projection lock is poisoned — unreachable, as its critical section only reads.
+    #[must_use]
+    pub fn live_orders(&self) -> Vec<LiveOrderView> {
+        let session = self.session();
+        let projection = self.lock_projection();
+        projection
+            .open_orders()
+            .into_iter()
+            .map(|order_id| LiveOrderView {
+                order_id,
+                table_id: projection.table_for_order(order_id),
+                bill_id: projection.bill_for_order(order_id),
+                lines: projection
+                    .identified_lines_for_order(order_id)
+                    .into_iter()
+                    .map(|(order_line_id, record)| LiveOrderLine {
+                        order_line_id,
+                        display_name: session.menu.get(record.menu_item_id).map_or_else(
+                            || DisplayName::new(record.menu_item_id.to_string()),
+                            |entry| entry.display_name.clone(),
+                        ),
+                        quantity: record.quantity,
+                        line_total: record.line_total,
+                        state: record.state,
+                        bumped: projection.bumped_lines.contains(&order_line_id),
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Sends every unsent line on an order to the kitchen, in one transaction.

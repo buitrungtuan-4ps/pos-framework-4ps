@@ -16,6 +16,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
+  includeSubDomains`, beside the `nosniff`, `DENY` and `no-referrer` headers the same middleware
+  already sets. Caddy redirects `http` to `https` already; what this closes is the redirect itself —
+  the one plain-text request a listener on the same network can answer first.
+
+  **Upgrade note.** This is remembered *by the browser*, for a year, for the console's hostname and
+  every name under it. Two consequences worth knowing before the first deploy that carries it:
+  a browser that has seen this header will refuse a plain-`http` subdomain of `$DOMAIN` with no way
+  for the operator to click through, and if the certificate ever expires there is no "proceed
+  anyway" into the console — the certificate has to be fixed first. Undoing it means serving
+  `max-age=0` and waiting for each browser to come back, so it is worth being sure every name under
+  `$DOMAIN` is HTTPS. Today the bundled proxy serves exactly one host and no subdomains.
+### Fixed
+
+- **A till that reloads, or a kitchen display switched on mid-service, no longer draws an empty
+  screen over live food.** A device learned order lines from the fan-out, and the fan-out carries
+  what happens *next* — so a browser reload, a tablet waking from sleep, or a kitchen display turned
+  on at five o'clock left the order screen showing no lines, the payment screen unable to resume an
+  open bill, and the kitchen board reading "clear" while the food existed. The till now reads
+  `GET /api/orders/live` at boot and again whenever the live link says it fell behind, and merges
+  what comes back over whatever the fan-out has since established.
+  - **What the read carries** is what a screen needs to *act*, not only to draw: the id a fire, a
+    void or a bump is addressed to, the state each line has reached, whether a station already made
+    it, and the bill already open on the order so the payment screen settles that one rather than
+    asking for a second the edge would refuse.
+  - **It is the shop, not the day.** A settled order leaves the list, so what a device reads at boot
+    is bounded by the tables the store has open plus the counter orders it has not yet been paid
+    for.
+  - **Upgrade note.** None. The route is additive and the till tolerates its absence — an edge built
+    before it answers 404 and the screens behave exactly as they did.
 ### Added
 
 - **The order screen shows what the table owes, and sends the whole order in one tap.** Two things
@@ -41,6 +73,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     is additive.
 
 ### Changed
+
+- **`flate2` 1.1.9 → 1.1.10, and the duplicate it brings is written down rather than waved through.**
+  The new release moves its default `rust_backend` from `miniz_oxide` 0.8 to 0.9, while `png` 0.18 —
+  the cloud's image pipeline ([ADR-0042](docs/adr/0042-image-pipeline.md)) — still names 0.8
+  directly. `deny.toml` bans two versions of one crate, so the bump needs a `skip` entry, and that
+  entry carries its reason and a review date like the three beside it. The duplicate is
+  **cloud-only**: `pos-edge`, which deflates a store archive before sealing it
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)), reaches `miniz_oxide` only through
+  `flate2` and carries 0.9 alone, so no shop machine ships both. `zlib-rs`, the optional backend the
+  new release can use, appears in the lockfile and is **not compiled** — the default feature set
+  keeps the pure-Rust `miniz_oxide` path, which is what lets a Windows till build with no zlib to
+  ship. The skip disappears when `png` follows onto 0.9.
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 

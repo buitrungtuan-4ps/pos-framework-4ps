@@ -20,7 +20,7 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { fold, loadStore, setLink } from "./state/store";
+import { fold, loadLiveOrders, loadStore, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
 // versions and nothing else: the operator cannot fix it, and the person who can needs the two
@@ -109,8 +109,10 @@ export function App() {
   const link = new LiveLink({
     onEvent: fold,
     onResync: () => {
-      // A resync tells the client its view may be stale; the projection rebuild that answers it is a
-      // follow-up. For now the next committed events re-establish the live state.
+      // A resync says this client fell behind, so what it holds may be stale — and the events it
+      // missed are exactly the ones it will never be sent. Re-reading what is open is the answer:
+      // the same read the boot gate makes, merged over whatever the fold has since established.
+      void loadLiveOrders();
     },
     onStatus: setLink,
   });

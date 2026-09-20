@@ -8,6 +8,7 @@ GET /api/layout
 GET /api/locale
 GET /api/menu
 GET /api/orders/awaiting-confirmation
+GET /api/orders/live
 GET /api/orders/open
 GET /api/orders/{id}/check
 GET /api/pair/devices
