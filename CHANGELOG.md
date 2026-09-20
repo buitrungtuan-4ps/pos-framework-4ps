@@ -16,7 +16,105 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
+  includeSubDomains`, beside the `nosniff`, `DENY` and `no-referrer` headers the same middleware
+  already sets. Caddy redirects `http` to `https` already; what this closes is the redirect itself —
+  the one plain-text request a listener on the same network can answer first.
+
+  **Upgrade note.** This is remembered *by the browser*, for a year, for the console's hostname and
+  every name under it. Two consequences worth knowing before the first deploy that carries it:
+  a browser that has seen this header will refuse a plain-`http` subdomain of `$DOMAIN` with no way
+  for the operator to click through, and if the certificate ever expires there is no "proceed
+  anyway" into the console — the certificate has to be fixed first. Undoing it means serving
+  `max-age=0` and waiting for each browser to come back, so it is worth being sure every name under
+  `$DOMAIN` is HTTPS. Today the bundled proxy serves exactly one host and no subdomains.
+### Fixed
+
+- **A till that reloads, or a kitchen display switched on mid-service, no longer draws an empty
+  screen over live food.** A device learned order lines from the fan-out, and the fan-out carries
+  what happens *next* — so a browser reload, a tablet waking from sleep, or a kitchen display turned
+  on at five o'clock left the order screen showing no lines, the payment screen unable to resume an
+  open bill, and the kitchen board reading "clear" while the food existed. The till now reads
+  `GET /api/orders/live` at boot and again whenever the live link says it fell behind, and merges
+  what comes back over whatever the fan-out has since established.
+  - **What the read carries** is what a screen needs to *act*, not only to draw: the id a fire, a
+    void or a bump is addressed to, the state each line has reached, whether a station already made
+    it, and the bill already open on the order so the payment screen settles that one rather than
+    asking for a second the edge would refuse.
+  - **It is the shop, not the day.** A settled order leaves the list, so what a device reads at boot
+    is bounded by the tables the store has open plus the counter orders it has not yet been paid
+    for.
+  - **Upgrade note.** None. The route is additive and the till tolerates its absence — an edge built
+    before it answers 404 and the screens behave exactly as they did.
+### Added
+
+- **The order screen shows what the table owes, and sends the whole order in one tap.** Two things
+  the till had never done, on the screen an order is taken on.
+  - **The running total.** The only way to answer a guest's "how much so far?" was to press **Take
+    payment** — and that opens a bill. A question about the order changed the order's state. The
+    screen now reads `GET /api/tables/{id}/check` and shows subtotal, tax and total, refreshed on
+    every act. The figures are the edge's own `billing::assemble`, the same calculation the settle
+    runs ([ADR-0028](docs/adr/0028-settlement-and-payment-invariant.md)), so what the guest is
+    quoted is what the bill will charge.
+  - **One Send button, with the count on it.** The screen carried a Send on every row, so a table of
+    six cost six taps and six round trips — and a failure halfway left three lines with the kitchen
+    and three not, with nothing on the screen saying which. `POST /api/orders/{id}/fire` sends every
+    unsent line in one transaction: all of them reach the kitchen, or none do. Each line is still
+    decided and routed individually — a batch is a transaction boundary, not a shortcut past a
+    decision. Sending an order with nothing unsent answers `200` with an empty list, because two
+    devices tapping Send on one table is an ordinary race.
+  - **The step budget's map now matches the code.** `ui/scripts/step-tasks.mjs` declared this flow
+    at two taps and its note described "the fire button… shows the unfired count". No such button
+    existed. The gate could not see it: a declaration naming an action is satisfied by any element
+    calling it, however many of them there are. One button makes the declared two honest.
+  - **Upgrade note.** None. `POST /api/lines/{id}/fire` is unchanged and still mounted; the new route
+    is additive.
+### Fixed
+
+- **A refused sign-in no longer wipes the PIN the operator has already started retyping.** The
+  sign-in button is disabled while the request is out; the PIN field is not. An operator who typed
+  the next attempt during that moment had it cleared out from under them when the refusal landed —
+  digits vanishing mid-typing, so they typed again, and every confused attempt counts toward the
+  lockout ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)). A badge locked in the middle
+  of service, by the screen rather than by the person. The field is now cleared only if it still
+  holds the PIN that was refused, and the cursor goes back to it so recovering costs no tap.
+  - **Upgrade note.** None.
+### Added
+
+- **The floor screen draws the room the store published, instead of a flat list of every table in
+  the building.** `loadFloor` read the plan and threw away three of the four things in it: which
+  area a table is in, how many it seats, and where the floor editor put it
+  ([ADR-0072](docs/adr/0072-floor-and-kitchen.md) publishes all three). A server hunting "the
+  six-top on the terrace" had to read every label on a board that matched no room.
+  - **Areas are sections**, in publication order, each with its heading.
+  - **A placed area is drawn on the editor's grid**, at the published column and row — so a gap in
+    the room stays a gap on the screen, and pointing at a table works. Placement is judged per area,
+    and an area with any unplaced table reflows as before rather than putting a table somewhere its
+    position does not mean.
+  - **Seat counts appear** where the store recorded one. Zero means "not recorded" on the wire, and
+    stays invisible rather than claiming a table seats nobody.
+  - **`examples/minimal-edge` now publishes a floor** — two named areas, seats, and a walkway gap —
+    through `session_from_config`, the same seam a real store's config goes through. Until now the
+    only floor anyone ever saw, contributor or browser gate, was the front end's eight-table
+    fallback, which has none of these: all three could have broken without a check going red.
+  - **Upgrade note.** None. A store with no published plan, or a plan with no areas or positions,
+    gets exactly the screen that shipped before.
+
 ### Changed
+
+- **`flate2` 1.1.9 → 1.1.10, and the duplicate it brings is written down rather than waved through.**
+  The new release moves its default `rust_backend` from `miniz_oxide` 0.8 to 0.9, while `png` 0.18 —
+  the cloud's image pipeline ([ADR-0042](docs/adr/0042-image-pipeline.md)) — still names 0.8
+  directly. `deny.toml` bans two versions of one crate, so the bump needs a `skip` entry, and that
+  entry carries its reason and a review date like the three beside it. The duplicate is
+  **cloud-only**: `pos-edge`, which deflates a store archive before sealing it
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)), reaches `miniz_oxide` only through
+  `flate2` and carries 0.9 alone, so no shop machine ships both. `zlib-rs`, the optional backend the
+  new release can use, appears in the lockfile and is **not compiled** — the default feature set
+  keeps the pure-Rust `miniz_oxide` path, which is what lets a Windows till build with no zlib to
+  ship. The skip disappears when `png` follows onto 0.9.
 
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 
