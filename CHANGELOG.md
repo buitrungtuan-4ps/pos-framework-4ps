@@ -16,6 +16,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **`AGENTS.md` §6 now lets the repo owner permit an agent to merge**
+  ([ADR-0126](docs/adr/0126-when-an-agent-may-merge.md)). The rule was "A human merges. Always."; it
+  now carries an exception the owner grants, per session. What the exception does **not** touch is
+  recorded with it and still binds every agent merge: `pos-core`, `pos-ports`, `pos-proto` and
+  `.github/` still require an owner review, squash merge is still the only method, and the
+  `ai-assisted` label and mandatory template fields still stand. The ADR also writes down the
+  discipline an agent applies inside the permission — green on the current head, no conflict, no
+  open review thread, and never a pull request it did not open — and is explicit that this is
+  practice rather than rule, so a later reader can tell the two apart. **Upgrade note:** none; a
+  process rule, not behaviour.
+
 ### Security
 
 - **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
