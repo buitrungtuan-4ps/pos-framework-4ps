@@ -71,6 +71,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     calling it, however many of them there are. One button makes the declared two honest.
   - **Upgrade note.** None. `POST /api/lines/{id}/fire` is unchanged and still mounted; the new route
     is additive.
+### Fixed
+
+- **A refused sign-in no longer wipes the PIN the operator has already started retyping.** The
+  sign-in button is disabled while the request is out; the PIN field is not. An operator who typed
+  the next attempt during that moment had it cleared out from under them when the refusal landed —
+  digits vanishing mid-typing, so they typed again, and every confused attempt counts toward the
+  lockout ([ADR-0030](docs/adr/0030-pairing-and-offline-auth.md)). A badge locked in the middle
+  of service, by the screen rather than by the person. The field is now cleared only if it still
+  holds the PIN that was refused, and the cursor goes back to it so recovering costs no tap.
+  - **Upgrade note.** None.
 
 ### Changed
 

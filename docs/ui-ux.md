@@ -59,7 +59,7 @@ should shorten the first six, not merge the publish into the save**: the two-ste
 The gate also earned its keep on its first run: it refused a declaration that claimed the new-store
 wizard was one sidebar click away. It is in `SCREENS` and in no nav group — it is reached from the
 Stores screen — so the flow is five clicks, not four, and nothing but a resolver would have noticed.
-7. **Errors always have an exit.** Every error state offers the next action — retry, switch to the backup printer, call a manager by PIN. No dead ends, and never a raw error code in front of staff.
+7. **Errors always have an exit.** Every error state offers the next action — retry, switch to the backup printer, call a manager by PIN. No dead ends, and never a raw error code in front of staff. **And a refusal never destroys what the operator has typed since:** a request takes a moment, the operator does not wait, and a field cleared on the answer's arrival takes the next attempt with it. Clear an input only if it still holds what was refused, and hand the cursor back so recovering costs no tap.
 8. **Money is king.** The largest type on the screen, tabular figures, locale-aware thousands separators, and never a displayed value that differs from the real one for cosmetic rounding.
 9. **Four device classes, four layouts.**
    - *POS terminal* (13"+): two columns — categories and items on the left, the open bill on the right.
