@@ -33,6 +33,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **`flate2` 1.1.9 → 1.1.10, and the duplicate it brings is written down rather than waved through.**
+  The new release moves its default `rust_backend` from `miniz_oxide` 0.8 to 0.9, while `png` 0.18 —
+  the cloud's image pipeline ([ADR-0042](docs/adr/0042-image-pipeline.md)) — still names 0.8
+  directly. `deny.toml` bans two versions of one crate, so the bump needs a `skip` entry, and that
+  entry carries its reason and a review date like the three beside it. The duplicate is
+  **cloud-only**: `pos-edge`, which deflates a store archive before sealing it
+  ([ADR-0124](docs/adr/0124-a-store-that-can-be-restored.md)), reaches `miniz_oxide` only through
+  `flate2` and carries 0.9 alone, so no shop machine ships both. `zlib-rs`, the optional backend the
+  new release can use, appears in the lockfile and is **not compiled** — the default feature set
+  keeps the pure-Rust `miniz_oxide` path, which is what lets a Windows till build with no zlib to
+  ship. The skip disappears when `png` follows onto 0.9.
+
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 
 ### Added
