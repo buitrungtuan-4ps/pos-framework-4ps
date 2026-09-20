@@ -54,7 +54,10 @@ export function StatusBar() {
 
   return (
     <header class="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2 text-sm">
-      <A href="/" class="font-semibold no-underline text-ink">
+      <A
+        href="/"
+        class="rounded-token font-semibold no-underline text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
         {t("app.brand")}
       </A>
       <span class="inline-flex items-center gap-2 text-ink-muted">
@@ -76,7 +79,12 @@ export function StatusBar() {
       <nav class="flex items-center gap-3 text-ink-muted">
         <For each={NAV}>
           {(item) => (
-            <A href={item.href} class="no-underline hover:text-ink" activeClass="text-ink" end>
+            <A
+              href={item.href}
+              class="rounded-token no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              activeClass="text-ink"
+              end
+            >
               {t(item.key)}
             </A>
           )}
@@ -84,7 +92,7 @@ export function StatusBar() {
       </nav>
       <button
         type="button"
-        class="ml-auto rounded-token border border-line px-3 py-1 text-ink"
+        class="ml-auto rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         aria-label={t("status.language")}
         onClick={() => setLocale(locale() === "vi" ? "en" : "vi")}
       >
@@ -92,14 +100,15 @@ export function StatusBar() {
       </button>
       <button
         type="button"
-        class="rounded-token border border-line px-3 py-1 text-ink"
+        class="rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
         onClick={cycleTheme}
       >
         {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
       </button>
       <button
         type="button"
-        class="rounded-token border border-line px-3 py-1 text-ink"
+        class="rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         onClick={() => void signOut()}
       >
         {t("nav.signout")}
