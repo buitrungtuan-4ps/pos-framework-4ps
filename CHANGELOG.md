@@ -81,6 +81,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   of service, by the screen rather than by the person. The field is now cleared only if it still
   holds the PIN that was refused, and the cursor goes back to it so recovering costs no tap.
   - **Upgrade note.** None.
+### Added
+
+- **The floor screen draws the room the store published, instead of a flat list of every table in
+  the building.** `loadFloor` read the plan and threw away three of the four things in it: which
+  area a table is in, how many it seats, and where the floor editor put it
+  ([ADR-0072](docs/adr/0072-floor-and-kitchen.md) publishes all three). A server hunting "the
+  six-top on the terrace" had to read every label on a board that matched no room.
+  - **Areas are sections**, in publication order, each with its heading.
+  - **A placed area is drawn on the editor's grid**, at the published column and row — so a gap in
+    the room stays a gap on the screen, and pointing at a table works. Placement is judged per area,
+    and an area with any unplaced table reflows as before rather than putting a table somewhere its
+    position does not mean.
+  - **Seat counts appear** where the store recorded one. Zero means "not recorded" on the wire, and
+    stays invisible rather than claiming a table seats nobody.
+  - **`examples/minimal-edge` now publishes a floor** — two named areas, seats, and a walkway gap —
+    through `session_from_config`, the same seam a real store's config goes through. Until now the
+    only floor anyone ever saw, contributor or browser gate, was the front end's eight-table
+    fallback, which has none of these: all three could have broken without a check going red.
+  - **Upgrade note.** None. A store with no published plan, or a plan with no areas or positions,
+    gets exactly the screen that shipped before.
 
 ### Changed
 

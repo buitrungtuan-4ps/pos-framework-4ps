@@ -45,6 +45,7 @@
   "expo.count": "{count, plural, one {# table on the pass} other {# tables on the pass}}",
   "expo.empty": "Nothing on the pass.",
   "expo.title": "Pass",
+  "floor.seats": "Seats {count, plural, one {# guest} other {# guests}}",
   "floor.title": "Floor",
   "kds.bump": "Tap to bump",
   "kds.count": "{count, plural, one {# item firing} other {# items firing}}",

@@ -290,6 +290,34 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
   }
 });
 
+test("the floor is drawn as the store published it: areas, seats, and the walkway gap", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    // The areas the example publishes, as headings. Before the screen read them, every table in the
+    // building landed in one undifferentiated grid in publication order.
+    await expect(page.getByRole("heading", { name: "Main hall" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Terrace" })).toBeVisible();
+
+    // The seat count the console recorded, on the card. "Which free table seats six?" is a question
+    // a host asks constantly and the screen could not answer at all.
+    await expect(page.getByText("Seats 6 guests")).toBeVisible();
+
+    // And the layout is the editor's, not a reflow. The example's hall leaves column 1 of row 1 empty
+    // for the walkway, so table 5 — at zero-based (2, 1) — must land on CSS grid line 3, not on
+    // line 2 where a list that merely flowed in order would put it.
+    const fifth = page.locator('[data-step="onCard"]').nth(4);
+    await expect(fifth).toHaveCSS("grid-column-start", "3");
+    await expect(fifth).toHaveCSS("grid-row-start", "2");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
