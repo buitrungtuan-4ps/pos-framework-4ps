@@ -8,7 +8,7 @@
 // silently overwrite each other's work. Publishing needs a store chosen in
 // the top bar. Recipe amounts are proprietary process (T2): they live here, never in the audit trail.
 
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
@@ -143,8 +143,18 @@ export function Inventory() {
 
   // Load on open and whenever the tenant or store changes — never with an empty context (F0).
 
+  // Optimization: Index menu items into a Map using createMemo for O(1) lookups instead of O(N) linear scans per recipe row.
+  // Placed below `items()` accessor definition to prevent TDZ runtime failures.
+  const itemMap = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of items()) {
+      map.set(item.menu_item_id, item.name);
+    }
+    return map;
+  });
+
   /** The name of a menu item by id, falling back to the id when the catalog has no such item. */
-  const itemName = (id: string): string => items().find((i) => i.menu_item_id === id)?.name ?? id;
+  const itemName = (id: string): string => itemMap().get(id) ?? id;
 
   // --- Ingredients ---
 
