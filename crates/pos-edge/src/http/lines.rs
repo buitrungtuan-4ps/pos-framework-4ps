@@ -25,7 +25,7 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::ids::{
-    CourseId, MenuItemId, OrderLineId, ReasonCodeId, StationId, TableId, TaxClassId,
+    CourseId, MenuItemId, OrderId, OrderLineId, ReasonCodeId, StationId, TableId, TaxClassId,
 };
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
@@ -164,6 +164,46 @@ where
         response.ticket_print = Some(printed.as_wire().to_owned());
     }
     Json(response).into_response()
+}
+
+/// `POST /api/orders/{id}/fire` — send every unsent line on an order, in one transaction.
+///
+/// The operator's act is "send this order". Firing line by line made it one tap and one round trip
+/// each, and a failure halfway left half the order with the kitchen. The commit is all or nothing;
+/// the tickets print afterwards, one per line, exactly as the single-line route does — a printer
+/// that is down must not un-fire food the kitchen is already making.
+///
+/// An order with nothing unsent answers `200` with an empty list rather than a refusal: two devices
+/// tapping send on the same table is an ordinary race, and the second one finding the work done is
+/// the right outcome.
+pub(crate) async fn fire_order<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path(id): Path<String>,
+    Json(request): Json<FireRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
+        return bad_request("an order id is a ULID");
+    };
+    let views = match edge.fire_order(actor, order_id, request.station_id).await {
+        Ok(views) => views,
+        Err(error) => return error_response(&error),
+    };
+
+    let mut body = Vec::with_capacity(views.len());
+    for view in views {
+        let mut response = LineResponse::from(view.clone());
+        if let Some(fired) = view.fired.as_ref() {
+            let printed = print_ticket_for(printers.as_deref(), &edge, &view, fired).await;
+            response.ticket_print = Some(printed.as_wire().to_owned());
+        }
+        body.push(response);
+    }
+    Json(body).into_response()
 }
 
 /// Runs the kitchen-ticket effect and says what came of it.

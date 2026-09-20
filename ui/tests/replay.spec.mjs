@@ -99,9 +99,9 @@ async function addItem(page) {
   await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 }
 
-/** Fires the first unfired line to the kitchen. */
-async function fireLine(page) {
-  await page.locator('[data-step="fire"]').first().click();
+/** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
+async function sendOrder(page) {
+  await page.locator('[data-step="fireOrder"]').click();
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
 }
 
@@ -143,13 +143,13 @@ const PRECONDITIONS = {
   "Bump a ticket on the kitchen display": async (page) => {
     await seatTable(page);
     await addItem(page);
-    await fireLine(page);
+    await sendOrder(page);
     await navigateTo(page, "/kds");
   },
   "Run away a course from the expo screen": async (page) => {
     await seatTable(page);
     await addItem(page);
-    await fireLine(page);
+    await sendOrder(page);
     await navigateTo(page, "/expo");
   },
   "Open the cash shift with a float": async (page) => {

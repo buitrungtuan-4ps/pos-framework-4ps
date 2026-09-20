@@ -45,8 +45,8 @@ export const TASKS = [
   {
     task: "Fire the open lines to the kitchen",
     budget: 2,
-    note: "The fire button is fixed on the order screen and shows the unfired count.",
-    steps: [{ route: "/table/:id", action: "fire" }],
+    note: "The send button is fixed on the order screen and shows the unsent count. This note described a button that did not exist: the screen carried a Send on every row, so this task really cost one tap per line and the gate could not see it — a declaration naming an action is satisfied by any element calling it, however many of them there are. One button now sends the whole order in one transaction, which is what makes the two honest.",
+    steps: [{ route: "/table/:id", action: "fireOrder" }],
     outcome: { route: "/table/:id", mark: "line-fired" },
   },
   {

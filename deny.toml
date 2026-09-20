@@ -97,6 +97,13 @@ skip = [
     # compatibility) needs 0.11 on the `digest` 0.11 line `hmac` 0.13 uses. The two never link in one
     # binary path meaningfully; skipping the 0.10 line leaves 0.11 unique. review: 2026-11-19
     { crate = "sha1@0.10", reason = "axum WebSocket handshake on sha1 0.10 (digest 0.10); cloud TOTP on sha1 0.11 (digest 0.11)" },
+    # miniz_oxide straddles 0.8 -> 0.9: `png` 0.18 (the cloud's image pipeline, ADR-0042) names 0.8
+    # directly, while `flate2` 1.1.10 moved its default `rust_backend` to 0.9. Both land in
+    # `pos-cloud` alone — `pos-edge`, which deflates a store archive before sealing it (ADR-0124),
+    # reaches miniz_oxide only through flate2 and so carries 0.9 by itself. So the duplicate rides on
+    # one VPS, never on the thousand shop machines the ban is mostly written for. It disappears when
+    # `png` follows flate2 onto 0.9. review: 2026-11-19
+    { crate = "miniz_oxide@0.8", reason = "png 0.18 pins the 0.8 line; flate2 1.1.10's default backend moved to 0.9 — cloud-only" },
 ]
 skip-tree = [
     # Two RustCrypto lines coexist during the 0.10 -> 0.11 migration: rust-embed

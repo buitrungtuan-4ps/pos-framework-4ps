@@ -189,6 +189,12 @@ export function linesForTable(tableId: string): OrderLine[] {
   return Object.values(state.lines).filter((line) => line.orderId === orderId);
 }
 
+// The lines on this table that the kitchen has not been told about yet — what one tap on Send acts
+// on, and the number the button carries. `docs/ui-ux.md` §3 has asked for that count since P6.
+export function unfiredLinesForTable(tableId: string): OrderLine[] {
+  return linesForTable(tableId).filter((line) => line.state === "ORDER_LINE_STATE_ADDED");
+}
+
 export function openBillFor(tableId: string): string | undefined {
   return state.openBill[tableId];
 }
@@ -572,6 +578,54 @@ export function reasonsFor(action: string): ReasonCodeEntry[] {
   return state.reasonCodes.filter((reason) => reason.applies_to.includes(action));
 }
 
+// What the store is in the middle of: every open order, its lines, and the bill already on it.
+//
+// The other loaders describe what the store *sells*. None of them describes what it is *doing*, and
+// a device learns that from the fan-out — which carries what happens next, never what already
+// happened. So a till that reloaded, a tablet that woke from sleep and a kitchen display switched on
+// mid-service each drew an empty order over live food: `linesForTable` had no order for the table,
+// and `firedLines` had no lines at all. This is the read that gives a device back what it missed.
+//
+// It **merges** rather than replaces. Events can land while the request is in flight, and the fold
+// is the authority on anything newer than this snapshot; replacing wholesale would drop a line added
+// a moment ago. Forgiving like every other loader: a failed read leaves what we hold.
+export async function loadLiveOrders(): Promise<void> {
+  let orders;
+  try {
+    orders = await api.liveOrders();
+  } catch {
+    // An edge that predates this route answers 404, and a device that just paired may be asking
+    // early. Neither is worth emptying a screen over.
+    return;
+  }
+  setState(
+    produce((draft) => {
+      for (const order of orders) {
+        if (order.table_id !== undefined) {
+          draft.tableOrder[order.table_id] = order.order_id;
+          draft.orderTable[order.order_id] = order.table_id;
+          if (order.bill_id !== undefined) {
+            draft.openBill[order.table_id] = order.bill_id;
+          }
+        }
+        for (const line of order.lines) {
+          draft.lines[line.order_line_id] = {
+            orderLineId: line.order_line_id,
+            orderId: order.order_id,
+            name: line.display_name,
+            quantityMilli: line.quantity.milli,
+            lineTotal: line.line_total,
+            state: line.state,
+          };
+          if (line.bumped) {
+            draft.bumped[line.order_line_id] = true;
+          }
+        }
+      }
+    }),
+  );
+}
+
 // Everything the till has to read from the edge before it can sell: the floor, the price book, the
 // button plan, the money settings and the reasons an act may cite.
 //
@@ -586,7 +640,40 @@ export function reasonsFor(action: string): ReasonCodeEntry[] {
 // Every loader is individually forgiving, so this is too: a blip leaves whatever was already loaded
 // rather than emptying the till.
 export async function loadStore(): Promise<void> {
-  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale(), loadReasonCodes()]);
+  await Promise.all([
+    loadFloor(),
+    loadMenu(),
+    loadLayout(),
+    loadLocale(),
+    loadReasonCodes(),
+    loadLiveOrders(),
+  ]);
+}
+
+// Sends every unsent line on this table's order in one act — the operator's own unit of work.
+//
+// One tap and one request, where the screen used to put a Send button on every row: a table of six
+// was six taps and six round trips, and a failure halfway left three lines with the kitchen and
+// three not, with nothing on screen saying which. The edge commits them together or not at all.
+//
+// A table with no order, or nothing unsent, is not an error here any more than it is on the edge:
+// there is nothing to send, and the button that calls this is disabled anyway.
+export async function fireOrder(tableId: string): Promise<void> {
+  const orderId = state.tableOrder[tableId];
+  if (orderId === undefined) {
+    return;
+  }
+  const fired = await api.fireOrder(orderId, { station_id: state.defaultStation });
+  setState(
+    produce((draft) => {
+      for (const line of fired) {
+        const held = draft.lines[line.order_line_id];
+        if (held !== undefined) {
+          held.state = line.state;
+        }
+      }
+    }),
+  );
 }
 
 export async function fire(lineId: string): Promise<void> {

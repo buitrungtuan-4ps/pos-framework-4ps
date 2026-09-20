@@ -32,6 +32,35 @@ export interface FireRequest {
   station_id: string;
 }
 
+// One line of an open order, from `GET /api/orders/live`.
+//
+// The fan-out carries what happens *next*, so a device that was not running when a line was added
+// has no way to learn it — this read is what a till that reloaded, a tablet that slept and a kitchen
+// display switched on mid-service have instead of the events they missed. It carries the line id
+// because a screen does not only draw a line, it fires, voids and bumps it.
+export interface LiveLine {
+  order_line_id: string;
+  display_name: string;
+  quantity: Quantity;
+  // The extended total captured when the line was added — the figure the guest was quoted.
+  line_total: Money;
+  state: string;
+  // Whether a station marked it prepared. Orthogonal to `state`, and what stops a kitchen display
+  // re-showing a ticket that was already bumped.
+  bumped: boolean;
+}
+
+// One open order, table or counter.
+export interface LiveOrder {
+  order_id: string;
+  // Absent for a counter order, which sits on no table (ADR-0093).
+  table_id?: string;
+  // A bill already open on it: the payment screen settles this one rather than asking for a second,
+  // which the edge refuses with a 409.
+  bill_id?: string;
+  lines: LiveLine[];
+}
+
 // The store's published floor plan and kitchen stations from `GET /api/floor` (ADR-0072). The edge
 // serves the live `EdgeSession` plans; the shapes mirror `pos_proto::floor`, with the optional-field
 // keys (`position`, `default_station_id`, …) omitted from the wire when absent.

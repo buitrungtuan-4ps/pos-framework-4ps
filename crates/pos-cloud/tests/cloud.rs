@@ -9800,6 +9800,14 @@ async fn every_response_carries_the_admin_security_headers() {
     );
     assert_eq!(
         headers
+            .get("strict-transport-security")
+            .expect("strict-transport-security header")
+            .to_str()
+            .expect("ascii"),
+        "max-age=31536000; includeSubDomains"
+    );
+    assert_eq!(
+        headers
             .get("permissions-policy")
             .expect("permissions-policy header")
             .to_str()
