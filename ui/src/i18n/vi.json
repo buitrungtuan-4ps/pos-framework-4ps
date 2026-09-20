@@ -45,6 +45,7 @@
   "expo.count": "{count, plural, other {# bàn ở khu ra món}}",
   "expo.empty": "Không có bàn ở khu ra món.",
   "expo.title": "Khu ra món",
+  "floor.seats": "{count, plural, other {# chỗ}}",
   "floor.title": "Sơ đồ bàn",
   "kds.bump": "Chạm để hoàn tất",
   "kds.count": "{count, plural, other {# món đang làm}}",

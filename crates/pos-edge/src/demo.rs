@@ -28,7 +28,7 @@
 
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{EmployeeId, MenuItemId};
+use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, TableId};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
@@ -104,7 +104,60 @@ pub fn config_document() -> Option<serde_json::Value> {
             }],
         },
         "menu": serde_json::to_value(demo_menu()).ok()?,
+        "floor": demo_floor(),
     }))
+}
+
+/// A floor with two named areas and every table placed on the editor's grid.
+///
+/// Published as JSON rather than built with the typed constructors, because that is what a cloud
+/// actually sends and this fixture is only worth anything if it goes through the same
+/// deserialization a real document does.
+///
+/// It exists so the example is a *room* rather than a list. The till draws areas, seat counts and
+/// grid positions from the published plan ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)),
+/// and until this node was here the only floor anybody — contributor or browser gate — ever saw was
+/// the front end's eight-table fallback, which has none of those. A feature nothing exercises is a
+/// feature nobody notices breaking.
+///
+/// The shape is deliberate: the main hall is a 3 × 2 grid with a **gap** where the walkway is, and
+/// the terrace is a single row. The gap is the point — it is what proves the screen honours the
+/// editor's coordinates rather than merely reflowing in order. Positions are **zero-based**
+/// ([`pos_proto::display::GridPosition`]).
+fn demo_floor() -> serde_json::Value {
+    let table = |id: u128, label: &str, seats: u16, column: u16, row: u16| {
+        serde_json::json!({
+            "table_id": TableId::new(Ulid::from_u128(id)).to_string(),
+            "label": label,
+            "seats": seats,
+            "position": { "column": column, "row": row },
+        })
+    };
+    serde_json::json!({
+        "areas": [
+            {
+                "area_id": AreaId::new(Ulid::from_u128(1)).to_string(),
+                "name": "Main hall",
+                "tables": [
+                    table(201, "1", 2, 0, 0),
+                    table(202, "2", 4, 1, 0),
+                    table(203, "3", 4, 2, 0),
+                    // Column 1 of the second row is the walkway: no table, and the screen must leave
+                    // it empty rather than closing the gap.
+                    table(204, "4", 6, 0, 1),
+                    table(205, "5", 2, 2, 1),
+                ],
+            },
+            {
+                "area_id": AreaId::new(Ulid::from_u128(2)).to_string(),
+                "name": "Terrace",
+                "tables": [
+                    table(206, "6", 4, 0, 0),
+                    table(207, "7", 4, 1, 0),
+                ],
+            },
+        ],
+    })
 }
 
 #[cfg(test)]
@@ -137,6 +190,50 @@ mod tests {
             "a wrong PIN is refused, so the fixture is a roster and not a bypass"
         );
         assert_eq!(session.menu.items().len(), 3, "three items to sell");
+    }
+
+    /// The floor has to arrive as a *room*: named areas, seat counts, and grid positions with the
+    /// walkway gap intact.
+    ///
+    /// This is the fixture's only reason for existing. The till reads areas, seats and positions from
+    /// the published plan (ADR-0072), and before this node the example served none of them — so the
+    /// only floor a contributor or the browser gate ever saw was the front end's flat fallback, and
+    /// every one of those three could have broken without a single check going red.
+    #[test]
+    fn the_demo_document_publishes_a_floor_with_areas_seats_and_positions() {
+        let document = config_document().expect("the fixture hashes its PIN");
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+
+        let areas = session.floor.areas();
+        assert_eq!(areas.len(), 2, "two named areas");
+        assert_eq!(areas[0].name.as_str(), "Main hall");
+        assert_eq!(areas[1].name.as_str(), "Terrace");
+
+        let hall = &areas[0];
+        assert_eq!(hall.tables.len(), 5, "five tables in the hall");
+        assert!(
+            hall.tables.iter().all(|table| table.position.is_some()),
+            "every table is placed, which is what makes the screen draw a grid rather than a list"
+        );
+        assert!(
+            hall.tables.iter().any(|table| table.seats == 6),
+            "a six-top exists, so 'which table seats a party of six' has an answer"
+        );
+
+        // The walkway: row 1 has tables in columns 0 and 2, and nothing in column 1. A screen that
+        // reflowed in order would close this gap, and the room would stop matching the screen.
+        let second_row: Vec<u16> = hall
+            .tables
+            .iter()
+            .filter_map(|table| table.position)
+            .filter(|position| position.row == 1)
+            .map(|position| position.column)
+            .collect();
+        assert_eq!(
+            second_row,
+            vec![0, 2],
+            "the walkway in column 1 is left empty"
+        );
     }
 
     /// Every item the fixture publishes has to be settleable, not merely addable: the bill assembles

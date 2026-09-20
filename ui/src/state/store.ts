@@ -33,6 +33,21 @@ export interface TableCard {
   id: string;
   label: string;
   state: string;
+  // The area the store put this table in ("Terrace", "Bar"), and where it sits in the floor editor's
+  // grid. Both are published (ADR-0072) and both were being dropped on the way in, which is why the
+  // floor was one undifferentiated list in publication order rather than a picture of the room.
+  //
+  // `areaName` is empty for a plan with no areas; `position` is absent for a table nobody placed —
+  // a real state, not an error, and the screen lays those out in reading order instead.
+  areaName: string;
+  seats: number;
+  position?: { column: number; row: number };
+}
+
+// One area of the floor, with its tables in the order they should be drawn.
+export interface FloorArea {
+  name: string;
+  tables: TableCard[];
 }
 
 export interface ShiftInfo {
@@ -98,7 +113,15 @@ const tid = (code: string): string => code.padStart(26, "0");
 // the published plan.
 const DEFAULT_FLOOR: readonly TableCard[] = Array.from({ length: 8 }, (_, index) => {
   const number = index + 1;
-  return { id: tid(`T${number.toString().padStart(2, "0")}`), label: String(number), state: "TABLE_STATE_FREE" };
+  return {
+    id: tid(`T${number.toString().padStart(2, "0")}`),
+    label: String(number),
+    state: "TABLE_STATE_FREE",
+    // No area and no seat count, because the fallback is not a room anybody measured — it is eight
+    // tables so a till that has never synced can still take an order. It draws in reading order.
+    areaName: "",
+    seats: 0,
+  };
 });
 
 // The fallback station a fire/bump carries until the store publishes a station plan (never-blank).
@@ -134,6 +157,30 @@ export function floorTables(): readonly TableCard[] {
   return state.floor;
 }
 
+// The floor grouped the way the store published it, areas in publication order.
+//
+// A plan with no areas — the fallback, or a store that never named one — comes back as a single
+// unnamed group, so the screen has one shape to draw rather than two code paths.
+export function floorAreas(): readonly FloorArea[] {
+  const areas: FloorArea[] = [];
+  for (const table of state.floor) {
+    const last = areas.at(-1);
+    if (last !== undefined && last.name === table.areaName) {
+      last.tables.push(table);
+    } else {
+      areas.push({ name: table.areaName, tables: [table] });
+    }
+  }
+  return areas;
+}
+
+// Whether this area was laid out on the floor editor's grid. Partial placement is treated as no
+// placement: a grid with half its tables pinned and half falling back would put a table somewhere its
+// position does not mean, which is worse than an honest list.
+export function areaIsPlaced(area: FloorArea): boolean {
+  return area.tables.length > 0 && area.tables.every((table) => table.position !== undefined);
+}
+
 // Reads the store's published floor plan and kitchen stations from the edge (ADR-0072) and folds them
 // in: the real tables replace the default grid, and the plan's default station replaces the bootstrap
 // fallback. Forgiving and never-blank — an empty plan or a failed read leaves the fallback in place,
@@ -154,6 +201,11 @@ export async function loadFloor(): Promise<void> {
         id: table.table_id,
         label: table.label,
         state: state.tableState[table.table_id] ?? "TABLE_STATE_FREE",
+        areaName: area.name,
+        // Zero means "not recorded" on the wire, and that is what it stays here: the screen shows a
+        // seat count only where the store gave one, rather than telling a host a table seats nobody.
+        seats: table.seats ?? 0,
+        position: table.position ? { column: table.position.column, row: table.position.row } : undefined,
       });
     }
   }
