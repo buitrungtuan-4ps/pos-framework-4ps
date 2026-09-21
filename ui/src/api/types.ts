@@ -19,6 +19,10 @@ export interface LineRequest {
   tax_rate: Ratio;
   seat?: number;
   course_id?: string;
+  // The modifiers chosen for this line (ADR-0127). The edge validates them against the groups the
+  // item attaches before it writes anything, so an empty list on an item that requires a choice is
+  // a refusal rather than a silent sale.
+  modifier_menu_item_ids: string[];
   note_present: boolean;
 }
 
@@ -112,6 +116,16 @@ export interface FloorResponse {
 // The store's own price book from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Every amount is the
 // edge's, already in the store's currency — the app displays it and hands it straight back on a
 // line, and never computes one of its own.
+// A set of choices with a min/max rule, attached to items (ADR-0127). `min_select >= 1` is what
+// "required" means — there is no second flag, here or in the book.
+export interface ModifierGroup {
+  modifier_group_id: string;
+  display_name: string;
+  min_select: number;
+  max_select: number;
+  member_menu_item_ids: string[];
+}
+
 export interface MenuItemResponse {
   menu_item_id: string;
   display_name: string;
@@ -120,6 +134,9 @@ export interface MenuItemResponse {
   // Absent when the store's rate table has no row for this item's class. That is a configuration
   // error, not a zero rate, so the edge also reports the item unavailable.
   tax_rate?: Ratio | null;
+  // The groups the till must ask about before this item is sold. Ids, not copies: the groups
+  // themselves are listed once on the menu response.
+  modifier_group_ids: string[];
   available: boolean;
 }
 
@@ -138,6 +155,8 @@ export interface MenuResponse {
   // the kitchen board is a destination at all (docs/ui-ux.md §3, §10).
   tables_enabled: boolean;
   kds_enabled: boolean;
+  // Every modifier group any item attaches, listed once — an item names the ones it needs by id.
+  modifier_groups: ModifierGroup[];
   // The payment methods this store accepts, as their wire names, or `null` when nothing is
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.

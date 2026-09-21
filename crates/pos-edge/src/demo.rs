@@ -83,10 +83,14 @@ fn demo_menu() -> MenuBook {
     // The two sizes a Margherita comes in, and one topping. Modifiers are ordinary items with their
     // own prices (ADR-0066 entity 4), which is how a large costs more than a small without a second
     // pricing concept — and why they are in the catalog beside the pizza rather than beside the rule.
+    // A plain item leads, deliberately. The browser gate's "add an item" precondition taps the
+    // *first* item on the grid, and it wants a line rather than a conversation — so the item that
+    // asks a question is not the one a flow reaches by accident. The flow that does want it types
+    // the name first, which the menu search made possible and which costs no tap.
     let catalog = MenuCatalog::new()
-        .with(item(101, "Margherita", 149_000).with_modifier_groups(vec![group(700), group(701)]))
         .with(item(102, "Garden salad", 89_000))
         .with(item(103, "Iced tea", 39_000))
+        .with(item(101, "Margherita", 149_000).with_modifier_groups(vec![group(700), group(701)]))
         // One item with tone marks on it, and it is not decoration. The order screen's menu search
         // folds diacritics so that `dac` reaches this — nobody switches input mode mid-service — and
         // a fixture whose every item was ASCII would leave that fold with no gate over it, the same
