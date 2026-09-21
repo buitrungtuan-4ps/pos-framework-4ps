@@ -337,6 +337,87 @@ pub(crate) struct VoidBillResponse {
     state: &'static str,
 }
 
+/// A discount as a till asks for it: how much, why, and the manager standing at the till for it.
+///
+/// The approval is optional in the shape and required by the act today, exactly as a line void's
+/// is. No store publishes a discount ceiling, so the domain reads the ceiling as zero and every
+/// discount needs `billing.discount.override_ceiling` — but the till sends the same request either
+/// way, and the edge answers `403` when the manager is the missing piece. When a ceiling is
+/// published, a discount under it will start succeeding without one, with no change here.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DiscountRequest {
+    /// How much comes off, in minor units. Never a percentage: `billing.discount.applied` records
+    /// an `amount`, so a percentage would have to be resolved somewhere, and resolving it at the
+    /// till would put the arithmetic on the device that does not own the price book (§14.2).
+    amount: Money,
+    reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+impl DiscountRequest {
+    fn approval(&self) -> Option<Approval> {
+        let code = self.approver_code.clone()?;
+        let pin = self.approver_pin.clone()?;
+        Some(Approval { code, pin })
+    }
+}
+
+/// What the bill comes to once the discount is on it — the edge's own arithmetic, so the till never
+/// subtracts a discount from a total itself and arrives at a different tax.
+#[derive(Debug, Serialize)]
+pub(crate) struct DiscountResponse {
+    subtotal: Money,
+    discount_total: Money,
+    comp_total: Money,
+    tax_total: Money,
+    total_due: Money,
+}
+
+/// `POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).
+pub(crate) async fn discount<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<DiscountRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    if request.amount.amount_minor <= 0 {
+        // Nothing off is not a discount, and a negative one is a way to add to a bill without
+        // selling anything. Both are malformed rather than refused by the domain, in the same
+        // class as a path segment that is not a ULID.
+        return bad_request("a discount is greater than zero");
+    }
+    let approval = request.approval();
+    match edge
+        .discount_bill(
+            actor,
+            bill_id,
+            request.amount,
+            request.reason_code_id,
+            approval.as_ref(),
+        )
+        .await
+    {
+        Ok(totals) => Json(DiscountResponse {
+            subtotal: totals.subtotal,
+            discount_total: totals.discount_total,
+            comp_total: totals.comp_total,
+            tax_total: totals.tax_total,
+            total_due: totals.total_due,
+        })
+        .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
 /// `POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's
 /// managed list (ADR-0115, roadmap B2.2).
 ///
