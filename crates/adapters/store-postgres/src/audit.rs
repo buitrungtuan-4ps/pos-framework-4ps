@@ -319,7 +319,6 @@ impl PostgresAudit {
         let total = window_total(
             &connection,
             &rows,
-            12,
             &format!("SELECT count(*) FROM audit_log WHERE {AUDIT_FILTERS}"),
             &[
                 &tenant_id,

@@ -404,7 +404,6 @@ impl PostgresCatalog {
         let total = window_total(
             &connection,
             &rows,
-            10,
             &format!(
                 "SELECT count(*) FROM catalog_items WHERE tenant_id = $1 AND {CATALOG_ITEM_SEARCH}"
             ),

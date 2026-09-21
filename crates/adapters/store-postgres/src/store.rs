@@ -1173,16 +1173,26 @@ fn encode(error: serde_json::Error) -> PortError {
 /// so the two cannot drift apart. Being a second statement it is a second snapshot, which is the
 /// usual reason to avoid it; here it is harmless, because there are no rows for the count to
 /// disagree with.
+///
+/// **The count is read from the end, not from a counted index.** This took a `count_column` argument
+/// once, and every caller passed a number it had counted by hand against a `*_COLUMNS` constant
+/// defined somewhere else in the crate. Adding a column to one of those constants silently moved the
+/// count one place right, and the paged read then asked PostgreSQL for a `text` column as an `i64` —
+/// which compiles, passes every fake, and fails on the first real connection. `count(*) OVER()` is
+/// appended by the caller, so it is the last column of the window by construction; reading it from
+/// there makes the whole class of mistake unrepresentable rather than merely fixed.
 pub(crate) async fn window_total(
     connection: &Object,
     rows: &[tokio_postgres::Row],
-    count_column: usize,
     count_sql: &str,
     count_params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
 ) -> Result<i64, PortError> {
-    match rows.first() {
-        Some(row) => Ok(row.get::<_, i64>(count_column)),
-        None => Ok(connection
+    // A window row always has at least the count in it, so the `columns > 0` guard cannot fail. It
+    // is a guard rather than a subtraction because the alternative is an underflow, and falling
+    // through to the count query is the right answer for a row that somehow carried nothing.
+    match rows.first().map(|row| (row, row.len())) {
+        Some((row, columns)) if columns > 0 => Ok(row.get::<_, i64>(columns - 1)),
+        _ => Ok(connection
             .query_one(count_sql, count_params)
             .await
             .map_err(unavailable)?
