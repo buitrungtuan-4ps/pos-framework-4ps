@@ -56,7 +56,23 @@ export function Expo() {
             <div class="rounded-token border border-line bg-surface-raised p-4">
               <p class="text-lg font-semibold">{t("common.table", { label: group.label })}</p>
               <ul class="mt-2 flex flex-col gap-1">
-                <For each={group.lines}>{(line) => <li>{line.name}</li>}</For>
+                <For each={group.lines}>
+                  {(line) => (
+                    <li>
+                      {line.name}
+                      {/* The choices, on the same row and dimmed. The pass is checking a plated
+                          table against what was ordered, and "Margherita" alone cannot be checked
+                          against a 30cm. One row rather than the board's list, because the expeditor
+                          is counting dishes and a second line per dish would halve how many fit. */}
+                      <Show when={line.modifiers.length > 0}>
+                        <span class="text-ink-muted" data-outcome="pass-modifiers">
+                          {" "}
+                          · {line.modifiers.join(" · ")}
+                        </span>
+                      </Show>
+                    </li>
+                  )}
+                </For>
               </ul>
               <button
                 type="button"

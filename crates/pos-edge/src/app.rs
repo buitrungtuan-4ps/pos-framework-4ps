@@ -1090,6 +1090,14 @@ pub struct LiveOrderLine {
     /// Whether a station has marked it prepared (`kitchen.ticket.bumped`). Orthogonal to `state`,
     /// and the reason a kitchen display coming online does not re-show tickets already made.
     pub bumped: bool,
+    /// What was chosen for the line (ADR-0127). Ids; the caller names them from its own price book,
+    /// because an order screen and a kitchen board want today's spelling.
+    ///
+    /// Carried for the reason the header gives — *"this read is what a device has instead of the
+    /// events it was not running to hear"* — and it was not: a kitchen display switched on
+    /// mid-service, which is exactly what this read exists for, rebuilt every ticket with no
+    /// modifiers on it, so a cook could not tell a 25cm from a 30cm.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -2956,6 +2964,7 @@ impl<S: EventStore> Edge<S> {
                         line_total: record.line_total,
                         state: record.state,
                         bumped: projection.bumped_lines.contains(&order_line_id),
+                        modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
                     })
                     .collect(),
             })

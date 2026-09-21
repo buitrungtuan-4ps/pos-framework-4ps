@@ -99,6 +99,23 @@ async function addItem(page) {
   await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 }
 
+/**
+ * Adds the one item the store attaches a modifier group to, choosing a size on the way.
+ *
+ * Reached by typing rather than by position, for the same reason the declared flow does: the item
+ * that asks a question is deliberately not first on the grid. The search is cleared afterwards so
+ * the screen a flow continues on is the one it would be on anyway.
+ */
+async function addItemWithAChoice(page) {
+  await page.locator("#menu-search").fill("margherita");
+  await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  await page.locator('[data-step="onItem"]').click();
+  await page.locator('[data-step="chooseModifier"]').first().click();
+  await page.locator('[data-step="confirmItem"]').click();
+  await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+  await page.locator("#menu-search").fill("");
+}
+
 /** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
 async function sendOrder(page) {
   await page.locator('[data-step="fireOrder"]').click();
@@ -167,17 +184,23 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  // The board and the pass both send a line that carries a choice, and both assert the board names
+  // it before the declared tap happens. That assertion is the claim: a fired line consumes the base
+  // recipe **plus one recipe per modifier** (§8), so a screen that shows only "Margherita" is asking
+  // a cook to make something it will not name — and until this flow said so, both screens did.
   "Bump a ticket on the kitchen display": async (page) => {
     await seatTable(page);
-    await addItem(page);
+    await addItemWithAChoice(page);
     await sendOrder(page);
     await navigateTo(page, "/kds");
+    await expect(page.locator('[data-outcome="ticket-modifiers"]').first()).toBeVisible();
   },
   "Run away a course from the expo screen": async (page) => {
     await seatTable(page);
-    await addItem(page);
+    await addItemWithAChoice(page);
     await sendOrder(page);
     await navigateTo(page, "/expo");
+    await expect(page.locator('[data-outcome="pass-modifiers"]').first()).toBeVisible();
   },
   "Open the cash shift with a float": async (page) => {
     await navigateTo(page, "/shift");
@@ -312,6 +335,35 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
 
     // And the cursor is where the next attempt is typed, so recovering costs no tap.
     await expect(page.locator("#signin-pin")).toBeFocused();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A device that was not running when the choice was made still learns it.
+//
+// `GET /api/orders/live` exists for exactly this — its own doc calls it *"what a device has instead
+// of the events it was not running to hear"* — and it carried the item, the quantity, the money and
+// the state, and not what was chosen. So a kitchen display switched on mid-service, a second till
+// joining a table, or any device that reloads, rebuilt every ticket as a bare "Margherita".
+//
+// This is the one case the rest of this file cannot reach: the harness is a single browser session,
+// so every other flow sees the choice through the fan-out event it was there for. A real reload is
+// what throws that away and makes the read answer — which is why this navigates with `page.goto`
+// rather than by clicking, the opposite of the rule `navigateTo` follows for every other flow.
+test("a screen that reloads mid-service still knows what was chosen", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItemWithAChoice(page);
+    await sendOrder(page);
+
+    // Everything this session knew is now gone; what comes back came from the edge.
+    await page.goto(`${edge.baseURL}/kds`);
+    await expect(page.locator('[data-outcome="ticket-modifiers"]').first()).toBeVisible();
+    await expect(page.getByText("+ Size — 25cm")).toBeVisible();
   } finally {
     await edge.stop();
   }

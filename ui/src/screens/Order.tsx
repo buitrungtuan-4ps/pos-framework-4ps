@@ -16,6 +16,7 @@ import {
   floorTables,
   linesForTable,
   loadCheck,
+  modifierNames,
   openBill,
   reasonsFor,
   seatFor,
@@ -322,11 +323,24 @@ export function Order() {
                 {/* A voided line stays on the order, struck through. Removing the row would make a
                     mis-tapped void invisible to the person who made it — the guest is not charged
                     either way, and seeing what was cancelled is how the mistake gets noticed. */}
-                <span
-                  class="flex-1"
-                  classList={{ "line-through text-ink-muted": voided(line) }}
-                >
-                  {line.name}
+                <span class="flex flex-1 flex-col">
+                  <span classList={{ "line-through text-ink-muted": voided(line) }}>
+                    {line.name}
+                  </span>
+                  {/* What was chosen, under the item it was chosen for (ADR-0127). The price already
+                      included it and the caption did not, so this row read "Margherita" whether the
+                      server picked 25cm or 30cm — and a server checking an order back to a guest had
+                      nothing to check against. Struck through with the line, because a voided
+                      line's choices are cancelled with it. */}
+                  <Show when={modifierNames(line).length > 0}>
+                    <span
+                      class="text-sm text-ink-muted"
+                      classList={{ "line-through": voided(line) }}
+                      data-outcome="line-modifiers"
+                    >
+                      {modifierNames(line).join(" · ")}
+                    </span>
+                  </Show>
                 </span>
                 {/* Which seat it was ordered for, on the line that carries it. A line with none is
                     the table's, and says nothing rather than saying "no seat". */}

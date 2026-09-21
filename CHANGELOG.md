@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A line says what was chosen.** The picker (ADR-0127) recorded the modifiers and the price
+  included them — and nothing displayed them. The order list showed "Margherita" whether the server
+  picked 25cm or 30cm, so an order could not be checked back to a guest; the kitchen board and the
+  pass showed the same bare name, to the one person the choice was recorded *for* — a fired line
+  consumes the base recipe **plus one recipe per modifier** (`docs/pos-spec.md` §8), so the cook was
+  being asked to make something no screen would name.
+  - The choices appear under the item on the order screen, under the dish on the kitchen board, and
+    beside it on the pass. A voided line's choices are struck through with it.
+  - **`GET /api/orders/live` carries them.** That read exists to be *"what a device has instead of
+    the events it was not running to hear"*, and it carried the item, the quantity, the money and
+    the state — but not the choice. So a kitchen display switched on mid-service, a second till
+    joining a table, or any screen that reloaded rebuilt every ticket as a bare item name. The field
+    is additive and always present (empty for a line with none), so an older reader is unaffected.
+  - The names are resolved against the store's **current** price book, which is the right rule for a
+    screen showing an open order — the same one `CounterOrderLine` and the kitchen ticket already
+    follow. An id the menu no longer names falls back to the id rather than to a blank, because a
+    silently empty modifier is how the wrong dish gets made.
+
 - **A pizza knows its sizes.** A modifier is already an ordinary catalog item with its own price and
   its own recipe, and a **modifier group** is already a min/max selection rule attached to items
   (ADR-0066 entities 4 and 5). The console has authored both for as long as the catalog has existed,

@@ -52,6 +52,10 @@ export interface LiveLine {
   // Whether a station marked it prepared. Orthogonal to `state`, and what stops a kitchen display
   // re-showing a ticket that was already bumped.
   bumped: boolean;
+  // What was chosen for the line (ADR-0127), as ids. Optional on the type because an edge built
+  // before the field sends none, and a till upgraded ahead of its store must not read `undefined`
+  // as a crash.
+  modifier_menu_item_ids?: string[];
 }
 
 // One open order, table or counter.

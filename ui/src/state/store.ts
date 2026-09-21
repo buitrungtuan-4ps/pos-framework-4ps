@@ -31,6 +31,13 @@ export interface OrderLine {
   // Whose dish it is, when the store assigns seats. Absent means the table, which is every line on
   // a store that does not do seats and every line nobody assigned on one that does.
   seat?: number;
+  // What was chosen when the line was added (ADR-0127). Ids, because that is what the event carries;
+  // `modifierNames` turns them into words against the price book the till already holds.
+  //
+  // `sales.order_line.added` has carried these since the field was added, and this fold dropped them
+  // — so a line read "Margherita" whether the server picked 25cm or 30cm, on the order screen and on
+  // the kitchen board alike. The price was right and the caption said nothing.
+  modifierMenuItemIds: string[];
 }
 
 export interface TableCard {
@@ -302,6 +309,12 @@ function str(source: Record<string, unknown>, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+// A list read off a payload carries whatever the sender put in it, so the elements are checked one
+// by one rather than asserted wholesale.
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
 function asMoney(value: unknown): Money | null {
   const object = record(value);
   if (object === null) {
@@ -450,6 +463,7 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
     return null;
   }
   const seat = payload["seat"];
+  const chosen = payload["modifier_menu_item_ids"];
   return {
     orderLineId,
     orderId,
@@ -458,7 +472,26 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
     lineTotal,
     state: "ORDER_LINE_STATE_ADDED",
     seat: typeof seat === "number" ? seat : undefined,
+    // Absent on every line written before the field existed, and on every device that sends none.
+    // An absent list is no modifiers, which is what the edge means by it too.
+    modifierMenuItemIds: Array.isArray(chosen) ? chosen.filter(isString) : [],
   };
+}
+
+// The words for a line's chosen modifiers, in the order they were added.
+//
+// Resolved against the **live** price book, not a snapshot, and that is the right way round here: an
+// order screen and a kitchen board show an open order, so they want today's spelling — the same rule
+// `CounterOrderLine` and the edge's own `ticket_line` follow. A receipt is the other case and takes
+// the name captured at add time (ADR-0129), because a settled bill must not change.
+//
+// An id the menu does not name falls back to the id rather than to a blank, exactly as the kitchen
+// ticket does: a cook can still match it to a screen, and a silently empty modifier is how the wrong
+// dish gets made.
+export function modifierNames(line: OrderLine): string[] {
+  return line.modifierMenuItemIds.map(
+    (id) => state.menu.find((item) => item.menu_item_id === id)?.display_name ?? id,
+  );
 }
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.
@@ -471,6 +504,9 @@ export interface KitchenLine {
   orderId: string;
   name: string;
   tableLabel: string;
+  // What was chosen, already in words. A board showing only "Margherita" cannot tell a 25cm from a
+  // 30cm, which is the whole reason the edge captures them and the ticket printer prints them.
+  modifiers: string[];
 }
 
 // Every fired line still on an open order, newest tables last — what the kitchen and the pass work
@@ -491,6 +527,7 @@ export function firedLines(): KitchenLine[] {
       orderId: line.orderId,
       name: line.name,
       tableLabel: tableLabel(state.orderTable[line.orderId] ?? ""),
+      modifiers: modifierNames(line),
     }));
 }
 
@@ -586,6 +623,7 @@ export async function addItem(
         lineTotal: item.unit_price,
         state: response.state,
         seat: line.seat,
+        modifierMenuItemIds: modifiers,
       };
     }),
   );
@@ -771,6 +809,9 @@ export async function loadLiveOrders(): Promise<void> {
             quantityMilli: line.quantity.milli,
             lineTotal: line.line_total,
             state: line.state,
+            // `?? []` for an edge that predates the field, not for one that sends an empty list:
+            // both mean the line carries no modifiers, and the till draws the same row either way.
+            modifierMenuItemIds: line.modifier_menu_item_ids ?? [],
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;

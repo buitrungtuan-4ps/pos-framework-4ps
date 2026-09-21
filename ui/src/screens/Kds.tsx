@@ -38,6 +38,17 @@ export function Kds() {
             >
               <span class="text-sm text-ink-muted">{t("common.table", { label: line.tableLabel })}</span>
               <span class="text-xl font-semibold">{line.name}</span>
+              {/* What was chosen, under the dish (ADR-0127). A board showing only "Margherita" could
+                  not tell a 25cm from a 30cm, and the cook is the person the choice was recorded
+                  for: a fired line consumes the base recipe plus one recipe per modifier (§8), so
+                  the kitchen was being asked to make something the screen would not name. Indented
+                  and one size down, so a cook scanning the board still reads *what* before *how* —
+                  the same order the printed ticket uses. */}
+              <Show when={line.modifiers.length > 0}>
+                <ul class="text-base text-ink-muted" data-outcome="ticket-modifiers">
+                  <For each={line.modifiers}>{(modifier) => <li>+ {modifier}</li>}</For>
+                </ul>
+              </Show>
               <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
             </button>
           )}
