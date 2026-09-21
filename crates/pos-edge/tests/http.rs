@@ -90,6 +90,14 @@ async fn the_root_serves_the_embedded_ui() {
         Some("DENY"),
         "assets should carry x-frame-options: DENY"
     );
+    assert_eq!(
+        response
+            .headers()
+            .get("referrer-policy")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-referrer"),
+        "assets should carry referrer-policy: no-referrer"
+    );
 
     let bytes = response
         .into_body()

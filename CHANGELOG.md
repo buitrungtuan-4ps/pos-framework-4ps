@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.
+
 ### Changed
 
 - **`AGENTS.md` §6 now lets the repo owner permit an agent to merge**
