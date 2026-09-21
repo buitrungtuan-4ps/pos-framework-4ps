@@ -96,6 +96,16 @@ interface StoreShape {
   // Whether the store assigns items to seats, from `GET /api/menu`. False until the read lands, so
   // a till that has not synced offers no picker rather than offering one the edge would refuse.
   seatsEnabled: boolean;
+  // What kind of shop this is, from the same read. `docs/ui-ux.md` §3: the store profile decides the
+  // starting screen and the flow — *"same components, different assembly, not three applications"*.
+  //
+  // Both start **true**, which is not the same choice as `seatsEnabled` starting false and is made
+  // for the same reason: these gate what the till *removes*, not what it offers. A till that has not
+  // synced yet must not hide the floor plan from a table-service store on the strength of a read
+  // that has not landed — so the unsynced state is the common profile, and a counter store loses the
+  // floor a moment after its price book arrives.
+  tablesEnabled: boolean;
+  kdsEnabled: boolean;
   // The seat the next items go to, per table. Absent means "the table", which is every line on
   // every store that does not do seats — and the honest default even on one that does, because a
   // server who has not said whose dish it is has not said.
@@ -153,6 +163,8 @@ const [state, setState] = createStore<StoreShape>({
   // than one that waits a moment for the price book.
   tipsEnabled: false,
   seatsEnabled: false,
+  tablesEnabled: true,
+  kdsEnabled: true,
   seatForTable: {},
   acceptedTender: null,
   cashDenominations: null,
@@ -585,6 +597,16 @@ export function seatsEnabled(): boolean {
   return state.seatsEnabled;
 }
 
+/// Whether this store runs table service — the flag the home screen and the floor link read.
+export function tablesEnabled(): boolean {
+  return state.tablesEnabled;
+}
+
+/// Whether fired lines reach a kitchen board here.
+export function kdsEnabled(): boolean {
+  return state.kdsEnabled;
+}
+
 export function tipsEnabled(): boolean {
   return state.tipsEnabled;
 }
@@ -609,6 +631,8 @@ export async function loadMenu(): Promise<void> {
     setState("currency", response.currency);
     setState("tipsEnabled", response.tips_enabled);
     setState("seatsEnabled", response.seats_enabled);
+    setState("tablesEnabled", response.tables_enabled);
+    setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.

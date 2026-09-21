@@ -134,6 +134,10 @@ export interface MenuResponse {
   // counters have no seats — and the edge refuses a seat on a store that has it off, so the till
   // offers the picker only when this is true rather than offering an act that would be refused.
   seats_enabled: boolean;
+  // What this store *is*. `tables_enabled` decides the home screen; `kds_enabled` decides whether
+  // the kitchen board is a destination at all (docs/ui-ux.md §3, §10).
+  tables_enabled: boolean;
+  kds_enabled: boolean;
   // The payment methods this store accepts, as their wire names, or `null` when nothing is
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.

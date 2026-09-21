@@ -44,6 +44,13 @@
 //! `seats_enabled` is the third, and arrived under that rule rather than around it: the seat picker
 //! that reads it ships in the same change.
 //!
+//! `tables_enabled` and `kds_enabled` are the fourth and fifth, and arrive under it too. They are
+//! the two flags that decide what the till *is*: `docs/ui-ux.md` §3 says the store profile decides
+//! the starting screen and the flow — *"same components, different assembly, not three
+//! applications"* — and until these rode here the till had no way to be anything but a
+//! table-service application. It landed every store on a floor plan and offered every store a
+//! kitchen board, including the ones that have neither.
+//!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 
 use std::sync::Arc;
@@ -64,6 +71,22 @@ use pos_proto::{SalesChannel, WireEnum as _, locale::TaxRateTable, text::Display
 use crate::app::Edge;
 
 /// The store's price book, as the in-store UI reads it.
+///
+/// The capability flags are flat and stay flat. `struct_excessive_bools` is a good lint about
+/// *arguments* — four positional bools at a call site is a bug waiting to happen — and this struct
+/// is never constructed positionally: it is serialized, and each flag is named on the wire by a
+/// field a till reads by name. Grouping them under a `capabilities` object is the shape B5.3 will
+/// want when the rest arrive, and it is **not available now**: `tips_enabled` and `seats_enabled`
+/// are already published, and `AGENTS.md` §2 forbids removing or renaming a published field —
+/// nesting them would do exactly that to every till that has not updated yet (ADR-0111's
+/// one-directional version rule is what makes an old device safe, and only while this is additive).
+/// When a sixth flag needs a reader, the answer is a *new* nested object beside these, with these
+/// deprecated rather than moved.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a serialized response whose fields are named on the wire, and whose published flags \
+              cannot be regrouped without removing them — see above"
+)]
 #[derive(Debug, Serialize)]
 pub(crate) struct MenuResponse {
     /// The store's currency — every amount below is in it.
@@ -84,6 +107,19 @@ pub(crate) struct MenuResponse {
     /// add route has accepted it all along, and nothing has ever set it — because the till had no way
     /// to know whether the store wanted to be asked.
     seats_enabled: bool,
+    /// Whether this store runs table service (§10 `Capability::Tables`, **on** by default).
+    ///
+    /// The one flag that decides what the till's home screen is. A counter cafe has no floor plan,
+    /// and `Capability::PayFirst` is declared incompatible with this one in the capability model's
+    /// own validity rules — so a store with it off being shown a room full of tables it does not
+    /// have is not a cosmetic problem, it is the till describing a different shop.
+    tables_enabled: bool,
+    /// Whether fired lines reach a kitchen display (§10 `Capability::Kds`, on by default).
+    ///
+    /// Rides with `tables_enabled` because it answers the same question about the same screen: a
+    /// destination in the status bar that leads to a board this store does not run is an offer the
+    /// store cannot honour, which is the same failure `tips_enabled` was added to stop.
+    kds_enabled: bool,
     /// The payment methods this store accepts, as their wire names, or `None` when the store
     /// restricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).
     ///
@@ -151,6 +187,8 @@ where
             items,
             tips_enabled: session.capabilities.enabled(Capability::Tips),
             seats_enabled: session.capabilities.enabled(Capability::Seats),
+            tables_enabled: session.capabilities.enabled(Capability::Tables),
+            kds_enabled: session.capabilities.enabled(Capability::Kds),
             accepted_tender: session
                 .accepted_tender
                 .as_ref()

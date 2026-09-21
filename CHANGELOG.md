@@ -16,6 +16,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
+  profile decides the starting screen and flow — same components, different assembly, not three
+  applications"*, and §10's capability model has carried the profiles all along: a counter preset, a
+  retail preset, and a validity rule saying `PayFirst` and `Tables` cannot both be on. **The till
+  implemented one profile.** It landed every store on a floor plan and offered every store a kitchen
+  board, including the ones with neither.
+  - `GET /api/menu` publishes **`tables_enabled`** and **`kds_enabled`**, under the rule that
+    module's header sets: a flag joins the response in the change that consumes it.
+  - `/` draws the floor plan where the store does tables and the counter list where it does not.
+    **Home stays `/` on every profile** — what changes is the screen, not the address, because a
+    home that moved per shop would be three applications wearing one name.
+  - The status bar drops the destinations a store has no use for. A link to a kitchen board nobody
+    watches is an offer the store cannot honour, which is the same failure `tips_enabled` was
+    published to stop.
+  - `examples/minimal-edge` publishes the counter profile under **`POS_DEMO_PROFILE=counter`**, so
+    it is something a contributor can run and the browser gate can drive — the same reason the demo
+    turns seats on.
+  - **Still missing, and recorded rather than guessed at:** retail has no barcode screen to start on
+    (`Capability::Barcode` has no reader anywhere in the till, so a retail store lands on the counter
+    with everything else that is not table service); a counter store cannot yet *begin* an order at
+    the till, because the counter list shows orders relayed from the cloud and no command exists for
+    a cashier to open a tableless one; and `pay_first_enabled` and `queue_number_enabled` have no
+    readers either.
+  - **Upgrade note.** None. Both flags default **on**, and the till treats an unsynced read as the
+    table-service profile — so a store that publishes neither behaves exactly as before.
+
 ### Fixed
 
 - **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on
@@ -52,7 +80,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   identity, and that **neither act needs a permission or a manager** — a split partitions money
   already captured and a merge concatenates it, so nothing is created or forgiven. Splitting evenly
   by N is explicitly **not** this and is left to its own record, with the reason: four equal shares
-  of a seven-line bill correspond to no grouping of those seven lines. No code yet.
+  of a seven-line bill correspond to no grouping of those seven lines. Amended after review to
+  answer whether a bill stays traceable through split → merge → split: **`billing.bill.opened`
+  gains `order_line_ids`** (additive), because without it the log recorded which *bills* a split
+  produced and never which *lines* went where — so the property the split event states about
+  itself could not be checked from the store's own log, and a store replaying it could not
+  rebuild which bill owed what. The record now also states that the lineage is acyclic by
+  construction, that a split commits atomically, that undoing one is a new merge rather than a
+  restoration, and that no receipt number is consumed by either act. Two gaps are named rather
+  than implied: the event log is append-only but **not chained** (no sequence, no hash of the
+  previous record), which the strictest cash-register regimes require and which needs its own
+  record; and `order_line_ids` grows with the order. No code yet.
   **Upgrade note:** none — a decision record.
 
 - **The ADR index had stopped being updated.** `docs/adr/README.md` listed records up to 0125 while
@@ -109,6 +147,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   covering it uses a range that needs the *late* bytes to decide (`192.0.2.0/24`), because a wrong
   reading of bytes 2 and 3 usually lands in the same forbidden /8 as the right one and hides the
   bug. **Upgrade note:** none.
+
+### Changed
+
+- **ADR-0127 records how modifier groups reach a store**
+  ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)). The console has authored modifier
+  groups since [ADR-0066](docs/adr/0066-cloud-catalog.md) and nothing carried them down, so a till
+  could record which modifiers a line had but never ask what a pizza's sizes were. The record
+  decides the compiled shape (`MenuCatalog` gains the groups, `MenuEntry` gains the ids of the ones
+  attached to it, both additive and `#[serde(default)]`, no `PROTOCOL_VERSION` bump), that
+  attachment inverts on the way down so a till asks once per tap rather than scanning, that
+  "required" is `min_select >= 1` rather than a second flag, and that the **edge** enforces the
+  selection rule rather than trusting a device to have asked. Nesting and half-and-half
+  (`SPLIT_ITEM`) are explicitly left to their own records, with the reasons. No code yet.
+  **Upgrade note:** none — a decision record.
 
 ### Security
 

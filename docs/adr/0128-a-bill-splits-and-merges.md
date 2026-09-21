@@ -45,6 +45,35 @@ Because the second needs a `pos-proto` enum value, `AGENTS.md` §7 requires this
 
 8. **A resulting bill is an ordinary bill, so splitting again is ordinary.** A table that splits three ways and then finds two of the three want to split again performs two operations, not a special case. Nothing tracks a split "depth".
 
+9. **A bill's line set is recorded in the log, not only in the projection.** `billing.bill.opened` gains `order_line_ids` — additive, on an event that already carries `bill_id` and `order_id`.
+
+   This was missing, and it is the decision this record was amended to add. Without it the log says *which bills* a split produced and never *which lines went into which*, so the property the split event states about itself — *"the parts sum exactly to the original"* — **cannot be checked from the store's own log.** Only a live projection would know, and a projection is a cache. That breaks `AGENTS.md` §1 rule 4 (events are the source of truth) before it breaks anything an auditor cares about: a store replaying its own log after a restart could not rebuild which bill owed what.
+
+   On `bill.opened` rather than on `bill.split`, because a bill covers lines from the moment it exists — decision 1 — and putting the partition on the split event would make the same fact true in two places for bills born two different ways. A merge needs no new field: the target's set is its own plus every absorbed bill's, and both are already in the log.
+
+10. **A split commits as one transaction, and nothing is ever edited.** The resulting bills' `bill.opened` events and the `bill.split` that names them are appended together or not at all, so the log never holds parts whose parent is missing, or a parent whose parts are. And undoing a split is a **new merge**, not a restoration: the source bill stays `SPLIT` for ever. That is the inalterability principle every cash-register regime states in its own words, and it is why the two terminal states of decision 2 are terminal.
+
+**What an auditor can reconstruct, and what they cannot.**
+
+The question this record was amended to answer: *can a bill still be traced through split → merge → split?*
+
+**Yes, forwards, and the chain always terminates.** `SPLIT` and `MERGED` are terminal, so a bill appears as a split's source or a merge's absorbed member **once**. The lineage is therefore a directed acyclic graph by construction — there is no cycle to walk into, and no "depth" to track (decision 8). A merge's *target* stays `OPEN` and may be split later; the log's order tells those apart.
+
+With decision 9, each step is checkable arithmetic rather than a claim:
+
+- a split: the parts' `order_line_ids` partition the source's exactly — no line lost, none duplicated, none invented;
+- a merge: the target's set afterwards is the union of its own and the absorbed bills';
+- either way the money follows, because a line's amount was captured when it was added (§14.2) and no reduction moves between bills.
+
+**Backwards is a scan, not a link, and that is accepted.** Given a bill, "what was I split from?" is answered by searching the `bill.split` events for one naming it. A `parent_bill_id` on `bill.opened` would make it a link, and is deliberately not added: it would be a second encoding of a fact the split event already carries, and the two could disagree. An audit reads a log in order; it does not need random access.
+
+**No receipt number is consumed by either act.** A number is allocated at settle and only at settle (ADR-0025), so the store's gapless sequence is untouched by any amount of splitting. This is the property a tax audit actually tests, and it is the reason splitting is not a revenue-suppression route: the parts each settle, each takes its own number, and the numbers have no gaps.
+
+**Two things this record does not fix, named rather than implied.**
+
+- **The event log is append-only but not *chained*.** `EventEnvelope` carries an id, a timestamp, a business date and a schema version — no sequence number and no hash of the previous record. France's NF525, Germany's KassenSichV/DSFinV-K, Austria's RKSV and Portugal's SAF-T PT all require chaining precisely so that a *deleted* record is detectable, and this log would not detect one. That is a property of the whole log rather than of splitting, it touches every event and the sync protocol, and folding it in here would be the speculative widening `AGENTS.md` §2 forbids. **It needs its own record.** It is also not what Vietnam's Decree 123/2020 and Circular 78/2021 or Japan's qualified-invoice system ask for — both put their integrity requirement at the *invoice*, which ADR-0025 and [ADR-0005](0005-country-neutral-core.md) already place behind the country module — so this is a gap against the strictest regimes rather than against the two this product trades in.
+- **`order_line_ids` on `bill.opened` grows with the order.** A bill covering a hundred-line banquet carries a hundred ULIDs. Accepted: the alternative is deriving it, and a derivation is exactly what decision 9 exists to stop.
+
 **Consequences accepted.**
 
 - **The projection grows.** Each bill carries its line set, and the replay fold gains `billing.bill.split` and `billing.bill.merged`. A store replaying its own log reconstructs which bill owed what — which it could not do before, because the answer was inferred from the order.
