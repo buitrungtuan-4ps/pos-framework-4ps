@@ -36,10 +36,13 @@
 //! signed in on this device*, which is per-device identity with a per-sign-in lifetime, and hanging
 //! store-wide published configuration off it would conflate the two.
 //!
-//! **Only these two.** The session carries ten capability flags and the till could be handed all of
-//! them; nine would arrive with no reader, which is the failure this repository has shipped
-//! repeatedly (`docs/roadmap-v3.md` Cadence). A flag joins this response in the change that consumes
-//! it, and B5.3 is where the rest arrive with their gates.
+//! **Only what has a reader.** The session carries ten capability flags and the till could be handed
+//! all of them; the rest would arrive with no reader, which is the failure this repository has
+//! shipped repeatedly (`docs/roadmap-v3.md` Cadence). A flag joins this response in the change that
+//! consumes it, and B5.3 is where the rest arrive with their gates.
+//!
+//! `seats_enabled` is the third, and arrived under that rule rather than around it: the seat picker
+//! that reads it ships in the same change.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 
@@ -73,6 +76,14 @@ pub(crate) struct MenuResponse {
     /// The till shows no tip entry when this is false, which is the difference between a guest being
     /// offered something the edge will refuse and the action simply not being there.
     tips_enabled: bool,
+    /// Whether this store assigns items to seats (§10 `Capability::Seats`, authored on the
+    /// `capabilities` node, and **off by default** — most counters have no seats to speak of).
+    ///
+    /// Joins this response in the change that consumes it, which is the rule this module's header
+    /// sets: `seat` has ridden `sales.order_line.added` and `LineDraft` since they were written, the
+    /// add route has accepted it all along, and nothing has ever set it — because the till had no way
+    /// to know whether the store wanted to be asked.
+    seats_enabled: bool,
     /// The payment methods this store accepts, as their wire names, or `None` when the store
     /// restricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).
     ///
@@ -139,6 +150,7 @@ where
             currency: session.currency,
             items,
             tips_enabled: session.capabilities.enabled(Capability::Tips),
+            seats_enabled: session.capabilities.enabled(Capability::Seats),
             accepted_tender: session
                 .accepted_tender
                 .as_ref()

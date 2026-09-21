@@ -16,6 +16,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **A line can say whose dish it is.** `seat` has ridden `sales.order_line.added` and `LineDraft`
+  since they were written, and `POST /api/tables/{id}/lines` has accepted it all along. Nothing ever
+  set it, because the till had no way to know whether the store wanted to be asked.
+  - `GET /api/menu` now publishes **`seats_enabled`** (§10 `Capability::Seats`), under the rule that
+    module's own header sets: a capability flag joins the response in the change that consumes it,
+    never before. The seat picker that reads it ships here too.
+  - **The edge refuses a seat where the store does not do seats.** The capability is off by default —
+    most counters have no seats — and a flag nothing enforces is decoration: a device that asked
+    anyway would write a seat into the log of a store that never seated anybody, and the by-seat
+    split that reads it later would find guests at a table that has none. A line with **no** seat is
+    untouched, which is every line on every store with this off.
+  - The picker offers seats `1..N` from the capacity the store published for that table, shows the
+    seat on each line it applies to, and is **sticky** — a server orders a whole seat's worth at
+    once, so asking per item would cost a tap per dish. Tapping the chosen seat again clears it,
+    which is how "this one is for the table" is said without a second control.
+  - `examples/minimal-edge` turns seats on, so the picker is exercised by the browser gate rather
+    than shipping as a dark corner.
+  - **Upgrade note.** None. A store that has not enabled `seats_enabled` sees no picker and behaves
+    exactly as before.
+
 ### Security
 
 - **A NAT64 local-use address could still smuggle a forbidden IPv4 past the webhook SSRF filter.**
