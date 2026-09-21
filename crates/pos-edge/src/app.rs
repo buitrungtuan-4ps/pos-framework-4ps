@@ -800,6 +800,15 @@ pub enum AppError {
     /// would send an operator to the wrong row.
     #[error("that reason code is not valid for voiding")]
     VoidReasonNotValid,
+
+    /// The modifiers a line names break a group's selection rule, or belong to no group the item
+    /// attaches ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    ///
+    /// The edge checks this rather than trusting the device to have asked. A required choice a till
+    /// that forgot to ask can skip is required in name only, and the money is already wrong by the
+    /// time the kitchen reads the ticket — the line was priced without the size it was sold at.
+    #[error("the modifiers on that line break the item's selection rules")]
+    ModifierSelectionInvalid,
 }
 
 /// A manager's step-up authorisation for one act (`docs/pos-spec.md` §9, §11.4).
@@ -2570,12 +2579,63 @@ impl<S: EventStore> Edge<S> {
         self.lock_projection().line(order_line_id).map(|r| r.state)
     }
 
+    /// Whether a line's chosen modifiers satisfy every group its item attaches (ADR-0127).
+    ///
+    /// Two different mistakes, checked separately because they send an operator to two different
+    /// places: a **group's rule broken** (no size chosen on a pizza that needs one, three toppings
+    /// where two is the maximum), and a **modifier that belongs to no attached group** — a device
+    /// sending an arbitrary item id as a modifier, which would otherwise be charged for and made.
+    ///
+    /// A store that has published no groups reaches the empty loop and the empty difference, so
+    /// every line on it costs one lookup that finds nothing. That is the common case today and it
+    /// stays free.
+    fn check_modifiers(session: &EdgeSession, draft: &LineDraft) -> Result<(), AppError> {
+        let groups = session.menu.groups_for(draft.menu_item_id);
+        // **An item that attaches no group is unconfigured, not empty-handed.** `add_line` has
+        // accepted `modifier_menu_item_ids` since long before groups existed, and every store is
+        // publishing none today — so enforcing "a modifier must be offered by a group" here would
+        // refuse lines that work now, on every store, until the console got round to attaching one.
+        // The edge checks what has been published and nothing else; the pos-edge suite caught this
+        // by failing `a_fired_line_consumes_its_modifier_recipe_as_well_as_the_base`, which prices
+        // a modifier on a catalogue with no groups in it at all.
+        if groups.is_empty() {
+            return Ok(());
+        }
+        for group in &groups {
+            if !group.satisfied_by(&draft.modifier_menu_item_ids) {
+                return Err(AppError::ModifierSelectionInvalid);
+            }
+        }
+        // Once an item *does* attach groups, every modifier on it must come from one of them.
+        // Without this a line could name any item id at all — a device's typo, or worse — and the
+        // kitchen would be told to add it and the guest charged for it.
+        let offered = |chosen: &MenuItemId| {
+            groups
+                .iter()
+                .any(|group| group.member_menu_item_ids.contains(chosen))
+        };
+        if !draft.modifier_menu_item_ids.iter().all(offered) {
+            return Err(AppError::ModifierSelectionInvalid);
+        }
+        Ok(())
+    }
+
     /// Adds a line to the order the table holds (`sales.order_line.added`).
     ///
     /// Adding a line is not a state-machine transition and needs no permission; it records what the
     /// device captured. A new line starts [`OrderLineState::Added`].
     ///
-    /// **A seat is the one thing checked**, because it is the one thing here a store can turn off.
+    /// **The modifiers are checked**, and the device is not trusted to have asked (ADR-0127
+    /// decision 5). A line names `modifier_menu_item_ids`; the item it names attaches zero or more
+    /// groups, each with a `min_select`/`max_select` rule. A selection that breaks one — or that
+    /// names a modifier belonging to no group this item attaches — is refused. A required choice a
+    /// till that forgot to ask can skip is required in name only, and by the time the kitchen reads
+    /// the ticket the line has already been priced without the size it was sold at.
+    ///
+    /// A line naming no modifiers on an item attaching no groups is every line on every store that
+    /// has published none, and costs it a lookup that finds nothing.
+    ///
+    /// **A seat is the other thing checked**, because it is the one thing here a store can turn off.
     /// `Capability::Seats` is off by default — most counters have no seats — and a flag nothing
     /// enforces is decoration: a device that asked for a seat anyway would write one into the log of
     /// a store that does not do seats, and the by-seat split that reads it later would find guests at
@@ -2585,7 +2645,8 @@ impl<S: EventStore> Edge<S> {
     /// # Errors
     ///
     /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::Domain`] if the line
-    /// names a seat and the store does not do seats, or [`AppError`] if the store cannot be written.
+    /// names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if the
+    /// modifiers break the item's rules, or [`AppError`] if the store cannot be written.
     pub async fn add_line(
         &self,
         actor: Actor,
@@ -2596,6 +2657,7 @@ impl<S: EventStore> Edge<S> {
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
+        Self::check_modifiers(&self.session(), &draft)?;
         let order_id = self
             .lock_projection()
             .order_for_table(table_id)
@@ -4075,6 +4137,7 @@ mod tests {
             display_name_translations: BTreeMap::new(),
             unit_price: vnd(150_000),
             tax_class_id: EdgeSession::standard_tax_class(),
+            modifier_group_ids: Vec::new(),
             available: true,
         });
         Edge::new(

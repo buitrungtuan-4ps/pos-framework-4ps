@@ -26,10 +26,12 @@
 //! fixture that took one would stop proving that the published-config path works, which is the whole
 //! value of running the example.
 
+use std::collections::BTreeMap;
+
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, TableId};
-use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
+use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, ModifierGroupId, TableId};
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -68,6 +70,8 @@ fn table_service() -> bool {
 
 fn demo_menu() -> MenuBook {
     let tax_class = EdgeSession::standard_tax_class();
+    let menu_item = |id: u128| MenuItemId::new(Ulid::from_u128(id));
+    let group = |id: u128| ModifierGroupId::new(Ulid::from_u128(id));
     let item = |id: u128, name: &str, price: i64| {
         MenuEntry::new(
             MenuItemId::new(Ulid::from_u128(id)),
@@ -76,8 +80,11 @@ fn demo_menu() -> MenuBook {
             tax_class,
         )
     };
+    // The two sizes a Margherita comes in, and one topping. Modifiers are ordinary items with their
+    // own prices (ADR-0066 entity 4), which is how a large costs more than a small without a second
+    // pricing concept — and why they are in the catalog beside the pizza rather than beside the rule.
     let catalog = MenuCatalog::new()
-        .with(item(101, "Margherita", 149_000))
+        .with(item(101, "Margherita", 149_000).with_modifier_groups(vec![group(700), group(701)]))
         .with(item(102, "Garden salad", 89_000))
         .with(item(103, "Iced tea", 39_000))
         // One item with tone marks on it, and it is not decoration. The order screen's menu search
@@ -89,7 +96,29 @@ fn demo_menu() -> MenuBook {
         // letter and two combining marks; `đ` decomposes into nothing at all, because it is its own
         // letter rather than `d` with a mark on it. Those are the two cases the fold has to handle
         // separately, and `đặc` is one syllable carrying both.
-        .with(item(104, "Phở bò đặc biệt", 99_000));
+        .with(item(104, "Phở bò đặc biệt", 99_000))
+        .with(item(201, "Size — 25cm", 0))
+        .with(item(202, "Size — 30cm", 40_000))
+        .with(item(210, "Extra cheese", 25_000))
+        // One required group and one optional, because the pair is what makes the rule visible: a
+        // pizza cannot be sold without a size, and can be sold without cheese. A demo with only the
+        // optional one would ship a picker no contributor and no browser gate ever had to satisfy.
+        .with_modifier_group(MenuModifierGroup {
+            modifier_group_id: group(700),
+            display_name: DisplayName::new("Size"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 1,
+            max_select: 1,
+            member_menu_item_ids: vec![menu_item(201), menu_item(202)],
+        })
+        .with_modifier_group(MenuModifierGroup {
+            modifier_group_id: group(701),
+            display_name: DisplayName::new("Extras"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 0,
+            max_select: 1,
+            member_menu_item_ids: vec![menu_item(210)],
+        });
     MenuBook::new()
         .with(SalesChannel::DineIn, catalog.clone())
         .with_fallback(catalog)

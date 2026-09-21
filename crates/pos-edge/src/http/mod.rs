@@ -420,6 +420,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::NotAwaitingStaffConfirmation
         | AppError::ReasonCodeNotValid
         | AppError::VoidReasonNotValid
+        | AppError::ModifierSelectionInvalid
         | AppError::AlreadyFired => (StatusCode::CONFLICT, error.to_string()).into_response(),
         // A missing or refused manager PIN is an authorisation failure, not a state conflict: the
         // command is well-formed and applies to the record, and the only thing missing is the
