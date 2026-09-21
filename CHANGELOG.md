@@ -22,6 +22,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Improve WAI-ARIA breadcrumb accessibility and semantics.** Refactored breadcrumb component in `dashboard/src/components/Shell.tsx` to use WAI-ARIA compliant `<ol>` and `<li>` elements and added `aria-current="page"` attribute to the active screen item.
+
 - **`AGENTS.md` §6 now lets the repo owner permit an agent to merge**
   ([ADR-0126](docs/adr/0126-when-an-agent-may-merge.md)). The rule was "A human merges. Always."; it
   now carries an exception the owner grants, per session. What the exception does **not** touch is
