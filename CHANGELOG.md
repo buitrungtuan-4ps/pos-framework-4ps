@@ -18,6 +18,48 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A failed replay says which flow failed.** Both browser gates reported a failure only into the
+  job log, and for `console-replay` that is the one place it cannot be read: the runner dumps the
+  Postgres service container's output at teardown, thousands of lines of it, so the failing
+  assertion ends up far above the end of the log and anything reading the tail sees database chatter
+  instead. Twice in this run of work a red `console-replay` had to be diagnosed by reproducing it
+  locally, because the log could not say what broke.
+  - Both harnesses now also write Playwright's **JSON report**, and on a failure CI turns it into the
+    **job summary** — the failing flow, its locator and the expectation — which is its own surface
+    and survives whatever the log carries.
+  - The Postgres noise is **expected and is now silenced at the source**. `store-postgres` recycles
+    every pooled connection with `ROLLBACK`, which is load-bearing (a `PgTx` dropped without commit
+    or rollback would otherwise hand the next caller a connection inside a leaked transaction), and
+    its own comment already says the no-op case costs "a warning, not an error". That is true once;
+    a browser suite makes thousands. The job tells the server not to log it. An `ERROR` still is.
+  - **The flake itself is not fixed, because it has not been reproduced.** Fifteen consecutive local
+    runs of the console suite passed. Both CI failures were on hosted runners with no diagnosis
+    available — which is the thing this change fixes, rather than the flake.
+- **A discount ceiling somebody can publish.** `billing.discount.apply` is granted to a **server**,
+  is not PIN-flagged, and its own description says *"apply a discount up to the role's configured
+  ceiling"* — and there was nowhere to configure one. The only thing bounding a permission a server
+  holds without a PIN did not exist, so the edge read its absence as **zero** and every discount in
+  the country needed a manager's PIN. This is the field that reading was waiting for.
+  - **On the role, not the person.** A tenant's *Cashier* is one policy rather than forty, which is
+    what the permission's own wording says and how the audit trail reads afterwards. The console's
+    role form takes it; the cloud compiles it onto each assigned person in the `permissions` node,
+    beside the permissions it already flattens there for the same reason.
+  - **Nothing changes for a store that sets none.** The field is additive, absent on the wire when
+    unset, and an absent ceiling still reads as zero — so a store that upgrades and configures
+    nothing behaves exactly as it does today.
+  - **`None` and `0` are kept apart.** Both mean no discount goes through without a manager, and they
+    are different statements: the first is an absence, the second is a tenant saying this role
+    discounts nothing. A console that could not tell them apart would have to invent a number the
+    operator never typed.
+  - **`security.permission.overridden` now carries the real excess.** With no ceiling the whole
+    discount was over it, so `exceeded_by` and the amount were the same number and the field could
+    not be wrong. With one published they differ, and an auditor asking how far past the allowance a
+    manager went gets that figure rather than the total.
+  - Refused negative at the route **and** at the column: the domain compares `ceiling - amount`, so a
+    negative ceiling would make a discount of nothing an override.
+  - **Still not built, and named rather than omitted:** the *percentage* discount ceiling and the
+    price-override ceiling that `docs/pos-spec.md` §9 lists beside this one. Each needs its own field
+    and its own comparison, and neither is served by pretending this one covers it.
 - **A bill splits and merges** ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)).
   `billing.bill.split` and `billing.bill.merged` were defined in `pos-proto`, with their exact
   shapes, since the schema was written, and **nothing ever emitted either**. A table of six who

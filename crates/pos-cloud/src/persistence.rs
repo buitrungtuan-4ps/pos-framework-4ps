@@ -3547,6 +3547,7 @@ fn role_template_record(
             tenant_id,
             name: row.name,
             permissions,
+            discount_ceiling_minor: row.discount_ceiling_minor,
             status: EntityStatus::from_db(&row.status),
         },
         version,
@@ -3563,6 +3564,7 @@ impl RoleTemplateStore for PostgresPeople {
             &template.tenant_id.to_string(),
             &template.name,
             &permissions_json,
+            template.discount_ceiling_minor,
         )
         .await
         .map(Version::new)
@@ -3606,6 +3608,7 @@ impl RoleTemplateStore for PostgresPeople {
             &template.name,
             &permissions_json,
             template.status.as_str(),
+            template.discount_ceiling_minor,
             expected.as_str(),
         )
         .await

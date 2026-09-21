@@ -16,7 +16,9 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   forbidOnly: Boolean(process.env["CI"]),
-  reporter: [["list"]],
+  // `list` for a person watching the run; `json` so a failure can be read back without scrolling
+  // — CI turns it into the job summary, where it survives whatever else the log carries.
+  reporter: [["list"], ["json", { outputFile: "test-results/report.json" }]],
   // Generous, because each test boots a fresh edge (a second or two) before it taps anything. It is
   // not a performance assertion: ADR-0109 deliberately asserts no timing, because "fast enough" on a
   // shared runner is a number about the runner.

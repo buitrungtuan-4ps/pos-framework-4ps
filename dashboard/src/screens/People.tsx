@@ -91,6 +91,10 @@ export function People() {
   const [roleDraftEtag, setRoleDraftEtag] = createSignal("");
   const [roleName, setRoleName] = createSignal("");
   const [rolePermissions, setRolePermissions] = createSignal<string[]>([]);
+  // Held as the typed text, not a number, so an empty box and a typed `0` stay apart: the first is
+  // "no ceiling configured" and the second is "this role discounts nothing". Both mean a manager is
+  // needed today, and they are different things to have said.
+  const [roleCeiling, setRoleCeiling] = createSignal("");
 
   // Assign form (store from the top-bar context).
   const [assignEmployee, setAssignEmployee] = createSignal("");
@@ -262,6 +266,7 @@ export function People() {
     setRoleDraftEtag("");
     setRoleName("");
     setRolePermissions([]);
+    setRoleCeiling("");
     setRoleOpen(true);
   };
   const openEditRole = (role: RoleTemplate) => {
@@ -269,6 +274,11 @@ export function People() {
     setRoleDraftEtag(role.etag);
     setRoleName(role.name);
     setRolePermissions([...role.permissions]);
+    setRoleCeiling(
+      role.discount_ceiling_minor === undefined || role.discount_ceiling_minor === null
+        ? ""
+        : String(role.discount_ceiling_minor),
+    );
     setRoleOpen(true);
   };
   const togglePermission = (id: string, on: boolean) => {
@@ -277,10 +287,35 @@ export function People() {
     );
   };
 
+  /**
+   * The typed ceiling as the wire wants it, or an error key when it is not a figure.
+   *
+   * An empty box is `null` — no ceiling configured — and is the only way to say that. Everything
+   * else must be a whole, non-negative number of minor units: money is an integer here as it is
+   * everywhere, and a negative ceiling would make a discount of nothing an override.
+   */
+  const parsedCeiling = ():
+    | { value: number | null }
+    | { error: "people.roleCeilingInvalid" } => {
+    const typed = roleCeiling().trim();
+    if (typed === "") {
+      return { value: null };
+    }
+    if (!/^\d+$/.test(typed)) {
+      return { error: "people.roleCeilingInvalid" };
+    }
+    return { value: Number(typed) };
+  };
+
   const saveRole = async () => {
     const name = roleName().trim();
     if (!name) {
       setError(t("people.roleNameRequired"));
+      return;
+    }
+    const ceiling = parsedCeiling();
+    if ("error" in ceiling) {
+      setError(t(ceiling.error));
       return;
     }
     setBusy(true);
@@ -292,13 +327,14 @@ export function People() {
           {
             name,
             permissions: rolePermissions(),
+            discountCeilingMinor: ceiling.value,
             status: "active",
           },
           roleDraftEtag(),
         );
         toast.ok(t("people.roleUpdated"));
       } else {
-        await api.createRole(tenantId(), name, rolePermissions());
+        await api.createRole(tenantId(), name, rolePermissions(), ceiling.value);
         toast.ok(t("people.roleCreated"));
       }
       setRoleOpen(false);
@@ -319,6 +355,9 @@ export function People() {
         {
           name: role.name,
           permissions: [...role.permissions],
+          // Carried through unchanged: archiving is a status change, and a PATCH that left this out
+          // would quietly wipe a ceiling somebody configured.
+          discountCeilingMinor: role.discount_ceiling_minor ?? null,
           status: role.status === "archived" ? "active" : "archived",
         },
         role.etag,
@@ -867,6 +906,13 @@ export function People() {
               value={roleName()}
               onInput={setRoleName}
               placeholder={t("people.roleNamePlaceholder")}
+            />
+            <TextField
+              label={t("people.roleCeiling")}
+              value={roleCeiling()}
+              onInput={setRoleCeiling}
+              placeholder={t("people.roleCeilingPlaceholder")}
+              hint={t("people.roleCeilingCaption")}
             />
             <FormField label={t("people.permissions")}>
               <div class="flex flex-col gap-4">

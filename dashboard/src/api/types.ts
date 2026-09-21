@@ -1447,6 +1447,15 @@ export interface RoleTemplate {
   readonly tenant_id: string;
   readonly name: string;
   readonly permissions: readonly string[];
+  /**
+   * How much this role may discount before it needs a manager, in the currency's minor unit.
+   *
+   * `billing.discount.apply` is granted without a PIN and its description says "up to the role's
+   * configured ceiling"; absent means none is configured, which the edge reads as **zero** — every
+   * discount then needs a manager. Absent and `0` land in the same place and are different
+   * statements, which is why this is nullable rather than defaulted.
+   */
+  readonly discount_ceiling_minor?: number | null;
   readonly status: EntityStatus;
   readonly etag: ETag;
 }

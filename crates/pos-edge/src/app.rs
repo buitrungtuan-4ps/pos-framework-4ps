@@ -147,6 +147,14 @@ pub struct StaffAuth {
     pub employee_id: Option<EmployeeId>,
     /// What the person's role grants (§9).
     pub permissions: PermissionSet,
+    /// How much they may discount before it needs a manager, from their role's configured ceiling
+    /// (ADR-0070's `permissions` node).
+    ///
+    /// `None` is "no ceiling configured", which `decide_bill` reads as **zero** — every discount
+    /// then needs `billing.discount.override_ceiling` and a manager's PIN. That is what every store
+    /// carries today, and the day a tenant sets one a server's small discount goes through with no
+    /// code change.
+    pub discount_ceiling: Option<Money>,
     /// The Argon2id PHC hash of their PIN, or `None` if none is set (they cannot sign in until one is).
     pub pin_phc: Option<String>,
 }
@@ -190,10 +198,29 @@ impl StaffRoster {
     /// does not know grants nothing.
     #[must_use]
     pub fn permissions_for(&self, employee_id: EmployeeId) -> Option<PermissionSet> {
+        self.member(employee_id).map(|auth| auth.permissions)
+    }
+
+    /// What a signed-in person may discount before it needs a manager, or `None` when their role
+    /// configures no ceiling — which the domain reads as zero.
+    ///
+    /// The two `None`s here mean the same thing on purpose: a person the roster does not know and a
+    /// person whose role sets no ceiling both discount nothing without a manager. An identity that
+    /// grants no permissions cannot be handed an allowance.
+    #[must_use]
+    pub fn discount_ceiling_for(&self, employee_id: EmployeeId) -> Option<Money> {
+        self.member(employee_id)
+            .and_then(|auth| auth.discount_ceiling)
+    }
+
+    /// The published member acting as `employee_id`, if the roster knows one.
+    ///
+    /// A linear scan over a store's staff is the right cost: a roster is tens of people, and the
+    /// alternative is a second index to keep in step with the published node.
+    fn member(&self, employee_id: EmployeeId) -> Option<&StaffAuth> {
         self.by_code
             .values()
             .find(|auth| auth.employee_id == Some(employee_id))
-            .map(|auth| auth.permissions)
     }
 
     /// How many staff the roster holds.
@@ -2707,6 +2734,10 @@ impl<S: EventStore> Edge<S> {
         let (discount, comp) = bill.reductions(session.currency);
         let applied = discount.checked_add(comp).map_err(DomainError::from)?;
 
+        // What this person may discount on their own, read from the roster the cloud published. Read
+        // *before* the step-up, because it is what decides whether a step-up was needed at all.
+        let ceiling = session.staff.discount_ceiling_for(actor.employee_id);
+
         // The step-up is attempted only when the till sent one, exactly as a line void does: the
         // till does not have to know the ceiling rule, and the domain answers with the permission
         // that was missing when it needed one and none came.
@@ -2726,8 +2757,9 @@ impl<S: EventStore> Edge<S> {
                 amount,
                 applied,
                 reducible,
-                // No store publishes one. See the header.
-                ceiling: None,
+                // The acting person's, from their role (ADR-0070's `permissions` node). `None` for a
+                // role that configures none, which the domain reads as zero — see the header.
+                ceiling,
                 pin_verified: approver.is_some(),
             },
             &ctx,
@@ -2749,11 +2781,19 @@ impl<S: EventStore> Edge<S> {
         let mut envelopes = vec![event_envelope];
         let mut messages = vec![event_message];
         if let Some(approver) = approver {
-            // `exceeded_by` finally carries a figure. With no ceiling published the whole amount is
-            // over it, which is the honest number: a void's override has none because a void is not
-            // an amount at all, and that asymmetry is the point of the field.
-            let record =
-                Self::override_record(Permission::OverrideDiscountCeiling, approver, Some(amount));
+            // `exceeded_by` carries how far over the ceiling this went: the whole amount when the
+            // role configures none (the ceiling is zero, so all of it is over), and the difference
+            // when it does. A void's override carries no figure at all because a void is not an
+            // amount over anything, and that asymmetry is the point of the field.
+            let exceeded_by = match ceiling {
+                Some(ceiling) => amount.checked_sub(ceiling).map_err(DomainError::from)?,
+                None => amount,
+            };
+            let record = Self::override_record(
+                Permission::OverrideDiscountCeiling,
+                approver,
+                Some(exceeded_by),
+            );
             let (envelope, message) = self.prepare(&ctx, &record)?;
             envelopes.push(envelope);
             messages.push(message);

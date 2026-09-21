@@ -16236,6 +16236,7 @@ impl RoleTemplateStore for FakeRoleTemplates {
                 tenant_id: template.tenant_id,
                 name: template.name.clone(),
                 permissions: template.permissions.clone(),
+                discount_ceiling_minor: None,
                 status: EntityStatus::Active,
             },
             version.clone(),
@@ -16404,6 +16405,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 "billing.discount.apply".to_owned(),
                 "sales.item.open".to_owned(),
             ],
+            discount_ceiling_minor: None,
         })
         .await
         .expect("create cashier");
@@ -16414,6 +16416,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
             tenant_id: other,
             name: "Cashier".to_owned(),
             permissions: vec![],
+            discount_ceiling_minor: None,
         })
         .await
         .expect("another tenant's Cashier");
@@ -16424,6 +16427,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 tenant_id: mine,
                 name: "Cashier".to_owned(),
                 permissions: vec![],
+                discount_ceiling_minor: None,
             })
             .await
             .is_err(),
@@ -16443,6 +16447,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                     tenant_id: mine,
                     name: "Cashier".to_owned(),
                     permissions: vec!["sales.item.open".to_owned()],
+                    discount_ceiling_minor: None,
                     status: EntityStatus::Archived,
                 },
                 &listed[0].etag,
@@ -17937,6 +17942,7 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
             tenant_id: mine,
             name: "Cashier".to_owned(),
             permissions: vec!["billing.discount.apply".to_owned()],
+            discount_ceiling_minor: None,
         },
     )
     .await
@@ -20716,6 +20722,7 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
             tenant_id: mine,
             name: "Cashier".to_owned(),
             permissions: vec!["billing.discount.apply".to_owned()],
+            discount_ceiling_minor: None,
         },
     )
     .await

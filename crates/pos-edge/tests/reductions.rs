@@ -49,6 +49,9 @@ use pos_proto::ulid::Ulid;
 const SALT: &[u8] = b"a-fixed-test-slt";
 
 const MANAGER_CODE: &str = "MGR-1";
+
+/// The server's own badge code, so a ceiling can be published against their identity.
+const SERVER_CODE: &str = "SRV-1";
 const MANAGER_PIN: &str = "4417";
 
 /// The signed-in server. They hold `ApplyDiscount` — which every server role does by default — and
@@ -136,6 +139,7 @@ fn session() -> EdgeSession {
         StaffAuth {
             employee_id: Some(manager_id()),
             permissions: PermissionSet::EMPTY.with(Permission::OverrideDiscountCeiling),
+            discount_ceiling: None,
             pin_phc: Some(hash_of(MANAGER_PIN)),
         },
     );
@@ -147,11 +151,35 @@ fn session() -> EdgeSession {
     session
 }
 
+/// The same store, with a ceiling published for the server's role — what a tenant that has
+/// configured one looks like.
+///
+/// Added to the roster under the server's own code, because the roster is keyed by the badge code a
+/// person types and the ceiling is looked up by the identity their session carries. `permissions`
+/// stays what it was: the point is that the *ceiling* is what changed, not what they are granted.
+fn session_with_a_server_ceiling(ceiling: Money) -> EdgeSession {
+    let mut session = session();
+    session.staff.insert(
+        SERVER_CODE,
+        StaffAuth {
+            employee_id: Some(server().employee_id),
+            permissions: PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            discount_ceiling: Some(ceiling),
+            pin_phc: Some(hash_of("0000")),
+        },
+    );
+    session
+}
+
 fn edge_over(store: FakeStore) -> Edge<FakeStore> {
+    edge_with(store, session())
+}
+
+fn edge_with(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
     Edge::new(
         store,
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(1))),
-        session(),
+        session,
         Arc::new(InMemoryReceipts::new()),
     )
     .expect("seed the id generator")
@@ -185,6 +213,26 @@ async fn a_bill(edge: &Edge<FakeStore>) -> pos_proto::ids::BillId {
         .await
         .expect("opens the bill")
         .bill_id
+}
+
+/// The payload of every `security.permission.overridden` the store holds, as JSON.
+///
+/// Read as JSON rather than as the typed event because the point of the assertion is the *figure on
+/// the wire* — what an auditor reading the log gets — and a typed read would prove the edge can
+/// deserialise what it just serialised.
+async fn overrides(store: &FakeStore) -> Vec<serde_json::Value> {
+    let query = EventQuery::first(
+        StoreId::new(Ulid::from_u128(1)),
+        NonZeroU32::new(100).expect("a positive limit"),
+    );
+    store
+        .read(&query)
+        .await
+        .expect("read the log")
+        .into_iter()
+        .filter(|envelope| envelope.event_type.as_str() == "security.permission.overridden")
+        .filter_map(|envelope| serde_json::to_value(&envelope.data).ok())
+        .collect()
 }
 
 /// Every event type the store holds, in order.
@@ -364,5 +412,105 @@ fn the_running_check_shows_the_discount() {
             .expect("the table's running check");
         assert_eq!(check.total_due, vnd(143_000));
         assert_eq!(check.discount_total, vnd(20_000));
+    });
+}
+
+/// The ceiling published, and the whole point of publishing one: **a server discounts on their own**.
+///
+/// Nothing about the permission set changed between this and
+/// [`a_server_cannot_discount_while_no_ceiling_is_published`] — the same person, holding the same
+/// `billing.discount.apply`, with no manager anywhere near the till. What changed is that their role
+/// now carries a figure, which is exactly the promise ADR-0070's node made and had no field for.
+#[test]
+fn a_server_discounts_under_a_published_ceiling_without_a_manager() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_with(store.clone(), session_with_a_server_ceiling(vnd(30_000)));
+        let bill = a_bill(&edge).await;
+
+        let totals = edge
+            .discount_bill(server(), bill, vnd(20_000), goodwill(), None)
+            .await
+            .expect("20,000 is under the published 30,000 ceiling");
+
+        // 150,000 less 20,000 is 130,000, and the tax follows the reduced base: 13,000, not 15,000.
+        assert_eq!(totals.discount_total, vnd(20_000));
+        assert_eq!(totals.total_due, vnd(143_000));
+
+        // And no override was recorded, because none was needed. A ceiling that still made the till
+        // ask for a manager would be a ceiling in name only.
+        let events = logged(&store).await;
+        assert!(
+            !events
+                .iter()
+                .any(|kind| kind == "security.permission.overridden"),
+            "a discount inside the ceiling recorded an override: {events:?}"
+        );
+    });
+}
+
+/// A discount **at** the ceiling goes through, and a single minor unit over it does not.
+///
+/// The boundary is the interesting part of any limit, and `over_ceiling` is written as
+/// `ceiling - amount` being negative — so equal is allowed. This pins that reading: change it to a
+/// `<=` and this case says so.
+#[test]
+fn the_ceiling_is_inclusive_and_one_unit_over_it_is_not() {
+    run_ready(async {
+        // A store each: one table holds one open bill, so the two halves of a boundary have to be
+        // asked of the same starting state rather than of a table the first half already moved on.
+        let at_the_ceiling = edge_with(
+            FakeStore::default(),
+            session_with_a_server_ceiling(vnd(30_000)),
+        );
+        let exactly = a_bill(&at_the_ceiling).await;
+        at_the_ceiling
+            .discount_bill(server(), exactly, vnd(30_000), goodwill(), None)
+            .await
+            .expect("a discount of exactly the ceiling is within it");
+
+        let past_it = edge_with(
+            FakeStore::default(),
+            session_with_a_server_ceiling(vnd(30_000)),
+        );
+        let over = a_bill(&past_it).await;
+        let refused = past_it
+            .discount_bill(server(), over, vnd(30_001), goodwill(), None)
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(AppError::Domain(DomainError::PermissionDenied {
+                    permission: "billing.discount.override_ceiling"
+                }))
+            ),
+            "one unit over the ceiling should want a manager, got {refused:?}"
+        );
+    });
+}
+
+/// Over a published ceiling, `exceeded_by` carries **the excess**, not the whole discount.
+///
+/// With no ceiling the two are the same number and the field could not tell them apart. With one
+/// published they differ, which is what makes the figure worth recording: an auditor asking "how far
+/// past their allowance did this go?" gets 5,000 rather than 35,000.
+#[test]
+fn an_override_records_how_far_over_the_ceiling_it_went() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_with(store.clone(), session_with_a_server_ceiling(vnd(30_000)));
+        let bill = a_bill(&edge).await;
+
+        edge.discount_bill(server(), bill, vnd(35_000), goodwill(), Some(&approval()))
+            .await
+            .expect("a manager's PIN authorises going over");
+
+        let recorded = overrides(&store).await;
+        assert_eq!(recorded.len(), 1, "the override is recorded once");
+        assert_eq!(
+            recorded[0]["exceeded_by"]["amount_minor"], 5_000,
+            "the figure is the excess over the ceiling, not the whole discount: {:?}",
+            recorded[0]
+        );
     });
 }
