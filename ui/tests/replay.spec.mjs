@@ -427,6 +427,63 @@ for (const device of DEVICE_CLASSES) {
   });
 }
 
+// The store profile decides what home is (`docs/ui-ux.md` §3, §10).
+//
+// §10's capability model has carried a counter preset since it was written, and the till implemented
+// exactly one profile: it landed every store on a floor plan and offered every store a kitchen
+// board, including the ones with neither. This drives a **real counter store** — the same example
+// binary, publishing `tables_enabled: false` — because a capability with no reader is the failure
+// this tree keeps finding, and a reader with no gate is the next one.
+test("a counter store lands on the counter, and is not offered a floor or a kitchen", async ({
+  page,
+}) => {
+  const edge = await startEdge("counter");
+  try {
+    await pair(page, edge);
+    await page.locator("#signin-code").fill(edge.staffCode);
+    await page.locator("#signin-pin").fill(edge.staffPin);
+    await page.locator('[data-step="submit"]').click();
+
+    // Home is the counter list, at `/` — the address does not change with the shop, only what it
+    // draws. The floor's own outcome mark must be absent, which is the half that would fail if the
+    // profile were read but ignored.
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('[data-outcome="counter"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="floor"]')).toHaveCount(0);
+
+    // And the status bar stops offering what this shop cannot do. A destination that leads to a
+    // board nobody watches is the same failure `tips_enabled` was published to stop: an action the
+    // store cannot honour, presented as though it could.
+    // Scoped to the nav, not the whole header: the brand is a link to `/` too, and on this store
+    // that is the counter. "Home" is still offered — it is the *floor* that is not.
+    await expect(page.locator('header nav a[href="/"]')).toHaveCount(0);
+    await expect(page.locator('header nav a[href="/kds"]')).toHaveCount(0);
+    await expect(page.locator('header nav a[href="/expo"]')).toHaveCount(0);
+    // The counter itself is still a destination, and so is the shift — neither depends on tables.
+    await expect(page.locator('header nav a[href="/counter"]')).toHaveCount(1);
+    await expect(page.locator('header nav a[href="/shift"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The same store with the default profile still gets the floor, so the test above is measuring the
+// flag rather than a screen that broke. Cheap, and it is the assertion that would have caught a
+// `tables_enabled` read inverted.
+test("a table-service store still lands on the floor", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(page.locator('header nav a[href="/"]')).toHaveCount(1);
+    await expect(page.locator('header nav a[href="/kds"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.

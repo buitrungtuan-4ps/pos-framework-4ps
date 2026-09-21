@@ -124,7 +124,10 @@ export function Takeaway() {
     ]);
 
   return (
-    <section class="mx-auto max-w-xl p-4">
+    // The mark that proves this screen rendered, which is what a counter store's home must show
+    // (`docs/ui-ux.md` §3). Named for the role rather than the screen: `/counter` is this list on
+    // any store, and on a store with no tables it is also `/`.
+    <section class="mx-auto max-w-xl p-4" data-outcome="counter">
       <Show
         when={chosen()}
         fallback={

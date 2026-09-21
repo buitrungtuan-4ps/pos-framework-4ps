@@ -57,6 +57,15 @@ fn demo_employee() -> EmployeeId {
 /// The tax class is [`EdgeSession::standard_tax_class`], the one the bootstrap rate table carries a
 /// rate for on every channel — an entry naming any other class would price fine and then refuse to
 /// settle, which is a worse first run than no menu at all.
+/// Whether this demo store runs table service — `POS_DEMO_PROFILE=counter` says it does not.
+///
+/// Read here rather than threaded through `config_document`'s signature because it is a property of
+/// the *fixture*, not of the caller: `examples/minimal-edge` asks for "the demo store" and the
+/// environment says which one, exactly as it says which port to bind.
+fn table_service() -> bool {
+    !std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("counter"))
+}
+
 fn demo_menu() -> MenuBook {
     let tax_class = EdgeSession::standard_tax_class();
     let item = |id: u128, name: &str, price: i64| {
@@ -98,6 +107,18 @@ fn demo_menu() -> MenuBook {
 /// [`crate::config_client::session_from_config`] keeps), so the floor stays the front end's own
 /// fallback and the tax table stays the bootstrap 10% — exactly what a store that has synced people
 /// and a menu, and nothing else, would show.
+///
+/// # The counter profile
+///
+/// `POS_DEMO_PROFILE=counter` publishes the same store with **table service off**. §10's capability
+/// model has carried a counter preset since it was written — `Capability::PayFirst` is even
+/// declared incompatible with `Tables` in its own validity rules — and the till implemented exactly
+/// one profile, because there was no way to run the other one. A contributor can now see what a
+/// counter cafe sees, and `ui/tests/replay.spec.mjs` drives it.
+///
+/// An environment variable rather than a second example binary: the two profiles differ by one
+/// published flag, and a second `main.rs` would be a second copy of the boot path — which is the
+/// thing that drifts.
 #[must_use]
 pub fn config_document() -> Option<serde_json::Value> {
     let permissions: Vec<&str> = Permission::ALL
@@ -115,6 +136,14 @@ pub fn config_document() -> Option<serde_json::Value> {
         },
         "menu": serde_json::to_value(demo_menu()).ok()?,
         "floor": demo_floor(),
+        // Table service, unless the profile says otherwise. On by default (§10), so the flag is
+        // published either way rather than only when it is false — a document that named it only to
+        // turn it off would leave the common case relying on the default and the rare case on the
+        // node, which is two paths where the till reads one.
+        "tables_enabled": table_service(),
+        // The kitchen board follows the same profile: a counter cafe hands the drink over, and a
+        // board nobody looks at is a destination in the status bar that leads nowhere.
+        "kds_enabled": table_service(),
         // Seats on. The capability defaults **off** (§10) because most counters have no seats, so a
         // demo that left it at the default would ship a seat picker no contributor and no browser
         // gate ever saw — the same dark corner the floor plan sat in until it was published here.
