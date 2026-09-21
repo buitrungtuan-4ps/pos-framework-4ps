@@ -297,6 +297,9 @@ where
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))
+        // How many, while the line is still editable. The till could only ever add one of a thing,
+        // so "three beers" was three lines.
+        .route("/api/lines/{id}/quantity", post(lines::set_quantity::<S>))
         // And the whole order in one tap. Firing line by line cost an operator one tap per line and
         // left half an order with the kitchen when one of them failed; this commits them together.
         .route("/api/orders/{id}/fire", post(lines::fire_order::<S>))

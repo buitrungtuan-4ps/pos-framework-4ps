@@ -161,6 +161,20 @@ pub enum LineCommand {
         /// Whether the edge has collected and verified the actor's PIN for this action.
         pin_verified: bool,
     },
+    /// Change how many of this line, while it is still editable.
+    ///
+    /// Carries no permission, for the same reason adding a line carries none and voiding an unfired
+    /// line carries none: nothing has been made and no stock has moved, so it is an ordinary edit of
+    /// an order still being taken. A **fired** line is refused by the machine, not by a permission —
+    /// see [`LineTrigger::Amend`](crate::machines::LineTrigger::Amend).
+    ///
+    /// The quantity is assumed positive. A zero or negative one is a malformed request rather than
+    /// a refused business rule, so the HTTP shell rejects it before the domain is asked; "take this
+    /// line off the order" is a void, and it is a different act with a different event.
+    SetQuantity {
+        /// How many the line should now be.
+        quantity: Quantity,
+    },
 }
 
 /// Decides an order-line command against the line's current state.
@@ -209,6 +223,10 @@ pub fn decide_line(
                 effects: vec![Effect::RecheckAvailability],
             })
         }
+        // No stock movement: stock leaves at fire (§8), and a line that can still be amended has not
+        // fired. The quantity the kitchen is eventually told about is whatever the line holds when
+        // somebody presses send.
+        LineCommand::SetQuantity { .. } => transition_only(current, LineTrigger::Amend),
         LineCommand::Void { pin_verified } => {
             let next_state = OrderLine::step(current, LineTrigger::Void)?;
             // Voiding a line that already fired is the fraud-sensitive case (§9, §11): it needs the
@@ -675,6 +693,58 @@ mod tests {
         .expect("cancel");
         assert_eq!(decision.next_state, OrderLineState::Voided);
         assert!(decision.effects.is_empty());
+    }
+
+    #[test]
+    fn a_line_still_being_taken_can_change_how_many() {
+        // No permission and no capability: changing the number on an order nobody has started making
+        // is an ordinary edit, exactly like adding the line was.
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let book = RecipeBook::new();
+        for state in [OrderLineState::Added, OrderLineState::Held] {
+            let decision = decide_line(
+                state,
+                LineCommand::SetQuantity {
+                    quantity: Quantity::from_milli(3_000),
+                },
+                &ctx,
+                &book,
+            )
+            .expect("an editable line takes a new quantity");
+            assert_eq!(decision.next_state, state, "the line stays where it was");
+            assert!(
+                decision.stock_movements.is_empty(),
+                "stock leaves at fire, and this line has not fired"
+            );
+            assert!(decision.effects.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_line_the_kitchen_is_already_making_cannot_change_how_many() {
+        // The refusal is the machine's, not a permission's — there is no PIN that makes this legal,
+        // because the food exists and stock moved against the old number. Void it and add a new line.
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::VoidFiredLine),
+            CapabilityContext::NONE,
+        );
+        let book = RecipeBook::new();
+        for state in [OrderLineState::Fired, OrderLineState::Voided] {
+            assert!(
+                matches!(
+                    decide_line(
+                        state,
+                        LineCommand::SetQuantity {
+                            quantity: Quantity::from_milli(2_000),
+                        },
+                        &ctx,
+                        &book,
+                    ),
+                    Err(DomainError::Transition(_))
+                ),
+                "{state:?} must refuse an amend"
+            );
+        }
     }
 
     // ---- Bill ----

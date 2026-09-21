@@ -49,8 +49,8 @@ use pos_proto::events::{
     CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted,
     DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType, KitchenTicketBumped,
     SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SecurityPermissionOverridden,
+    SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
+    SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -1139,6 +1139,14 @@ struct LineRecord {
     /// The extended total the device captured at add time — the base a bill sums per tax class. A
     /// line never re-reads the live menu (§14.2), so this is authoritative.
     line_total: Money,
+    /// The unit price captured at add time, kept so a quantity change can re-extend the line.
+    ///
+    /// `sales.order_line.added` has always carried it and this projection used to drop it, which
+    /// left the edge holding an extended total it could not take apart: re-extending meant dividing
+    /// by the old quantity to recover a price, and a rounded one at that. Keeping the captured
+    /// figure means an amend multiplies the same number the guest was quoted, rather than today's
+    /// menu price — a line never re-reads the live menu (§14.2), and that holds when it changes too.
+    unit_price: Money,
     /// The tax class captured at add time, which keys the line into a rate on the bill.
     tax_class_id: TaxClassId,
     /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
@@ -1158,6 +1166,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             quantity: event.quantity,
             course_id: event.course_id,
             line_total: event.line_total,
+            unit_price: event.unit_price,
             tax_class_id: event.tax_class_id,
             modifier_menu_item_ids: event.modifier_menu_item_ids,
         }
@@ -1569,6 +1578,23 @@ impl Projection {
             .collect();
         lines.sort_by_key(|(id, _)| *id);
         lines
+    }
+
+    /// Applies a new quantity and extended total to a line the order still holds.
+    ///
+    /// Silent on a line this projection does not know, like every other setter here: a replay that
+    /// reaches an update before its add is a replay out of order, and refusing would stop a box
+    /// trading over a line that will exist a moment later.
+    fn set_line_quantity(
+        &mut self,
+        order_line_id: OrderLineId,
+        quantity: Quantity,
+        line_total: Money,
+    ) {
+        if let Some(record) = self.lines.get_mut(&order_line_id) {
+            record.quantity = quantity;
+            record.line_total = line_total;
+        }
     }
 
     fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
@@ -2020,6 +2046,7 @@ impl<S: EventStore> Edge<S> {
                     quantity: priced.quantity,
                     course_id: None,
                     line_total: priced.line_total,
+                    unit_price: priced.unit_price,
                     tax_class_id: priced.tax_class_id,
                     modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
                 },
@@ -2628,6 +2655,7 @@ impl<S: EventStore> Edge<S> {
                 quantity: draft.quantity,
                 course_id: draft.course_id,
                 line_total: draft.line_total,
+                unit_price: draft.unit_price,
                 tax_class_id: draft.tax_class_id,
                 modifier_menu_item_ids: draft.modifier_menu_item_ids,
             },
@@ -2898,6 +2926,75 @@ impl<S: EventStore> Edge<S> {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Changes how many of a line the order carries, while it is still editable.
+    ///
+    /// "Three beers" was three taps and three lines, because the till could only ever add one of a
+    /// thing (`quantity: { milli: 1000 }`, hard-coded at the call site with a comment saying so).
+    /// This is the command behind the stepper that replaces them, and it emits
+    /// `sales.order_line.updated` — an event `pos-proto` has carried, with exactly this shape,
+    /// since the schema was written, and which nothing has ever emitted.
+    ///
+    /// **The new total is the captured unit price times the new quantity, computed here.** The caller
+    /// sends a quantity and nothing else. That is not the edge inventing a price: `unit_price` is
+    /// the figure the device captured when it added the line and `sales.order_line.added` carried,
+    /// so multiplying it is exactly what the device would do — with the difference that the guest
+    /// cannot be charged an extended total that does not follow from the price they were quoted.
+    /// Today's menu is not consulted, because a line never re-reads the live menu (§14.2) and that
+    /// holds when it changes as much as when it is added.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownLine`] for a line this edge does not hold, [`AppError::Domain`] when the
+    /// line has already gone to the kitchen — a fired line is refused by the state machine, not by a
+    /// permission, because the food exists and stock moved against the old number, so that case is a
+    /// void and a fresh line — and [`AppError::Domain`] again if the multiplication overflows.
+    pub async fn set_line_quantity(
+        &self,
+        actor: Actor,
+        order_line_id: OrderLineId,
+        quantity: Quantity,
+    ) -> Result<LineView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let record = self
+            .lock_projection()
+            .line(order_line_id)
+            .ok_or(AppError::UnknownLine)?;
+
+        let decision = decide_line(
+            record.state,
+            LineCommand::SetQuantity { quantity },
+            &ctx,
+            &session.recipes,
+        )?;
+
+        // Integer arithmetic on the captured price, rounded the way every other money path here
+        // rounds (§1 rule 10: money is never a float).
+        let line_total = record
+            .unit_price
+            .mul_quantity(quantity, Rounding::HalfUp)
+            .map_err(|error| AppError::Domain(DomainError::Money(error)))?;
+
+        let payload = SalesOrderLineUpdated {
+            order_id: record.order_id,
+            order_line_id,
+            quantity,
+            line_total,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+
+        self.lock_projection()
+            .set_line_quantity(order_line_id, quantity, line_total);
+
+        Ok(LineView {
+            order_id: record.order_id,
+            order_line_id,
+            state: decision.next_state,
+            // Nothing was sent anywhere: an amend is only legal before the kitchen is told.
+            fired: None,
+        })
     }
 
     /// Sends every unsent line on an order to the kitchen, in one transaction.
@@ -3722,6 +3819,11 @@ impl<S: EventStore> Edge<S> {
                 let event: SalesOrderLineFired =
                     envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_line_state(event.order_line_id, OrderLineState::Fired);
+            }
+            EventType::SalesOrderLineUpdated => {
+                let event: SalesOrderLineUpdated =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_line_quantity(event.order_line_id, event.quantity, event.line_total);
             }
             EventType::SalesOrderLineVoided | EventType::BillingBillVoided => {
                 Self::fold_void(projection, envelope, known)?;

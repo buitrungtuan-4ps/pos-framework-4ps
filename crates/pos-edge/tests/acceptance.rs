@@ -696,6 +696,113 @@ async fn one_send_moves_every_unsent_line_and_sending_again_is_a_no_op() {
     );
 }
 
+/// Three beers are one line that says three, and the kitchen cannot be told a different number
+/// after the fact.
+///
+/// The till could only ever add **one** of a thing — `quantity: { milli: 1000 }`, hard-coded, with a
+/// comment at the call site admitting it was the only quantity on offer — so an order for three was
+/// three taps and three lines on the ticket. `sales.order_line.updated` has been defined in
+/// `pos-proto`, with exactly this shape, since the schema was written, and nothing had ever emitted
+/// it.
+///
+/// The second half is the half worth pinning: once a line is with the kitchen its quantity is
+/// settled. The food exists and stock moved against the old number, so an amend is refused by the
+/// state machine rather than by a permission — there is no PIN that makes it legal. Changing your
+/// mind after sending is a void and a new line.
+#[tokio::test]
+async fn a_line_changes_how_many_until_the_kitchen_is_told() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(703));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let line_id = line["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+
+    // Three of them. The body carries a quantity and no money at all — the edge extends the line
+    // from the unit price it captured when the line was added.
+    let (status, amended) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/lines/{line_id}/quantity"),
+        Some(json!({ "quantity": Quantity::from_milli(3_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the quantity route is mounted");
+    assert_eq!(
+        amended["state"], "ORDER_LINE_STATE_ADDED",
+        "the line stays where it was: {amended}"
+    );
+
+    // And the bill charges for three, which is the whole point — a quantity the check does not see
+    // is a quantity the guest does not pay for.
+    let (status, check) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        &format!("/api/tables/{table}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        check["subtotal"]["amount_minor"],
+        UNIT_PRICE * 3,
+        "the check follows the amended line: {check}"
+    );
+
+    // Zero is refused at the door: taking a line off an order is a void, with its own event and its
+    // own reason, and must not have a quiet second spelling.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/lines/{line_id}/quantity"),
+        Some(json!({ "quantity": Quantity::ZERO })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "zero is not a quantity");
+
+    // Send it, then try to change it. The kitchen has the ticket now.
+    let station = StationId::new(Ulid::from_u128(9));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/lines/{line_id}/fire"),
+        Some(json!({ "station_id": station })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, refused) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/lines/{line_id}/quantity"),
+        Some(json!({ "quantity": Quantity::from_milli(5_000) })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a fired line refuses an amend: {refused}"
+    );
+}
+
 /// A seat is recorded where the store assigns seats, and refused where it does not.
 ///
 /// `seat` has ridden `sales.order_line.added` and `LineDraft` since they were written, and the add
