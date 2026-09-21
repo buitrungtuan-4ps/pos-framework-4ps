@@ -85,6 +85,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     from a 30cm; nesting is not authorable (a group's members are items); and half-and-half
     (`SPLIT_ITEM`) changes the shape and pricing of a line rather than being a selection rule, so it
     gets its own record.
+- **The receipt says what was sold.** `receipt_document` composed the guest's receipt from the store
+  profile, the receipt number, the totals and an optional buyer — and was never given the lines. The
+  document went from the seller's address straight to `Subtotal`: a guest got a total with no way to
+  check it, and a tax authority got a document naming no goods, in a country whose Decree 123/2020
+  Art. 10 lists the per-line contents an invoice must have
+  ([ADR-0129](docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+  - One row per line sold: **the name, then the quantity at the unit price with the extended amount**.
+    The rows sit above the totals and sum to the subtotal printed under them — they are the same
+    records the tax classes were folded from, which is asserted rather than assumed.
+  - **Nothing new is recorded.** `sales.order_line.added` has carried `display_name` and `unit_price`
+    since it was written — that is `docs/pos-spec.md` §14.2's line snapshot — and the projection
+    discarded both on the way in. Keeping them is the whole change: no protocol change, no event
+    change, no migration.
+  - **What prints is the snapshot, not the live menu.** Renaming or repricing an item after the sale
+    does not alter a receipt for a bill already settled.
+  - **A voided line does not print.** It is owed nothing and taxed nothing, so printing it would give
+    a document whose rows do not sum to its own subtotal.
+  - The live add path and the replay now build the projection's line record through the **same**
+    conversion. Restating the same fields in two places is how `display_name` and `unit_price` came to
+    be missing from one of them.
+  - **Still missing, and recorded rather than guessed at:** the **unit of measure** Art. 10 asks for
+    (`đơn vị tính`) — there is no unit on a catalog item, and printing "each" would be the till
+    asserting something the operator never said; the **chosen modifiers** (their prices are already
+    inside the unit price, but only their ids were captured, so naming them means capturing the
+    names); and a **per-line tax rate column** (the tax block already prints one line per rate).
 
 - **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
   profile decides the starting screen and flow — same components, different assembly, not three

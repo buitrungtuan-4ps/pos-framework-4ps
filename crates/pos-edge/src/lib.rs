@@ -80,7 +80,7 @@ pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
     AppError, Approval, BillView, Edge, EdgeSession, FiredLine, InboundOrderOpened, LineDraft,
-    LineView, ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
+    LineView, ReceiptLine, ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
 pub use backup::{ArchiveError, ArchiveKey};

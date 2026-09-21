@@ -912,6 +912,28 @@ pub struct LineView {
     pub fired: Option<FiredLine>,
 }
 
+/// One row of a receipt: what was sold, how many, at what each, for how much
+/// ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+///
+/// The name and the price are the **snapshot** `sales.order_line.added` captured, not what the menu
+/// says now — a settled bill does not change because somebody renamed an item next week (§14.2).
+/// That is the one way this differs from [`CounterOrderLine`], which resolves against the live menu
+/// on purpose, because a screen showing an open order wants today's spelling.
+///
+/// Edge-local, like [`BillTotals`] beside it: it crosses no wire and is not part of any response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiptLine {
+    /// The item's name as the guest saw it when the line was added.
+    pub display_name: DisplayName,
+    /// How many — a [`Quantity`], because a split item is half of one and a weighed item is not a
+    /// whole number either.
+    pub quantity: Quantity,
+    /// The price of one, as captured. Any modifier's price is already inside it.
+    pub unit_price: Money,
+    /// The extended amount for the row. The rows sum to the bill's `subtotal`.
+    pub line_total: Money,
+}
+
 /// What a fire tells the kitchen, for the caller to turn into a ticket.
 ///
 /// The ids, not the names: resolving an item's name is the *session's* job (its published menu
@@ -1031,6 +1053,13 @@ pub struct BillView {
     pub table_state: Option<TableState>,
     /// Whether the settle asked for a receipt to be printed, for the caller to run after commit.
     pub print_receipt: bool,
+    /// The rows that receipt lists, present once settled and empty otherwise (ADR-0129).
+    ///
+    /// Carried out of the settle rather than read back afterwards: the receipt is composed **after**
+    /// the transaction commits (ADR-0100), by which point the projection has moved on, and these
+    /// have to be the same records the totals above were assembled from or the document does not add
+    /// up. Edge-local, like [`Self::totals`].
+    pub lines: Vec<ReceiptLine>,
 }
 
 /// One line of a counter order, as the counter list shows it.
@@ -1143,19 +1172,31 @@ struct LineRecord {
     order_id: OrderId,
     state: OrderLineState,
     menu_item_id: MenuItemId,
+    /// The name the guest saw at add time, and the name the receipt prints
+    /// ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+    ///
+    /// `sales.order_line.added` has always carried it — it is half of §14.2's line snapshot — and
+    /// this projection always threw it away, because a fire and a tax-class fold have no use for a
+    /// name. Kept now, from the *event* and not from `session.menu`, because a settled bill must not
+    /// change when somebody renames an item next week.
+    display_name: DisplayName,
     quantity: Quantity,
     course_id: Option<CourseId>,
+    /// The per-unit price captured at add time, and two things depend on it.
+    ///
+    /// A **quantity change** re-extends the line from it: `sales.order_line.added` has always
+    /// carried it and this projection used to drop it, which left the edge holding an extended total
+    /// it could not take apart — re-extending meant dividing by the old quantity to recover a price,
+    /// and a rounded one at that. And a **receipt** prints it, as the `đơn giá` Decree 123/2020
+    /// Art. 10 asks for ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)).
+    ///
+    /// Either way it is the figure the guest was quoted rather than today's menu price — a line
+    /// never re-reads the live menu (§14.2), and that holds when it changes as much as when it is
+    /// printed. Modifier prices are already inside it.
+    unit_price: Money,
     /// The extended total the device captured at add time — the base a bill sums per tax class. A
     /// line never re-reads the live menu (§14.2), so this is authoritative.
     line_total: Money,
-    /// The unit price captured at add time, kept so a quantity change can re-extend the line.
-    ///
-    /// `sales.order_line.added` has always carried it and this projection used to drop it, which
-    /// left the edge holding an extended total it could not take apart: re-extending meant dividing
-    /// by the old quantity to recover a price, and a rounded one at that. Keeping the captured
-    /// figure means an amend multiplies the same number the guest was quoted, rather than today's
-    /// menu price — a line never re-reads the live menu (§14.2), and that holds when it changes too.
-    unit_price: Money,
     /// The tax class captured at add time, which keys the line into a rate on the bill.
     tax_class_id: TaxClassId,
     /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
@@ -1172,14 +1213,24 @@ impl From<SalesOrderLineAdded> for LineRecord {
             order_id: event.order_id,
             state: OrderLineState::Added,
             menu_item_id: event.menu_item_id,
+            display_name: event.display_name,
             quantity: event.quantity,
             course_id: event.course_id,
-            line_total: event.line_total,
             unit_price: event.unit_price,
+            line_total: event.line_total,
             tax_class_id: event.tax_class_id,
             modifier_menu_item_ids: event.modifier_menu_item_ids,
         }
     }
+}
+
+/// One read of an order: its lines, the pre-tax base per tax class those lines fold into, and the
+/// channel to tax them at. Everything downstream of it — the totals, and the receipt's rows — comes
+/// from this one answer, which is what makes the two agree (see [`Edge::order_snapshot`]).
+struct OrderSnapshot {
+    lines: Vec<LineRecord>,
+    class_bases: Vec<ClassBase>,
+    sales_channel: SalesChannel,
 }
 
 /// What the projection remembers about one bill: the order it bills, the table that order sits on
@@ -2096,20 +2147,12 @@ impl<S: EventStore> Edge<S> {
             let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
             envelopes.push(envelope);
             messages.push(message);
-            line_records.push((
-                order_line_id,
-                LineRecord {
-                    order_id,
-                    state: OrderLineState::Added,
-                    menu_item_id: priced.menu_item_id,
-                    quantity: priced.quantity,
-                    course_id: None,
-                    line_total: priced.line_total,
-                    unit_price: priced.unit_price,
-                    tax_class_id: priced.tax_class_id,
-                    modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
-                },
-            ));
+            // Built from the event rather than beside it. Restating the same fields in two
+            // places is how the projection came to be missing `display_name` and `unit_price` in the
+            // first place: the event grew them, the hand-written twin did not, and nothing noticed
+            // because nothing yet asked for them. The replay already folds through this conversion,
+            // so using it here makes the live path and the replay path the same code.
+            line_records.push((order_line_id, LineRecord::from(added)));
         }
 
         // Asked once, here, from the session snapshot this order was priced against — and handed
@@ -2582,9 +2625,9 @@ impl<S: EventStore> Edge<S> {
 
         // The pre-tax base is what there is to reduce: tax follows from it, so reducing past it
         // would make the tax negative before the total was.
-        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
+        let order = self.order_snapshot(bill.order_id, &session)?;
         let mut reducible = Money::zero(session.currency);
-        for base in &class_bases {
+        for base in &order.class_bases {
             reducible = reducible
                 .checked_add(base.amount)
                 .map_err(DomainError::from)?;
@@ -2658,8 +2701,8 @@ impl<S: EventStore> Edge<S> {
             .reductions(session.currency);
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &class_bases,
-            channel,
+            &order.class_bases,
+            order.sales_channel,
             (discount, comp),
         ))?)
     }
@@ -2889,20 +2932,9 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
-        self.lock_projection().add_line(
-            order_line_id,
-            LineRecord {
-                order_id,
-                state: OrderLineState::Added,
-                menu_item_id: draft.menu_item_id,
-                quantity: draft.quantity,
-                course_id: draft.course_id,
-                line_total: draft.line_total,
-                unit_price: draft.unit_price,
-                tax_class_id: draft.tax_class_id,
-                modifier_menu_item_ids: draft.modifier_menu_item_ids,
-            },
-        );
+        // From the event, for the reason the order-in path above says.
+        self.lock_projection()
+            .add_line(order_line_id, LineRecord::from(payload));
         Ok(LineView {
             order_id,
             order_line_id,
@@ -3088,14 +3120,14 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
-        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
-        if class_bases.is_empty() {
+        let order = self.order_snapshot(bill.order_id, &session)?;
+        if order.class_bases.is_empty() {
             return Ok(Self::nothing_owed(session.currency));
         }
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &class_bases,
-            channel,
+            &order.class_bases,
+            order.sales_channel,
             bill.reductions(session.currency),
         ))?)
     }
@@ -3393,8 +3425,8 @@ impl<S: EventStore> Edge<S> {
     /// caller surfaces rather than papers over with zero tax.
     pub fn order_totals(&self, order_id: OrderId) -> Result<BillTotals, AppError> {
         let session = self.session();
-        let (class_bases, channel) = self.taxable_bases(order_id, &session)?;
-        if class_bases.is_empty() {
+        let order = self.order_snapshot(order_id, &session)?;
+        if order.class_bases.is_empty() {
             // Nothing ordered — a seated table before its first line, or one whose every line was
             // voided. `assemble` refuses an empty bill (there is nothing to allocate across), and
             // rightly so; but "owes nothing" is a real answer for a screen to show, not an error.
@@ -3407,8 +3439,8 @@ impl<S: EventStore> Edge<S> {
         let nothing_off = (Money::zero(session.currency), Money::zero(session.currency));
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &class_bases,
-            channel,
+            &order.class_bases,
+            order.sales_channel,
             nothing_off,
         ))?)
     }
@@ -3546,6 +3578,8 @@ impl<S: EventStore> Edge<S> {
             receipt_number: None,
             total_due: None,
             totals: None,
+            // Nothing prints on an open bill, so there is nothing to carry out of it.
+            lines: Vec::new(),
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
         })
@@ -3601,11 +3635,11 @@ impl<S: EventStore> Edge<S> {
         // Assemble the amount owed from the order's captured line totals, grouped per tax class, at
         // the rate for the channel *this order* came in on (B1.2).
         let session = self.session();
-        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
+        let order = self.order_snapshot(bill.order_id, &session)?;
         let totals = billing::assemble(&Self::bill_input(
             &session,
-            &class_bases,
-            channel,
+            &order.class_bases,
+            order.sales_channel,
             bill.reductions(session.currency),
         ))?;
 
@@ -3711,6 +3745,7 @@ impl<S: EventStore> Edge<S> {
             totals: Some(totals.clone()),
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+            lines: Self::receipt_lines(&order.lines),
         })
     }
 
@@ -4177,23 +4212,27 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
-    /// What an order owes before tax, grouped per tax class, and the channel to tax it **at**.
+    /// Everything a bill and its receipt are made of, from **one** read of the order.
     ///
-    /// One function returns both because every caller needs both, and — since roadmap **B1.2** —
-    /// both must be derived from the *same* order: the channel comes from the order's own
+    /// The channel is here for roadmap **B1.2**'s reason: it comes from the order's own
     /// `sales.order.opened`, falling back to the session's only when the order has no answer (a
     /// pre-B1.2 order, or a token this build does not understand). Two callers resolving that
     /// separately is two chances to reach for `session.sales_channel` and reintroduce the defect,
     /// which is exactly how it was written before.
     ///
+    /// The **lines** are here for [ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)'s:
+    /// the receipt's rows have to sum to the subtotal printed under them, and they do so only if they
+    /// are the very records the bases were folded from. A second read of the projection would be a
+    /// second answer — a line added between the two reads, and a document that does not add up.
+    ///
     /// # Errors
     ///
     /// [`AppError`] if a line's amounts cannot be summed.
-    fn taxable_bases(
+    fn order_snapshot(
         &self,
         order_id: OrderId,
         session: &EdgeSession,
-    ) -> Result<(Vec<ClassBase>, SalesChannel), AppError> {
+    ) -> Result<OrderSnapshot, AppError> {
         // The guard is taken and dropped inside the block: `class_bases` does arithmetic that can
         // fail, and holding the projection lock across a `?` is how a poisoned lock happens.
         let (lines, channel) = {
@@ -4203,20 +4242,46 @@ impl<S: EventStore> Edge<S> {
                 projection.order_channel(order_id),
             )
         };
-        Ok((
-            Self::class_bases(&lines)?,
-            channel.unwrap_or(session.sales_channel),
-        ))
+        let class_bases = Self::class_bases(&lines)?;
+        Ok(OrderSnapshot {
+            lines,
+            class_bases,
+            sales_channel: channel.unwrap_or(session.sales_channel),
+        })
+    }
+
+    /// The lines that were actually sold: everything but the voided ones.
+    ///
+    /// One definition, two readers — [`Self::class_bases`] taxes them and [`Self::receipt_lines`]
+    /// prints them. Written as a shared filter rather than the same `continue` in two loops, because
+    /// the two disagreeing is precisely a receipt whose rows do not sum to its own subtotal
+    /// (ADR-0129 decision 4).
+    fn sold_lines(lines: &[LineRecord]) -> impl Iterator<Item = &LineRecord> {
+        lines
+            .iter()
+            .filter(|line| line.state != OrderLineState::Voided)
+    }
+
+    /// The rows a receipt prints, in the order the bases were folded in (ADR-0129 decision 1).
+    ///
+    /// Straight off the record, which is straight off the event: the name and the unit price are the
+    /// ones the guest agreed to at add time, not the ones the menu carries now (§14.2).
+    fn receipt_lines(lines: &[LineRecord]) -> Vec<ReceiptLine> {
+        Self::sold_lines(lines)
+            .map(|line| ReceiptLine {
+                display_name: line.display_name.clone(),
+                quantity: line.quantity,
+                unit_price: line.unit_price,
+                line_total: line.line_total,
+            })
+            .collect()
     }
 
     /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
     /// takes. A voided line is owed nothing, so it contributes nothing.
     fn class_bases(lines: &[LineRecord]) -> Result<Vec<ClassBase>, AppError> {
         let mut bases: Vec<ClassBase> = Vec::new();
-        for line in lines {
-            if line.state == OrderLineState::Voided {
-                continue;
-            }
+        for line in Self::sold_lines(lines) {
             if let Some(base) = bases
                 .iter_mut()
                 .find(|base| base.tax_class_id == line.tax_class_id)
