@@ -70,14 +70,24 @@ fn demo_menu() -> MenuBook {
     let catalog = MenuCatalog::new()
         .with(item(101, "Margherita", 149_000))
         .with(item(102, "Garden salad", 89_000))
-        .with(item(103, "Iced tea", 39_000));
+        .with(item(103, "Iced tea", 39_000))
+        // One item with tone marks on it, and it is not decoration. The order screen's menu search
+        // folds diacritics so that `dac` reaches this — nobody switches input mode mid-service — and
+        // a fixture whose every item was ASCII would leave that fold with no gate over it, the same
+        // dark corner the floor plan and the seat picker sat in before they were published here.
+        //
+        // The name is picked for what it is made of, not for the cuisine. `ặ` decomposes into a
+        // letter and two combining marks; `đ` decomposes into nothing at all, because it is its own
+        // letter rather than `d` with a mark on it. Those are the two cases the fold has to handle
+        // separately, and `đặc` is one syllable carrying both.
+        .with(item(104, "Phở bò đặc biệt", 99_000));
     MenuBook::new()
         .with(SalesChannel::DineIn, catalog.clone())
         .with_fallback(catalog)
 }
 
 /// The demo store's configuration document: a `permissions` node with one employee, and a `menu`
-/// node with three items.
+/// node with four items.
 ///
 /// `None` if the PIN could not be hashed — the OS entropy source being unavailable is the only way
 /// that happens, and a fixture that answered with a roster nobody can sign into would be worse than
@@ -194,7 +204,16 @@ mod tests {
             session.staff.authorise(DEMO_STAFF_CODE, "0000").is_none(),
             "a wrong PIN is refused, so the fixture is a roster and not a bypass"
         );
-        assert_eq!(session.menu.items().len(), 3, "three items to sell");
+        assert_eq!(session.menu.items().len(), 4, "four items to sell");
+        assert!(
+            session
+                .menu
+                .items()
+                .iter()
+                .any(|entry| entry.display_name.as_str() == "Phở bò đặc biệt"),
+            "a name with tone marks survives the published-config seam, so the till's menu search \
+             has something to fold"
+        );
     }
 
     /// The floor has to arrive as a *room*: named areas, seat counts, and grid positions with the

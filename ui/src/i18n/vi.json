@@ -72,6 +72,8 @@
   "order.fired": "Đã báo bếp",
   "order.menu": "Thực đơn",
   "order.menu_empty": "Cửa hàng này chưa có thực đơn được công bố.",
+  "order.search": "Tìm món",
+  "order.search_empty": "Không có món nào khớp với “{query}”.",
   "order.seat_for": "Ghế",
   "order.seat_short": "Ghế {seat}",
   "order.send": "Gửi bếp",

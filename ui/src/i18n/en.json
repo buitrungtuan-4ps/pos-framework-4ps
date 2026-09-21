@@ -72,6 +72,8 @@
   "order.fired": "Fired",
   "order.menu": "Menu",
   "order.menu_empty": "No menu published for this store yet.",
+  "order.search": "Search the menu",
+  "order.search_empty": "Nothing on the menu matches “{query}”.",
   "order.seat_for": "Seat",
   "order.seat_short": "Seat {seat}",
   "order.send": "Send to kitchen",

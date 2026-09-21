@@ -18,6 +18,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The order screen can be searched.** A box above the item grid filters the menu as an operator
+  types, and one tap on a match sells it (#367).
+  - It matches **both** names an item has: the price book's `display_name`, and the caption the
+    console wrote on each button pointing at it (ADR-0066). The two differ on purpose — a button
+    inside a "Pizza" category can read "Large" — so searching only the first would fail the operator
+    who knows the item by what the grid calls it. Results are drawn with the price book's name,
+    because a button's caption means something inside its category and nothing outside it.
+  - **Diacritics are folded**, so `dac` reaches *đặc biệt* and `pho` reaches *Phở*. Nobody switches
+    input mode mid-service. `đ` is handled separately from the tone marks, because it has no Unicode
+    decomposition — it is its own letter rather than `d` with a mark on it.
+  - **The flow still costs one tap.** Typing is not a tap (§1 principle 6, the same accounting the
+    shift float and the manager's PIN get), and the declaration says so: `Find an item by name and
+    add it` is a declared task whose browser gate types the query in its precondition and then
+    asserts the grid narrowed to a single button — so a search that stopped filtering, or stopped
+    folding, fails there while the plain add stays green.
+  - `examples/minimal-edge` seeds one item with tone marks on it, for the same reason it turns seats
+    on: a fixture whose every item was ASCII would leave the folding with no gate over it.
+  - **Upgrade note.** None. An empty box is the grid the screen has always drawn.
+
 - **A line can say whose dish it is.** `seat` has ridden `sales.order_line.added` and `LineDraft`
   since they were written, and `POST /api/tables/{id}/lines` has accepted it all along. Nothing ever
   set it, because the till had no way to know whether the store wanted to be asked.
