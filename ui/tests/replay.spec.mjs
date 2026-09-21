@@ -340,27 +340,36 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
   }
 });
 
-// A device that was not running when the choice was made still learns it.
+// A device that was not running when the order was taken still learns what was chosen, and for whom.
 //
 // `GET /api/orders/live` exists for exactly this — its own doc calls it *"what a device has instead
 // of the events it was not running to hear"* — and it carried the item, the quantity, the money and
-// the state, and not what was chosen. So a kitchen display switched on mid-service, a second till
-// joining a table, or any device that reloads, rebuilt every ticket as a bare "Margherita".
+// the state, and neither the choice nor the seat. So a kitchen display switched on mid-service, a
+// second till joining a table, or any device that reloads, rebuilt every ticket as a bare
+// "Margherita" belonging to nobody.
 //
 // This is the one case the rest of this file cannot reach: the harness is a single browser session,
-// so every other flow sees the choice through the fan-out event it was there for. A real reload is
-// what throws that away and makes the read answer — which is why this navigates with `page.goto`
-// rather than by clicking, the opposite of the rule `navigateTo` follows for every other flow.
-test("a screen that reloads mid-service still knows what was chosen", async ({ page }) => {
+// so every other flow sees both through the fan-out event it was there for. A real reload is what
+// throws that away and makes the read answer — which is why this navigates with `page.goto` rather
+// than by clicking, the opposite of the rule `navigateTo` follows for every other flow.
+test("a screen that reloads mid-service still knows what was chosen, and for whom", async ({
+  page,
+}) => {
   const edge = await startEdge();
   try {
     await pair(page, edge);
     await signIn(page, edge);
     await seatTable(page);
+    const table = new URL(page.url()).pathname;
+    await page.locator('[data-step="chooseSeat"]').first().click();
     await addItemWithAChoice(page);
     await sendOrder(page);
 
     // Everything this session knew is now gone; what comes back came from the edge.
+    await page.goto(`${edge.baseURL}${table}`);
+    await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-seat"]').first()).toBeVisible();
+
     await page.goto(`${edge.baseURL}/kds`);
     await expect(page.locator('[data-outcome="ticket-modifiers"]').first()).toBeVisible();
     await expect(page.getByText("+ Size — 25cm")).toBeVisible();

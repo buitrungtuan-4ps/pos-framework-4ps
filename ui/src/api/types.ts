@@ -56,6 +56,9 @@ export interface LiveLine {
   // before the field sends none, and a till upgraded ahead of its store must not read `undefined`
   // as a crash.
   modifier_menu_item_ids?: string[];
+  // The seat it was ordered for. Absent from the wire for the table's own lines, and for every line
+  // on a store that does not assign seats.
+  seat?: number;
 }
 
 // One open order, table or counter.

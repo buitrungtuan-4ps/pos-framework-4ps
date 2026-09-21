@@ -1098,6 +1098,11 @@ pub struct LiveOrderLine {
     /// mid-service, which is exactly what this read exists for, rebuilt every ticket with no
     /// modifiers on it, so a cook could not tell a 25cm from a 30cm.
     pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Whose dish it is, or `None` for the table's — the same omission, one field over.
+    ///
+    /// A server assigns seats so that the food can be put in front of the right person; a till that
+    /// reloaded lost every one of them and showed a table's worth of anonymous lines.
+    pub seat: Option<u16>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -1152,6 +1157,12 @@ struct LineRecord {
     state: OrderLineState,
     menu_item_id: MenuItemId,
     quantity: Quantity,
+    /// Whose dish it is, when the store assigns seats, or `None` for the table's.
+    ///
+    /// `sales.order_line.added` has carried it since seats were added and this projection dropped
+    /// it, which is the same omission one field over from the modifiers: a till that reloads had no
+    /// way to learn a seat back, so a server rebuilding after a crash saw every line as the table's.
+    seat: Option<u16>,
     course_id: Option<CourseId>,
     /// The extended total the device captured at add time — the base a bill sums per tax class. A
     /// line never re-reads the live menu (§14.2), so this is authoritative.
@@ -1173,6 +1184,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             state: OrderLineState::Added,
             menu_item_id: event.menu_item_id,
             quantity: event.quantity,
+            seat: event.seat,
             course_id: event.course_id,
             line_total: event.line_total,
             tax_class_id: event.tax_class_id,
@@ -2035,6 +2047,8 @@ impl<S: EventStore> Edge<S> {
                     state: OrderLineState::Added,
                     menu_item_id: priced.menu_item_id,
                     quantity: priced.quantity,
+                    // An inbound order has no seat: a marketplace does not know the room.
+                    seat: None,
                     course_id: None,
                     line_total: priced.line_total,
                     tax_class_id: priced.tax_class_id,
@@ -2696,6 +2710,7 @@ impl<S: EventStore> Edge<S> {
                 state: OrderLineState::Added,
                 menu_item_id: draft.menu_item_id,
                 quantity: draft.quantity,
+                seat: draft.seat,
                 course_id: draft.course_id,
                 line_total: draft.line_total,
                 tax_class_id: draft.tax_class_id,
@@ -2965,6 +2980,7 @@ impl<S: EventStore> Edge<S> {
                         state: record.state,
                         bumped: projection.bumped_lines.contains(&order_line_id),
                         modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
+                        seat: record.seat,
                     })
                     .collect(),
             })

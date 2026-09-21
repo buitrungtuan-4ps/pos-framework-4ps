@@ -51,6 +51,11 @@ struct LiveLineResponse {
     /// book it already holds. Always present, empty for a line that carries none, so a reader never
     /// has to tell "no modifiers" apart from "an older edge that did not say".
     modifier_menu_item_ids: Vec<String>,
+    /// The seat the line was ordered for, absent for the table's. Omitted from the wire when absent,
+    /// the way every other optional field on this route is: a `seat` of zero is not "no seat", and a
+    /// null would be a second spelling of the same nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seat: Option<u16>,
 }
 
 /// One open order.
@@ -98,6 +103,7 @@ where
                         .iter()
                         .map(ToString::to_string)
                         .collect(),
+                    seat: line.seat,
                 })
                 .collect(),
         })

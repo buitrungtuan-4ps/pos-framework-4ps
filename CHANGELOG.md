@@ -35,6 +35,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     screen showing an open order — the same one `CounterOrderLine` and the kitchen ticket already
     follow. An id the menu no longer names falls back to the id rather than to a blank, because a
     silently empty modifier is how the wrong dish gets made.
+  - **The seat comes back too**, which was the same omission one field over. `sales.order_line.added`
+    has carried it since seats were added and the projection dropped it, so a till that reloaded
+    mid-service showed a table of anonymous lines — a server rebuilding after a crash could not tell
+    whose main was whose, which is the whole point of assigning seats.
 
 - **A pizza knows its sizes.** A modifier is already an ordinary catalog item with its own price and
   its own recipe, and a **modifier group** is already a min/max selection rule attached to items

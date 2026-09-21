@@ -555,6 +555,11 @@ fn assert_the_lines_read_back(open: &Value, second_line: &str) {
         json!([]),
         "a line that carries none says so, rather than leaving the key off for a reader to guess at"
     );
+    assert!(
+        lines[0]["seat"].is_null(),
+        "a line ordered for the table carries no seat, and says so by omission rather than by a \
+         zero that would read as seat number nought"
+    );
 }
 
 /// A device that was not running when the order was taken can still draw it.
@@ -814,6 +819,24 @@ async fn a_seat_is_recorded_where_the_store_assigns_seats_and_refused_where_it_d
         status,
         StatusCode::OK,
         "a store that assigns seats takes one: {accepted}"
+    );
+
+    // And it survives a reload. A server assigns seats so the food reaches the right person; the
+    // projection dropped the seat the event carried, so `GET /api/orders/live` could not answer for
+    // it and a till that reloaded showed a table of anonymous lines. Asserted here rather than
+    // beside the modifiers, because only this store has the capability on to assert it with.
+    let (status, live) = send(
+        seated.app.clone(),
+        Some(&seated.token),
+        "GET",
+        "/api/orders/live",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        live[0]["lines"][0]["seat"], 3,
+        "the seat comes back with the line a device rebuilds from: {live}"
     );
 }
 

@@ -812,6 +812,7 @@ export async function loadLiveOrders(): Promise<void> {
             // `?? []` for an edge that predates the field, not for one that sends an empty list:
             // both mean the line carries no modifiers, and the till draws the same row either way.
             modifierMenuItemIds: line.modifier_menu_item_ids ?? [],
+            seat: line.seat,
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;
