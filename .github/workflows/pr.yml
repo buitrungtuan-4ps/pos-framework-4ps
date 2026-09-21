@@ -257,6 +257,14 @@ jobs:
       - name: replay every declared flow
         working-directory: ui
         run: pnpm replay
+      # What broke, where a reader will actually find it. A failed replay's assertion
+      # is somewhere in the middle of the log — for `console-replay`, thousands of
+      # lines above the end, because the runner dumps the Postgres service
+      # container's output at teardown. The summary is its own surface and says the
+      # failing flow and its locator whatever the log carries.
+      - name: say which flow failed
+        if: failure()
+        run: node .github/scripts/replay-summary.mjs ui/test-results/report.json >> "$GITHUB_STEP_SUMMARY"
       # The trace of a failed replay is the difference between "a tap did not
       # land" and knowing which one. Only on failure, and only for a fortnight.
       - name: keep the traces of whatever failed
@@ -316,6 +324,18 @@ jobs:
         run: pnpm build
       - name: build the cloud
         run: cargo build -p pos-cloud --locked
+      # `store-postgres` recycles every pooled connection with `ROLLBACK`, which is
+      # load-bearing: a `PgTx` dropped without commit or rollback would otherwise
+      # hand the next caller a connection inside a leaked transaction. Its own
+      # comment says the no-op case "is a harmless no-op (a warning, not an error)"
+      # — and so it is, once. A browser suite makes thousands, and the runner dumps
+      # them into this job's log at teardown, which is what buried the one failure
+      # this gate exists to show. The warning is expected here, so the server is
+      # told not to log it; an `ERROR` still is.
+      - name: quieten the expected recycle warning
+        run: |
+          PGPASSWORD=pos psql -h 127.0.0.1 -U pos -d poscloud -v ON_ERROR_STOP=1 -c \
+            "ALTER SYSTEM SET log_min_messages = 'error'" -c "SELECT pg_reload_conf()"
       # Chromium only, and only the browser this project drives. `--with-deps`
       # installs the shared libraries a headless Chromium needs on a bare runner.
       - name: install the browser
@@ -324,6 +344,14 @@ jobs:
       - name: replay every declared console flow
         working-directory: dashboard
         run: pnpm replay
+      # What broke, where a reader will actually find it. A failed replay's assertion
+      # is somewhere in the middle of the log — for `console-replay`, thousands of
+      # lines above the end, because the runner dumps the Postgres service
+      # container's output at teardown. The summary is its own surface and says the
+      # failing flow and its locator whatever the log carries.
+      - name: say which flow failed
+        if: failure()
+        run: node .github/scripts/replay-summary.mjs dashboard/test-results/report.json >> "$GITHUB_STEP_SUMMARY"
       # The trace of a failed replay is the difference between "a click did not
       # land" and knowing which one. Only on failure, and only for a fortnight.
       - name: keep the traces of whatever failed
