@@ -55,6 +55,12 @@ fn respond(path: &str, bytes: Vec<u8>) -> Response {
                 HeaderValue::from_static("nosniff"),
             ),
             (header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
+            // Security: Prevent sensitive referrer information (e.g. internal routes or parameters)
+            // from leaking to external origins when external resources or links are loaded from the UI.
+            (
+                header::REFERRER_POLICY,
+                HeaderValue::from_static("no-referrer"),
+            ),
         ],
         bytes,
     )
