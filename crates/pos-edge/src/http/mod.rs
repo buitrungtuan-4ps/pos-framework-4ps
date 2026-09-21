@@ -320,6 +320,7 @@ where
         // registry's `pin: true`.
         .route("/api/lines/{id}/void", post(lines::void::<S>))
         .route("/api/bills/{id}/void", post(bills::void::<S>))
+        .route("/api/bills/{id}/discount", post(bills::discount::<S>))
         // The cash shift: open, blind count, close.
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))

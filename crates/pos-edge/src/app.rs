@@ -45,12 +45,12 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, BillingBillVoided, BillingPaymentCaptured,
-    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted,
-    DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType, KitchenTicketBumped,
-    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
-    SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
+    BillingBillOpened, BillingBillSettled, BillingBillVoided, BillingDiscountApplied,
+    BillingPaymentCaptured, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
+    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
+    SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
+    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -72,7 +72,7 @@ use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::ulid::Ulid;
 use pos_proto::{
     BillState, ClockSource, IdGenerator, Open, OrderLineState, PaymentMethod, PaymentOutcome,
-    SalesChannel, ShiftState, TableState,
+    ReductionKind, SalesChannel, ShiftState, TableState,
 };
 
 use crate::clock::SystemClock;
@@ -1187,6 +1187,30 @@ struct BillRecord {
     order_id: OrderId,
     table_id: Option<TableId>,
     state: BillState,
+    /// What has been taken off this bill so far, by kind.
+    ///
+    /// Kept apart rather than summed, because `billing::BillInput` takes them apart — a discount is
+    /// a price decision and a comp is food given away whose cost inventory still carries — and the
+    /// receipt prints them on two lines. One field would have to be split again at every reader.
+    ///
+    /// `None` is "none yet", and is not the same as zero. A bill is opened by
+    /// `billing.bill.opened`, which carries no money at all, and the replay fold has no session to
+    /// ask for a currency — so a `Money::zero` here would need a currency invented at fold time,
+    /// which is a worse thing to store than the absence it would be standing in for. The currency
+    /// arrives with the first reduction, on the event's own `amount`.
+    discount: Option<Money>,
+    comp: Option<Money>,
+}
+
+impl BillRecord {
+    /// Every reduction on this bill, in the store's currency — the two figures
+    /// [`billing::BillInput`] takes.
+    fn reductions(&self, currency: CurrencyCode) -> (Money, Money) {
+        (
+            self.discount.unwrap_or_else(|| Money::zero(currency)),
+            self.comp.unwrap_or_else(|| Money::zero(currency)),
+        )
+    }
 }
 
 /// What the projection remembers about a cash shift: its state, the float it opened with, the cash
@@ -1599,6 +1623,32 @@ impl Projection {
 
     fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
         self.bills.get(&bill_id).copied()
+    }
+
+    /// Records a reduction against a bill. Additive, because two discounts on one bill are two
+    /// facts rather than a correction of the first.
+    ///
+    /// A kind this build does not know — `VOID`, or a token from a newer sender — moves nothing.
+    /// The alternative is to guess which column it belongs in, and guessing wrong understates what
+    /// a guest owes.
+    fn add_reduction(
+        &mut self,
+        bill_id: BillId,
+        kind: ReductionKind,
+        amount: Money,
+    ) -> Result<(), DomainError> {
+        if let Some(record) = self.bills.get_mut(&bill_id) {
+            let slot = match kind {
+                ReductionKind::Discount => &mut record.discount,
+                ReductionKind::Comp => &mut record.comp,
+                ReductionKind::Void | ReductionKind::Unspecified => return Ok(()),
+            };
+            *slot = Some(match *slot {
+                Some(running) => running.checked_add(amount)?,
+                None => amount,
+            });
+        }
+        Ok(())
     }
 
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
@@ -2314,11 +2364,12 @@ impl<S: EventStore> Edge<S> {
     fn override_record(
         permission: Permission,
         approver: EmployeeId,
+        exceeded_by: Option<Money>,
     ) -> SecurityPermissionOverridden {
         SecurityPermissionOverridden {
             permission_key: PermissionKey::new(permission.meta().id),
             approver_employee_id: approver,
-            exceeded_by: None,
+            exceeded_by,
         }
     }
 
@@ -2394,7 +2445,7 @@ impl<S: EventStore> Edge<S> {
         // One transaction for the void and the override that authorised it: a log holding the void
         // without the approval would show an act nobody could have performed.
         if let Some(approver) = approver {
-            let override_record = Self::override_record(Permission::VoidFiredLine, approver);
+            let override_record = Self::override_record(Permission::VoidFiredLine, approver, None);
             let (envelope, message) = self.prepare(&ctx, &override_record)?;
             envelopes.push(envelope);
             messages.push(message);
@@ -2463,7 +2514,7 @@ impl<S: EventStore> Edge<S> {
         let mut envelopes = vec![voided_envelope];
         let mut messages = vec![voided_message];
         if let Some(approver) = approver {
-            let override_record = Self::override_record(Permission::VoidBill, approver);
+            let override_record = Self::override_record(Permission::VoidBill, approver, None);
             let (envelope, message) = self.prepare(&ctx, &override_record)?;
             envelopes.push(envelope);
             messages.push(message);
@@ -2472,6 +2523,136 @@ impl<S: EventStore> Edge<S> {
 
         self.lock_projection().set_bill_state(bill_id, next_state);
         Ok(next_state)
+    }
+
+    /// Takes money off a bill before it settles — a bill-level discount (`docs/pos-spec.md` §14.4,
+    /// roadmap B2.2).
+    ///
+    /// `billing.discount.applied` has been defined in `pos-proto`, with exactly this shape, since
+    /// the schema was written, and `billing::assemble` has taken a `bill_discount` and allocated it
+    /// across tax classes for just as long. Nothing ever emitted the event and the edge passed a
+    /// hard-coded zero, so the arithmetic ran on every bill and could only ever produce the same
+    /// answer.
+    ///
+    /// # The ceiling, and why an absent one is zero
+    ///
+    /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged — its own
+    /// description is "apply a discount up to the role's configured ceiling". **No store publishes
+    /// a ceiling**: nothing in the cloud authors one and no config node carries one, which is why
+    /// `None` goes to the domain here. [`decide_bill`] reads that as zero, so today every discount
+    /// needs `billing.discount.override_ceiling` and a manager's PIN. The moment a ceiling is
+    /// published this becomes ordinary work for a server with no code change, which is the right
+    /// direction for the default to fail in.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`]; [`AppError::VoidReasonNotValid`] if the reason is not one the
+    /// store publishes for a discount; [`AppError::ApprovalRefused`] if the manager's PIN does not
+    /// authorise; [`AppError::Domain`] if the bill has settled or been voided, if the actor may not
+    /// discount, or if the reductions would take the bill below nothing.
+    pub async fn discount_bill(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        amount: Money,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<BillTotals, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        if !session
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::Discount)
+        {
+            return Err(AppError::VoidReasonNotValid);
+        }
+
+        // The pre-tax base is what there is to reduce: tax follows from it, so reducing past it
+        // would make the tax negative before the total was.
+        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
+        let mut reducible = Money::zero(session.currency);
+        for base in &class_bases {
+            reducible = reducible
+                .checked_add(base.amount)
+                .map_err(DomainError::from)?;
+        }
+        let (discount, comp) = bill.reductions(session.currency);
+        let applied = discount.checked_add(comp).map_err(DomainError::from)?;
+
+        // The step-up is attempted only when the till sent one, exactly as a line void does: the
+        // till does not have to know the ceiling rule, and the domain answers with the permission
+        // that was missing when it needed one and none came.
+        let approver = match approval {
+            Some(_) => {
+                self.resolve_step_up(&mut ctx, Permission::OverrideDiscountCeiling, approval)?
+            }
+            None => None,
+        };
+
+        // The decision is the gate, not a value: a reduction moves the bill nowhere and runs no
+        // effect, so there is nothing in it to carry forward. What it does is refuse.
+        let _decided = decide_bill(
+            bill.state,
+            BillCommand::Reduce {
+                kind: ReductionKind::Discount,
+                amount,
+                applied,
+                reducible,
+                // No store publishes one. See the header.
+                ceiling: None,
+                pin_verified: approver.is_some(),
+            },
+            &ctx,
+        )?;
+
+        let applied_event = BillingDiscountApplied {
+            bill_id,
+            // Bill-level: the whole check, not a line on it. A line-level discount is the same
+            // event with this set, and is its own change.
+            order_line_id: None,
+            // A person decided this, not a rule. A campaign-granted discount arrives from the
+            // campaign engine and carries its id.
+            campaign_id: None,
+            kind: Open::from_known(ReductionKind::Discount),
+            amount,
+            reason_code_id: Some(reason_code_id),
+        };
+        let (event_envelope, event_message) = self.prepare(&ctx, &applied_event)?;
+        let mut envelopes = vec![event_envelope];
+        let mut messages = vec![event_message];
+        if let Some(approver) = approver {
+            // `exceeded_by` finally carries a figure. With no ceiling published the whole amount is
+            // over it, which is the honest number: a void's override has none because a void is not
+            // an amount at all, and that asymmetry is the point of the field.
+            let record =
+                Self::override_record(Permission::OverrideDiscountCeiling, approver, Some(amount));
+            let (envelope, message) = self.prepare(&ctx, &record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection()
+            .add_reduction(bill_id, ReductionKind::Discount, amount)
+            .map_err(AppError::Domain)?;
+
+        // The new figure, so the till redraws the bill from the edge's arithmetic rather than
+        // subtracting the discount itself and risking a second opinion about the tax.
+        let (discount, comp) = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?
+            .reductions(session.currency);
+        Ok(billing::assemble(&Self::bill_input(
+            &session,
+            &class_bases,
+            channel,
+            (discount, comp),
+        ))?)
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -2811,11 +2992,50 @@ impl<S: EventStore> Edge<S> {
         // Bound to a local first: a `match` on the call would hold the projection guard across the
         // arm, and the arm takes it again — which is a deadlock, not a borrow error.
         let open_order = self.lock_projection().order_for_table(table_id);
-        match open_order {
-            Some(order_id) => self.order_totals(order_id),
+        let Some(order_id) = open_order else {
             // A free table owes nothing, which is a real answer for a screen to show.
-            None => Ok(Self::nothing_owed(self.session().currency)),
+            return Ok(Self::nothing_owed(self.session().currency));
+        };
+        // Through the bill where there is one, because that is where a reduction is recorded. The
+        // order's own worth is what it sold; the bill's is what the guest owes, and once anything
+        // has come off they are different numbers. Quoting the first would have the operator read
+        // out a figure the settle then disagrees with.
+        //
+        // Bound to a local for the reason the comment above gives, and which I proved by writing it
+        // the other way first: `match self.lock_projection()...` holds the guard across the arm,
+        // and both arms take it again. The test suite hung rather than failed.
+        let open_bill = self.lock_projection().bill_for_order(order_id);
+        match open_bill {
+            Some(bill_id) => self.bill_totals(bill_id),
+            None => self.order_totals(order_id),
         }
+    }
+
+    /// What a **bill** owes: its order's lines, less what has been taken off it.
+    ///
+    /// The settle path's arithmetic, available as a read, so the till and the receipt and the
+    /// settlement are one calculation rather than three that agree until a discount is applied.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if a line's tax class has no
+    /// configured rate.
+    pub fn bill_totals(&self, bill_id: BillId) -> Result<BillTotals, AppError> {
+        let session = self.session();
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
+        if class_bases.is_empty() {
+            return Ok(Self::nothing_owed(session.currency));
+        }
+        Ok(billing::assemble(&Self::bill_input(
+            &session,
+            &class_bases,
+            channel,
+            bill.reductions(session.currency),
+        ))?)
     }
 
     /// Every counter order still owing money, for the takeaway screen
@@ -3118,10 +3338,16 @@ impl<S: EventStore> Edge<S> {
             // rightly so; but "owes nothing" is a real answer for a screen to show, not an error.
             return Ok(Self::nothing_owed(session.currency));
         }
+        // An order's own total carries no reduction: a discount is applied to a **bill**, and an
+        // order that has not had one opened has nothing to reduce. `check_totals` re-reads through
+        // the bill when there is one, which is where the figures differ and where the guest's
+        // question is actually being answered.
+        let nothing_off = (Money::zero(session.currency), Money::zero(session.currency));
         Ok(billing::assemble(&Self::bill_input(
             &session,
             &class_bases,
             channel,
+            nothing_off,
         ))?)
     }
 
@@ -3244,6 +3470,8 @@ impl<S: EventStore> Edge<S> {
                     order_id,
                     table_id,
                     state: BillState::Open,
+                    discount: None,
+                    comp: None,
                 },
             );
             if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
@@ -3312,7 +3540,12 @@ impl<S: EventStore> Edge<S> {
         // the rate for the channel *this order* came in on (B1.2).
         let session = self.session();
         let (class_bases, channel) = self.taxable_bases(bill.order_id, &session)?;
-        let totals = billing::assemble(&Self::bill_input(&session, &class_bases, channel))?;
+        let totals = billing::assemble(&Self::bill_input(
+            &session,
+            &class_bases,
+            channel,
+            bill.reductions(session.currency),
+        ))?;
 
         // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
         // order has no table, so there is no floor move to prove and no tables capability to
@@ -3713,6 +3946,18 @@ impl<S: EventStore> Edge<S> {
         known: EventType,
     ) -> Result<(), AppError> {
         match known {
+            EventType::BillingDiscountApplied => {
+                let event: BillingDiscountApplied =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                // Rebuilt from the log rather than from a stored total, so a store that restarts
+                // mid-service quotes the guest the reduced figure it already quoted them. Without
+                // this arm a discount survived the commit and vanished on the next boot — and the
+                // bill would settle at full price with the guest holding a receipt that said
+                // otherwise.
+                projection
+                    .add_reduction(event.bill_id, event.kind.known(), event.amount)
+                    .map_err(AppError::Domain)?;
+            }
             EventType::BillingBillOpened => {
                 let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 // The bill is recorded whether or not a table is found. A bill event names its
@@ -3727,6 +3972,8 @@ impl<S: EventStore> Edge<S> {
                         order_id: event.order_id,
                         table_id,
                         state: BillState::Open,
+                        discount: None,
+                        comp: None,
                     },
                 );
                 if let Some(table_id) = table_id {
@@ -3830,7 +4077,8 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::BillingBillOpened
             | EventType::BillingPaymentCaptured
-            | EventType::BillingBillSettled => {
+            | EventType::BillingBillSettled
+            | EventType::BillingDiscountApplied => {
                 Self::fold_billing(projection, envelope, known)?;
             }
             EventType::CashShiftOpened => {
@@ -3932,13 +4180,15 @@ impl<S: EventStore> Edge<S> {
         session: &'a EdgeSession,
         class_bases: &'a [ClassBase],
         sales_channel: SalesChannel,
+        reductions: (Money, Money),
     ) -> BillInput<'a> {
         let currency = session.currency;
+        let (bill_discount, comps) = reductions;
         BillInput {
             currency_code: currency,
             class_bases,
-            bill_discount: Money::zero(currency),
-            comps: Money::zero(currency),
+            bill_discount,
+            comps,
             service_charge: Money::zero(currency),
             service_charge_taxable: true,
             service_charge_tax_class: None,

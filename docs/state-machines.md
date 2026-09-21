@@ -32,11 +32,11 @@ state's wire token, or `·` when the trigger is not valid in that state.
 
 ### `bill`
 
-| state | settle | void |
-|---|---|---|
-| `BILL_STATE_OPEN` | `BILL_STATE_SETTLED` | `BILL_STATE_VOIDED` |
-| `BILL_STATE_SETTLED` *(terminal)* | · | · |
-| `BILL_STATE_VOIDED` *(terminal)* | · | · |
+| state | settle | void | reduce |
+|---|---|---|---|
+| `BILL_STATE_OPEN` | `BILL_STATE_SETTLED` | `BILL_STATE_VOIDED` | `BILL_STATE_OPEN` |
+| `BILL_STATE_SETTLED` *(terminal)* | · | · | · |
+| `BILL_STATE_VOIDED` *(terminal)* | · | · | · |
 
 ### `shift`
 

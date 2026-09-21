@@ -33,6 +33,12 @@ use crate::http::{bad_request, error_response, parse_ulid};
 pub(crate) struct CheckResponse {
     /// The sum of the order's live line totals, before tax.
     subtotal: Money,
+    /// What has been taken off, once a bill is open to take it off. Two figures rather than one,
+    /// because the receipt prints them on two lines and for two different reasons — a discount is
+    /// a price decision, a comp is food given away. Zero until something is applied, which is every
+    /// bill until somebody reduces one.
+    discount_total: Money,
+    comp_total: Money,
     /// The tax on those lines, each class rounded once by the domain.
     tax_total: Money,
     /// What the guest owes — the figure the bill will settle against.
@@ -55,6 +61,8 @@ where
             StatusCode::OK,
             Json(CheckResponse {
                 subtotal: totals.subtotal,
+                discount_total: totals.discount_total,
+                comp_total: totals.comp_total,
                 tax_total: totals.tax_total,
                 total_due: totals.total_due,
             }),
@@ -88,6 +96,8 @@ where
             StatusCode::OK,
             Json(CheckResponse {
                 subtotal: totals.subtotal,
+                discount_total: totals.discount_total,
+                comp_total: totals.comp_total,
                 tax_total: totals.tax_total,
                 total_due: totals.total_due,
             }),

@@ -12,6 +12,7 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  DiscountResponse,
   LineRequest,
   LayoutCategory,
   MenuItemResponse,
@@ -860,6 +861,28 @@ export async function voidLine(
 //
 // The table goes back to occupied. The bill is gone but the order is not — the lines are still
 // there, and a cashier who voided the wrong bill can open another one on the same table.
+/// Takes money off a bill, and hands back what it now comes to.
+///
+/// The edge's own figures are returned rather than a bare acknowledgement, and the caller shows
+/// them: the till must never subtract a discount from a total itself, because the tax follows the
+/// reduced base and a second opinion about it is a second price for the same meal.
+///
+/// The approval is optional in the shape and required by the act today. No store publishes a
+/// discount ceiling, so the edge reads it as zero and every discount needs a manager — but the till
+/// sends the same request either way, and the edge answers when the manager is what is missing.
+export async function applyDiscount(
+  billId: string,
+  amount: Money,
+  reasonCodeId: string,
+  approval: ApproverRequest,
+): Promise<DiscountResponse> {
+  return api.discountBill(billId, {
+    amount,
+    reason_code_id: reasonCodeId,
+    ...approval,
+  });
+}
+
 export async function voidBill(
   billId: string,
   reasonCodeId: string,

@@ -285,6 +285,13 @@ triggers! {
         Settle => "settle",
         /// Void the bill before settlement.
         Void => "void",
+        /// Reduce what the bill owes — a discount, or a comp.
+        ///
+        /// A self-transition, for the reason [`LineTrigger::Amend`] is one: the bill is the same
+        /// bill, and it is still open for payment. What the row buys is the refusal on the other
+        /// two states, where there is no arm at all — a settled bill is not discounted, it is
+        /// refunded, and a voided one is owed nothing to reduce.
+        Reduce => "reduce",
     }
 }
 
@@ -317,6 +324,7 @@ impl StateMachine for Bill {
         Some(match (from, trigger) {
             (BillState::Open, BillTrigger::Settle) => BillState::Settled,
             (BillState::Open, BillTrigger::Void) => BillState::Voided,
+            (BillState::Open, BillTrigger::Reduce) => BillState::Open,
             _ => return None,
         })
     }

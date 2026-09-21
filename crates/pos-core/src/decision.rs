@@ -34,7 +34,7 @@ use pos_proto::ids::{CourseId, DeviceId, EmployeeId, MenuItemId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
 use pos_proto::time::{BusinessDate, Timestamp};
-use pos_proto::{BillState, OrderLineState, ShiftState, TableState};
+use pos_proto::{BillState, OrderLineState, ReductionKind, ShiftState, TableState};
 
 use crate::billing::{Payment, Settlement};
 use crate::campaign::Connectivity;
@@ -303,6 +303,69 @@ pub enum BillCommand {
         /// Whether the edge has collected and verified the actor's PIN.
         pin_verified: bool,
     },
+    /// Reduce what the bill owes, before it settles.
+    Reduce {
+        /// Which reduction this is. Two published events, two permissions, and two different
+        /// stories on a receipt — so a variant rather than a flag on one command.
+        kind: ReductionKind,
+        /// How much to take off, non-negative. A negative amount is refused as money arithmetic
+        /// rather than given a rule of its own: adding to a bill by discounting it is not a
+        /// smaller version of a legal act, it is a different one.
+        amount: Money,
+        /// What every reduction on this bill already comes to, before this one.
+        applied: Money,
+        /// What there is to reduce: the bill's pre-tax base. Passed in, as `Settle` is passed
+        /// `total_due`, because the caller has the lines and the domain has the rule.
+        reducible: Money,
+        /// The most this actor's role may discount without a manager, or `None` where the store
+        /// has published no ceiling.
+        ///
+        /// **`None` means zero, not unlimited.** `billing.discount.apply` is granted to a server
+        /// and is *not* PIN-flagged — its own description is "apply a discount up to the role's
+        /// configured ceiling" — so the ceiling is the only thing bounding it. Reading an absent
+        /// ceiling as "no limit" would hand every server an unbounded till; reading it as zero
+        /// means a discount needs a manager until somebody says otherwise, which is the same
+        /// deny-by-default the permission set itself uses. Ignored for a comp, which is
+        /// manager-only by its own permission.
+        ceiling: Option<Money>,
+        /// Whether the edge has collected and verified a manager's PIN for this act.
+        pin_verified: bool,
+    },
+}
+
+/// Whether a discount of `amount` is above what this role may give without a manager.
+///
+/// An absent ceiling is **zero**, so any discount at all needs the override. See
+/// [`BillCommand::Reduce::ceiling`] for why that direction and not the other.
+fn over_ceiling(amount: Money, ceiling: Option<Money>) -> Result<bool, DomainError> {
+    let Some(ceiling) = ceiling else {
+        return Ok(!amount.is_zero());
+    };
+    Ok(ceiling.checked_sub(amount)?.is_negative())
+}
+
+/// The permission a reduction of this kind needs.
+///
+/// [`ReductionKind`] is `pos-proto`'s and has been since the schema was written — this maps it to
+/// the two permissions the registry already publishes for it rather than restating the pair.
+///
+/// `Void` has no arm: a void is not a reduction of a bill that is still owed, it is
+/// [`BillCommand::Void`] with its own permission and its own terminal state. The wire enum carries
+/// all three because accounting treats all three differently on a *report*; only two of them are
+/// commands here.
+///
+/// # Errors
+///
+/// [`DomainError::PermissionDenied`] naming `billing.reduction.void`, which is not a permission
+/// anybody holds, for `Void` or for a token a newer sender used that this build does not know.
+fn reduction_permission(kind: ReductionKind) -> Result<Permission, DomainError> {
+    match kind {
+        ReductionKind::Discount => Ok(Permission::ApplyDiscount),
+        ReductionKind::Comp => Ok(Permission::ApplyComp),
+        ReductionKind::Void | ReductionKind::Unspecified => Err(DomainError::PermissionDenied {
+            permission: "billing.reduction.void",
+        }),
+    }
 }
 
 /// Decides a bill command against the bill's current state.
@@ -341,6 +404,52 @@ pub fn decide_bill(
                 next_state,
                 settlement: Some(settlement),
                 effects: vec![Effect::PrintReceipt],
+            })
+        }
+        BillCommand::Reduce {
+            kind,
+            amount,
+            applied,
+            reducible,
+            ceiling,
+            pin_verified,
+        } => {
+            // The machine first, so a settled or voided bill is refused before anything is
+            // computed about money that is no longer owed.
+            let next_state = Bill::step(current, BillTrigger::Reduce)?;
+            let permission = reduction_permission(kind)?;
+            let grant = ctx.require(permission)?;
+            if grant.pin_required && !pin_verified {
+                return Err(DomainError::PermissionDenied {
+                    permission: permission.meta().id,
+                });
+            }
+            // Above the role's ceiling it is a second, manager-only act — which is what
+            // `billing.discount.override_ceiling` has been published for all along.
+            if kind == ReductionKind::Discount && over_ceiling(amount, ceiling)? {
+                let over = ctx.require(Permission::OverrideDiscountCeiling)?;
+                if over.pin_required && !pin_verified {
+                    return Err(DomainError::PermissionDenied {
+                        permission: Permission::OverrideDiscountCeiling.meta().id,
+                    });
+                }
+            }
+            // The sum, not this reduction alone: two reductions that are each legal can be
+            // illegal together, and only the total can say so.
+            let total = applied.checked_add(amount)?;
+            // Subtract and read the sign rather than compare: `Money` is deliberately not `Ord`,
+            // because comparing two amounts in different currencies is the one arithmetic mistake
+            // that looks right. `checked_sub` refuses the mismatch for us.
+            if reducible.checked_sub(total)?.is_negative() {
+                return Err(DomainError::ReductionExceedsBill {
+                    reduction_minor: total.amount_minor,
+                    reducible_minor: reducible.amount_minor,
+                });
+            }
+            Ok(BillDecision {
+                next_state,
+                settlement: None,
+                effects: Vec::new(),
             })
         }
         BillCommand::Void { pin_verified } => {
@@ -500,7 +609,9 @@ mod tests {
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::quantity::Quantity;
     use pos_proto::time::{BusinessDate, Timestamp};
-    use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState, Ulid};
+    use pos_proto::{
+        BillState, OrderLineState, PaymentMethod, ReductionKind, ShiftState, TableState, Ulid,
+    };
 
     fn vnd(amount: i64) -> Money {
         Money::new(CurrencyCode::VND, amount)
@@ -846,6 +957,244 @@ mod tests {
                 &ctx,
             ),
             Err(DomainError::Transition(_))
+        ));
+    }
+
+    // ---- Reductions ----
+
+    /// A reduction on a 100,000 bill, with a manager standing there and a 50,000 ceiling, so each
+    /// test below varies exactly the one thing it is about.
+    fn reduce(kind: ReductionKind, amount: i64, applied: i64) -> BillCommand {
+        BillCommand::Reduce {
+            kind,
+            amount: vnd(amount),
+            applied: vnd(applied),
+            reducible: vnd(100_000),
+            ceiling: Some(vnd(50_000)),
+            pin_verified: true,
+        }
+    }
+
+    /// A discount under the ceiling is ordinary work: `billing.discount.apply` is granted to a
+    /// server and is **not** PIN-flagged, so no manager is fetched for taking 20,000 off.
+    #[test]
+    fn a_discount_within_the_ceiling_needs_no_manager() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            CapabilityContext::NONE,
+        );
+        let alone = BillCommand::Reduce {
+            kind: ReductionKind::Discount,
+            amount: vnd(20_000),
+            applied: vnd(0),
+            reducible: vnd(100_000),
+            ceiling: Some(vnd(50_000)),
+            pin_verified: false,
+        };
+        assert!(decide_bill(BillState::Open, alone, &ctx).is_ok());
+    }
+
+    /// Above it, it is a different act. `billing.discount.override_ceiling` is manager-only and
+    /// PIN-flagged, and holding the ordinary discount permission does not stand in for it.
+    #[test]
+    fn a_discount_above_the_ceiling_needs_the_override_and_its_pin() {
+        let server = ctx_with(
+            PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Discount, 60_000, 0),
+                &server
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.discount.override_ceiling"
+            })
+        ));
+
+        let manager = ctx_with(
+            PermissionSet::EMPTY
+                .with(Permission::ApplyDiscount)
+                .with(Permission::OverrideDiscountCeiling),
+            CapabilityContext::NONE,
+        );
+        assert!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Discount, 60_000, 0),
+                &manager
+            )
+            .is_ok()
+        );
+
+        // Held but not verified is not held: the override is PIN-flagged.
+        let unverified = BillCommand::Reduce {
+            kind: ReductionKind::Discount,
+            amount: vnd(60_000),
+            applied: vnd(0),
+            reducible: vnd(100_000),
+            ceiling: Some(vnd(50_000)),
+            pin_verified: false,
+        };
+        assert!(matches!(
+            decide_bill(BillState::Open, unverified, &manager),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.discount.override_ceiling"
+            })
+        ));
+    }
+
+    /// The direction that matters most. No store publishes a discount ceiling today — nothing in
+    /// the cloud authors one — and `billing.discount.apply` is granted to a server with no PIN. If
+    /// an absent ceiling meant "no limit", every server would hold an unbounded till on the day
+    /// this shipped. It means zero.
+    #[test]
+    fn a_store_that_has_published_no_ceiling_has_a_ceiling_of_zero() {
+        let server = ctx_with(
+            PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            CapabilityContext::NONE,
+        );
+        let any_discount = BillCommand::Reduce {
+            kind: ReductionKind::Discount,
+            amount: vnd(1),
+            applied: vnd(0),
+            reducible: vnd(100_000),
+            ceiling: None,
+            pin_verified: true,
+        };
+        assert!(matches!(
+            decide_bill(BillState::Open, any_discount, &server),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.discount.override_ceiling"
+            })
+        ));
+
+        // And a discount of nothing is not a discount, so it is not an override either.
+        let nothing = BillCommand::Reduce {
+            kind: ReductionKind::Discount,
+            amount: vnd(0),
+            applied: vnd(0),
+            reducible: vnd(100_000),
+            ceiling: None,
+            pin_verified: false,
+        };
+        assert!(decide_bill(BillState::Open, nothing, &server).is_ok());
+    }
+
+    /// The two reductions are two permissions, and holding one does not grant the other. A server
+    /// who may knock money off a price may not give the food away.
+    #[test]
+    fn a_comp_is_not_a_discount_and_neither_grants_the_other() {
+        let discounter = ctx_with(
+            PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Comp, 20_000, 0),
+                &discounter
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.comp.apply"
+            })
+        ));
+
+        let comper = ctx_with(
+            PermissionSet::EMPTY.with(Permission::ApplyComp),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                // Under the ceiling, so the refusal is about the discount permission itself
+                // rather than about the override.
+                reduce(ReductionKind::Discount, 20_000, 0),
+                &comper
+            ),
+            Err(DomainError::PermissionDenied {
+                permission: "billing.discount.apply"
+            })
+        ));
+    }
+
+    /// The sum is what is checked, not the reduction in hand. This is the case a per-reduction
+    /// check would pass: two discounts, each well under the bill, that together exceed it.
+    #[test]
+    fn two_legal_reductions_can_be_illegal_together() {
+        // A manager, so the ceiling is not what this test is measuring.
+        let ctx = ctx_with(
+            PermissionSet::EMPTY
+                .with(Permission::ApplyDiscount)
+                .with(Permission::OverrideDiscountCeiling),
+            CapabilityContext::NONE,
+        );
+        // 60,000 off a 100,000 bill: fine.
+        assert!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Discount, 60_000, 0),
+                &ctx
+            )
+            .is_ok()
+        );
+        // Another 60,000 on top of it: not fine, although 60,000 alone was.
+        assert!(matches!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Discount, 60_000, 60_000),
+                &ctx
+            ),
+            Err(DomainError::ReductionExceedsBill {
+                reduction_minor: 120_000,
+                reducible_minor: 100_000,
+            })
+        ));
+        // And exactly the bill is allowed: a guest can be given the whole thing.
+        assert!(
+            decide_bill(
+                BillState::Open,
+                reduce(ReductionKind::Discount, 40_000, 60_000),
+                &ctx
+            )
+            .is_ok()
+        );
+    }
+
+    /// A settled bill is not discounted, it is refunded (ADR-0028), and a voided one is owed
+    /// nothing to reduce. Both refusals are the machine's, not a permission's — there is no PIN
+    /// that makes either legal.
+    #[test]
+    fn a_bill_that_is_no_longer_open_cannot_be_reduced() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY
+                .with(Permission::ApplyDiscount)
+                .with(Permission::ApplyComp),
+            CapabilityContext::NONE,
+        );
+        for state in [BillState::Settled, BillState::Voided] {
+            assert!(matches!(
+                decide_bill(state, reduce(ReductionKind::Discount, 1_000, 0), &ctx),
+                Err(DomainError::Transition(_))
+            ));
+        }
+    }
+
+    /// `ReductionKind` carries a third value the wire needs and this command does not: a void is
+    /// `BillCommand::Void`, with its own permission and its own terminal state. An unknown token
+    /// from a newer sender lands in the same arm, which is the safe direction.
+    #[test]
+    fn a_void_is_not_a_reduction_command() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY
+                .with(Permission::ApplyDiscount)
+                .with(Permission::ApplyComp),
+            CapabilityContext::NONE,
+        );
+        assert!(matches!(
+            decide_bill(BillState::Open, reduce(ReductionKind::Void, 1_000, 0), &ctx),
+            Err(DomainError::PermissionDenied { .. })
         ));
     }
 
