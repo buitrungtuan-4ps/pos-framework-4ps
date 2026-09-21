@@ -108,7 +108,7 @@ export function Floor() {
         class={
           areaIsPlaced(group)
             ? "grid gap-3 overflow-x-auto [grid-auto-columns:minmax(9rem,1fr)] [grid-auto-flow:dense]"
-            : "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+            : "grid grid-cols-2 gap-3 tablet:grid-cols-3 terminal:grid-cols-4"
         }
       >
         <For each={group.tables}>{card}</For>
