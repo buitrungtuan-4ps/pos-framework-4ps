@@ -42,12 +42,57 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - **Upgrade note.** None. The route is additive, the event was already published, and a store that
     applies no discount behaves exactly as before.
 
+- **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
+  profile decides the starting screen and flow — same components, different assembly, not three
+  applications"*, and §10's capability model has carried the profiles all along: a counter preset, a
+  retail preset, and a validity rule saying `PayFirst` and `Tables` cannot both be on. **The till
+  implemented one profile.** It landed every store on a floor plan and offered every store a kitchen
+  board, including the ones with neither.
+  - `GET /api/menu` publishes **`tables_enabled`** and **`kds_enabled`**, under the rule that
+    module's header sets: a flag joins the response in the change that consumes it.
+  - `/` draws the floor plan where the store does tables and the counter list where it does not.
+    **Home stays `/` on every profile** — what changes is the screen, not the address, because a
+    home that moved per shop would be three applications wearing one name.
+  - The status bar drops the destinations a store has no use for. A link to a kitchen board nobody
+    watches is an offer the store cannot honour, which is the same failure `tips_enabled` was
+    published to stop.
+  - `examples/minimal-edge` publishes the counter profile under **`POS_DEMO_PROFILE=counter`**, so
+    it is something a contributor can run and the browser gate can drive — the same reason the demo
+    turns seats on.
+  - **Still missing, and recorded rather than guessed at:** retail has no barcode screen to start on
+    (`Capability::Barcode` has no reader anywhere in the till, so a retail store lands on the counter
+    with everything else that is not table service); a counter store cannot yet *begin* an order at
+    the till, because the counter list shows orders relayed from the cloud and no command exists for
+    a cashier to open a tableless one; and `pay_first_enabled` and `queue_number_enabled` have no
+    readers either.
+  - **Upgrade note.** None. Both flags default **on**, and the till treats an unsynced read as the
+    table-service profile — so a store that publishes neither behaves exactly as before.
+
 ### Fixed
 
 - **The running check ignored discounts.** `check_totals` read the *order*, which knows nothing
   about a reduction, so a till would have quoted a guest full price while the settle charged the
   discounted one. It goes through the bill when there is one now, and `GET /api/tables/{id}/check`
   carries `discount_total` and `comp_total` so the screen can show why the figure moved.
+
+- **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on
+  all of them.** `docs/ui-ux.md` §1 principle 9 has named four device classes since P6 and the
+  screens adapted on Tailwind's stock `sm`/`lg`/`xl`; principle 2 asks for 48 px targets and
+  `app.css` promises to keep the page from scrolling sideways. Measured against a running edge, all
+  three were false: the status bar's ten destinations sat in a row that could not wrap, 488 px wide
+  against a 390 px screen, each one bare text 20 px high — at **every** size, not just on a phone.
+  - The device classes are now **tokens with names**: `tablet:` (768 px) and `terminal:` (1024 px),
+    with the phone as the unprefixed base. They are added beside Tailwind's stock names rather than
+    replacing them — `tokens.css` is mirrored into `dashboard/`, and the console has forty-five
+    responsive rules in the stock vocabulary that clearing the defaults would have flattened
+    silently. The vocabulary is enforced where it applies instead: `ui/scripts/device-classes.mjs`
+    fails the `ui` job on a stock prefix under `ui/src`, and also fails if *nothing* adapts, so it
+    cannot pass by deletion.
+  - The status bar wraps, and every link and button in it is `min-h-touch`.
+  - On a phone the order screen's **send and take-payment buttons are anchored to the bottom**, which
+    principle 9 has asked for all along; a large table's order used to sit below its own lines.
+  - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
+    claims. Reverting the status bar turns all three red, naming the element that sticks out.
 
 ### Added
 

@@ -23,7 +23,7 @@ export function Today() {
   return (
     <section class="p-4">
       <PageHeader title={t("today.title")} />
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="grid grid-cols-2 gap-3 tablet:grid-cols-4">
         <For each={ORDER}>
           {(key) => (
             <div class="rounded-token border border-line bg-surface p-4">
@@ -34,7 +34,7 @@ export function Today() {
         </For>
       </div>
 
-      <div class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="mt-4 grid grid-cols-2 gap-3 tablet:grid-cols-4">
         <div class="rounded-token border border-line bg-surface p-4">
           <p class="text-2xl font-semibold tabular-nums">{openBillCount()}</p>
           <p class="text-sm text-ink-muted">{t("today.open_bills")}</p>

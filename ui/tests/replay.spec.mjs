@@ -335,6 +335,151 @@ test("the floor is drawn as the store published it: areas, seats, and the walkwa
   }
 });
 
+// The device classes, in a browser, at the width each one names (`docs/ui-ux.md` §1 principle 9).
+//
+// Two claims, and both were false when this was written. `app.css`'s own header promises to "keep
+// the page from scrolling sideways"; **every route** scrolled sideways on a phone, because the
+// status bar's ten destinations sat in a `flex` that could not wrap and came to 488 px. And §1
+// principle 2 asks for 48 px targets; those same destinations were bare text, 20 px high, at every
+// size — the one control on the till a finger could not hit was the navigation.
+//
+// A sideways scroll is the right thing to assert rather than a screenshot: it is the one layout
+// failure that is unambiguous. Text reflowing is a judgement call, a table needing a scroll of its
+// own is sometimes correct, but content wider than the screen on a device with no mouse means an
+// operator cannot reach it at all.
+const DEVICE_CLASSES = [
+  { name: "phone", width: 390, height: 844 },
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "terminal", width: 1280, height: 800 },
+];
+
+for (const device of DEVICE_CLASSES) {
+  test(`the till fits a ${device.name} on every screen, with targets a finger can hit`, async ({
+    page,
+  }) => {
+    const edge = await startEdge();
+    try {
+      await page.setViewportSize({ width: device.width, height: device.height });
+      await pair(page, edge);
+      await signIn(page, edge);
+
+      // A seated table with a line on it, so the order and pay screens are not measured empty —
+      // an empty screen fits anything.
+      await seatTable(page);
+      await addItem(page);
+      const table = new URL(page.url()).pathname.split("/")[2];
+
+      for (const path of [
+        "/",
+        `/table/${table}`,
+        `/table/${table}/pay`,
+        "/kds",
+        "/expo",
+        "/shift",
+        "/today",
+        "/counter",
+      ]) {
+        await page.goto(`${edge.baseURL}${path}`);
+        await expect(page.locator("header")).toBeVisible();
+
+        const overflow = await page.evaluate(() => {
+          const root = document.documentElement;
+          if (root.scrollWidth <= root.clientWidth + 1) {
+            return null;
+          }
+          // Name the widest thing that sticks out, so the failure says what to fix rather than
+          // that something, somewhere, is too wide.
+          let worst = null;
+          for (const element of document.querySelectorAll("*")) {
+            const box = element.getBoundingClientRect();
+            if (box.width > 0 && box.right > root.clientWidth + 1 && (worst === null || box.right > worst.right)) {
+              worst = { right: Math.round(box.right), tag: element.tagName.toLowerCase(), classes: String(element.className).slice(0, 70) };
+            }
+          }
+          return { page: root.scrollWidth, viewport: root.clientWidth, worst };
+        });
+        expect(
+          overflow,
+          `${path} scrolls sideways on a ${device.name}: ${JSON.stringify(overflow)}`,
+        ).toBeNull();
+      }
+
+      // The status bar is on every screen, so its targets are the ones an operator meets most.
+      await page.goto(`${edge.baseURL}/`);
+      const shrunk = await page.evaluate(() => {
+        const small = [];
+        for (const control of document.querySelectorAll("header a, header button")) {
+          const box = control.getBoundingClientRect();
+          if (box.height > 0 && box.height < 48) {
+            small.push(`${(control.textContent ?? "").trim()} is ${Math.round(box.height)}px`);
+          }
+        }
+        return small;
+      });
+      expect(shrunk, "a status-bar control is under the 48px §1 principle 2 asks for").toEqual([]);
+    } finally {
+      await edge.stop();
+    }
+  });
+}
+
+// The store profile decides what home is (`docs/ui-ux.md` §3, §10).
+//
+// §10's capability model has carried a counter preset since it was written, and the till implemented
+// exactly one profile: it landed every store on a floor plan and offered every store a kitchen
+// board, including the ones with neither. This drives a **real counter store** — the same example
+// binary, publishing `tables_enabled: false` — because a capability with no reader is the failure
+// this tree keeps finding, and a reader with no gate is the next one.
+test("a counter store lands on the counter, and is not offered a floor or a kitchen", async ({
+  page,
+}) => {
+  const edge = await startEdge("counter");
+  try {
+    await pair(page, edge);
+    await page.locator("#signin-code").fill(edge.staffCode);
+    await page.locator("#signin-pin").fill(edge.staffPin);
+    await page.locator('[data-step="submit"]').click();
+
+    // Home is the counter list, at `/` — the address does not change with the shop, only what it
+    // draws. The floor's own outcome mark must be absent, which is the half that would fail if the
+    // profile were read but ignored.
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('[data-outcome="counter"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="floor"]')).toHaveCount(0);
+
+    // And the status bar stops offering what this shop cannot do. A destination that leads to a
+    // board nobody watches is the same failure `tips_enabled` was published to stop: an action the
+    // store cannot honour, presented as though it could.
+    // Scoped to the nav, not the whole header: the brand is a link to `/` too, and on this store
+    // that is the counter. "Home" is still offered — it is the *floor* that is not.
+    await expect(page.locator('header nav a[href="/"]')).toHaveCount(0);
+    await expect(page.locator('header nav a[href="/kds"]')).toHaveCount(0);
+    await expect(page.locator('header nav a[href="/expo"]')).toHaveCount(0);
+    // The counter itself is still a destination, and so is the shift — neither depends on tables.
+    await expect(page.locator('header nav a[href="/counter"]')).toHaveCount(1);
+    await expect(page.locator('header nav a[href="/shift"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The same store with the default profile still gets the floor, so the test above is measuring the
+// flag rather than a screen that broke. Cheap, and it is the assertion that would have caught a
+// `tables_enabled` read inverted.
+test("a table-service store still lands on the floor", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(page.locator('header nav a[href="/"]')).toHaveCount(1);
+    await expect(page.locator('header nav a[href="/kds"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.

@@ -5,7 +5,17 @@ import { ApiError } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { areaIsPlaced, clean, floorAreas, seat, tableState, type FloorArea, type TableCard } from "../state/store";
+import {
+  areaIsPlaced,
+  clean,
+  floorAreas,
+  seat,
+  tableState,
+  tablesEnabled,
+  type FloorArea,
+  type TableCard,
+} from "../state/store";
+import { Takeaway } from "./Takeaway";
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -14,9 +24,31 @@ const DOT: Record<string, string> = {
   TABLE_STATE_NEEDS_CLEANING: "bg-cleaning",
 };
 
-// The floor plan: one card per table, its state shown by a labelled colour (never colour alone). A
-// free table seats and opens; an occupied or paying table opens its order; a table needing cleaning
-// offers the one action that clears it.
+// Home — which is a floor plan in most shops and not in all of them.
+//
+// One card per table, its state shown by a labelled colour (never colour alone). A free table seats
+// and opens; an occupied or paying table opens its order; a table needing cleaning offers the one
+// action that clears it.
+//
+// # Why the counter list is here and not behind a route of its own
+//
+// `docs/ui-ux.md` §3: *"The store profile decides the starting screen and flow... Same components,
+// different assembly — not three applications."* §10's capability model has carried that since it
+// was written — there is a counter preset, a retail preset, and a rule saying `PayFirst` and
+// `Tables` cannot both be on — and the till implemented one profile: every store landed on a floor
+// plan, including the ones with no floor.
+//
+// So `/` is still `/`, and what it draws follows `tables_enabled`. The choice sits in this file
+// rather than in a component `App.tsx` composes, because `scripts/step-budget.mjs` resolves a route
+// to `screens/<Name>.tsx` and scans **that file**: a wrapper that merely picked between two screens
+// would hide both of them from the gate, and the flows declared on `/` would stop resolving. Making
+// home a different *address* per profile was the other option and is worse — it would make "home" a
+// route that depends on the shop, which is the opposite of one application assembled differently.
+//
+// **Retail is not here.** §1 principle 9's third profile starts on a barcode field, and no such
+// screen exists — `Capability::Barcode` has no reader anywhere in the till. A retail store lands on
+// the counter with everything else that is not table service, and that gap is recorded rather than
+// guessed at.
 //
 // **It is drawn the way the store published it** (ADR-0072). Until now this screen flattened every
 // area into one reflowing grid in publication order, throwing away the three things the console had
@@ -108,13 +140,19 @@ export function Floor() {
         class={
           areaIsPlaced(group)
             ? "grid gap-3 overflow-x-auto [grid-auto-columns:minmax(9rem,1fr)] [grid-auto-flow:dense]"
-            : "grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4"
+            : "grid grid-cols-2 gap-3 tablet:grid-cols-3 terminal:grid-cols-4"
         }
       >
         <For each={group.tables}>{card}</For>
       </div>
     </section>
   );
+
+  // A shop with no tables gets the counter list, which is home for that role (ADR-0093). Checked
+  // before anything else this screen does, so a counter store never renders a room it has not got.
+  if (!tablesEnabled()) {
+    return <Takeaway />;
+  }
 
   return (
     <section class="p-4">
