@@ -16,6 +16,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
+  profile decides the starting screen and flow — same components, different assembly, not three
+  applications"*, and §10's capability model has carried the profiles all along: a counter preset, a
+  retail preset, and a validity rule saying `PayFirst` and `Tables` cannot both be on. **The till
+  implemented one profile.** It landed every store on a floor plan and offered every store a kitchen
+  board, including the ones with neither.
+  - `GET /api/menu` publishes **`tables_enabled`** and **`kds_enabled`**, under the rule that
+    module's header sets: a flag joins the response in the change that consumes it.
+  - `/` draws the floor plan where the store does tables and the counter list where it does not.
+    **Home stays `/` on every profile** — what changes is the screen, not the address, because a
+    home that moved per shop would be three applications wearing one name.
+  - The status bar drops the destinations a store has no use for. A link to a kitchen board nobody
+    watches is an offer the store cannot honour, which is the same failure `tips_enabled` was
+    published to stop.
+  - `examples/minimal-edge` publishes the counter profile under **`POS_DEMO_PROFILE=counter`**, so
+    it is something a contributor can run and the browser gate can drive — the same reason the demo
+    turns seats on.
+  - **Still missing, and recorded rather than guessed at:** retail has no barcode screen to start on
+    (`Capability::Barcode` has no reader anywhere in the till, so a retail store lands on the counter
+    with everything else that is not table service); a counter store cannot yet *begin* an order at
+    the till, because the counter list shows orders relayed from the cloud and no command exists for
+    a cashier to open a tableless one; and `pay_first_enabled` and `queue_number_enabled` have no
+    readers either.
+  - **Upgrade note.** None. Both flags default **on**, and the till treats an unsynced read as the
+    table-service profile — so a store that publishes neither behaves exactly as before.
+
 ### Fixed
 
 - **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on

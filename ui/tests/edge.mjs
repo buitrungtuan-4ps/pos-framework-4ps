@@ -48,7 +48,7 @@ async function freePort() {
  * Resolves to `{ baseURL, pairingCode, staffCode, staffPin, stop() }`. Every field but `baseURL`
  * comes out of the process's own output, so nothing here can disagree with the binary.
  */
-export async function startEdge() {
+export async function startEdge(profile) {
   if (!existsSync(BINARY)) {
     throw new Error(
       `${BINARY} is not built — run \`cargo build -p minimal-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
@@ -65,6 +65,10 @@ export async function startEdge() {
       // its `=` is enough to make the pattern below miss the one line this harness exists to read.
       // Asked for plainly here, and stripped below anyway.
       NO_COLOR: "1",
+      // Which demo store to publish. Absent means the table-service one every other test drives;
+      // `"counter"` publishes the same shop with `tables_enabled` off, which is the only way to see
+      // what §10's counter preset actually does to the till (`crates/pos-edge/src/demo.rs`).
+      ...(profile === undefined ? {} : { POS_DEMO_PROFILE: profile }),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
