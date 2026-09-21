@@ -16,6 +16,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **ADR-0127 records how modifier groups reach a store**
+  ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)). The console has authored modifier
+  groups since [ADR-0066](docs/adr/0066-cloud-catalog.md) and nothing carried them down, so a till
+  could record which modifiers a line had but never ask what a pizza's sizes were. The record
+  decides the compiled shape (`MenuCatalog` gains the groups, `MenuEntry` gains the ids of the ones
+  attached to it, both additive and `#[serde(default)]`, no `PROTOCOL_VERSION` bump), that
+  attachment inverts on the way down so a till asks once per tap rather than scanning, that
+  "required" is `min_select >= 1` rather than a second flag, and that the **edge** enforces the
+  selection rule rather than trusting a device to have asked. Nesting and half-and-half
+  (`SPLIT_ITEM`) are explicitly left to their own records, with the reasons. No code yet.
+  **Upgrade note:** none — a decision record.
+
 ### Security
 
 - **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.
