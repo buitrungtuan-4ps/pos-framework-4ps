@@ -5,6 +5,7 @@ import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatMoney, formatQuantity } from "../lib/money";
+import { matches } from "../lib/search";
 import type { LayoutButton, MenuItemResponse } from "../api/types";
 import {
   addItem,
@@ -149,6 +150,50 @@ export function Order() {
     ),
   );
 
+  // What the operator has typed into the menu box. Empty means the grid, which is what the screen
+  // has always shown; a query replaces it with the matches, flat, because a category heading over a
+  // result list describes where the item lives rather than why it is on screen.
+  const [query, setQuery] = createSignal("");
+  const searching = () => query().trim() !== "";
+
+  // Every caption an item can be found by: the price book's own name, plus whatever the console
+  // wrote on each button pointing at it (ADR-0066). The two differ on purpose — a button inside a
+  // "Pizza" category can say "Large" — and an operator who knows an item by the grid's word for it
+  // would otherwise search for it and be told there is no such thing.
+  //
+  // Built once per menu-and-layout rather than per keystroke: the two gates this screen already
+  // carries for that (`menuItemMap`, `arranged`) exist because a linear scan per render is what this
+  // grid costs, and a scan per *letter typed* would be worse than either.
+  const captions = createMemo(() => {
+    const byItem = new Map<string, string[]>(
+      state.menu.map((item) => [item.menu_item_id, [item.display_name]]),
+    );
+    const record = (button: LayoutButton) => {
+      const known = byItem.get(button.menu_item_id);
+      if (known !== undefined && !known.includes(button.label)) {
+        known.push(button.label);
+      }
+    };
+    for (const category of state.layout) {
+      category.buttons.forEach(record);
+      for (const subcategory of category.subcategories) {
+        subcategory.buttons.forEach(record);
+      }
+    }
+    return byItem;
+  });
+
+  // The matches, in the price book's own order. Drawn with `display_name` and not the caption that
+  // matched: a button's caption is shorthand that means something inside its category and nothing
+  // outside it, and a flat result list is outside it.
+  const results = createMemo(() =>
+    searching()
+      ? state.menu.filter((item) =>
+          matches(query(), captions().get(item.menu_item_id) ?? [item.display_name]),
+        )
+      : [],
+  );
+
   const sellButton = (item: MenuItemResponse, caption: string) => (
     <button
       type="button"
@@ -164,6 +209,22 @@ export function Order() {
     </button>
   );
 
+  // What the aside draws while a query is in the box: the matches, or the sentence saying there are
+  // none. The empty state names what was searched for, because "nothing found" and "nothing found
+  // *for this*" are different amounts of help when the answer is a typo.
+  const searchResults = () => (
+    <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1" data-outcome="menu-results">
+      <For
+        each={results()}
+        fallback={
+          <p class="text-ink-muted">{t("order.search_empty", { query: query().trim() })}</p>
+        }
+      >
+        {(item) => sellButton(item, item.display_name)}
+      </For>
+    </div>
+  );
+
   // An arranged button carries the caption the console wrote; the price comes from the price book, so
   // there is never a second price that can disagree with it. Uses O(1) hash map lookup instead of
   // O(N) state.menu.find(...).
@@ -173,7 +234,7 @@ export function Order() {
   };
 
   return (
-    <section class="grid gap-4 p-4 lg:grid-cols-[1fr_20rem]">
+    <section class="grid gap-4 p-4 terminal:grid-cols-[1fr_20rem]">
       <div>
         <div class="mb-3 flex items-center gap-3">
           <a href="/" class="text-sm text-ink-muted no-underline">
@@ -437,71 +498,111 @@ export function Order() {
           </Show>
         </div>
 
-        <button
-          type="button"
-          class="mt-4 min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
-          disabled={unfired().length === 0}
-          data-step="fireOrder"
-          onClick={() => void guard(() => fireOrder(params.id))}
-        >
-          {unfired().length === 0
-            ? t("order.send")
-            : t("order.send_count", { count: unfired().length })}
-        </button>
+        {/*
+          The two acts that end this screen, anchored to the bottom of a phone.
 
-        <button
-          type="button"
-          class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink"
-          data-step="takePayment"
-          onClick={() => void takePayment()}
-        >
-          {t("order.take_payment")}
-        </button>
+          `docs/ui-ux.md` §1 principle 9 asks for exactly this — *"Phone: single column, primary
+          action anchored at the bottom within thumb reach"* — and until now they simply sat after
+          the check total, which on a handheld puts them below however many lines the table has
+          ordered. A server taking a large table's order had to scroll to send it.
+
+          Sticky rather than fixed: fixed would take the buttons out of the flow and float them over
+          the last line of the order, and the line under your thumb is the one you were reading. On
+          a tablet and a terminal the whole column fits, so the anchor is released and they sit
+          where they always did — which is why this is `tablet:static` rather than a media query
+          asking the phone for something special.
+        */}
+        <div class="sticky bottom-0 -mx-4 mt-4 border-t border-line bg-canvas px-4 pb-4 pt-3 tablet:static tablet:mx-0 tablet:border-0 tablet:bg-transparent tablet:p-0">
+          <button
+            type="button"
+            class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
+            disabled={unfired().length === 0}
+            data-step="fireOrder"
+            onClick={() => void guard(() => fireOrder(params.id))}
+          >
+            {unfired().length === 0
+              ? t("order.send")
+              : t("order.send_count", { count: unfired().length })}
+          </button>
+
+          <button
+            type="button"
+            class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+            data-step="takePayment"
+            onClick={() => void takePayment()}
+          >
+            {t("order.take_payment")}
+          </button>
+        </div>
       </div>
 
       <aside>
         <h2 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
         {/*
-          Two ways to draw the same price book. When the console has arranged buttons on the `layout`
-          node (ADR-0066, C4) the till groups by the categories it authored, in the order it authored
-          them; when it has arranged nothing, the flat list is the honest fallback and is what the
-          till drew before that node had a reader.
+          The box that makes a long menu usable. `type="search"` rather than `text` so the browser
+          gives the operator its own clear affordance — one control fewer to draw, and the one every
+          other search box on their phone already has.
+
+          No `data-step`: typing is not a tap (`docs/ui-ux.md` §6), which is exactly why this is
+          worth having — it finds an item in a two-hundred-line book without costing the flow the
+          tap the grid costs. The id is how the browser gate reaches it in a precondition, the same
+          way it reaches the shift float.
         */}
-        <Show
-          when={arranged().length > 0}
-          fallback={
-            <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
-              <For
-                each={state.menu}
-                fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
-              >
-                {(item) => sellButton(item, item.display_name)}
-              </For>
-            </div>
-          }
-        >
-          <For each={arranged()}>
-            {(category) => (
-              <section class="mb-4">
-                <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                  {category.name}
-                </h3>
-                <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
-                  <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
-                </div>
-                <For each={category.subcategories}>
-                  {(subcategory) => (
-                    <div class="mt-3">
-                      <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
-                      <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
-                        <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
-                      </div>
-                    </div>
-                  )}
+        <label class="mb-3 block">
+          <span class="sr-only">{t("order.search")}</span>
+          <input
+            id="menu-search"
+            type="search"
+            class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
+            placeholder={t("order.search")}
+            value={query()}
+            onInput={(event) => setQuery(event.currentTarget.value)}
+          />
+        </label>
+
+        <Show when={!searching()} fallback={searchResults()}>
+          {/*
+            Two ways to draw the same price book. When the console has arranged buttons on the
+            `layout` node (ADR-0066, C4) the till groups by the categories it authored, in the order
+            it authored them; when it has arranged nothing, the flat list is the honest fallback and
+            is what the till drew before that node had a reader.
+          */}
+          <Show
+            when={arranged().length > 0}
+            fallback={
+              <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
+                <For
+                  each={state.menu}
+                  fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
+                >
+                  {(item) => sellButton(item, item.display_name)}
                 </For>
-              </section>
-            )}
-          </For>
+              </div>
+            }
+          >
+            <For each={arranged()}>
+              {(category) => (
+                <section class="mb-4">
+                  <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                    {category.name}
+                  </h3>
+                  <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
+                    <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
+                  </div>
+                  <For each={category.subcategories}>
+                    {(subcategory) => (
+                      <div class="mt-3">
+                        <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
+                        <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
+                          <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                </section>
+              )}
+            </For>
+          </Show>
         </Show>
       </aside>
     </section>

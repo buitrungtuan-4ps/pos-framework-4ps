@@ -123,6 +123,22 @@ const PRECONDITIONS = {
     await addItem(page);
   },
   "Order an item for a particular seat": seatTable,
+  // Typing, then the assertion that makes this flow worth declaring at all.
+  //
+  // `dac` is chosen and not `pho`, which was the obvious query and proves nothing: NFD leaves the
+  // marks *after* the letter they sit on, so `pho` is already a substring of an unfolded `Phở` and
+  // the test passes with the folding deleted. `đặc` is the opposite shape — `đ` has no
+  // decomposition and the marks on `ặ` land between the `a` and the `c` — so `dac` reaches it only
+  // if both halves of `fold` ran. Delete either and this goes red.
+  //
+  // It is also not the first item in the book, so a search that silently stopped filtering would
+  // leave the harness tapping Margherita and still finding a line on the order. The count is what
+  // forbids that: after typing, exactly one sell button may remain on the screen.
+  "Find an item by name and add it": async (page) => {
+    await seatTable(page);
+    await page.locator("#menu-search").fill("dac");
+    await expect(page.locator('[data-step="addItem"]')).toHaveCount(1);
+  },
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);
@@ -322,6 +338,94 @@ test("the floor is drawn as the store published it: areas, seats, and the walkwa
     await edge.stop();
   }
 });
+
+// The device classes, in a browser, at the width each one names (`docs/ui-ux.md` §1 principle 9).
+//
+// Two claims, and both were false when this was written. `app.css`'s own header promises to "keep
+// the page from scrolling sideways"; **every route** scrolled sideways on a phone, because the
+// status bar's ten destinations sat in a `flex` that could not wrap and came to 488 px. And §1
+// principle 2 asks for 48 px targets; those same destinations were bare text, 20 px high, at every
+// size — the one control on the till a finger could not hit was the navigation.
+//
+// A sideways scroll is the right thing to assert rather than a screenshot: it is the one layout
+// failure that is unambiguous. Text reflowing is a judgement call, a table needing a scroll of its
+// own is sometimes correct, but content wider than the screen on a device with no mouse means an
+// operator cannot reach it at all.
+const DEVICE_CLASSES = [
+  { name: "phone", width: 390, height: 844 },
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "terminal", width: 1280, height: 800 },
+];
+
+for (const device of DEVICE_CLASSES) {
+  test(`the till fits a ${device.name} on every screen, with targets a finger can hit`, async ({
+    page,
+  }) => {
+    const edge = await startEdge();
+    try {
+      await page.setViewportSize({ width: device.width, height: device.height });
+      await pair(page, edge);
+      await signIn(page, edge);
+
+      // A seated table with a line on it, so the order and pay screens are not measured empty —
+      // an empty screen fits anything.
+      await seatTable(page);
+      await addItem(page);
+      const table = new URL(page.url()).pathname.split("/")[2];
+
+      for (const path of [
+        "/",
+        `/table/${table}`,
+        `/table/${table}/pay`,
+        "/kds",
+        "/expo",
+        "/shift",
+        "/today",
+        "/counter",
+      ]) {
+        await page.goto(`${edge.baseURL}${path}`);
+        await expect(page.locator("header")).toBeVisible();
+
+        const overflow = await page.evaluate(() => {
+          const root = document.documentElement;
+          if (root.scrollWidth <= root.clientWidth + 1) {
+            return null;
+          }
+          // Name the widest thing that sticks out, so the failure says what to fix rather than
+          // that something, somewhere, is too wide.
+          let worst = null;
+          for (const element of document.querySelectorAll("*")) {
+            const box = element.getBoundingClientRect();
+            if (box.width > 0 && box.right > root.clientWidth + 1 && (worst === null || box.right > worst.right)) {
+              worst = { right: Math.round(box.right), tag: element.tagName.toLowerCase(), classes: String(element.className).slice(0, 70) };
+            }
+          }
+          return { page: root.scrollWidth, viewport: root.clientWidth, worst };
+        });
+        expect(
+          overflow,
+          `${path} scrolls sideways on a ${device.name}: ${JSON.stringify(overflow)}`,
+        ).toBeNull();
+      }
+
+      // The status bar is on every screen, so its targets are the ones an operator meets most.
+      await page.goto(`${edge.baseURL}/`);
+      const shrunk = await page.evaluate(() => {
+        const small = [];
+        for (const control of document.querySelectorAll("header a, header button")) {
+          const box = control.getBoundingClientRect();
+          if (box.height > 0 && box.height < 48) {
+            small.push(`${(control.textContent ?? "").trim()} is ${Math.round(box.height)}px`);
+          }
+        }
+        return small;
+      });
+      expect(shrunk, "a status-bar control is under the 48px §1 principle 2 asks for").toEqual([]);
+    } finally {
+      await edge.stop();
+    }
+  });
+}
 
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the

@@ -16,6 +16,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on
+  all of them.** `docs/ui-ux.md` §1 principle 9 has named four device classes since P6 and the
+  screens adapted on Tailwind's stock `sm`/`lg`/`xl`; principle 2 asks for 48 px targets and
+  `app.css` promises to keep the page from scrolling sideways. Measured against a running edge, all
+  three were false: the status bar's ten destinations sat in a row that could not wrap, 488 px wide
+  against a 390 px screen, each one bare text 20 px high — at **every** size, not just on a phone.
+  - The device classes are now **tokens with names**: `tablet:` (768 px) and `terminal:` (1024 px),
+    with the phone as the unprefixed base. They are added beside Tailwind's stock names rather than
+    replacing them — `tokens.css` is mirrored into `dashboard/`, and the console has forty-five
+    responsive rules in the stock vocabulary that clearing the defaults would have flattened
+    silently. The vocabulary is enforced where it applies instead: `ui/scripts/device-classes.mjs`
+    fails the `ui` job on a stock prefix under `ui/src`, and also fails if *nothing* adapts, so it
+    cannot pass by deletion.
+  - The status bar wraps, and every link and button in it is `min-h-touch`.
+  - On a phone the order screen's **send and take-payment buttons are anchored to the bottom**, which
+    principle 9 has asked for all along; a large table's order used to sit below its own lines.
+  - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
+    claims. Reverting the status bar turns all three red, naming the element that sticks out.
+
 ### Added
 
 - **A line says how many, and two taps change it.** The till could only ever add *one* of a thing —
@@ -39,6 +60,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     kitchen has seen it — and a quantity of zero must not become a quieter way to perform one. The
     minus control stops at one for the same reason.
   - **Upgrade note.** None. The route is additive and the event was already published.
+- **The order screen can be searched.** A box above the item grid filters the menu as an operator
+  types, and one tap on a match sells it (#367).
+  - It matches **both** names an item has: the price book's `display_name`, and the caption the
+    console wrote on each button pointing at it (ADR-0066). The two differ on purpose — a button
+    inside a "Pizza" category can read "Large" — so searching only the first would fail the operator
+    who knows the item by what the grid calls it. Results are drawn with the price book's name,
+    because a button's caption means something inside its category and nothing outside it.
+  - **Diacritics are folded**, so `dac` reaches *đặc biệt* and `pho` reaches *Phở*. Nobody switches
+    input mode mid-service. `đ` is handled separately from the tone marks, because it has no Unicode
+    decomposition — it is its own letter rather than `d` with a mark on it.
+  - **The flow still costs one tap.** Typing is not a tap (§1 principle 6, the same accounting the
+    shift float and the manager's PIN get), and the declaration says so: `Find an item by name and
+    add it` is a declared task whose browser gate types the query in its precondition and then
+    asserts the grid narrowed to a single button — so a search that stopped filtering, or stopped
+    folding, fails there while the plain add stays green.
+  - `examples/minimal-edge` seeds one item with tone marks on it, for the same reason it turns seats
+    on: a fixture whose every item was ASCII would leave the folding with no gate over it.
+  - **Upgrade note.** None. An empty box is the grid the screen has always drawn.
+
 - **A line can say whose dish it is.** `seat` has ridden `sales.order_line.added` and `LineDraft`
   since they were written, and `POST /api/tables/{id}/lines` has accepted it all along. Nothing ever
   set it, because the till had no way to know whether the store wanted to be asked.
