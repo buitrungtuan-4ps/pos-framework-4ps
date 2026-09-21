@@ -135,6 +135,10 @@ async function openShift(page) {
 // floor, which is where signing in leaves the device.
 const PRECONDITIONS = {
   "Add an item to an open order": seatTable,
+  "Change how many of a line": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   "Order an item for a particular seat": seatTable,
   // The item that asks a question is deliberately *not* first on the grid — every other flow's
   // precondition taps the first item and wants a line rather than a conversation. So this one types
@@ -560,6 +564,7 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Charge a counter (takeaway) order in cash",
       "Charge a counter order by card",
       "Charge a counter order in cash, taking a tip",
+      "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",
     ].sort(),

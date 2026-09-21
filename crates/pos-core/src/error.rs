@@ -39,6 +39,20 @@ pub enum DomainError {
     /// `applied_to_bill` was set above `tendered`, which is not a real payment.
     NegativeChange,
 
+    /// A discount or comp would reduce the bill below nothing. The guest cannot be owed money by
+    /// being sold food: taking money back after payment is a refund, which is its own signed
+    /// movement ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)) and not a
+    /// reduction with a large number in it.
+    ///
+    /// Stated as "the reductions so far plus this one" rather than "this one", because two legal
+    /// reductions can be illegal together and only the sum can say so.
+    ReductionExceedsBill {
+        /// What every reduction on the bill would come to, this one included.
+        reduction_minor: i64,
+        /// What there was to reduce.
+        reducible_minor: i64,
+    },
+
     /// A line carries a tax class the store's rate table does not price on this channel. Silently
     /// charging no tax would be an audit finding, so the domain refuses instead
     /// ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)).
@@ -90,6 +104,13 @@ impl core::fmt::Display for DomainError {
             Self::NegativeChange => {
                 f.write_str("change would be negative: tendered is less than applied plus tips")
             }
+            Self::ReductionExceedsBill {
+                reduction_minor,
+                reducible_minor,
+            } => write!(
+                f,
+                "reductions come to {reduction_minor} on a bill worth {reducible_minor}"
+            ),
             Self::TaxRateNotConfigured {
                 tax_class_id,
                 sales_channel,
@@ -115,6 +136,7 @@ impl core::error::Error for DomainError {
             Self::Transition(error) => Some(error),
             Self::PaymentsDoNotSumToTotal { .. }
             | Self::NegativeChange
+            | Self::ReductionExceedsBill { .. }
             | Self::TaxRateNotConfigured { .. }
             | Self::Empty { .. }
             | Self::PermissionDenied { .. }

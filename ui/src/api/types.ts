@@ -32,6 +32,13 @@ export interface LineResponse {
   state: string;
 }
 
+// How many a line should now be. A quantity and no money: the edge holds the unit price the device
+// captured when the line was added and extends the line itself, so a till cannot quote a total that
+// does not follow from the price it showed.
+export interface QuantityRequest {
+  quantity: Quantity;
+}
+
 export interface FireRequest {
   station_id: string;
 }
@@ -175,6 +182,28 @@ export interface MenuResponse {
 // settles against, so the till displays a figure rather than deriving one.
 export interface CheckResponse {
   subtotal: Money;
+  // What has come off, once a bill is open to take it off. Two figures because the receipt prints
+  // two lines: a discount is a price decision, a comp is food given away.
+  discount_total: Money;
+  comp_total: Money;
+  tax_total: Money;
+  total_due: Money;
+}
+
+// A discount as the till asks for it. The amount is money, never a percentage — the edge records an
+// amount, so a percentage would have to be resolved on the device that does not own the price book.
+export interface DiscountRequest {
+  amount: Money;
+  reason_code_id: string;
+  approver_code?: string;
+  approver_pin?: string;
+}
+
+// The bill once the discount is on it, straight from the edge's own arithmetic.
+export interface DiscountResponse {
+  subtotal: Money;
+  discount_total: Money;
+  comp_total: Money;
   tax_total: Money;
   total_due: Money;
 }

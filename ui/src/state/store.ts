@@ -12,6 +12,7 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  DiscountResponse,
   LineRequest,
   LayoutCategory,
   MenuItemResponse,
@@ -372,6 +373,23 @@ export function fold(event: ServerEvent): void {
       const lineId = str(payload, "order_line_id");
       if (lineId !== null && state.lines[lineId] !== undefined) {
         setState("lines", lineId, "state", "ORDER_LINE_STATE_FIRED");
+      }
+      break;
+    }
+    // A quantity somebody changed — on this device or another one. Folded for the same reason a
+    // void is: two servers on one table must not disagree about how many, and the running total on
+    // the order screen is derived from these lines.
+    case "sales.order_line.updated": {
+      const lineId = str(payload, "order_line_id");
+      const quantity = record(payload["quantity"]);
+      const lineTotal = asMoney(payload["line_total"]);
+      if (lineId !== null && state.lines[lineId] !== undefined) {
+        if (quantity !== null && typeof quantity["milli"] === "number") {
+          setState("lines", lineId, "quantityMilli", quantity["milli"]);
+        }
+        if (lineTotal !== null) {
+          setState("lines", lineId, "lineTotal", lineTotal);
+        }
       }
       break;
     }
@@ -873,6 +891,23 @@ export async function fireOrder(tableId: string): Promise<void> {
   );
 }
 
+// Changes how many of a line, while the kitchen has not been told about it.
+//
+// Sends a quantity and no money: the edge holds the unit price captured when the line was added and
+// extends the line itself, so this cannot quote the guest a total that does not follow from the
+// price on the menu they were shown.
+export async function setQuantity(lineId: string, quantityMilli: number): Promise<void> {
+  const line = await api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } });
+  setState(
+    produce((draft) => {
+      const held = draft.lines[line.order_line_id];
+      if (held !== undefined) {
+        held.state = line.state;
+      }
+    }),
+  );
+}
+
 export async function fire(lineId: string): Promise<void> {
   // The edge derives the fired line's station from the published routing (ADR-0072); the station we
   // send is only the fallback it uses when the store has published no station plan yet.
@@ -904,6 +939,28 @@ export async function voidLine(
 //
 // The table goes back to occupied. The bill is gone but the order is not — the lines are still
 // there, and a cashier who voided the wrong bill can open another one on the same table.
+/// Takes money off a bill, and hands back what it now comes to.
+///
+/// The edge's own figures are returned rather than a bare acknowledgement, and the caller shows
+/// them: the till must never subtract a discount from a total itself, because the tax follows the
+/// reduced base and a second opinion about it is a second price for the same meal.
+///
+/// The approval is optional in the shape and required by the act today. No store publishes a
+/// discount ceiling, so the edge reads it as zero and every discount needs a manager — but the till
+/// sends the same request either way, and the edge answers when the manager is what is missing.
+export async function applyDiscount(
+  billId: string,
+  amount: Money,
+  reasonCodeId: string,
+  approval: ApproverRequest,
+): Promise<DiscountResponse> {
+  return api.discountBill(billId, {
+    amount,
+    reason_code_id: reasonCodeId,
+    ...approval,
+  });
+}
+
 export async function voidBill(
   billId: string,
   reasonCodeId: string,

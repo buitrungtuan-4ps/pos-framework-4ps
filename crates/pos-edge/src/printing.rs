@@ -61,7 +61,7 @@ use pos_proto::store_profile::StoreProfile;
 
 use pos_proto::ClockSource;
 
-use crate::app::{BuyerDetails, EdgeSession, FiredLine};
+use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine};
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
 
 /// The store's receipt printer: the printer bound to no station.
@@ -160,10 +160,10 @@ fn percent(basis_points: u32) -> String {
 /// The customer's receipt for a settled bill — and, where a country's law is satisfied by it, its
 /// tax invoice ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 ///
-/// Composed from three things and nothing else: who the store is, what the bill came to, and the
-/// store's own gapless receipt number — which is explicitly **not** a legal invoice number
-/// ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md)); a country whose law wants an
-/// allocated number gets it from `Fiscalization` and prints it beside this one.
+/// Composed from four things and nothing else: who the store is, **what was sold**, what the bill
+/// came to, and the store's own gapless receipt number — which is explicitly **not** a legal invoice
+/// number ([ADR-0025](../../../docs/adr/0025-receipt-number-authority.md)); a country whose law wants
+/// an allocated number gets it from `Fiscalization` and prints it beside this one.
 ///
 /// # Every block is omitted when it has nothing to say
 ///
@@ -181,6 +181,19 @@ fn percent(basis_points: u32) -> String {
 /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)); an ordinary retail sale is the
 /// receipt it always was.
 ///
+/// # The lines, which every regime asks for
+///
+/// One row per line sold: the name, then the quantity at the unit price with the extended amount
+/// beside it ([ADR-0129](../../../docs/adr/0129-a-receipt-itemises-what-was-sold.md)). Vietnam's
+/// Decree 123/2020 Art. 10 asks for exactly this set (minus a unit of measure the catalog has not
+/// got), and a Japanese qualified invoice, an Indian tax invoice and an EU one all want the goods
+/// named and counted. The rows sum to `subtotal` printed under them, because they are the same
+/// records it was assembled from.
+///
+/// The name gets a line of its own. It is the one field with no bound on its length, and a receipt
+/// whose amounts have been pushed off the right-hand edge of the paper is not a document anybody can
+/// check.
+///
 /// # The tax section is per rate, not per line
 ///
 /// Which is what a Japanese qualified invoice (8 % and 10 % separately) and an Indian tax invoice
@@ -190,6 +203,7 @@ fn percent(basis_points: u32) -> String {
 pub fn receipt_document(
     profile: &StoreProfile,
     receipt_number: u64,
+    lines: &[ReceiptLine],
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
 ) -> PrintDocument {
@@ -230,6 +244,25 @@ pub fn receipt_document(
                 style: TextStyle::default(),
             });
         }
+    }
+
+    // What was sold, before what it came to. A settle always has rows — an empty bill has nothing to
+    // allocate across and `assemble` refuses it — so this is not a "some receipts are itemised"
+    // branch; passing none is how the cases below hold the rest of the document still while they
+    // check one block of it.
+    for line in lines {
+        blocks.push(PrintBlock::Text {
+            line: line.display_name.as_str().to_owned(),
+            style: TextStyle::default(),
+        });
+        blocks.push(amount_line(
+            &format!(
+                "  {} x {}",
+                format_quantity(line.quantity),
+                format_money(line.unit_price)
+            ),
+            line.line_total,
+        ));
     }
 
     // What was charged. `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the
@@ -809,6 +842,7 @@ impl Printers {
         store_id: StoreId,
         job_id: EventId,
         receipt_number: u64,
+        lines: &[ReceiptLine],
         totals: &BillTotals,
         buyer: Option<&BuyerDetails>,
     ) -> PrintOutcome {
@@ -818,7 +852,7 @@ impl Printers {
         };
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
-        let document = receipt_document(&session.profile, receipt_number, totals, buyer);
+        let document = receipt_document(&session.profile, receipt_number, lines, totals, buyer);
         self.dispatch(
             device,
             PrintJob {
@@ -1025,7 +1059,7 @@ mod tests {
         assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
         station_printer, ticket_document, ticket_line,
     };
-    use crate::app::{BuyerDetails, EdgeSession, FiredLine};
+    use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
@@ -1181,6 +1215,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
                 None,
             )
@@ -1213,6 +1248,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
                 None,
             )
@@ -1240,6 +1276,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
                 None,
             )
@@ -1268,6 +1305,7 @@ mod tests {
                     store_id(),
                     event_id(1),
                     42,
+                    &[],
                     &totals_of(total),
                     None,
                 )
@@ -1490,6 +1528,70 @@ mod tests {
         );
     }
 
+    fn sold(name: &str, milli: i64, unit: Money, total: Money) -> ReceiptLine {
+        ReceiptLine {
+            display_name: DisplayName::new(name),
+            quantity: Quantity::from_milli(milli),
+            unit_price: unit,
+            line_total: total,
+        }
+    }
+
+    #[test]
+    fn a_receipt_lists_what_was_sold() {
+        // ADR-0129 decision 1, and the shape Decree 123/2020 Art. 10 asks for: the name, then how
+        // many at what each, with the extended amount. The rows come before the totals and sum to
+        // the subtotal printed under them.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [
+            sold("Phở bò đặc biệt", 2_000, vnd(99_000), vnd(198_000)),
+            sold("Margherita", 1_000, vnd(149_000), vnd(149_000)),
+        ];
+
+        let document = receipt_document(
+            &StoreProfile::default(),
+            7,
+            &lines,
+            &totals_of(vnd(347_000)),
+            None,
+        );
+
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "#7",
+                "Phở bò đặc biệt",
+                "  2 x VND 99000  VND 198000",
+                "Margherita",
+                "  1 x VND 149000  VND 149000",
+                "Subtotal  VND 347000",
+                "VND 347000",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_half_prints_as_a_half_and_not_as_five_hundred() {
+        // `Quantity` counts thousandths, so the raw figure for one half is 500. A receipt reading
+        // "500 x" is a rounding bug nobody would guess at from the paper, which is why the rows
+        // share `format_quantity` with the kitchen ticket rather than printing the integer.
+        let jpy = |minor| Money::new(CurrencyCode::JPY, minor);
+        let lines = [sold("Hokkaido melon", 500, jpy(4_000), jpy(2_000))];
+
+        let document = receipt_document(
+            &StoreProfile::default(),
+            8,
+            &lines,
+            &totals_of(jpy(2_000)),
+            None,
+        );
+
+        assert!(
+            lines_of(&document).contains(&"  0.5 x JPY 4000  JPY 2000"),
+            "one half of an item is half of its unit price"
+        );
+    }
+
     #[test]
     fn a_store_that_has_filled_nothing_in_prints_what_it_always_printed() {
         // The never-blank rule applied to a legal document: an empty label reads as a value somebody
@@ -1498,6 +1600,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             7,
+            &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
             None,
         );
@@ -1521,6 +1624,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             42,
+            &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             None,
         );
@@ -1565,6 +1669,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             11,
+            &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
             Some(&buyer),
         );
@@ -1588,6 +1693,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             12,
+            &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
             None,
         );
@@ -1641,7 +1747,7 @@ mod tests {
             tax_registration_label: Some("GSTIN".to_owned()),
             ..StoreProfile::default()
         };
-        let document = receipt_document(&profile, 9, &totals, None);
+        let document = receipt_document(&profile, 9, &[], &totals, None);
         assert_eq!(
             lines_of(&document),
             vec![
@@ -1670,6 +1776,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             3,
+            &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
             None,
         );
@@ -1785,6 +1892,7 @@ mod tests {
                 store_id(),
                 event_id(1),
                 42,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 99_000)),
                 None,
             )
@@ -1913,6 +2021,7 @@ mod tests {
                 store_id(),
                 event_id(7),
                 41,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 90_000)),
                 None,
             )
@@ -1956,6 +2065,7 @@ mod tests {
                 store_id(),
                 event_id(8),
                 42,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 10_000)),
                 None,
             )
@@ -1981,6 +2091,7 @@ mod tests {
                     store_id(),
                     event_id(9),
                     43,
+                    &[],
                     &totals_of(Money::new(CurrencyCode::VND, 10_000)),
                     None,
                 )
@@ -2036,6 +2147,7 @@ mod tests {
                 store_id(),
                 event_id(10),
                 44,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 10_000)),
                 None,
             )
@@ -2060,6 +2172,7 @@ mod tests {
                 store_id(),
                 event_id(11),
                 45,
+                &[],
                 &totals_of(Money::new(CurrencyCode::VND, 10_000)),
                 None,
             )

@@ -18,10 +18,12 @@ GET /api/session
 GET /api/tables/{id}
 GET /api/tables/{id}/check
 POST /api/activate
+POST /api/bills/{id}/discount
 POST /api/bills/{id}/settle
 POST /api/bills/{id}/void
 POST /api/kds/bump
 POST /api/lines/{id}/fire
+POST /api/lines/{id}/quantity
 POST /api/lines/{id}/void
 POST /api/orders/{id}/bill
 POST /api/orders/{id}/confirm

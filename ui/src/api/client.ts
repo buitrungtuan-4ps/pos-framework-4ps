@@ -17,7 +17,10 @@ import type {
   CheckResponse,
   CountShiftRequest,
   CounterOrder,
+  DiscountRequest,
+  DiscountResponse,
   FireRequest,
+  QuantityRequest,
   FloorResponse,
   LineRequest,
   LineResponse,
@@ -201,6 +204,9 @@ export const api = {
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),
+  setLineQuantity: (lineId: string, body: QuantityRequest) =>
+    request<LineResponse>("POST", `/api/lines/${lineId}/quantity`, body),
+
   fireLine: (lineId: string, fire: FireRequest) =>
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
 
@@ -240,6 +246,11 @@ export const api = {
   // kitchen started. A settled one is refused with a 409 — reversing that is a refund.
   voidBill: (billId: string, request_: VoidRequest) =>
     request<VoidBillResponse>("POST", `/api/bills/${billId}/void`, request_),
+
+  // Money off a bill before it settles. The response is the whole re-priced bill rather than an
+  // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.
+  discountBill: (billId: string, request_: DiscountRequest) =>
+    request<DiscountResponse>("POST", `/api/bills/${billId}/discount`, request_),
 
   // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
