@@ -16,6 +16,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **ADR-0128 records how a bill splits and merges**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)). `billing.bill.split` and
+  `billing.bill.merged` have been defined in `pos-proto` since the schema was written and **nothing
+  has ever emitted either**, because two structural things were missing: a bill has no lines (it
+  bills a whole order, and the amount owed is assembled by reading every line of that order), and a
+  bill whose lines have moved has nowhere to go (`BillState` is `OPEN`, `SETTLED`, `VOIDED`). The
+  record decides that a bill covers a **set of order lines**, that `BillState` gains the terminal
+  values `SPLIT` and `MERGED` (additive, no `PROTOCOL_VERSION` bump), that a split is a **partition**
+  the domain checks rather than a carve-off, that each resulting bill computes its own tax and
+  rounding rather than being allocated a share of the source's, that a merge keeps the target's
+  identity, and that **neither act needs a permission or a manager** — a split partitions money
+  already captured and a merge concatenates it, so nothing is created or forgiven. Splitting evenly
+  by N is explicitly **not** this and is left to its own record, with the reason: four equal shares
+  of a seven-line bill correspond to no grouping of those seven lines. No code yet.
+  **Upgrade note:** none — a decision record.
+
+- **The ADR index had stopped being updated.** `docs/adr/README.md` listed records up to 0125 while
+  0126 was merged; its row is added here alongside 0128's.
+
 ### Added
 
 - **The order screen can be searched.** A box above the item grid filters the menu as an operator
