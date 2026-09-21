@@ -54,7 +54,7 @@ const BINARY =
  */
 const POSTGRES = process.env["POS_E2E_POSTGRES"];
 
-/** How long to wait for the cloud to answer `/healthz` before giving up. */
+/** How long to wait for the cloud to answer `/health` before giving up. */
 const BOOT_TIMEOUT_MS = 60_000;
 
 /** The password the enrolled owner gets. Long enough for ADR-0045's minimum, and thrown away. */
@@ -205,10 +205,10 @@ export async function startCloud() {
     }
     if (Date.now() - started > BOOT_TIMEOUT_MS) {
       await stop();
-      throw new Error(`pos-cloud did not answer /healthz within ${BOOT_TIMEOUT_MS}ms:\n${output}`);
+      throw new Error(`pos-cloud did not answer /health within ${BOOT_TIMEOUT_MS}ms:\n${output}`);
     }
     try {
-      const health = await fetch(`${baseURL}/healthz`);
+      const health = await fetch(`${baseURL}/health`);
       if (health.ok) {
         break;
       }

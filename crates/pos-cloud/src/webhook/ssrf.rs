@@ -309,31 +309,40 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         return classify_v4(Ipv4Addr::new(a, b, c, d));
     }
 
-    // NAT64 well-known prefix (`64:ff9b::a.b.c.d`, RFC 6052) or local-use prefix (`64:ff9b:1::/48`, RFC 8215).
-    if segments[0] == 0x0064
-        && segments[1] == 0xff9b
-        && ((segments[2] == 0 && segments[3] == 0) || segments[2] == 0x0001)
-        && segments[4] == 0
-        && segments[5] == 0
-    {
-        let [a, b, c, d] = ip.octets()[12..16] else {
-            unreachable!()
-        };
-        return classify_v4(Ipv4Addr::new(a, b, c, d));
+    // NAT64 well-known prefix (`64:ff9b::/96`, RFC 6052) or local-use prefix (`64:ff9b:1::/48`, RFC 8215).
+    if segments[0] == 0x0064 && segments[1] == 0xff9b {
+        if segments[2] == 0 && segments[3] == 0 && segments[4] == 0 && segments[5] == 0 {
+            let [a, b, c, d] = ip.octets()[12..16] else {
+                unreachable!()
+            };
+            return classify_v4(Ipv4Addr::new(a, b, c, d));
+        } else if segments[2] == 0x0001 {
+            let [a, b, c, d] = ip.octets()[12..16] else {
+                unreachable!()
+            };
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
+            }
+            let v4_rfc6052 = Ipv4Addr::new(
+                (segments[3] >> 8) as u8,
+                (segments[3] & 0xff) as u8,
+                (segments[4] >> 8) as u8,
+                (segments[4] & 0xff) as u8,
+            );
+            if let Some(reason) = classify_v4(v4_rfc6052) {
+                return Some(reason);
+            }
+        }
     }
 
-    // ISATAP address (`::5efe:a.b.c.d`, RFC 5214).
-    if segments[0] == 0
-        && segments[1] == 0
-        && segments[2] == 0
-        && segments[3] == 0
-        && (segments[4] == 0 || segments[4] == 0x0200)
-        && segments[5] == 0x5efe
-    {
+    // ISATAP address (`<prefix>:0:5efe:a.b.c.d` or `<prefix>:200:5efe:a.b.c.d`, RFC 5214).
+    if (segments[4] == 0 || segments[4] == 0x0200) && segments[5] == 0x5efe {
         let [a, b, c, d] = ip.octets()[12..16] else {
             unreachable!()
         };
-        return classify_v4(Ipv4Addr::new(a, b, c, d));
+        if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+            return Some(reason);
+        }
     }
 
     let [first, second, third, ..] = segments;
@@ -375,6 +384,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && second == 0x0db8 {
         // 2001:db8::/32 documentation.
         Some(ForbiddenReason::Documentation)
+    } else if first == 0x2001 && second == 0x0002 {
+        // 2001:2::/48 benchmarking (RFC 5180).
+        Some(ForbiddenReason::Benchmarking)
     } else {
         None
     }
@@ -658,7 +670,14 @@ mod tests {
                 ForbiddenReason::LinkLocal
             ))
         );
-        // ISATAP smuggling cases (`::5efe:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("64:ff9b:1:0:1::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:1:0:1::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        // ISATAP smuggling cases (`::5efe:a.b.c.d` and with arbitrary prefixes).
         assert_eq!(
             classify_ip(ip("::5efe:127.0.0.1")),
             Err(SsrfRejection::ForbiddenAddress(
@@ -671,6 +690,28 @@ mod tests {
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::5efe:169.254.169.254"),
                 ForbiddenReason::LinkLocal
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:db8::5efe:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::5efe:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:1234:5678:9abc:0:5efe:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:1234:5678:9abc:0:5efe:169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // Benchmarking IPv6 range (2001:2::/48).
+        assert_eq!(
+            classify_ip(ip("2001:2::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:2::1"),
+                ForbiddenReason::Benchmarking
             ))
         );
     }

@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.
+
 ### Changed
 
 - **Improve WAI-ARIA breadcrumb accessibility and semantics.** Refactored breadcrumb component in `dashboard/src/components/Shell.tsx` to use WAI-ARIA compliant `<ol>` and `<li>` elements and added `aria-current="page"` attribute to the active screen item.
@@ -32,6 +36,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   process rule, not behaviour.
 
 ### Security
+
+- **Fix SSRF IPv6 translation bypass via ISATAP and NAT64 local-use prefixes in `pos-cloud`.** Updated IPv6 address classification in `crates/pos-cloud/src/webhook/ssrf.rs` to inspect ISATAP interface identifiers across all 64-bit IPv6 prefixes and NAT64 local-use subnets (`64:ff9b:1::/48`), preventing SSRF filter bypasses.
 
 - **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
   includeSubDomains`, beside the `nosniff`, `DENY` and `no-referrer` headers the same middleware
@@ -131,6 +137,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   keeps the pure-Rust `miniz_oxide` path, which is what lets a Windows till build with no zlib to
   ship. The skip disappears when `png` follows onto 0.9.
 
+- **Optimized menu item lookups in Inventory authoring screen.** Memoized menu items into an $O(1)$ lookup Map using `createMemo` in `dashboard/src/screens/Inventory.tsx`, eliminating repeated $O(N)$ linear scans per recipe row.
+- **Improve keyboard focus visibility and ARIA label in pos-edge-ui's StatusBar.** Added explicit `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` rings to interactive links and buttons, and a dynamic `aria-label` to the theme toggle button in `ui/src/components/StatusBar.tsx`.
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 
 ### Added
