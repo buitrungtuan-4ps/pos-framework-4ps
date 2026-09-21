@@ -159,6 +159,19 @@ async fn a_store_without_tips() -> Store {
     .await
 }
 
+/// The same store with seat-level ordering on. `Capability::Seats` is **off** in the reference
+/// preset — most counters have no seats — so the default store below is the one that refuses a seat,
+/// and this is the one that takes it.
+async fn a_store_with_seats() -> Store {
+    a_store_where(|session| {
+        let capabilities = session
+            .capabilities
+            .with(pos_core::capability::Capability::Seats);
+        session.with_capabilities(capabilities)
+    })
+    .await
+}
+
 /// Composes a store, letting the caller adjust the session before it is applied.
 async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store {
     let mut roster = StaffRoster::new();
@@ -680,6 +693,102 @@ async fn one_send_moves_every_unsent_line_and_sending_again_is_a_no_op() {
         again.as_array().expect("a list").len(),
         0,
         "nothing left unsent, so nothing is sent twice: {again}"
+    );
+}
+
+/// A seat is recorded where the store assigns seats, and refused where it does not.
+///
+/// `seat` has ridden `sales.order_line.added` and `LineDraft` since they were written, and the add
+/// route has accepted it all along — nothing ever set it, because the till had no way to know
+/// whether the store wanted to be asked. `GET /api/menu` now says, under the rule that module's
+/// header sets: a flag joins the response in the change that consumes it.
+///
+/// The refusal is the half that makes the flag mean something. `Capability::Seats` is off by
+/// default, and a flag nothing enforces is decoration — a device that asked anyway would write a
+/// seat into the log of a store that does not do seats, and the by-seat split that reads it later
+/// would find guests at a table nobody seated.
+#[tokio::test]
+async fn a_seat_is_recorded_where_the_store_assigns_seats_and_refused_where_it_does_not() {
+    // The reference preset: seats off.
+    let plain = a_store().await;
+    let (status, menu) = send(
+        plain.app.clone(),
+        Some(&plain.token),
+        "GET",
+        "/api/menu",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(menu["seats_enabled"], false, "the preset does not do seats");
+
+    let table = TableId::new(Ulid::from_u128(704));
+    let (status, _) = post(
+        plain.app.clone(),
+        Some(&plain.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut seated_line = a_line_body();
+    seated_line["seat"] = json!(3);
+    let (status, refused) = post(
+        plain.app.clone(),
+        Some(&plain.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(seated_line.clone()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a store that does not do seats refuses one: {refused}"
+    );
+
+    // A line with no seat is untouched — which is every line on every store that has this off.
+    let (status, _) = post(
+        plain.app.clone(),
+        Some(&plain.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a seatless line is unaffected");
+
+    // And the same request against a store that does assign seats.
+    let seated = a_store_with_seats().await;
+    let (status, menu) = send(
+        seated.app.clone(),
+        Some(&seated.token),
+        "GET",
+        "/api/menu",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(menu["seats_enabled"], true, "the till is told to ask");
+
+    let (status, _) = post(
+        seated.app.clone(),
+        Some(&seated.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, accepted) = post(
+        seated.app.clone(),
+        Some(&seated.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(seated_line),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a store that assigns seats takes one: {accepted}"
     );
 }
 
