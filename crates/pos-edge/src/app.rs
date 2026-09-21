@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use pos_core::billing::{self, BillInput, BillTotals, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
-use pos_core::capability::CapabilityContext;
+use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::decision::{
     Actor, BillCommand, DecisionCtx, Effect, LineCommand, ShiftCommand, TableCommand, decide_bill,
     decide_line, decide_shift, decide_table,
@@ -2575,10 +2575,17 @@ impl<S: EventStore> Edge<S> {
     /// Adding a line is not a state-machine transition and needs no permission; it records what the
     /// device captured. A new line starts [`OrderLineState::Added`].
     ///
+    /// **A seat is the one thing checked**, because it is the one thing here a store can turn off.
+    /// `Capability::Seats` is off by default — most counters have no seats — and a flag nothing
+    /// enforces is decoration: a device that asked for a seat anyway would write one into the log of
+    /// a store that does not do seats, and the by-seat split that reads it later would find guests at
+    /// a table nobody seated. A line with no seat is untouched either way, which is every line on
+    /// every store that has not turned this on.
+    ///
     /// # Errors
     ///
-    /// [`AppError::NoOpenOrder`] if the table has not been seated, or [`AppError`] if the store cannot
-    /// be written.
+    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::Domain`] if the line
+    /// names a seat and the store does not do seats, or [`AppError`] if the store cannot be written.
     pub async fn add_line(
         &self,
         actor: Actor,
@@ -2586,6 +2593,9 @@ impl<S: EventStore> Edge<S> {
         draft: LineDraft,
     ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        if draft.seat.is_some() {
+            ctx.require_capability(Capability::Seats)?;
+        }
         let order_id = self
             .lock_projection()
             .order_for_table(table_id)

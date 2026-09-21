@@ -105,6 +105,11 @@ pub fn config_document() -> Option<serde_json::Value> {
         },
         "menu": serde_json::to_value(demo_menu()).ok()?,
         "floor": demo_floor(),
+        // Seats on. The capability defaults **off** (§10) because most counters have no seats, so a
+        // demo that left it at the default would ship a seat picker no contributor and no browser
+        // gate ever saw — the same dark corner the floor plan sat in until it was published here.
+        // The floor above gives every table a capacity, which is what the picker offers.
+        "seats_enabled": true,
     }))
 }
 
