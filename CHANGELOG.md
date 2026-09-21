@@ -18,6 +18,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A failed replay says which flow failed.** Both browser gates reported a failure only into the
+  job log, and for `console-replay` that is the one place it cannot be read: the runner dumps the
+  Postgres service container's output at teardown, thousands of lines of it, so the failing
+  assertion ends up far above the end of the log and anything reading the tail sees database chatter
+  instead. Twice in this run of work a red `console-replay` had to be diagnosed by reproducing it
+  locally, because the log could not say what broke.
+  - Both harnesses now also write Playwright's **JSON report**, and on a failure CI turns it into the
+    **job summary** — the failing flow, its locator and the expectation — which is its own surface
+    and survives whatever the log carries.
+  - The Postgres noise is **expected and is now silenced at the source**. `store-postgres` recycles
+    every pooled connection with `ROLLBACK`, which is load-bearing (a `PgTx` dropped without commit
+    or rollback would otherwise hand the next caller a connection inside a leaked transaction), and
+    its own comment already says the no-op case costs "a warning, not an error". That is true once;
+    a browser suite makes thousands. The job tells the server not to log it. An `ERROR` still is.
+  - **The flake itself is not fixed, because it has not been reproduced.** Fifteen consecutive local
+    runs of the console suite passed. Both CI failures were on hosted runners with no diagnosis
+    available — which is the thing this change fixes, rather than the flake.
 - **A discount ceiling somebody can publish.** `billing.discount.apply` is granted to a **server**,
   is not PIN-flagged, and its own description says *"apply a discount up to the role's configured
   ceiling"* — and there was nowhere to configure one. The only thing bounding a permission a server
