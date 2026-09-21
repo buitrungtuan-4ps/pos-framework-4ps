@@ -16,6 +16,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on
+  all of them.** `docs/ui-ux.md` §1 principle 9 has named four device classes since P6 and the
+  screens adapted on Tailwind's stock `sm`/`lg`/`xl`; principle 2 asks for 48 px targets and
+  `app.css` promises to keep the page from scrolling sideways. Measured against a running edge, all
+  three were false: the status bar's ten destinations sat in a row that could not wrap, 488 px wide
+  against a 390 px screen, each one bare text 20 px high — at **every** size, not just on a phone.
+  - The device classes are now **tokens with names**: `tablet:` (768 px) and `terminal:` (1024 px),
+    with the phone as the unprefixed base. They are added beside Tailwind's stock names rather than
+    replacing them — `tokens.css` is mirrored into `dashboard/`, and the console has forty-five
+    responsive rules in the stock vocabulary that clearing the defaults would have flattened
+    silently. The vocabulary is enforced where it applies instead: `ui/scripts/device-classes.mjs`
+    fails the `ui` job on a stock prefix under `ui/src`, and also fails if *nothing* adapts, so it
+    cannot pass by deletion.
+  - The status bar wraps, and every link and button in it is `min-h-touch`.
+  - On a phone the order screen's **send and take-payment buttons are anchored to the bottom**, which
+    principle 9 has asked for all along; a large table's order used to sit below its own lines.
+  - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
+    claims. Reverting the status bar turns all three red, naming the element that sticks out.
+
 ### Changed
 
 - **ADR-0128 records how a bill splits and merges**

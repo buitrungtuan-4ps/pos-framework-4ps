@@ -22,6 +22,31 @@
   --text-xl: 1.75rem; /* 28 */
   --text-2xl: 2.5rem; /* 40 */
 
+  /* Device classes. `docs/ui-ux.md` §1 principle 9 has named four since P6 — POS terminal, tablet,
+     phone, kitchen display — and until now the screens adapted on Tailwind's stock `sm`/`lg`/`xl`,
+     which are names for widths rather than for hardware. A screen written against `lg:` says it
+     changes at 1024 pixels; a screen written against `terminal:` says which machine it is laying
+     itself out for, which is the thing a reviewer can agree or disagree with.
+
+     Three classes, not four. **Phone is the base**, with no prefix at all: a layout that has to be
+     asked for on the smallest screen is a layout that was designed for the largest and narrowed
+     afterwards, which is how the status bar came to scroll sideways on every route. The kitchen
+     display is the fourth class and is deliberately absent here, because it is not a width — it is
+     `/kds` and `/expo`, which take over the theme when they mount (`lib/screen.ts`) and are read
+     from two metres whatever the panel measures.
+
+     Added beside Tailwind's stock names rather than replacing them, and that is not a compromise:
+     **this file is mirrored into `dashboard/`** (`cargo xtask mirrored-files` holds the two
+     identical), and the console is a back-office screen on a laptop with forty-five responsive
+     rules of its own written in the stock vocabulary. Clearing the defaults here would have
+     silently flattened every one of them — the console has no equivalent of the till's device
+     classes and should not, because `docs/ui-ux.md` §2 already gives it different rules for the
+     same reasons. So the vocabulary is enforced where it applies rather than globally:
+     `ui/scripts/device-classes.mjs` fails the `ui` job on a stock prefix under `ui/src`, and says
+     nothing about the console. */
+  --breakpoint-tablet: 48rem; /* 768 — a tablet, either way up */
+  --breakpoint-terminal: 64rem; /* 1024 — a fixed till, or a 10" tablet on its side */
+
   /* One radius, one border. */
   --radius-token: 0.5rem; /* 8px */
 
