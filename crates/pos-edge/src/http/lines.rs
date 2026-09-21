@@ -166,6 +166,45 @@ where
     Json(response).into_response()
 }
 
+/// How many a line should now be.
+///
+/// A quantity and nothing else. Unlike an add, no money crosses this boundary: the edge holds the
+/// unit price the device captured when the line was added, so it extends the line itself rather than
+/// being told what the line comes to. One less number a caller can get wrong, and one less way for a
+/// guest to be charged a total that does not follow from the price they were quoted.
+#[derive(Debug, Deserialize)]
+pub(crate) struct QuantityRequest {
+    quantity: Quantity,
+}
+
+/// `POST /api/lines/{id}/quantity` — change how many, while the line is still editable.
+///
+/// A non-positive quantity is refused here rather than by the domain, and the distinction is
+/// deliberate: zero is not a business rule anybody argued about, it is a malformed request, in the
+/// same class as a path segment that is not a ULID. "Take this off the order" is a **void** — a
+/// different act, with its own event, its own reason code and its own permission once the kitchen
+/// has seen it — and a quantity of zero must not become a quiet way to perform one.
+pub(crate) async fn set_quantity<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<QuantityRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_line_id) = parse_ulid(&id).map(OrderLineId::new) else {
+        return bad_request("an order line id is a ULID");
+    };
+    if request.quantity.as_milli() <= 0 {
+        return bad_request("a quantity is greater than zero; removing a line is a void");
+    }
+    respond(
+        edge.set_line_quantity(actor, order_line_id, request.quantity)
+            .await,
+    )
+}
+
 /// `POST /api/orders/{id}/fire` — send every unsent line on an order, in one transaction.
 ///
 /// The operator's act is "send this order". Firing line by line made it one tap and one round trip

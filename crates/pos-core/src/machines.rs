@@ -196,6 +196,11 @@ triggers! {
         Fire => "fire",
         /// Cancel the line, with a reason and a permission once fired.
         Void => "void",
+        /// Change how many, while the line is still editable.
+        ///
+        /// A self-transition rather than a move: the line is the same line, and its place in the
+        /// merge order (ADR-0029) must not shift because somebody typed a different number.
+        Amend => "amend",
     }
 }
 
@@ -225,6 +230,12 @@ impl StateMachine for OrderLine {
         trigger.label()
     }
 
+    // A transition table, where two rows landing in the same state is a coincidence of the domain
+    // rather than duplication to fold away. `match_same_arms` would have `(Added, Hold)` merged with
+    // `(Held, Amend)` because both end in `Held`, which reads as though holding a line and changing
+    // its quantity were the same act. The table is the documentation (`docs/state-machines.md` is
+    // generated from it), so it stays one row per legal move.
+    #[expect(clippy::match_same_arms, reason = "one row per legal move; see above")]
     fn next(from: OrderLineState, trigger: LineTrigger) -> Option<OrderLineState> {
         Some(match (from, trigger) {
             (OrderLineState::Added, LineTrigger::Hold) => OrderLineState::Held,
@@ -236,6 +247,12 @@ impl StateMachine for OrderLine {
                 OrderLineState::Added | OrderLineState::Held | OrderLineState::Fired,
                 LineTrigger::Void,
             ) => OrderLineState::Voided,
+            // Amend stays where it is, and only from the two editable states. A fired line is being
+            // made — changing its quantity would ask the kitchen to have cooked a different number
+            // in the past, and stock has already moved against the old one. That is a void and a
+            // fresh line, which is what the machine forces by refusing this.
+            (OrderLineState::Added, LineTrigger::Amend) => OrderLineState::Added,
+            (OrderLineState::Held, LineTrigger::Amend) => OrderLineState::Held,
             _ => return None,
         })
     }

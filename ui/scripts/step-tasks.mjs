@@ -43,6 +43,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {
+    task: "Change how many of a line",
+    budget: 2,
+    note: "One tap on the line's own stepper. Declared on the **+** button: both controls call the same action, and the map names an action rather than an element, so declaring the pair would measure the same tap twice. Minus is the same single tap and is deliberately disabled at one — zero is not a smaller order, it is a void, which carries a reason and a manager once the kitchen has the ticket.",
+    steps: [{ route: "/table/:id", action: "setQuantity" }],
+    outcome: { route: "/table/:id", mark: "line-quantity" },
+  },
+  {
     task: "Order an item for a particular seat",
     budget: 2,
     note: "Two, at the ceiling, and the second tap is the item itself — choosing the seat is the first. Declared as its own task rather than as a step inside \"Add an item\", for the reason the tipped settles are separate: a seat is *optional*, and folding it in would make the common flow read as two taps when it is one. The choice is sticky because a server orders a whole seat's worth at once; per-item it would cost a tap per dish. The control is absent entirely unless the store assigns seats, so on most stores this task does not exist.",

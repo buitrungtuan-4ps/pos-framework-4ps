@@ -18,6 +18,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **[ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) — a course is something the
+  catalog names.** A decision record, no behaviour change. A course is built end to end and the thing
+  itself does not exist: `CourseId` is a wire id, `sales.order_line.added` carries one,
+  `POST /api/tables/{id}/lines` accepts one, `pos_proto::floor::RoutingRule` matches on one and the
+  edge honours it, `Capability::Courses` gates a fire-by-course and `decide_line` refuses it when the
+  capability is off — with a test. **Nothing creates, names, orders, lists or publishes a course.**
+  Every `course_id` in the tree is a foreign key to a table that is not there, which is sharpest in
+  the cloud's own admin API: a routing rule keyed on a course is accepted after checking only that it
+  does not also name an item, published to a store, honoured there, and matches nothing for ever. The
+  record decides the entity, its `sort` (which is the whole meaning of the grouping), that the *item*
+  declares its course rather than the server, that it rides the `menu` node additively, and that a
+  routing rule's course must exist. Fire rounds, a course-level hold and per-course pacing are named
+  as out of scope rather than omitted.
 - **A bill can be discounted.** `billing.discount.applied` has been defined in `pos-proto`, with
   exactly this shape, since the schema was written, and `billing::assemble` has taken a
   `bill_discount` and allocated it across tax classes for just as long. **Nothing ever emitted the
@@ -94,8 +107,60 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
     claims. Reverting the status bar turns all three red, naming the element that sticks out.
 
+### Changed
+
+- **ADR-0128 records how a bill splits and merges**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)). `billing.bill.split` and
+  `billing.bill.merged` have been defined in `pos-proto` since the schema was written and **nothing
+  has ever emitted either**, because two structural things were missing: a bill has no lines (it
+  bills a whole order, and the amount owed is assembled by reading every line of that order), and a
+  bill whose lines have moved has nowhere to go (`BillState` is `OPEN`, `SETTLED`, `VOIDED`). The
+  record decides that a bill covers a **set of order lines**, that `BillState` gains the terminal
+  values `SPLIT` and `MERGED` (additive, no `PROTOCOL_VERSION` bump), that a split is a **partition**
+  the domain checks rather than a carve-off, that each resulting bill computes its own tax and
+  rounding rather than being allocated a share of the source's, that a merge keeps the target's
+  identity, and that **neither act needs a permission or a manager** — a split partitions money
+  already captured and a merge concatenates it, so nothing is created or forgiven. Splitting evenly
+  by N is explicitly **not** this and is left to its own record, with the reason: four equal shares
+  of a seven-line bill correspond to no grouping of those seven lines. Amended after review to
+  answer whether a bill stays traceable through split → merge → split: **`billing.bill.opened`
+  gains `order_line_ids`** (additive), because without it the log recorded which *bills* a split
+  produced and never which *lines* went where — so the property the split event states about
+  itself could not be checked from the store's own log, and a store replaying it could not
+  rebuild which bill owed what. The record now also states that the lineage is acyclic by
+  construction, that a split commits atomically, that undoing one is a new merge rather than a
+  restoration, and that no receipt number is consumed by either act. Two gaps are named rather
+  than implied: the event log is append-only but **not chained** (no sequence, no hash of the
+  previous record), which the strictest cash-register regimes require and which needs its own
+  record; and `order_line_ids` grows with the order. No code yet.
+  **Upgrade note:** none — a decision record.
+
+- **The ADR index had stopped being updated.** `docs/adr/README.md` listed records up to 0125 while
+  0126 was merged; its row is added here alongside 0128's.
+
 ### Added
 
+- **A line says how many, and two taps change it.** The till could only ever add *one* of a thing —
+  `quantity: { milli: 1000 }`, hard-coded, with a comment at the call site admitting it was the only
+  quantity on offer — so an order for three beers was three taps and three rows on the ticket.
+  - `POST /api/lines/{id}/quantity` emits `sales.order_line.updated`, an event `pos-proto` has
+    carried with exactly this shape since the schema was written and which **nothing had ever
+    emitted**.
+  - **The request carries a quantity and no money.** The projection now keeps the `unit_price` the
+    device captured at add time — `sales.order_line.added` always carried it and the fold was
+    dropping it — so the edge extends the line itself rather than being told what it comes to. A
+    guest cannot be charged a total that does not follow from the price they were quoted, and
+    today's menu is never consulted, because a line never re-reads the live menu (§14.2).
+  - **A fired line refuses.** The new `amend` trigger is a self-transition on the two editable
+    states only, so the refusal comes from the state machine rather than from a permission: there is
+    no PIN that makes it legal, because the food exists and stock moved against the old number.
+    Changing your mind after sending is a void and a fresh line. `docs/state-machines.md` shows the
+    new column.
+  - **Zero is refused at the door**, as a malformed request rather than a domain refusal. Taking a
+    line off an order is a **void** — its own event, its own reason code, and a manager once the
+    kitchen has seen it — and a quantity of zero must not become a quieter way to perform one. The
+    minus control stops at one for the same reason.
+  - **Upgrade note.** None. The route is additive and the event was already published.
 - **The order screen can be searched.** A box above the item grid filters the menu as an operator
   types, and one tap on a match sells it (#367).
   - It matches **both** names an item has: the price book's `display_name`, and the caption the
@@ -145,6 +210,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   covering it uses a range that needs the *late* bytes to decide (`192.0.2.0/24`), because a wrong
   reading of bytes 2 and 3 usually lands in the same forbidden /8 as the right one and hides the
   bug. **Upgrade note:** none.
+
+### Changed
+
+- **ADR-0127 records how modifier groups reach a store**
+  ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)). The console has authored modifier
+  groups since [ADR-0066](docs/adr/0066-cloud-catalog.md) and nothing carried them down, so a till
+  could record which modifiers a line had but never ask what a pizza's sizes were. The record
+  decides the compiled shape (`MenuCatalog` gains the groups, `MenuEntry` gains the ids of the ones
+  attached to it, both additive and `#[serde(default)]`, no `PROTOCOL_VERSION` bump), that
+  attachment inverts on the way down so a till asks once per tap rather than scanning, that
+  "required" is `min_select >= 1` rather than a second flag, and that the **edge** enforces the
+  selection rule rather than trusting a device to have asked. Nesting and half-and-half
+  (`SPLIT_ITEM`) are explicitly left to their own records, with the reasons. No code yet.
+  **Upgrade note:** none — a decision record.
 
 ### Security
 

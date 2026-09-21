@@ -20,6 +20,7 @@ import type {
   DiscountRequest,
   DiscountResponse,
   FireRequest,
+  QuantityRequest,
   FloorResponse,
   LineRequest,
   LineResponse,
@@ -203,6 +204,9 @@ export const api = {
 
   addLine: (tableId: string, line: LineRequest) =>
     request<LineResponse>("POST", `/api/tables/${tableId}/lines`, line),
+  setLineQuantity: (lineId: string, body: QuantityRequest) =>
+    request<LineResponse>("POST", `/api/lines/${lineId}/quantity`, body),
+
   fireLine: (lineId: string, fire: FireRequest) =>
     request<LineResponse>("POST", `/api/lines/${lineId}/fire`, fire),
 

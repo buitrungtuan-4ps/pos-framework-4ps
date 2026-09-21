@@ -54,6 +54,24 @@ export function formatMoney(m: Money): string {
   return `${sign}${m.currency_code} ${body}`;
 }
 
+// How many, for a ticket row. Thousandths on the wire so a half or a weighed item can be expressed
+// (`pos_proto::Quantity`), and integer ops only on the way out, for the reason money uses them: a
+// float here would eventually render 2.9999999 beside a price.
+//
+// A whole number prints bare — "3", not "3.000" — because that is what almost every line is and the
+// zeros are noise on a screen read at arm's length. A fraction prints only the digits it has.
+export function formatQuantity(milli: number): string {
+  const negative = milli < 0;
+  const abs = Math.abs(milli);
+  const whole = Math.trunc(abs / 1000);
+  const fraction = abs % 1000;
+  const sign = negative ? "-" : "";
+  if (fraction === 0) {
+    return `${sign}${whole}`;
+  }
+  return `${sign}${whole}.${fraction.toString().padStart(3, "0").replace(/0+$/, "")}`;
+}
+
 // The banknotes a cashier is most often handed, in minor units, per currency — the pay pad's
 // quick-cash keys **until the store's locale syncs**.
 //
