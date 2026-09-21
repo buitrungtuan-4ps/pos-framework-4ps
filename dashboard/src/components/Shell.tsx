@@ -320,16 +320,26 @@ export function Shell(props: ParentProps) {
             aria-label={t("shell.breadcrumb")}
             class="flex shrink-0 flex-wrap items-center gap-1 border-b border-line px-4 py-2 text-sm text-ink-muted md:px-6"
           >
-            <For each={crumbs()}>
-              {(crumb, index) => (
-                <>
-                  <Show when={index() > 0}>
-                    <span aria-hidden="true">›</span>
-                  </Show>
-                  <span class={index() === crumbs().length - 1 ? "text-ink" : ""}>{crumb}</span>
-                </>
-              )}
-            </For>
+            <ol class="flex flex-wrap items-center gap-1">
+              <For each={crumbs()}>
+                {(crumb, index) => {
+                  const isLast = () => index() === crumbs().length - 1;
+                  return (
+                    <li class="inline-flex items-center gap-1">
+                      <Show when={index() > 0}>
+                        <span aria-hidden="true">›</span>
+                      </Show>
+                      <span
+                        class={isLast() ? "text-ink" : ""}
+                        aria-current={isLast() ? "page" : undefined}
+                      >
+                        {crumb}
+                      </span>
+                    </li>
+                  );
+                }}
+              </For>
+            </ol>
           </nav>
           {/* A page is bounded, and the bound is generous rather than tight: 1280px keeps a wide
               table wide while stopping a form from stretching to the full 1440 of a laptop, where
