@@ -8,6 +8,7 @@ GET /api/layout
 GET /api/locale
 GET /api/menu
 GET /api/orders/awaiting-confirmation
+GET /api/orders/live
 GET /api/orders/open
 GET /api/orders/{id}/check
 GET /api/pair/devices
@@ -24,6 +25,7 @@ POST /api/lines/{id}/fire
 POST /api/lines/{id}/void
 POST /api/orders/{id}/bill
 POST /api/orders/{id}/confirm
+POST /api/orders/{id}/fire
 POST /api/orders/{id}/reject
 POST /api/pair
 POST /api/pair/codes

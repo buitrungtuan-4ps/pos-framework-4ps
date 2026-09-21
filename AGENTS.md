@@ -91,7 +91,7 @@ A change is complete when all of these are true:
 - Template fields are mandatory: **what / why / how tested / docs updated**.
 - Squash merge only. History stays linear.
 - PRs produced with AI assistance carry the `ai-assisted` label. This does not lower the review bar; it exists for traceability.
-- A human merges. Always.
+- A human merges. Always. Exception for Repo Owner can allow AI auto merged
 - `pos-core`, `pos-ports`, `pos-proto`, and `.github/` require an owner review.
 
 ## 7. Changes that need an ADR before code
