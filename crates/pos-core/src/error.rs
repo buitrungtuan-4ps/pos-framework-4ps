@@ -53,6 +53,17 @@ pub enum DomainError {
         reducible_minor: i64,
     },
 
+    /// A proposed split is not a partition of the bill's lines
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 3).
+    ///
+    /// One error rather than four, carrying which rule broke, because they are one question — *is
+    /// this a partition?* — and a caller that has to handle four variants to say "that split does
+    /// not add up" has been given the domain's reasoning instead of its answer.
+    NotAPartition {
+        /// Which rule the proposed split broke.
+        reason: PartitionFault,
+    },
+
     /// A line carries a tax class the store's rate table does not price on this channel. Silently
     /// charging no tax would be an audit finding, so the domain refuses instead
     /// ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)).
@@ -104,6 +115,7 @@ impl core::fmt::Display for DomainError {
             Self::NegativeChange => {
                 f.write_str("change would be negative: tendered is less than applied plus tips")
             }
+            Self::NotAPartition { reason } => write!(f, "the split is not a partition: {reason}"),
             Self::ReductionExceedsBill {
                 reduction_minor,
                 reducible_minor,
@@ -137,6 +149,7 @@ impl core::error::Error for DomainError {
             Self::PaymentsDoNotSumToTotal { .. }
             | Self::NegativeChange
             | Self::ReductionExceedsBill { .. }
+            | Self::NotAPartition { .. }
             | Self::TaxRateNotConfigured { .. }
             | Self::Empty { .. }
             | Self::PermissionDenied { .. }
@@ -148,6 +161,45 @@ impl core::error::Error for DomainError {
 impl From<MoneyError> for DomainError {
     fn from(error: MoneyError) -> Self {
         Self::Money(error)
+    }
+}
+
+/// Which of a partition's four rules a proposed split broke
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 3).
+///
+/// Four rules and not one check, because each says something different to whoever has to fix it: a
+/// split of one part is a screen that did not ask for a second, an empty part is a screen that let
+/// somebody confirm nothing, an unbilled line is a stale screen, and a line left behind or claimed
+/// twice is arithmetic that would charge a guest wrongly either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PartitionFault {
+    /// Fewer than two parts. Splitting into one is not a split; it is the bill it already was.
+    TooFewParts,
+    /// A part covers no lines. A bill owing nothing is not something to hand a guest.
+    EmptyPart,
+    /// A part names a line the source bill does not cover — a screen acting on an order that has
+    /// moved on, or on another bill's lines.
+    LineNotOnTheBill,
+    /// A line the source covers appears in no part, or in more than one.
+    ///
+    /// Both directions are this one fault because both are the same failure of arithmetic: the
+    /// parts do not sum to the source. A line left behind would be food nobody is charged for; a
+    /// line in two parts would be food charged twice.
+    LinesDoNotPartition,
+}
+
+impl core::fmt::Display for PartitionFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::TooFewParts => "a split needs at least two parts",
+            Self::EmptyPart => "a part covers no lines",
+            Self::LineNotOnTheBill => "a part names a line this bill does not cover",
+            Self::LinesDoNotPartition => {
+                "every line must appear in exactly one part, and each part's lines must be the \
+                 source's"
+            }
+        })
     }
 }
 

@@ -406,6 +406,26 @@ event_catalogue! {
         bill_id: BillId,
         /// The order it bills.
         order_id: OrderId,
+        /// The order lines this bill covers
+        /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decisions 1 and 9).
+        ///
+        /// A bill covers *lines*, not an order — which is what makes a split a partition of
+        /// something. Recorded here rather than only in the projection because otherwise the log
+        /// says which bills a split produced and never which lines went into which, so the property
+        /// the split event states about itself cannot be checked from the store's own log, and a
+        /// store replaying after a restart could not rebuild which bill owed what.
+        ///
+        /// On `opened` rather than on `split`, because a bill covers lines from the moment it
+        /// exists — a bill born by splitting and a bill born by opening a table are the same kind of
+        /// thing, and putting the partition on the split event would make the same fact true in two
+        /// places. A merge needs no new field: the target's set is its own plus every absorbed
+        /// bill's, and both are already in the log.
+        ///
+        /// `#[serde(default)]` so a bill opened before this field existed still replays — as a bill
+        /// covering no lines it names, which the projection reads as "every unvoided line on the
+        /// order", exactly what such a bill meant when it was written.
+        #[serde(default)]
+        order_line_ids: Vec<OrderLineId>,
     },
     /// A bill was split.
     ///

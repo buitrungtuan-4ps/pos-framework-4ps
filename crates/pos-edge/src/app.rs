@@ -45,12 +45,13 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, BillingBillVoided, BillingDiscountApplied,
-    BillingPaymentCaptured, CashShiftClosed, CashShiftCounted, CashShiftOpened,
-    DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
-    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
-    SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
-    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened, SecurityPermissionOverridden,
+    BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
+    BillingDiscountApplied, BillingPaymentCaptured, CashShiftClosed, CashShiftCounted,
+    CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
+    EventType, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
+    SecurityPermissionOverridden,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -757,6 +758,16 @@ pub enum AppError {
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
+    /// A merge named bills that do not sit on the same table, or named the target as its own
+    /// absorbed bill ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    ///
+    /// The model does not forbid a bill spanning two tables; the **floor** does. Settling moves a
+    /// bill's table from `AwaitingPayment` to `NeedsCleaning`, and a bill over two tables makes
+    /// "which table moved?" a question with two answers. Merging a bill into itself is refused here
+    /// too, because it would double that bill's own lines — the one arithmetic mistake ADR-0128
+    /// exists to make impossible.
+    #[error("bills on different tables cannot be merged")]
+    BillsOnDifferentTables,
     /// A command named a shift the edge does not know.
     #[error("no such shift")]
     UnknownShift,
@@ -1289,11 +1300,27 @@ struct OrderSnapshot {
 /// tableless by design ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)); while this was a bare
 /// `TableId` such an order could be accepted, priced, queued and fired — and never charged for,
 /// because there was no table to open its bill against.
-#[derive(Debug, Clone, Copy)]
+/// `Clone`, not `Copy`: the line set is a `Vec`. Cloning a record is a handful of words plus a list
+/// the size of one table's order, and the alternative — keeping a bill's lines somewhere other than
+/// beside the bill — is the shape ADR-0128 was written to replace.
+#[derive(Debug, Clone)]
 struct BillRecord {
     order_id: OrderId,
     table_id: Option<TableId>,
     state: BillState,
+    /// The order lines this bill covers
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
+    ///
+    /// A bill covers *lines*, not an order, which is what makes a split a partition of something.
+    /// Until this field existed the amount owed was assembled by reading **every** line of the
+    /// order, so there was nothing to partition and two bills on one order would each have owed all
+    /// of it.
+    ///
+    /// **Empty means "every unvoided line on the order"**, which is what a bill opened before this
+    /// field existed meant and what it still means on replay. Not a `None`, because the distinction
+    /// is only ever read one way — `covered_lines` resolves it once — and an `Option<Vec<_>>` would
+    /// make every reader handle two absences.
+    order_line_ids: Vec<OrderLineId>,
     /// What has been taken off this bill so far, by kind.
     ///
     /// Kept apart rather than summed, because `billing::BillInput` takes them apart — a discount is
@@ -1729,7 +1756,25 @@ impl Projection {
     }
 
     fn bill(&self, bill_id: BillId) -> Option<BillRecord> {
-        self.bills.get(&bill_id).copied()
+        self.bills.get(&bill_id).cloned()
+    }
+
+    /// The unvoided lines of `order_id`, in id order — what opening a bill covers.
+    ///
+    /// Unvoided, because a voided line is owed nothing and taxed nothing; in id order, because that
+    /// is the order the merge semantics fix (ADR-0029) and a partition has to be comparable against
+    /// something stable.
+    fn sold_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
+        let mut ids: Vec<OrderLineId> = self
+            .lines
+            .iter()
+            .filter(|(_, record)| {
+                record.order_id == order_id && record.state != OrderLineState::Voided
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// Records a reduction against a bill. Additive, because two discounts on one bill are two
@@ -1761,6 +1806,13 @@ impl Projection {
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
         if let Some(record) = self.bills.get_mut(&bill_id) {
             record.state = state;
+        }
+    }
+
+    /// Replaces what a bill covers — the target of a merge, taking the absorbed bills' lines.
+    fn set_bill_lines(&mut self, bill_id: BillId, order_line_ids: Vec<OrderLineId>) {
+        if let Some(record) = self.bills.get_mut(&bill_id) {
+            record.order_line_ids = order_line_ids;
         }
     }
 
@@ -2672,7 +2724,7 @@ impl<S: EventStore> Edge<S> {
 
         // The pre-tax base is what there is to reduce: tax follows from it, so reducing past it
         // would make the tax negative before the total was.
-        let order = self.order_snapshot(bill.order_id, &session)?;
+        let order = self.bill_snapshot(&bill, &session)?;
         let mut reducible = Money::zero(session.currency);
         for base in &order.class_bases {
             reducible = reducible
@@ -2765,6 +2817,190 @@ impl<S: EventStore> Edge<S> {
             order.sales_channel,
             (discount, comp),
         ))?)
+    }
+
+    /// Partitions a bill's lines into two or more new bills
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// The source moves to `SPLIT`, which is terminal: it stops owing anything and the parts owe it
+    /// instead, so the same food cannot be charged twice. Each part becomes an ordinary bill on the
+    /// same order and the same table, and can itself be split again — nothing tracks a depth.
+    ///
+    /// **One transaction.** Every part's `billing.bill.opened` and the `billing.bill.split` naming
+    /// them are appended together or not at all, so the log never holds parts whose source is
+    /// missing, or a source whose parts are (decision 10).
+    ///
+    /// **Each part computes its own tax and its own rounding**, because `assemble` runs per bill over
+    /// that bill's captured line totals. The parts' totals can therefore differ from the source's by
+    /// the cash rounding on each, and that is the correct answer rather than a discrepancy: the
+    /// source's total was quoted and never charged, and what the store banks is the sum of what each
+    /// guest was actually asked for (decision 4).
+    ///
+    /// No permission and no PIN: nothing is created, forgiven or moved out of the store.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if the bill is not open or
+    /// the proposed parts are not a partition of what it covers.
+    pub async fn split_bill(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        parts: Vec<Vec<OrderLineId>>,
+    ) -> Result<Vec<BillId>, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+
+        // What the bill covers, resolved the one way the projection resolves it — so a bill opened
+        // before the line set was recorded splits on the same lines it would have been settled on.
+        let covers = self.covered_lines(&bill);
+        let decided = decide_bill(
+            bill.state,
+            BillCommand::Split {
+                covers,
+                parts: parts.clone(),
+            },
+            &ctx,
+        )?;
+
+        // One id per part, minted before anything is written so the split event can name them.
+        let part_ids: Vec<BillId> = parts
+            .iter()
+            .map(|_| BillId::new(self.next_ulid()))
+            .collect();
+
+        let mut envelopes = Vec::new();
+        let mut messages = Vec::new();
+        for (part_id, lines) in part_ids.iter().zip(parts.iter()) {
+            let opened = BillingBillOpened {
+                bill_id: *part_id,
+                order_id: bill.order_id,
+                order_line_ids: lines.clone(),
+            };
+            let (envelope, message) = self.prepare(&ctx, &opened)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        let split = BillingBillSplit {
+            source_bill_id: bill_id,
+            resulting_bill_ids: part_ids.clone(),
+        };
+        let (envelope, message) = self.prepare(&ctx, &split)?;
+        envelopes.push(envelope);
+        messages.push(message);
+        self.append_and_publish(envelopes, messages).await?;
+
+        {
+            let mut projection = self.lock_projection();
+            for (part_id, lines) in part_ids.iter().zip(parts.into_iter()) {
+                projection.open_bill_record(
+                    *part_id,
+                    BillRecord {
+                        order_id: bill.order_id,
+                        table_id: bill.table_id,
+                        state: BillState::Open,
+                        order_line_ids: lines,
+                        // A part starts owing its lines in full. The source's reductions are not
+                        // divided across the parts: a discount was a decision about *that* bill, and
+                        // splitting one is not the arithmetic that says how it should land on two.
+                        // Reducing a part is an ordinary discount on an ordinary bill.
+                        discount: None,
+                        comp: None,
+                    },
+                );
+            }
+            projection.set_bill_state(bill_id, decided.next_state);
+        }
+        Ok(part_ids)
+    }
+
+    /// Folds `absorbed` into `bill_id`, which takes their lines and survives
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    ///
+    /// The target keeps its identity because it is the bill the cashier is standing in front of, so
+    /// a merge is not a split in reverse and does not need to be. Every absorbed bill must be open,
+    /// and each moves to `MERGED`, which is terminal.
+    ///
+    /// **Restricted to bills on the same table**, which the model does not require and the floor
+    /// does: settling a bill moves its table from `AwaitingPayment` to `NeedsCleaning`, and a bill
+    /// spanning two tables makes *"which table moved?"* a question with two answers. Two tableless
+    /// counter bills merge freely, having no floor move to disagree about.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if the target or any absorbed bill is unknown;
+    /// [`AppError::BillsOnDifferentTables`] if they do not share a table; [`AppError::Domain`] if
+    /// the target or an absorbed bill is not open.
+    pub async fn merge_bills(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        absorbed: Vec<BillId>,
+    ) -> Result<BillId, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let target = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        // The target has to be open too, and the machine is what says so — a settled bill gaining
+        // lines would be food charged after the money was taken. Asked through the same door the
+        // absorbed bills go through, so the two cannot drift apart, and the answer is **discarded**:
+        // the target survives a merge rather than moving, so there is no state to write.
+        let _open = decide_bill(target.state, BillCommand::Merge, &ctx)?;
+
+        let mut folded = Vec::new();
+        for absorbed_id in &absorbed {
+            // Merging a bill into itself would double its own lines, which is the one arithmetic
+            // mistake this whole record exists to make impossible.
+            if *absorbed_id == bill_id {
+                return Err(AppError::BillsOnDifferentTables);
+            }
+            let record = self
+                .lock_projection()
+                .bill(*absorbed_id)
+                .ok_or(AppError::UnknownBill)?;
+            if record.table_id != target.table_id {
+                return Err(AppError::BillsOnDifferentTables);
+            }
+            let decided = decide_bill(record.state, BillCommand::Merge, &ctx)?;
+            folded.push((*absorbed_id, record, decided.next_state));
+        }
+
+        let event = BillingBillMerged {
+            target_bill_id: bill_id,
+            merged_bill_ids: absorbed,
+        };
+        self.commit_and_publish(&ctx, &event).await?;
+
+        {
+            let mut projection = self.lock_projection();
+            let mut lines = self.covered_lines(&target);
+            for (absorbed_id, record, next_state) in folded {
+                lines.extend(self.covered_lines(&record));
+                projection.set_bill_state(absorbed_id, next_state);
+            }
+            lines.sort_unstable();
+            lines.dedup();
+            projection.set_bill_lines(bill_id, lines);
+        }
+        Ok(bill_id)
+    }
+
+    /// The lines a bill covers, resolving the "empty means all of them" case once.
+    ///
+    /// A bill opened before ADR-0128's field existed names none, and meant every unvoided line on
+    /// its order — so that is what it still covers. Resolved here rather than at each reader,
+    /// because two readers disagreeing about what a bill covers is two different answers to what a
+    /// guest owes.
+    fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
+        if bill.order_line_ids.is_empty() {
+            self.lock_projection().sold_line_ids(bill.order_id)
+        } else {
+            bill.order_line_ids.clone()
+        }
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -3180,7 +3416,7 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
-        let order = self.order_snapshot(bill.order_id, &session)?;
+        let order = self.bill_snapshot(&bill, &session)?;
         if order.class_bases.is_empty() {
             return Ok(Self::nothing_owed(session.currency));
         }
@@ -3614,8 +3850,17 @@ impl<S: EventStore> Edge<S> {
             None => None,
         };
 
+        // Every unvoided line on the order, named rather than implied (ADR-0128 decision 9). This
+        // is exactly what opening a bill has always meant; writing it down is what lets a split
+        // partition it, and what lets the log say which bill owed what without a live projection.
+        let order_line_ids = self.lock_projection().sold_line_ids(order_id);
+
         let bill_id = BillId::new(self.next_ulid());
-        let payload = BillingBillOpened { bill_id, order_id };
+        let payload = BillingBillOpened {
+            bill_id,
+            order_id,
+            order_line_ids: order_line_ids.clone(),
+        };
         self.commit_and_publish(&ctx, &payload).await?;
 
         {
@@ -3626,6 +3871,7 @@ impl<S: EventStore> Edge<S> {
                     order_id,
                     table_id,
                     state: BillState::Open,
+                    order_line_ids,
                     discount: None,
                     comp: None,
                 },
@@ -3697,7 +3943,7 @@ impl<S: EventStore> Edge<S> {
         // Assemble the amount owed from the order's captured line totals, grouped per tax class, at
         // the rate for the channel *this order* came in on (B1.2).
         let session = self.session();
-        let order = self.order_snapshot(bill.order_id, &session)?;
+        let order = self.bill_snapshot(&bill, &session)?;
         let totals = billing::assemble(&Self::bill_input(
             &session,
             &order.class_bases,
@@ -4131,6 +4377,9 @@ impl<S: EventStore> Edge<S> {
                         order_id: event.order_id,
                         table_id,
                         state: BillState::Open,
+                        // Empty on a bill opened before the field existed, which `covered_lines`
+                        // reads as "every unvoided line on the order" — what such a bill meant.
+                        order_line_ids: event.order_line_ids,
                         discount: None,
                         comp: None,
                     },
@@ -4240,6 +4489,34 @@ impl<S: EventStore> Edge<S> {
             | EventType::BillingDiscountApplied => {
                 Self::fold_billing(projection, envelope, known)?;
             }
+            // A split's source and a merge's absorbed bills are terminal, and a store that replayed
+            // its log without them would reopen a bill somebody has already been charged for
+            // through its parts (ADR-0128 decision 10). The parts themselves need nothing here:
+            // each has its own `billing.bill.opened` in the same transaction, which the arm above
+            // already folds with the lines it covers.
+            EventType::BillingBillSplit => {
+                let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.set_bill_state(event.source_bill_id, BillState::Split);
+            }
+            EventType::BillingBillMerged => {
+                let event: BillingBillMerged = envelope.data.decode().map_err(AppError::Encode)?;
+                // The target takes their lines, rebuilt from what each bill already records rather
+                // than from a field on this event: a bill covers lines from the moment it exists,
+                // and carrying the union here too would make the same fact true in two places.
+                let mut lines = projection
+                    .bill(event.target_bill_id)
+                    .map(|target| target.order_line_ids)
+                    .unwrap_or_default();
+                for absorbed_id in event.merged_bill_ids {
+                    if let Some(absorbed) = projection.bill(absorbed_id) {
+                        lines.extend(absorbed.order_line_ids);
+                    }
+                    projection.set_bill_state(absorbed_id, BillState::Merged);
+                }
+                lines.sort_unstable();
+                lines.dedup();
+                projection.set_bill_lines(event.target_bill_id, lines);
+            }
             EventType::CashShiftOpened => {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.open_shift_record(
@@ -4295,14 +4572,51 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
         session: &EdgeSession,
     ) -> Result<OrderSnapshot, AppError> {
+        self.snapshot_of(order_id, None, session)
+    }
+
+    /// The same read, narrowed to the lines **one bill** covers
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 1).
+    ///
+    /// This is the difference a split turns on. Before it, what a bill owed was assembled from every
+    /// line of its order — so two bills on one order would each have owed all of it, and there was
+    /// nothing to partition. A bill now answers for its own lines and nobody else's.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if a line's amounts cannot be summed.
+    fn bill_snapshot(
+        &self,
+        bill: &BillRecord,
+        session: &EdgeSession,
+    ) -> Result<OrderSnapshot, AppError> {
+        self.snapshot_of(bill.order_id, Some(&bill.order_line_ids), session)
+    }
+
+    /// One read of an order, optionally narrowed to a set of its lines.
+    ///
+    /// `covers` of `None` — or an empty set, which is what a bill opened before ADR-0128's field
+    /// existed carries — means every line of the order, which is what such a bill has always meant.
+    fn snapshot_of(
+        &self,
+        order_id: OrderId,
+        covers: Option<&[OrderLineId]>,
+        session: &EdgeSession,
+    ) -> Result<OrderSnapshot, AppError> {
         // The guard is taken and dropped inside the block: `class_bases` does arithmetic that can
         // fail, and holding the projection lock across a `?` is how a poisoned lock happens.
         let (lines, channel) = {
             let projection = self.lock_projection();
-            (
-                projection.lines_for_order(order_id),
-                projection.order_channel(order_id),
-            )
+            let lines = match covers {
+                Some(covered) if !covered.is_empty() => projection
+                    .identified_lines_for_order(order_id)
+                    .into_iter()
+                    .filter(|(id, _)| covered.contains(id))
+                    .map(|(_, record)| record)
+                    .collect(),
+                _ => projection.lines_for_order(order_id),
+            };
+            (lines, projection.order_channel(order_id))
         };
         let class_bases = Self::class_bases(&lines)?;
         Ok(OrderSnapshot {

@@ -30,7 +30,7 @@
 //! [`Permission::VoidFiredLine`]: crate::permission::Permission::VoidFiredLine
 //! [`Capability::Courses`]: crate::capability::Capability::Courses
 
-use pos_proto::ids::{CourseId, DeviceId, EmployeeId, MenuItemId};
+use pos_proto::ids::{CourseId, DeviceId, EmployeeId, MenuItemId, OrderLineId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
 use pos_proto::time::{BusinessDate, Timestamp};
@@ -39,7 +39,7 @@ use pos_proto::{BillState, OrderLineState, ReductionKind, ShiftState, TableState
 use crate::billing::{Payment, Settlement};
 use crate::campaign::Connectivity;
 use crate::capability::{Capability, CapabilityContext};
-use crate::error::DomainError;
+use crate::error::{DomainError, PartitionFault};
 use crate::inventory::{RecipeBook, StockMovement, consumption_for_fire};
 use crate::machines::{Bill, BillTrigger, LineTrigger, OrderLine, Shift, ShiftTrigger, Table};
 use crate::permission::{Grant, Permission, PermissionSet, require};
@@ -303,6 +303,25 @@ pub enum BillCommand {
         /// Whether the edge has collected and verified the actor's PIN.
         pin_verified: bool,
     },
+    /// Partition the bill's lines into two or more new bills
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// **No permission and no PIN.** A void forgives money and a discount reduces it, so both are
+    /// gated; a split partitions amounts that are already captured and creates, forgives and moves
+    /// nothing — the totals reconcile by construction. A prompt here would be paid for on every
+    /// table, every service, for an act that cannot lose money (ADR-0128 decision 6).
+    Split {
+        /// Every line the bill covers, as the caller holds it.
+        covers: Vec<OrderLineId>,
+        /// The proposed parts, each the lines one new bill will cover.
+        parts: Vec<Vec<OrderLineId>>,
+    },
+    /// Fold this bill into another, which takes its lines.
+    ///
+    /// Decided on the **absorbed** bill, once per bill being folded in: the target stays `Open` and
+    /// has not changed state by gaining lines, so there is nothing to step it through. No permission
+    /// and no PIN, for the reason [`Self::Split`] carries none.
+    Merge,
     /// Reduce what the bill owes, before it settles.
     Reduce {
         /// Which reduction this is. Two published events, two permissions, and two different
@@ -331,6 +350,55 @@ pub enum BillCommand {
         /// Whether the edge has collected and verified a manager's PIN for this act.
         pin_verified: bool,
     },
+}
+
+/// Refuses a proposed split that is not a partition of `covers`
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 3).
+///
+/// Four rules: at least two parts, no empty part, every line of the source in exactly one part, and
+/// no line named that the source does not cover. Stated as a partition rather than as "carve one
+/// off and keep the rest" because a partition has one rule to check, while the asymmetric form
+/// leaves *"and what does the source hold now?"* as a second question needing its own answer.
+///
+/// The counting is done with a sorted vector rather than a set: a bill covers the lines of one
+/// table's order, which is tens of lines, and a `BTreeMap` for that is a larger allocation and a
+/// slower comparison than the sort it replaces. It also lets the duplicate and the missing line be
+/// one pass and one fault, which is what they are — the parts not summing to the source.
+fn check_partition(covers: &[OrderLineId], parts: &[Vec<OrderLineId>]) -> Result<(), DomainError> {
+    if parts.len() < 2 {
+        return Err(DomainError::NotAPartition {
+            reason: PartitionFault::TooFewParts,
+        });
+    }
+    if parts.iter().any(Vec::is_empty) {
+        return Err(DomainError::NotAPartition {
+            reason: PartitionFault::EmptyPart,
+        });
+    }
+
+    let mut claimed: Vec<OrderLineId> = parts.iter().flatten().copied().collect();
+    claimed.sort_unstable();
+    // Checked before the count, so a stale screen naming another bill's line is told *that* rather
+    // than being told its arithmetic is wrong — which would send somebody to recount instead of to
+    // reload.
+    let mut source: Vec<OrderLineId> = covers.to_vec();
+    source.sort_unstable();
+    if claimed
+        .iter()
+        .any(|line| source.binary_search(line).is_err())
+    {
+        return Err(DomainError::NotAPartition {
+            reason: PartitionFault::LineNotOnTheBill,
+        });
+    }
+    // Sorted and equal in one comparison: it catches a line left behind, a line claimed twice, and
+    // a count that happens to match while the contents do not.
+    if claimed != source {
+        return Err(DomainError::NotAPartition {
+            reason: PartitionFault::LinesDoNotPartition,
+        });
+    }
+    Ok(())
 }
 
 /// Whether a discount of `amount` is above what this role may give without a manager.
@@ -452,6 +520,22 @@ pub fn decide_bill(
                 effects: Vec::new(),
             })
         }
+        BillCommand::Split { covers, parts } => {
+            // The machine first, so a settled or voided bill is refused before anything is computed
+            // about lines that are no longer anybody's to move.
+            let next_state = Bill::step(current, BillTrigger::Split)?;
+            check_partition(&covers, &parts)?;
+            Ok(BillDecision {
+                next_state,
+                settlement: None,
+                effects: Vec::new(),
+            })
+        }
+        BillCommand::Merge => Ok(BillDecision {
+            next_state: Bill::step(current, BillTrigger::Merge)?,
+            settlement: None,
+            effects: Vec::new(),
+        }),
         BillCommand::Void { pin_verified } => {
             let next_state = Bill::step(current, BillTrigger::Void)?;
             let grant = ctx.require(Permission::VoidBill)?;
@@ -602,10 +686,10 @@ mod tests {
     use crate::billing::Payment;
     use crate::campaign::Connectivity;
     use crate::capability::{Capability, CapabilityContext};
-    use crate::error::DomainError;
+    use crate::error::{DomainError, PartitionFault};
     use crate::inventory::{Recipe, RecipeBook, RecipeLine};
     use crate::permission::{Permission, PermissionSet};
-    use pos_proto::ids::{CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId};
+    use pos_proto::ids::{CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderLineId};
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::quantity::Quantity;
     use pos_proto::time::{BusinessDate, Timestamp};
@@ -1295,5 +1379,134 @@ mod tests {
             decide_table(TableState::Free, TableCommand::Clean, &ctx),
             Err(DomainError::Transition(_))
         ));
+    }
+
+    fn line(n: u128) -> OrderLineId {
+        OrderLineId::new(Ulid::from_u128(n))
+    }
+
+    /// A partition goes through, with **no permission at all** in the context.
+    ///
+    /// That empty set is the assertion, not scenery (ADR-0128 decision 6): a split creates,
+    /// forgives and moves no money, so gating it would put a PIN prompt in the busiest flow on the
+    /// floor for an act that cannot lose anything.
+    #[test]
+    fn a_split_that_partitions_the_lines_needs_no_permission() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let decided = decide_bill(
+            BillState::Open,
+            BillCommand::Split {
+                covers: vec![line(1), line(2), line(3)],
+                parts: vec![vec![line(1), line(3)], vec![line(2)]],
+            },
+            &ctx,
+        )
+        .expect("a partition of the bill's own lines");
+        assert_eq!(decided.next_state, BillState::Split);
+        assert!(decided.settlement.is_none());
+        assert!(decided.effects.is_empty(), "a split prints nothing");
+    }
+
+    /// Each of the four partition rules, and each named separately — because each says something
+    /// different to whoever has to fix it.
+    #[test]
+    fn a_split_that_is_not_a_partition_is_refused_and_says_which_rule() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let covers = vec![line(1), line(2)];
+        let split = |parts: Vec<Vec<OrderLineId>>| {
+            decide_bill(
+                BillState::Open,
+                BillCommand::Split {
+                    covers: covers.clone(),
+                    parts,
+                },
+                &ctx,
+            )
+        };
+        let fault = |parts: Vec<Vec<OrderLineId>>| match split(parts) {
+            Err(DomainError::NotAPartition { reason }) => reason,
+            other => panic!("expected a partition refusal, got {other:?}"),
+        };
+
+        assert_eq!(
+            fault(vec![vec![line(1), line(2)]]),
+            PartitionFault::TooFewParts,
+            "splitting into one is the bill it already was"
+        );
+        assert_eq!(
+            fault(vec![vec![line(1), line(2)], Vec::new()]),
+            PartitionFault::EmptyPart,
+            "a bill owing nothing is not something to hand a guest"
+        );
+        assert_eq!(
+            fault(vec![vec![line(1)], vec![line(9)]]),
+            PartitionFault::LineNotOnTheBill,
+            "a line this bill does not cover is a stale screen, not bad arithmetic"
+        );
+        assert_eq!(
+            fault(vec![vec![line(1)], vec![line(1)]]),
+            PartitionFault::LinesDoNotPartition,
+            "a line in two parts would charge the same food twice"
+        );
+        assert_eq!(
+            fault(vec![vec![line(1)], vec![line(1), line(2)]]),
+            PartitionFault::LinesDoNotPartition,
+            "and so would a duplicate hidden behind a correct-looking count"
+        );
+    }
+
+    /// A settled or voided bill can be neither split nor merged, and the refusal is the machine's.
+    ///
+    /// No permission makes either legal, which is the point of decision 7: taking money back after
+    /// payment is a refund (ADR-0028), not an edge out of a terminal state.
+    #[test]
+    fn a_bill_that_is_no_longer_open_can_be_neither_split_nor_merged() {
+        // Everything granted, so the refusal below is provably the machine's and not a missing
+        // permission: there is no PIN that makes a terminal bill movable.
+        let everything: PermissionSet = Permission::ALL.iter().copied().collect();
+        let every_capability = Capability::ALL
+            .iter()
+            .fold(CapabilityContext::NONE, |context, capability| {
+                context.with(*capability)
+            });
+        let ctx = ctx_with(everything, every_capability);
+        for state in [
+            BillState::Settled,
+            BillState::Voided,
+            BillState::Split,
+            BillState::Merged,
+        ] {
+            assert!(
+                matches!(
+                    decide_bill(
+                        state,
+                        BillCommand::Split {
+                            covers: vec![line(1), line(2)],
+                            parts: vec![vec![line(1)], vec![line(2)]],
+                        },
+                        &ctx
+                    ),
+                    Err(DomainError::Transition(_))
+                ),
+                "{state:?} should refuse a split"
+            );
+            assert!(
+                matches!(
+                    decide_bill(state, BillCommand::Merge, &ctx),
+                    Err(DomainError::Transition(_))
+                ),
+                "{state:?} should refuse a merge"
+            );
+        }
+    }
+
+    /// A merge moves the **absorbed** bill and needs no permission either.
+    #[test]
+    fn a_merge_moves_the_absorbed_bill_to_merged() {
+        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let decided =
+            decide_bill(BillState::Open, BillCommand::Merge, &ctx).expect("an open bill folds in");
+        assert_eq!(decided.next_state, BillState::Merged);
+        assert!(decided.effects.is_empty(), "a merge prints nothing");
     }
 }
