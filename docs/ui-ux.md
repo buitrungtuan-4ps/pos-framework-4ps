@@ -98,6 +98,8 @@ Tokens live in one theme file per surface (`dashboard/src/styles/tokens.css`, `u
 
 **The store profile decides the starting screen and flow** ([pos-spec.md](pos-spec.md) §10): full-service starts on the floor plan and pays afterwards; a counter cafe starts on the order screen, pays first, and issues a queue number; retail starts on the barcode field. Same components, different assembly — not three applications.
 
+**The till reads this now, for the first two of the three.** `GET /api/menu` publishes `tables_enabled` and `kds_enabled`; `/` draws the floor plan where the store does tables and the counter list where it does not, and the status bar drops the destinations the store has no use for — a link to a kitchen board nobody watches is an offer the store cannot honour, which is the same failure `tips_enabled` was published to stop. **Home stays `/` on every profile**: what changes is the screen, not the address, because a home that moved per shop would be three applications wearing one name. `examples/minimal-edge` publishes the counter profile under `POS_DEMO_PROFILE=counter`, and `ui/tests/replay.spec.mjs` drives both. **Still missing:** retail has no barcode screen to start on (`Capability::Barcode` has no reader), a counter store cannot yet *begin* an order at the till — the counter list shows orders relayed from the cloud and there is no command for a cashier to open a tableless one — and `pay_first_enabled` and `queue_number_enabled` have no readers either.
+
 ## 4. Degraded states
 
 | Situation | What the UI does |

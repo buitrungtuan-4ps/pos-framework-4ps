@@ -3,16 +3,25 @@ import { A } from "@solidjs/router";
 
 import { api } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
-import { state } from "../state/store";
+import { kdsEnabled, state, tablesEnabled } from "../state/store";
 
-const NAV: { href: string; key: MessageKey }[] = [
-  { href: "/", key: "nav.floor" },
+// Every destination, and what the store has to do for it to be one.
+//
+// `needs` is a predicate over the published capabilities, absent where a destination is unconditional.
+// A counter cafe has no floor and no kitchen board; offering either is the failure `tips_enabled` was
+// published to stop — an action the store cannot honour, presented as though it could.
+//
+// The floor link is dropped rather than relabelled on a counter store, because `/` is still home
+// there: it draws the counter list instead (see `App.tsx`), and a link to the page you are on is not
+// navigation. `nav.counter` below is the one that names it.
+const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
+  { href: "/", key: "nav.floor", needs: tablesEnabled },
   { href: "/counter", key: "nav.counter" },
   // A guest order that nobody confirms never reaches the kitchen (ADR-0116), so the queue needs to
   // be one tap from every screen rather than somewhere a server has to remember to look.
   { href: "/guests", key: "nav.confirm" },
-  { href: "/kds", key: "nav.kitchen" },
-  { href: "/expo", key: "nav.pass" },
+  { href: "/kds", key: "nav.kitchen", needs: kdsEnabled },
+  { href: "/expo", key: "nav.pass", needs: kdsEnabled },
   { href: "/today", key: "nav.today" },
   { href: "/shift", key: "nav.shift" },
   { href: "/pair", key: "nav.pair" },
@@ -86,7 +95,7 @@ export function StatusBar() {
         )}
       </Show>
       <nav class="flex flex-wrap items-center gap-1 text-ink-muted">
-        <For each={NAV}>
+        <For each={NAV.filter((item) => item.needs === undefined || item.needs())}>
           {(item) => (
             <A
               href={item.href}
