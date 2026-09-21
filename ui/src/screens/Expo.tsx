@@ -43,7 +43,7 @@ export function Expo() {
   return (
     <section class="p-4">
       <PageHeader title={t("expo.title")} size="xl" />
-      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-3">
         <For
           each={groups()}
           fallback={

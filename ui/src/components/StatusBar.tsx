@@ -24,6 +24,15 @@ const NAV: { href: string; key: MessageKey }[] = [
 // The persistent status bar. It names the store link (to the edge on the LAN, not the cloud — a
 // store is meant to trade with the cloud unreachable), the open shift, the language, and a theme
 // toggle. Nothing here ever moves between states; only its text and colour change.
+//
+// # Why every control here is `min-h-touch`
+//
+// `docs/ui-ux.md` §1 principle 2 asks for 48 px, and this bar was the one place in the till that
+// ignored it: the ten destinations were bare text in a `flex` that could not wrap, so each was a
+// 20 px-high target and together they were 488 px wide — which is what made **every route** scroll
+// sideways on a phone, against `app.css`'s own promise not to. The bar wraps now and each
+// destination is padded to the token, which costs vertical room on a phone and is the correct
+// trade: a target a finger cannot hit during service is not navigation.
 export function StatusBar() {
   const linkKey = (): MessageKey => {
     switch (state.link) {
@@ -53,10 +62,10 @@ export function StatusBar() {
   };
 
   return (
-    <header class="flex flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-2 text-sm">
+    <header class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-surface px-4 py-2 text-sm">
       <A
         href="/"
-        class="rounded-token font-semibold no-underline text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        class="inline-flex min-h-touch items-center rounded-token font-semibold no-underline text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         {t("app.brand")}
       </A>
@@ -76,12 +85,12 @@ export function StatusBar() {
           </span>
         )}
       </Show>
-      <nav class="flex items-center gap-3 text-ink-muted">
+      <nav class="flex flex-wrap items-center gap-1 text-ink-muted">
         <For each={NAV}>
           {(item) => (
             <A
               href={item.href}
-              class="rounded-token no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              class="inline-flex min-h-touch items-center rounded-token px-3 no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
               activeClass="text-ink"
               end
             >
@@ -92,7 +101,7 @@ export function StatusBar() {
       </nav>
       <button
         type="button"
-        class="ml-auto rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         aria-label={t("status.language")}
         onClick={() => setLocale(locale() === "vi" ? "en" : "vi")}
       >
@@ -100,7 +109,7 @@ export function StatusBar() {
       </button>
       <button
         type="button"
-        class="rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
         onClick={cycleTheme}
       >
@@ -108,7 +117,7 @@ export function StatusBar() {
       </button>
       <button
         type="button"
-        class="rounded-token border border-line px-3 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         onClick={() => void signOut()}
       >
         {t("nav.signout")}

@@ -212,7 +212,7 @@ export function Order() {
   // none. The empty state names what was searched for, because "nothing found" and "nothing found
   // *for this*" are different amounts of help when the answer is a typo.
   const searchResults = () => (
-    <div class="grid grid-cols-2 gap-2 lg:grid-cols-1" data-outcome="menu-results">
+    <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1" data-outcome="menu-results">
       <For
         each={results()}
         fallback={
@@ -233,7 +233,7 @@ export function Order() {
   };
 
   return (
-    <section class="grid gap-4 p-4 lg:grid-cols-[1fr_20rem]">
+    <section class="grid gap-4 p-4 terminal:grid-cols-[1fr_20rem]">
       <div>
         <div class="mb-3 flex items-center gap-3">
           <a href="/" class="text-sm text-ink-muted no-underline">
@@ -455,26 +455,42 @@ export function Order() {
           </Show>
         </div>
 
-        <button
-          type="button"
-          class="mt-4 min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
-          disabled={unfired().length === 0}
-          data-step="fireOrder"
-          onClick={() => void guard(() => fireOrder(params.id))}
-        >
-          {unfired().length === 0
-            ? t("order.send")
-            : t("order.send_count", { count: unfired().length })}
-        </button>
+        {/*
+          The two acts that end this screen, anchored to the bottom of a phone.
 
-        <button
-          type="button"
-          class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink"
-          data-step="takePayment"
-          onClick={() => void takePayment()}
-        >
-          {t("order.take_payment")}
-        </button>
+          `docs/ui-ux.md` §1 principle 9 asks for exactly this — *"Phone: single column, primary
+          action anchored at the bottom within thumb reach"* — and until now they simply sat after
+          the check total, which on a handheld puts them below however many lines the table has
+          ordered. A server taking a large table's order had to scroll to send it.
+
+          Sticky rather than fixed: fixed would take the buttons out of the flow and float them over
+          the last line of the order, and the line under your thumb is the one you were reading. On
+          a tablet and a terminal the whole column fits, so the anchor is released and they sit
+          where they always did — which is why this is `tablet:static` rather than a media query
+          asking the phone for something special.
+        */}
+        <div class="sticky bottom-0 -mx-4 mt-4 border-t border-line bg-canvas px-4 pb-4 pt-3 tablet:static tablet:mx-0 tablet:border-0 tablet:bg-transparent tablet:p-0">
+          <button
+            type="button"
+            class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
+            disabled={unfired().length === 0}
+            data-step="fireOrder"
+            onClick={() => void guard(() => fireOrder(params.id))}
+          >
+            {unfired().length === 0
+              ? t("order.send")
+              : t("order.send_count", { count: unfired().length })}
+          </button>
+
+          <button
+            type="button"
+            class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+            data-step="takePayment"
+            onClick={() => void takePayment()}
+          >
+            {t("order.take_payment")}
+          </button>
+        </div>
       </div>
 
       <aside>
@@ -511,7 +527,7 @@ export function Order() {
           <Show
             when={arranged().length > 0}
             fallback={
-              <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
+              <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
                 <For
                   each={state.menu}
                   fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
@@ -527,14 +543,14 @@ export function Order() {
                   <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
                     {category.name}
                   </h3>
-                  <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                  <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
                     <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
                   </div>
                   <For each={category.subcategories}>
                     {(subcategory) => (
                       <div class="mt-3">
                         <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
-                        <div class="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                        <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
                           <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
                         </div>
                       </div>
