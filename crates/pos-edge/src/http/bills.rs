@@ -298,6 +298,7 @@ where
             // itself makes (ADR-0025).
             EventId::new(view.bill_id.as_ulid()),
             receipt_number,
+            &view.lines,
             totals,
             buyer,
         )
