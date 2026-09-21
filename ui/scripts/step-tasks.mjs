@@ -39,7 +39,18 @@ export const TASKS = [
     task: "Add an item to an open order",
     budget: 2,
     note: "The item grid is on the order screen, so an item is one tap. §6's headline case.",
-    steps: [{ route: "/table/:id", action: "addItem" }],
+    steps: [{ route: "/table/:id", action: "onItem" }],
+    outcome: { route: "/table/:id", mark: "line-added" },
+  },
+  {
+    task: "Add an item that needs a choice",
+    budget: 3,
+    note: "An item the store attaches a modifier group to: tap it, choose, confirm. Three, and the ceiling for a *common* action is two — declared at three anyway, for the reason the tipped settle is declared at four. The choices are the point: a pizza sold without its size is priced wrong, and the edge refuses it (ADR-0127 decision 5), so there is no two-tap shape of this that is also correct. What the declaration does buy is the guarantee the common case did not move: an item attaching no group never opens the picker and still sells in the one tap \"Add an item\" declares — put the picker in front of every item and that task goes red, not this one.",
+    steps: [
+      { route: "/table/:id", action: "onItem" },
+      { route: "/table/:id", action: "chooseModifier" },
+      { route: "/table/:id", action: "confirmItem" },
+    ],
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {
@@ -55,7 +66,7 @@ export const TASKS = [
     note: "Two, at the ceiling, and the second tap is the item itself — choosing the seat is the first. Declared as its own task rather than as a step inside \"Add an item\", for the reason the tipped settles are separate: a seat is *optional*, and folding it in would make the common flow read as two taps when it is one. The choice is sticky because a server orders a whole seat's worth at once; per-item it would cost a tap per dish. The control is absent entirely unless the store assigns seats, so on most stores this task does not exist.",
     steps: [
       { route: "/table/:id", action: "chooseSeat" },
-      { route: "/table/:id", action: "addItem" },
+      { route: "/table/:id", action: "onItem" },
     ],
     outcome: { route: "/table/:id", mark: "line-seat" },
   },
@@ -63,7 +74,7 @@ export const TASKS = [
     task: "Find an item by name and add it",
     budget: 2,
     note: "One tap, and the typing before it is not one — the same accounting the shift float and the manager's PIN get. That is the whole claim: a menu too long for the grid costs the flow nothing extra to sell from. Declared separately from \"Add an item\" although it taps the same control and ends the same way, because the claim is different and the harness proves it differently: the precondition types the query **and asserts the grid narrowed to one button**, so a search that stopped filtering fails here while the plain add stays green. Put search behind a button and this goes red twice over — the box the precondition fills would be gone, and the flow would have grown the tap this says it does not need.",
-    steps: [{ route: "/table/:id", action: "addItem" }],
+    steps: [{ route: "/table/:id", action: "onItem" }],
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {

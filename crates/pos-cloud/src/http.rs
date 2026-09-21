@@ -21067,10 +21067,16 @@ where
             Err(error) => return Err(catalog_error_response(&error)),
         }
     }
+    // Modifier groups are tenant-wide, not per menu (ADR-0066 entity 5): one "Size" group is pinned to
+    // items, and the compiler keeps only the ones this menu's channels can offer (ADR-0127).
+    let groups: Vec<ModifierGroup> = match catalog.list_modifier_groups(tenant_id).await {
+        Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
 
     // Compile the price book. A refusal here is a configuration error the operator must fix, not a
     // store failure — which is why a batch treats it as refusing the *batch* and not one member.
-    let book = match compile_menu(&items, &menus, &placements, menu_id) {
+    let book = match compile_menu(&items, &menus, &placements, &groups, menu_id) {
         Ok(book) => book,
         Err(error) => return Err(api_error(ErrorStatus::Unprocessable, error.to_string())),
     };

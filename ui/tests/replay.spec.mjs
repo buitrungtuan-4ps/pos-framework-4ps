@@ -95,7 +95,7 @@ async function seatTable(page) {
 
 /** Adds the first item on the order screen's menu. */
 async function addItem(page) {
-  await page.locator('[data-step="addItem"]').first().click();
+  await page.locator('[data-step="onItem"]').first().click();
   await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 }
 
@@ -123,6 +123,16 @@ const PRECONDITIONS = {
     await addItem(page);
   },
   "Order an item for a particular seat": seatTable,
+  // The item that asks a question is deliberately *not* first on the grid — every other flow's
+  // precondition taps the first item and wants a line rather than a conversation. So this one types
+  // the name to bring it up, exactly as "Find an item by name" does, and typing is not a tap. Every
+  // declared step here is still a tap, which is what makes this replayable where the two voids are
+  // not.
+  "Add an item that needs a choice": async (page) => {
+    await seatTable(page);
+    await page.locator("#menu-search").fill("margherita");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  },
   // Typing, then the assertion that makes this flow worth declaring at all.
   //
   // `dac` is chosen and not `pho`, which was the obvious query and proves nothing: NFD leaves the
@@ -137,7 +147,7 @@ const PRECONDITIONS = {
   "Find an item by name and add it": async (page) => {
     await seatTable(page);
     await page.locator("#menu-search").fill("dac");
-    await expect(page.locator('[data-step="addItem"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
   },
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);

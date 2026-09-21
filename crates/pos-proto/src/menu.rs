@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
-use crate::ids::{MenuItemId, TaxClassId};
+use crate::ids::{MenuItemId, ModifierGroupId, TaxClassId};
 use crate::money::Money;
 use crate::text::DisplayName;
 use crate::wire_enum::Open;
@@ -63,6 +63,18 @@ pub struct MenuEntry {
     pub unit_price: Money,
     /// The tax class, which the channel-keyed [`crate::locale::TaxRateTable`] turns into a rate.
     pub tax_class_id: TaxClassId,
+    /// The modifier groups a guest must be asked about for this item, by id
+    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    ///
+    /// The inverted half of the cloud's `attached_item_ids`: the till asks *what must I ask about
+    /// this item?* once per tap, and the answer is here rather than at the end of a scan over every
+    /// group in the book. The groups themselves live once on [`MenuCatalog`], so this is ids and
+    /// not copies.
+    ///
+    /// Additive and `#[serde(default)]`: an item with no modifiers carries an empty list and
+    /// behaves exactly as it did before the field existed.
+    #[serde(default)]
+    pub modifier_group_ids: Vec<ModifierGroupId>,
     /// Whether the item can be sold right now. An item present but 86'd (out of stock, or an operator
     /// has paused it) is refused rather than promised. Absent in the document means available: an
     /// item on the menu is sellable unless something says otherwise.
@@ -90,8 +102,16 @@ impl MenuEntry {
             display_name_translations: BTreeMap::new(),
             unit_price,
             tax_class_id,
+            modifier_group_ids: Vec::new(),
             available: true,
         }
+    }
+
+    /// The same entry, attaching these modifier groups.
+    #[must_use]
+    pub fn with_modifier_groups(mut self, group_ids: Vec<ModifierGroupId>) -> Self {
+        self.modifier_group_ids = group_ids;
+        self
     }
 
     /// The same entry marked 86'd — present in the catalog but not for sale right now.
@@ -122,6 +142,75 @@ impl MenuEntry {
 
 /// The store's price book: the items it sells and what they cost.
 ///
+/// A modifier group as a **store** reads it: the rule, the choices, and the names
+/// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+///
+/// The compiled view of the cloud's `ModifierGroup` (ADR-0066 entity 5), and deliberately smaller
+/// than it: no `tenant_id`, no `etag`, no `status`. An archived group is simply not published, the
+/// way an unavailable item is published-and-flagged rather than reasoned about at the till. This is
+/// the `CatalogItem` → [`MenuEntry`] relationship applied to a second entity, not a new kind of sync.
+///
+/// **Attachment is inverted on the way down.** The cloud holds `attached_item_ids` on the group,
+/// because one "Size" group pinned to forty pizzas is how a person authors it. A till asks the
+/// opposite question, once per tap — *what must I ask about this item?* — so the compiled entry
+/// carries [`MenuEntry::modifier_group_ids`] and nothing ever scans every group looking for itself.
+///
+/// **Required is `min_select >= 1`.** There is no second flag: one number cannot disagree with
+/// itself, and a `required` boolean beside a minimum is the kind of pair that drifts and then has to
+/// be reconciled in a refund.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MenuModifierGroup {
+    /// The group's identifier, which a [`MenuEntry`] names.
+    pub modifier_group_id: ModifierGroupId,
+    /// The name to show ("Size", "Extra toppings"), and the fallback for a locale the map below
+    /// does not carry.
+    pub display_name: DisplayName,
+    /// The name in each locale the group is translated into, exactly as [`MenuEntry`] carries its
+    /// own ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    #[serde(default)]
+    pub display_name_translations: BTreeMap<String, DisplayName>,
+    /// How many choices a guest must make. **Zero means optional**; one or more means required.
+    pub min_select: u16,
+    /// How many choices a guest may make at most.
+    pub max_select: u16,
+    /// The items offered as choices. Each is an ordinary menu item with its own price and its own
+    /// recipe (ADR-0066 entity 4), which is why a fired line consumes the base recipe plus one per
+    /// modifier (`docs/pos-spec.md` §8) rather than needing a second kind of thing.
+    pub member_menu_item_ids: Vec<MenuItemId>,
+}
+
+impl MenuModifierGroup {
+    /// Whether a guest must choose from this group — `min_select >= 1`, and nothing else.
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        self.min_select >= 1
+    }
+
+    /// The group's name in `locale`, falling back to [`display_name`](Self::display_name).
+    #[must_use]
+    pub fn localized_name(&self, locale: &str) -> &DisplayName {
+        self.display_name_translations
+            .get(locale)
+            .unwrap_or(&self.display_name)
+    }
+
+    /// Whether `chosen` satisfies this group's rule, counting only members of it.
+    ///
+    /// The count is of *this group's* members among the whole selection, so one call per attached
+    /// group answers the whole question and a modifier belonging to no attached group is left for
+    /// the caller to refuse separately — two different mistakes, two different refusals.
+    #[must_use]
+    pub fn satisfied_by(&self, chosen: &[MenuItemId]) -> bool {
+        let count = chosen
+            .iter()
+            .filter(|id| self.member_menu_item_ids.contains(id))
+            .count();
+        let count = u16::try_from(count).unwrap_or(u16::MAX);
+        count >= self.min_select && count <= self.max_select
+    }
+}
+
 /// A list of rows rather than a map, for the same reason [`crate::locale::TaxRateTable`] is — it
 /// survives JSON round-tripping through the configuration tree, and it is a shape a person can read
 /// in a diff ([ADR-0010](../../../docs/adr/0010-naming-standard.md)). Lookups are a linear scan; a
@@ -131,6 +220,14 @@ impl MenuEntry {
 #[serde(rename_all = "snake_case")]
 pub struct MenuCatalog {
     items: Vec<MenuEntry>,
+    /// The modifier groups any of these items attach, by id.
+    ///
+    /// On the catalog rather than repeated inside each entry: one "Size" group pinned to forty
+    /// pizzas would otherwise be forty copies of the same rule, and forty chances for them to
+    /// disagree after a partial sync. Additive and `#[serde(default)]`, so a book that omits it
+    /// loads unchanged and an edge that predates the field ignores it.
+    #[serde(default)]
+    modifier_groups: Vec<MenuModifierGroup>,
 }
 
 impl MenuCatalog {
@@ -138,13 +235,19 @@ impl MenuCatalog {
     /// channel until one is (a safe default: it never guesses a price).
     #[must_use]
     pub const fn new() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            items: Vec::new(),
+            modifier_groups: Vec::new(),
+        }
     }
 
     /// A catalog from its rows.
     #[must_use]
     pub const fn from_items(items: Vec<MenuEntry>) -> Self {
-        Self { items }
+        Self {
+            items,
+            modifier_groups: Vec::new(),
+        }
     }
 
     /// Adds an entry, for building a catalog in code or a test.
@@ -152,6 +255,44 @@ impl MenuCatalog {
     pub fn with(mut self, entry: MenuEntry) -> Self {
         self.items.push(entry);
         self
+    }
+
+    /// Adds a modifier group, for building a catalog in code or a test.
+    #[must_use]
+    pub fn with_modifier_group(mut self, group: MenuModifierGroup) -> Self {
+        self.modifier_groups.push(group);
+        self
+    }
+
+    /// Every modifier group this catalog carries.
+    #[must_use]
+    pub fn modifier_groups(&self) -> &[MenuModifierGroup] {
+        &self.modifier_groups
+    }
+
+    /// The groups attached to `menu_item_id`, in the order the entry names them.
+    ///
+    /// A group an entry names but the catalog does not carry is skipped rather than refused: a
+    /// partial publish is a real state, and a till that dropped the whole item because one rule
+    /// arrived late would stop selling a pizza over a missing "extra cheese".
+    #[must_use]
+    pub fn groups_for(&self, menu_item_id: MenuItemId) -> Vec<&MenuModifierGroup> {
+        let Some(entry) = self
+            .items
+            .iter()
+            .find(|entry| entry.menu_item_id == menu_item_id)
+        else {
+            return Vec::new();
+        };
+        entry
+            .modifier_group_ids
+            .iter()
+            .filter_map(|id| {
+                self.modifier_groups
+                    .iter()
+                    .find(|group| group.modifier_group_id == *id)
+            })
+            .collect()
     }
 
     /// Every entry.
@@ -311,9 +452,9 @@ impl MenuBook {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{MenuBook, MenuCatalog, MenuEntry};
+    use super::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
     use crate::enums::SalesChannel;
-    use crate::ids::{MenuItemId, TaxClassId};
+    use crate::ids::{MenuItemId, ModifierGroupId, TaxClassId};
     use crate::money::{CurrencyCode, Money};
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
@@ -570,6 +711,157 @@ mod tests {
         assert!(
             !without.contains("display_name_translations"),
             "an entry with no translations does not carry the field on the wire"
+        );
+    }
+
+    fn group_id(n: u128) -> ModifierGroupId {
+        ModifierGroupId::new(Ulid::from_u128(n))
+    }
+
+    /// A "Size" group: exactly one of two, so required.
+    fn size_group() -> MenuModifierGroup {
+        MenuModifierGroup {
+            modifier_group_id: group_id(700),
+            display_name: DisplayName::new("Size"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 1,
+            max_select: 1,
+            member_menu_item_ids: vec![item(801), item(802)],
+        }
+    }
+
+    /// Toppings: up to two, none required.
+    fn toppings_group() -> MenuModifierGroup {
+        MenuModifierGroup {
+            modifier_group_id: group_id(701),
+            display_name: DisplayName::new("Extra toppings"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 0,
+            max_select: 2,
+            member_menu_item_ids: vec![item(810), item(811), item(812)],
+        }
+    }
+
+    /// Required is `min_select >= 1` and nothing else — the decision ADR-0127 makes rather than
+    /// carrying a second flag that could disagree with the number beside it.
+    #[test]
+    fn required_is_the_minimum_and_not_a_second_flag() {
+        assert!(size_group().required(), "one of one is required");
+        assert!(!toppings_group().required(), "none of two is optional");
+    }
+
+    /// The rule counts **this group's** members among the whole selection, so one call per attached
+    /// group answers the whole question — and a modifier belonging to no attached group is left for
+    /// the caller to refuse separately, because those are two different mistakes.
+    #[test]
+    fn a_group_counts_only_its_own_members() {
+        let size = size_group();
+        assert!(size.satisfied_by(&[item(801)]), "exactly one size chosen");
+        assert!(
+            !size.satisfied_by(&[]),
+            "no size chosen, and one is required"
+        );
+        assert!(
+            !size.satisfied_by(&[item(801), item(802)]),
+            "two sizes is above the maximum"
+        );
+        // Toppings are not this group's business, so they neither satisfy nor break it.
+        assert!(
+            size.satisfied_by(&[item(801), item(810), item(811)]),
+            "one size plus two toppings still satisfies the size rule"
+        );
+    }
+
+    #[test]
+    fn an_optional_group_is_satisfied_by_nothing_and_broken_by_too_much() {
+        let toppings = toppings_group();
+        assert!(toppings.satisfied_by(&[]));
+        assert!(toppings.satisfied_by(&[item(810), item(811)]));
+        assert!(!toppings.satisfied_by(&[item(810), item(811), item(812)]));
+    }
+
+    /// Attachment is inverted on the way down: the entry names the groups, so the till asks once
+    /// per tap instead of scanning every group in the book looking for itself.
+    #[test]
+    fn an_entry_names_its_groups_and_the_catalog_resolves_them() {
+        let pizza = MenuEntry::new(
+            item(500),
+            DisplayName::new("Margherita"),
+            vnd(149_000),
+            food_class(),
+        )
+        .with_modifier_groups(vec![group_id(700), group_id(701)]);
+        let catalog = MenuCatalog::new()
+            .with(pizza)
+            .with_modifier_group(size_group())
+            .with_modifier_group(toppings_group());
+
+        let groups = catalog.groups_for(item(500));
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .first()
+                .expect("the size group")
+                .display_name
+                .as_str(),
+            "Size"
+        );
+        assert_eq!(
+            groups
+                .get(1)
+                .expect("the toppings group")
+                .display_name
+                .as_str(),
+            "Extra toppings"
+        );
+
+        // An item nobody attached anything to asks nothing, which is most of a menu.
+        assert!(catalog.groups_for(item(501)).is_empty());
+    }
+
+    /// A partial publish is a real state. An entry naming a group the catalog has not carried yet
+    /// skips that group rather than refusing the item — a till that stopped selling a pizza over a
+    /// late-arriving "extra cheese" would be worse than one that asks a question fewer.
+    #[test]
+    fn a_group_that_did_not_arrive_is_skipped_rather_than_refusing_the_item() {
+        let pizza = MenuEntry::new(
+            item(500),
+            DisplayName::new("Margherita"),
+            vnd(149_000),
+            food_class(),
+        )
+        .with_modifier_groups(vec![group_id(700), group_id(999)]);
+        let catalog = MenuCatalog::new()
+            .with(pizza)
+            .with_modifier_group(size_group());
+
+        let groups = catalog.groups_for(item(500));
+        assert_eq!(groups.len(), 1, "the one that arrived, and no refusal");
+        assert_eq!(
+            groups
+                .first()
+                .expect("the one that arrived")
+                .modifier_group_id,
+            group_id(700)
+        );
+    }
+
+    /// The additive claim, checked rather than asserted in a comment: a book written before this
+    /// field existed still loads, and its items attach nothing.
+    #[test]
+    fn a_book_that_predates_modifier_groups_still_loads() {
+        let older = r#"{"items":[{"menu_item_id":"00000000000000000000000FE4","display_name":"Margherita","unit_price":{"currency_code":"VND","amount_minor":149000},"tax_class_id":"00000000000000000000000001","available":true}]}"#;
+        let catalog: MenuCatalog =
+            serde_json::from_str(older).expect("a book without the field still loads");
+        assert_eq!(catalog.items().len(), 1);
+        assert!(catalog.modifier_groups().is_empty());
+        assert!(
+            catalog
+                .items()
+                .first()
+                .expect("the one item")
+                .modifier_group_ids
+                .is_empty()
         );
     }
 }

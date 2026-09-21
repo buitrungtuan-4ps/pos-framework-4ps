@@ -54,6 +54,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     taking money back after payment is a refund (ADR-0028).
   - **Upgrade note.** None. The route is additive, the event was already published, and a store that
     applies no discount behaves exactly as before.
+- **A pizza knows its sizes.** A modifier is already an ordinary catalog item with its own price and
+  its own recipe, and a **modifier group** is already a min/max selection rule attached to items
+  (ADR-0066 entities 4 and 5). The console has authored both for as long as the catalog has existed,
+  `sales.order_line.added` has carried `modifier_menu_item_ids` since the field was added, and
+  `POST /api/tables/{id}/lines` has accepted them. **None of it reached a store**: the write path was
+  complete and the read path did not exist, so a till could charge for a large pizza only if some
+  other device told it which item id "large" was
+  ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)).
+  - The compiled price book carries the groups. `MenuCatalog` gains `modifier_groups` and `MenuEntry`
+    gains `modifier_group_ids` — both additive and `#[serde(default)]`, so a book that omits them
+    loads unchanged and a store replaying its own log at start-up still boots. `PROTOCOL_VERSION` is
+    **not** incremented (ADR-0024: additive by construction).
+  - **Attachment is inverted on the way down.** The operator pins one "Size" group to forty pizzas;
+    the till asks the opposite question once per tap, so `compile_menu` puts the ids on the entry and
+    the rule on the catalog once. Per channel, it drops an archived group, a member the channel does
+    not price, and a group left with fewer members than its own `min_select` — publishing a rule
+    nothing can satisfy would take the item off sale on that channel rather than ask a better
+    question.
+  - **The edge enforces the rule; the till is not trusted to have asked.** `add_line` refuses a line
+    with too few, too many, or a modifier belonging to no attached group. An item that attaches no
+    group is unconfigured, not empty-handed, and still takes any modifiers sent — which is every item
+    in every store publishing today.
+  - `GET /api/menu` publishes the groups with per-locale names, and the order screen opens a picker
+    for an item that has one: tap → choose → add, still one tap for an item that has none.
+  - **Required is `min_select >= 1`** — no second flag, because one number cannot disagree with
+    itself.
+  - **Still missing, and recorded rather than guessed at:** a line does not *display* what was chosen.
+    The order list and the kitchen board both show the base item's name, so a cook cannot tell a 25cm
+    from a 30cm; nesting is not authorable (a group's members are items); and half-and-half
+    (`SPLIT_ITEM`) changes the shape and pricing of a line rather than being a selection rule, so it
+    gets its own record.
 
 - **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
   profile decides the starting screen and flow — same components, different assembly, not three

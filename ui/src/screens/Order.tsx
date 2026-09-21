@@ -6,10 +6,12 @@ import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatMoney, formatQuantity } from "../lib/money";
 import { matches } from "../lib/search";
-import type { LayoutButton, MenuItemResponse } from "../api/types";
+import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
   addItem,
   chooseSeat,
+  groupsFor,
+  modifiersSatisfied,
   fireOrder,
   floorTables,
   linesForTable,
@@ -153,6 +155,14 @@ export function Order() {
   // What the operator has typed into the menu box. Empty means the grid, which is what the screen
   // has always shown; a query replaces it with the matches, flat, because a category heading over a
   // result list describes where the item lives rather than why it is on screen.
+  // The item a guest is being asked about, and the choices made so far (ADR-0127).
+  //
+  // Only an item that attaches a group opens this: tapping a plain item still sells it in one tap,
+  // which is §6's headline case and the one most taps on this screen are. An item with choices is a
+  // different act and is declared as its own task.
+  const [choosing, setChoosing] = createSignal<MenuItemResponse | null>(null);
+  const [chosen, setChosen] = createSignal<string[]>([]);
+
   const [query, setQuery] = createSignal("");
   const searching = () => query().trim() !== "";
 
@@ -194,13 +204,58 @@ export function Order() {
       : [],
   );
 
+  // Tapping an item: sell it, or ask first. The question is the store's, not this screen's — an
+  // item attaches groups or it does not, and the till has no opinion beyond obeying that.
+  const onItem = (item: MenuItemResponse) => {
+    if (groupsFor(item).length === 0) {
+      void guard(() => addItem(params.id, item));
+      return;
+    }
+    setError(null);
+    setChosen([]);
+    setChoosing(item);
+  };
+
+  // One choice, toggled. A group at its maximum replaces rather than refuses: on a single-choice
+  // group — every "Size" — tapping another size is obviously a correction, and making the operator
+  // untick the first one would cost a tap to undo a tap.
+  const chooseModifier = (group: ModifierGroup, memberId: string) => {
+    setChosen((current) => {
+      if (current.includes(memberId)) {
+        return current.filter((id) => id !== memberId);
+      }
+      const mine = current.filter((id) => group.member_menu_item_ids.includes(id));
+      if (mine.length >= group.max_select) {
+        const dropped = current.filter((id) => !group.member_menu_item_ids.includes(id));
+        // Keep the choices made *before* the ones in this group, so the order a guest chose in
+        // survives a correction.
+        return [...dropped, ...mine.slice(1), memberId];
+      }
+      return [...current, memberId];
+    });
+  };
+
+  const closeChoosing = () => {
+    setChoosing(null);
+    setChosen([]);
+  };
+
+  // The confirm. Disabled until every required group is satisfied — the same arithmetic the edge
+  // runs, so the refusal never reaches the screen. The edge is still the authority; this only keeps
+  // a `409` off a guest's eyeline.
+  const confirmItem = (item: MenuItemResponse) =>
+    guard(async () => {
+      await addItem(params.id, item, chosen());
+      closeChoosing();
+    });
+
   const sellButton = (item: MenuItemResponse, caption: string) => (
     <button
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
       disabled={!item.available}
-      data-step="addItem"
-      onClick={() => void guard(() => addItem(params.id, item))}
+      data-step="onItem"
+      onClick={() => onItem(item)}
     >
       <span>{caption}</span>
       <span class="tabular-nums text-ink-muted">
@@ -424,6 +479,86 @@ export function Order() {
                 type="button"
                 class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
                 onClick={() => closeVoid()}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          )}
+        </Show>
+
+        {/*
+          The choices an item needs before it can be sold (ADR-0127, `docs/ui-ux.md` §3's "required
+          modifier groups open immediately").
+
+          It opens on the item tap and not behind a button of its own, which is what keeps the
+          common case at one tap: an item attaching no group never opens this at all. An item that
+          does costs one tap per choice plus the confirm, and is declared as its own task rather
+          than folded into "Add an item" — the reason the seat and the tipped settle are separate.
+
+          The confirm is disabled until every required group is satisfied, running the same
+          arithmetic the edge runs. The edge is still the authority; this only keeps a refusal off a
+          guest's eyeline.
+        */}
+        <Show when={choosing()}>
+          {(item) => (
+            <div class="mb-3 rounded-token border border-line bg-surface p-3">
+              <h2 class="font-semibold">{t("order.choose_title", { item: item().display_name })}</h2>
+              <For each={groupsFor(item())}>
+                {(group) => (
+                  <div class="mt-3">
+                    <p class="text-sm text-ink-muted">
+                      {group.min_select >= 1
+                        ? t("order.choose_required", { group: group.display_name })
+                        : t("order.choose_optional", { group: group.display_name })}
+                    </p>
+                    <div class="mt-2 grid grid-cols-2 gap-2">
+                      <For each={group.member_menu_item_ids}>
+                        {(memberId) => (
+                          <Show when={menuItemMap().get(memberId)}>
+                            {(member) => (
+                              <button
+                                type="button"
+                                class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left"
+                                classList={{
+                                  "bg-primary text-primary-ink": chosen().includes(memberId),
+                                  "bg-surface text-ink": !chosen().includes(memberId),
+                                }}
+                                aria-pressed={chosen().includes(memberId)}
+                                data-step="chooseModifier"
+                                onClick={() => chooseModifier(group, memberId)}
+                              >
+                                <span>{member().display_name}</span>
+                                {/* A modifier is an ordinary item with its own price, which is how
+                                    a large costs more than a small. A free choice says nothing
+                                    rather than saying zero. */}
+                                <Show when={member().unit_price.amount_minor > 0}>
+                                  <span class="tabular-nums text-ink-muted">
+                                    {"+ "}
+                                    {formatMoney(member().unit_price)}
+                                  </span>
+                                </Show>
+                              </button>
+                            )}
+                          </Show>
+                        )}
+                      </For>
+                    </div>
+                  </div>
+                )}
+              </For>
+              <button
+                type="button"
+                class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
+                disabled={!modifiersSatisfied(item(), chosen())}
+                data-step="confirmItem"
+                onClick={() => void confirmItem(item())}
+              >
+                {t("order.choose_add")}
+              </button>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line px-3 text-sm"
+                onClick={() => closeChoosing()}
               >
                 {t("common.cancel")}
               </button>

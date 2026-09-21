@@ -26,10 +26,12 @@
 //! fixture that took one would stop proving that the published-config path works, which is the whole
 //! value of running the example.
 
+use std::collections::BTreeMap;
+
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, TableId};
-use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
+use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, ModifierGroupId, TableId};
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -68,6 +70,8 @@ fn table_service() -> bool {
 
 fn demo_menu() -> MenuBook {
     let tax_class = EdgeSession::standard_tax_class();
+    let menu_item = |id: u128| MenuItemId::new(Ulid::from_u128(id));
+    let group = |id: u128| ModifierGroupId::new(Ulid::from_u128(id));
     let item = |id: u128, name: &str, price: i64| {
         MenuEntry::new(
             MenuItemId::new(Ulid::from_u128(id)),
@@ -76,10 +80,17 @@ fn demo_menu() -> MenuBook {
             tax_class,
         )
     };
+    // The two sizes a Margherita comes in, and one topping. Modifiers are ordinary items with their
+    // own prices (ADR-0066 entity 4), which is how a large costs more than a small without a second
+    // pricing concept — and why they are in the catalog beside the pizza rather than beside the rule.
+    // A plain item leads, deliberately. The browser gate's "add an item" precondition taps the
+    // *first* item on the grid, and it wants a line rather than a conversation — so the item that
+    // asks a question is not the one a flow reaches by accident. The flow that does want it types
+    // the name first, which the menu search made possible and which costs no tap.
     let catalog = MenuCatalog::new()
-        .with(item(101, "Margherita", 149_000))
         .with(item(102, "Garden salad", 89_000))
         .with(item(103, "Iced tea", 39_000))
+        .with(item(101, "Margherita", 149_000).with_modifier_groups(vec![group(700), group(701)]))
         // One item with tone marks on it, and it is not decoration. The order screen's menu search
         // folds diacritics so that `dac` reaches this — nobody switches input mode mid-service — and
         // a fixture whose every item was ASCII would leave that fold with no gate over it, the same
@@ -89,14 +100,37 @@ fn demo_menu() -> MenuBook {
         // letter and two combining marks; `đ` decomposes into nothing at all, because it is its own
         // letter rather than `d` with a mark on it. Those are the two cases the fold has to handle
         // separately, and `đặc` is one syllable carrying both.
-        .with(item(104, "Phở bò đặc biệt", 99_000));
+        .with(item(104, "Phở bò đặc biệt", 99_000))
+        .with(item(201, "Size — 25cm", 0))
+        .with(item(202, "Size — 30cm", 40_000))
+        .with(item(210, "Extra cheese", 25_000))
+        // One required group and one optional, because the pair is what makes the rule visible: a
+        // pizza cannot be sold without a size, and can be sold without cheese. A demo with only the
+        // optional one would ship a picker no contributor and no browser gate ever had to satisfy.
+        .with_modifier_group(MenuModifierGroup {
+            modifier_group_id: group(700),
+            display_name: DisplayName::new("Size"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 1,
+            max_select: 1,
+            member_menu_item_ids: vec![menu_item(201), menu_item(202)],
+        })
+        .with_modifier_group(MenuModifierGroup {
+            modifier_group_id: group(701),
+            display_name: DisplayName::new("Extras"),
+            display_name_translations: BTreeMap::new(),
+            min_select: 0,
+            max_select: 1,
+            member_menu_item_ids: vec![menu_item(210)],
+        });
     MenuBook::new()
         .with(SalesChannel::DineIn, catalog.clone())
         .with_fallback(catalog)
 }
 
 /// The demo store's configuration document: a `permissions` node with one employee, and a `menu`
-/// node with four items.
+/// node with four products, the three modifiers they are made of, and the two groups that offer
+/// them.
 ///
 /// `None` if the PIN could not be hashed — the OS entropy source being unavailable is the only way
 /// that happens, and a fixture that answered with a roster nobody can sign into would be worse than
@@ -206,9 +240,18 @@ fn demo_floor() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    use pos_proto::ids::MenuItemId;
+    use pos_proto::ulid::Ulid;
+
     use super::{DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document};
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
+
+    /// The same numbering the fixture above mints its items from, so an assertion names the item it
+    /// means rather than a ULID nobody can read.
+    fn menu_item(id: u128) -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(id))
+    }
 
     /// The fixture is only worth anything if it goes through the published-config seam and comes out
     /// the other side as a roster that signs in and a book that prices — which is the exact pair the
@@ -233,7 +276,29 @@ mod tests {
             session.staff.authorise(DEMO_STAFF_CODE, "0000").is_none(),
             "a wrong PIN is refused, so the fixture is a roster and not a bypass"
         );
-        assert_eq!(session.menu.items().len(), 4, "four items to sell");
+        assert_eq!(
+            session.menu.items().len(),
+            7,
+            "four products plus the three modifiers, which are ordinary priced items (ADR-0066 \
+             entity 4) and so are counted here"
+        );
+        let sizes = session
+            .menu
+            .groups_for(menu_item(101))
+            .first()
+            .copied()
+            .cloned()
+            .expect("the pizza asks what size");
+        assert!(sizes.required(), "a pizza cannot be sold without a size");
+        assert_eq!(
+            sizes.member_menu_item_ids,
+            vec![menu_item(201), menu_item(202)],
+            "and both sizes are on the menu, so the picker has something to offer"
+        );
+        assert!(
+            session.menu.groups_for(menu_item(102)).is_empty(),
+            "a salad asks nothing, which is what keeps adding it one tap"
+        );
         assert!(
             session
                 .menu
