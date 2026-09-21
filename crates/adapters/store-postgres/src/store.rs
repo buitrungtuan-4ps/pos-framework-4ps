@@ -233,6 +233,12 @@ const MIGRATION_0063: &str = include_str!("../migrations/0063_store_archive_expi
 /// nullable `release_id` so ADR-0077's per-store schedule keeps working unchanged.
 const MIGRATION_0064: &str = include_str!("../migrations/0064_releases.sql");
 
+/// The ceiling a role may discount up to. `billing.discount.apply` has named "the role's configured
+/// ceiling" since the permission catalogue was written and there was nowhere to configure one, so
+/// the edge's safe reading — an absent ceiling is zero, and every discount needs a manager — was the
+/// only reading available. This column is what lets a tenant say otherwise.
+const MIGRATION_0065: &str = include_str!("../migrations/0065_role_discount_ceiling.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -547,6 +553,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0064)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0065)
             .await
             .map_err(unavailable)
     }

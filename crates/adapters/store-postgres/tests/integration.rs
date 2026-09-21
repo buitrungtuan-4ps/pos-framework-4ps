@@ -5249,18 +5249,33 @@ mod role_templates_and_assignments {
                     "tenant-a",
                     "Cashier",
                     r#"["billing.discount.apply","sales.item.open"]"#,
+                    // A cashier who may discount up to 30,000 without a manager — the column this
+                    // row exists to round-trip.
+                    Some(30_000),
                 )
                 .await
                 .expect("insert cashier");
             people
-                .insert_role_template("01ROLE000000000000000000B1", "tenant-b", "Cashier", "[]")
+                .insert_role_template(
+                    "01ROLE000000000000000000B1",
+                    "tenant-b",
+                    "Cashier",
+                    "[]",
+                    None,
+                )
                 .await
                 .expect("a duplicate name is fine under a different tenant");
 
             // The unique index refuses a second "Cashier" within tenant-a.
             assert!(
                 people
-                    .insert_role_template("01ROLE000000000000000000A2", "tenant-a", "Cashier", "[]")
+                    .insert_role_template(
+                        "01ROLE000000000000000000A2",
+                        "tenant-a",
+                        "Cashier",
+                        "[]",
+                        None
+                    )
                     .await
                     .is_err(),
                 "role names are unique within a tenant"
@@ -5282,6 +5297,11 @@ mod role_templates_and_assignments {
                     "sales.item.open".to_owned()
                 ]
             );
+            assert_eq!(
+                cashier.discount_ceiling_minor,
+                Some(30_000),
+                "the ceiling round-trips through the column"
+            );
 
             // Update the permission set + archive, at the version the read handed out (ADR-0094).
             assert!(
@@ -5293,6 +5313,7 @@ mod role_templates_and_assignments {
                             "Cashier",
                             r#"["sales.item.open"]"#,
                             "archived",
+                            None,
                             &cashier.version,
                         )
                         .await
@@ -6844,7 +6865,7 @@ mod conditional_writes {
             let role = "00000000000000000ROLEXMINA";
 
             let first = people
-                .insert_role_template(role, tenant, "Cashier", "[\"sales.item.open\"]")
+                .insert_role_template(role, tenant, "Cashier", "[\"sales.item.open\"]", None)
                 .await
                 .expect("insert the role template");
 
@@ -6862,13 +6883,21 @@ mod conditional_writes {
 
             assert_eq!(
                 people
-                    .set_role_template(tenant, role, "Nope", "[]", "active", "not-a-transaction-id")
+                    .set_role_template(
+                        tenant,
+                        role,
+                        "Nope",
+                        "[]",
+                        "active",
+                        None,
+                        "not-a-transaction-id",
+                    )
                     .await
                     .expect("the comparison must not raise"),
                 RowUpdate::VersionMismatch
             );
             let second = match people
-                .set_role_template(tenant, role, "Cashier", "[]", "archived", &first)
+                .set_role_template(tenant, role, "Cashier", "[]", "archived", None, &first)
                 .await
                 .expect("the update")
             {

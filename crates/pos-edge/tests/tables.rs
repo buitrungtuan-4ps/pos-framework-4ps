@@ -52,6 +52,7 @@ async fn paired() -> (Router, String) {
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
             permissions: PermissionSet::default(),
+            discount_ceiling: None,
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
     );

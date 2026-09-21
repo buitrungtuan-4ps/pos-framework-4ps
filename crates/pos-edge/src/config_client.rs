@@ -54,6 +54,7 @@ use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
+use pos_proto::money::Money;
 use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::store_profile::StoreProfile;
 
@@ -77,6 +78,11 @@ struct PublishedStaff {
     code: String,
     #[serde(default)]
     permissions: Vec<String>,
+    /// How much this person may discount before it needs a manager, in minor units, resolved from
+    /// their role by the cloud's compiler. Absent on every node published before the field existed
+    /// and on every tenant that configures none, which the edge reads as zero.
+    #[serde(default)]
+    discount_ceiling_minor: Option<i64>,
     #[serde(default)]
     pin_phc: Option<String>,
 }
@@ -191,6 +197,16 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                         .as_deref()
                         .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
                     permissions: permission_set_from_ids(&member.permissions),
+                    // Given the store's own currency here rather than carried as one: a role is a
+                    // tenant's and has no currency, a store has exactly one (its `locale` node), and
+                    // the only thing this figure is ever compared against is a bill in that
+                    // currency. A negative figure is refused at the cloud's route and by the column,
+                    // so it cannot arrive; if one somehow did, dropping it is the safe reading —
+                    // the ceiling goes back to being absent, which needs a manager.
+                    discount_ceiling: member
+                        .discount_ceiling_minor
+                        .filter(|minor| *minor >= 0)
+                        .map(|minor| Money::new(session.currency, minor)),
                     pin_phc: member.pin_phc,
                 },
             );
@@ -1147,6 +1163,7 @@ mod tests {
             StaffAuth {
                 employee_id: None,
                 permissions: [Permission::AddOpenItem].into_iter().collect(),
+                discount_ceiling: None,
                 pin_phc: Some(hash_of("1234")),
             },
         );

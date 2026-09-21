@@ -180,6 +180,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         StaffAuth {
             employee_id: Some(pos_proto::ids::EmployeeId::new(Ulid::from_u128(11))),
             permissions: PermissionSet::default(),
+            discount_ceiling: None,
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
     );

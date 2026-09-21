@@ -846,18 +846,34 @@ export const api = {
 
   listRoles: (tenantId: string) =>
     requestJson<RoleTemplate[]>("GET", `/admin/roles?${tenantQuery(tenantId)}`),
-  createRole: (tenantId: string, name: string, permissions: string[]) =>
-    requestJson<CreatedId>("POST", "/admin/roles", { tenant_id: tenantId, name, permissions }),
+  createRole: (
+    tenantId: string,
+    name: string,
+    permissions: string[],
+    discountCeilingMinor: number | null,
+  ) =>
+    requestJson<CreatedId>("POST", "/admin/roles", {
+      tenant_id: tenantId,
+      name,
+      permissions,
+      discount_ceiling_minor: discountCeilingMinor,
+    }),
   updateRole: (
     id: string,
     tenantId: string,
-    fields: { name: string; permissions: string[]; status: EntityStatus },
+    fields: {
+      name: string;
+      permissions: string[];
+      discountCeilingMinor: number | null;
+      status: EntityStatus;
+    },
     etag: ETag,
   ) =>
     requestVoidIfMatch("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       permissions: fields.permissions,
+      discount_ceiling_minor: fields.discountCeilingMinor,
       status: fields.status,
     }),
 

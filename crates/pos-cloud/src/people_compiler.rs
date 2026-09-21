@@ -37,6 +37,18 @@ pub struct StaffMember {
     pub name: String,
     /// The granted `pos-core` permission ids, deduped and sorted.
     pub permissions: Vec<String>,
+    /// How much this person may discount before it needs a manager, in the currency's minor unit,
+    /// from the role they are assigned under.
+    ///
+    /// Flattened onto the person for the same reason their permissions are: the edge authorises one
+    /// signed-in person at a time and would otherwise have to hold the tenant's role table to answer
+    /// a question about them. `None` — no ceiling configured, or no role found — is what every store
+    /// carries today, and the edge reads it as zero.
+    ///
+    /// Skipped from the wire when absent, so a node published before this field existed and one
+    /// published for a tenant that configures no ceiling are the same document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub discount_ceiling_minor: Option<i64>,
     /// The Argon2id PHC hash of the PIN, or `None` if no PIN is set (the person cannot sign in until
     /// one is). Never the PIN itself.
     pub pin_phc: Option<String>,
@@ -92,6 +104,13 @@ pub fn compile_permissions(
                 code: employee.code.clone(),
                 name: employee.name.clone(),
                 permissions,
+                // Resolved from the role, like the permissions above it and for the same reason: the
+                // edge authorises one person at a time and should not have to hold the role table to
+                // do it. A missing role contributes no ceiling, which is the same "needs a manager"
+                // answer its empty permission set already gives.
+                discount_ceiling_minor: role_by_id
+                    .get(&assignment.role_template_id.to_string())
+                    .and_then(|role| role.discount_ceiling_minor),
                 pin_phc: pins
                     .get(&employee.employee_id.to_string())
                     .cloned()
@@ -133,11 +152,21 @@ mod tests {
     }
 
     fn role(id: u128, name: &str, permissions: &[&str]) -> RoleTemplate {
+        role_with_ceiling(id, name, permissions, None)
+    }
+
+    fn role_with_ceiling(
+        id: u128,
+        name: &str,
+        permissions: &[&str],
+        discount_ceiling_minor: Option<i64>,
+    ) -> RoleTemplate {
         RoleTemplate {
             role_template_id: RoleTemplateId::new(Ulid::from_u128(id)),
             tenant_id: TenantId::new(Ulid::from_u128(0x7E)),
             name: name.to_owned(),
             permissions: permissions.iter().map(|p| (*p).to_owned()).collect(),
+            discount_ceiling_minor,
             status: EntityStatus::Active,
         }
     }
@@ -226,5 +255,50 @@ mod tests {
         let document = compile_permissions(store, &employees, &roles, &assignments, &pins);
         assert_eq!(document.staff.len(), 1);
         assert!(document.staff[0].permissions.is_empty());
+        assert_eq!(
+            document.staff[0].discount_ceiling_minor, None,
+            "a person whose role is missing gets no allowance either"
+        );
+    }
+
+    /// The role's ceiling reaches the person, which is the whole of what the node had to carry for a
+    /// server to discount without a manager.
+    #[test]
+    fn a_role_carries_its_discount_ceiling_onto_the_people_assigned_to_it() {
+        let store = StoreId::new(Ulid::from_u128(0x5702F));
+        let employees = vec![
+            employee(1, "C01", "Alice", EntityStatus::Active),
+            employee(2, "C02", "Bao", EntityStatus::Active),
+        ];
+        let roles = vec![
+            role_with_ceiling(10, "Server", &["billing.discount.apply"], Some(30_000)),
+            // Deliberately a *zero* rather than an absent one: the two are different statements and
+            // the node has to keep them apart, or a console could not show which was said.
+            role_with_ceiling(11, "Trainee", &["billing.discount.apply"], Some(0)),
+        ];
+        let assignments = vec![
+            assignment(20, 1, 0x5702F, 10),
+            assignment(21, 2, 0x5702F, 11),
+        ];
+        let pins = BTreeMap::new();
+
+        let document = compile_permissions(store, &employees, &roles, &assignments, &pins);
+        assert_eq!(document.staff[0].discount_ceiling_minor, Some(30_000));
+        assert_eq!(document.staff[1].discount_ceiling_minor, Some(0));
+
+        // And an absent ceiling is left off the wire entirely, so a tenant that configures none
+        // publishes the document it published before the field existed.
+        let plain = compile_permissions(
+            store,
+            &employees[..1],
+            &[role(10, "Server", &["billing.discount.apply"])],
+            &assignments[..1],
+            &pins,
+        );
+        let json = serde_json::to_value(&plain).expect("serialise");
+        assert!(
+            json["staff"][0].get("discount_ceiling_minor").is_none(),
+            "an absent ceiling should not appear on the wire: {json}"
+        );
     }
 }
