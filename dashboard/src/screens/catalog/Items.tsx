@@ -6,7 +6,7 @@
 // Tax class, category and sub-category are set at create and preserved on every edit, exactly as the
 // monolith did (a rename or a status flip re-sends the item's existing taxonomy untouched).
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { api } from "../../api/client";
@@ -102,10 +102,25 @@ export function CatalogItems() {
   const [draftName, setDraftName] = createSignal("");
   const [draftTranslations, setDraftTranslations] = createSignal<Record<string, string>>({});
 
-  const taxClassName = (id: string) =>
-    taxClasses().find((row) => row.tax_class_id === id)?.name ?? id;
-  const categoryName = (id: string | null) =>
-    id ? (categories().find((row) => row.item_category_id === id)?.name ?? id) : "—";
+  // Optimization: Pre-group taxonomy names into Maps using createMemo for O(1) lookups instead of O(T) / O(C) find operations per table cell.
+  const taxClassMap = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of taxClasses()) {
+      map.set(row.tax_class_id, row.name);
+    }
+    return map;
+  });
+
+  const categoryMap = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of categories()) {
+      map.set(row.item_category_id, row.name);
+    }
+    return map;
+  });
+
+  const taxClassName = (id: string) => taxClassMap().get(id) ?? id;
+  const categoryName = (id: string | null) => (id ? (categoryMap().get(id) ?? id) : "—");
 
   // console.media.manage → owner/admin (the server re-checks). Gates the per-item image widget's write
   // affordances and, since the same role set holds console.catalog.manage, the CSV export button.
@@ -114,10 +129,12 @@ export function CatalogItems() {
     return role === "owner" || role === "admin";
   };
 
-  const activeTaxClasses = () => taxClasses().filter((row) => row.status === "active");
-  const activeCategories = () => categories().filter((row) => row.status === "active");
-  const activeSubcategories = () =>
-    subcategories().filter((row) => row.status === "active" && row.item_category_id === newCategory());
+  // Optimization: Memoize active taxonomy filters with createMemo to avoid redundant O(K) array filtering on input strokes / re-renders.
+  const activeTaxClasses = createMemo(() => taxClasses().filter((row) => row.status === "active"));
+  const activeCategories = createMemo(() => categories().filter((row) => row.status === "active"));
+  const activeSubcategories = createMemo(() =>
+    subcategories().filter((row) => row.status === "active" && row.item_category_id === newCategory()),
+  );
 
   /**
    * Move the pager and read that window, stepping back off a window that no longer exists.
