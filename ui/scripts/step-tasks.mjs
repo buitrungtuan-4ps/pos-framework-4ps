@@ -53,6 +53,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-seat" },
   },
   {
+    task: "Find an item by name and add it",
+    budget: 2,
+    note: "One tap, and the typing before it is not one — the same accounting the shift float and the manager's PIN get. That is the whole claim: a menu too long for the grid costs the flow nothing extra to sell from. Declared separately from \"Add an item\" although it taps the same control and ends the same way, because the claim is different and the harness proves it differently: the precondition types the query **and asserts the grid narrowed to one button**, so a search that stopped filtering fails here while the plain add stays green. Put search behind a button and this goes red twice over — the box the precondition fills would be gone, and the flow would have grown the tap this says it does not need.",
+    steps: [{ route: "/table/:id", action: "addItem" }],
+    outcome: { route: "/table/:id", mark: "line-added" },
+  },
+  {
     task: "Fire the open lines to the kitchen",
     budget: 2,
     note: "The send button is fixed on the order screen and shows the unsent count. This note described a button that did not exist: the screen carried a Send on every row, so this task really cost one tap per line and the gate could not see it — a declaration naming an action is satisfied by any element calling it, however many of them there are. One button now sends the whole order in one transaction, which is what makes the two honest.",

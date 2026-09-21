@@ -119,6 +119,22 @@ async function openShift(page) {
 const PRECONDITIONS = {
   "Add an item to an open order": seatTable,
   "Order an item for a particular seat": seatTable,
+  // Typing, then the assertion that makes this flow worth declaring at all.
+  //
+  // `dac` is chosen and not `pho`, which was the obvious query and proves nothing: NFD leaves the
+  // marks *after* the letter they sit on, so `pho` is already a substring of an unfolded `Phở` and
+  // the test passes with the folding deleted. `đặc` is the opposite shape — `đ` has no
+  // decomposition and the marks on `ặ` land between the `a` and the `c` — so `dac` reaches it only
+  // if both halves of `fold` ran. Delete either and this goes red.
+  //
+  // It is also not the first item in the book, so a search that silently stopped filtering would
+  // leave the harness tapping Margherita and still finding a line on the order. The count is what
+  // forbids that: after typing, exactly one sell button may remain on the screen.
+  "Find an item by name and add it": async (page) => {
+    await seatTable(page);
+    await page.locator("#menu-search").fill("dac");
+    await expect(page.locator('[data-step="addItem"]')).toHaveCount(1);
+  },
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);
