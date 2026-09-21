@@ -51,7 +51,7 @@ export const TASKS = [
       { route: "/table/:id", action: "chooseModifier" },
       { route: "/table/:id", action: "confirmItem" },
     ],
-    outcome: { route: "/table/:id", mark: "line-added" },
+    outcome: { route: "/table/:id", mark: "line-modifiers" },
   },
   {
     task: "Change how many of a line",

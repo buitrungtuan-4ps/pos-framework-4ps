@@ -506,52 +506,11 @@ async fn live_orders(store: &Store) -> Value {
     live
 }
 
-/// A device that was not running when the order was taken can still draw it.
+/// Every fact the live read has to carry about the two lines the flow below left open.
 ///
-/// The bug this pins: lines reach a device on the fan-out, and the fan-out carries what happens
-/// *next*. A till that reloaded, a tablet that woke from sleep and a kitchen display switched on
-/// mid-service had nothing to ask — so each drew an empty order, and an empty board, over food that
-/// existed. `GET /api/orders/live` is what they ask instead of the events they missed, and the three
-/// facts it has to carry are asserted here: the id to act on a line, where the line has got to, and
-/// whether a station already made it.
-///
-/// The settle at the end is the other half of the contract. The list is the store's live trading,
-/// not its log: an order that has been paid for leaves it, which is what keeps a device's first read
-/// the size of the shop rather than the size of the day.
-#[tokio::test]
-async fn a_device_that_missed_the_events_reads_what_is_open() {
-    let store = a_store().await;
-    let table = TableId::new(Ulid::from_u128(701));
-    a_fired_and_prepared_order(&store, table).await;
-
-    // A second line, left unfired, so the read has both states to tell apart.
-    let (status, second) = post(
-        store.app.clone(),
-        Some(&store.token),
-        &format!("/api/tables/{table}/lines"),
-        Some(a_line_body()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    let second_line = second["order_line_id"]
-        .as_str()
-        .expect("a line id")
-        .to_owned();
-
-    let live = live_orders(&store).await;
-    let orders = live.as_array().expect("a list of orders");
-    assert_eq!(orders.len(), 1, "one order is open: {live}");
-    let open = &orders[0];
-    assert_eq!(
-        open["table_id"],
-        table.to_string(),
-        "named with its table, so the order screen knows which table it belongs to"
-    );
-    assert!(
-        open["bill_id"].is_null(),
-        "no bill open on it yet, so a device that reloads opens one rather than resuming"
-    );
-
+/// Its own function because the flow's three beats — read, bill, settle — each deserve to read as
+/// one thing, and this is the longest of them by far.
+fn assert_the_lines_read_back(open: &Value, second_line: &str) {
     let lines = open["lines"].as_array().expect("the order's lines");
     assert_eq!(lines.len(), 2, "both lines come back: {open}");
     assert_eq!(
@@ -583,6 +542,77 @@ async fn a_device_that_missed_the_events_reads_what_is_open() {
         lines[1]["line_total"]["amount_minor"], UNIT_PRICE,
         "and the figure captured when it was added, not a fresh lookup"
     );
+    assert_eq!(
+        lines[1]["modifier_menu_item_ids"],
+        json!([MenuItemId::new(Ulid::from_u128(ITEM + 1)).to_string()]),
+        "and what was chosen for it. Without this a kitchen display switched on mid-service — the \
+         device this route exists for — rebuilds every ticket as a bare item name, and a fired line \
+         consumes the base recipe *plus one per modifier* (§8), so the cook is being asked to make \
+         something the board will not name"
+    );
+    assert_eq!(
+        lines[0]["modifier_menu_item_ids"],
+        json!([]),
+        "a line that carries none says so, rather than leaving the key off for a reader to guess at"
+    );
+    assert!(
+        lines[0]["seat"].is_null(),
+        "a line ordered for the table carries no seat, and says so by omission rather than by a \
+         zero that would read as seat number nought"
+    );
+}
+
+/// A device that was not running when the order was taken can still draw it.
+///
+/// The bug this pins: lines reach a device on the fan-out, and the fan-out carries what happens
+/// *next*. A till that reloaded, a tablet that woke from sleep and a kitchen display switched on
+/// mid-service had nothing to ask — so each drew an empty order, and an empty board, over food that
+/// existed. `GET /api/orders/live` is what they ask instead of the events they missed, and the three
+/// facts it has to carry are asserted here: the id to act on a line, where the line has got to, and
+/// whether a station already made it.
+///
+/// The settle at the end is the other half of the contract. The list is the store's live trading,
+/// not its log: an order that has been paid for leaves it, which is what keeps a device's first read
+/// the size of the shop rather than the size of the day.
+#[tokio::test]
+async fn a_device_that_missed_the_events_reads_what_is_open() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(701));
+    a_fired_and_prepared_order(&store, table).await;
+
+    // A second line, left unfired, so the read has both states to tell apart — and carrying a
+    // modifier, so the read has to answer for that too (ADR-0127).
+    let mut with_a_choice = a_line_body();
+    with_a_choice["modifier_menu_item_ids"] =
+        json!([MenuItemId::new(Ulid::from_u128(ITEM + 1)).to_string()]);
+    let (status, second) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(with_a_choice),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let second_line = second["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+
+    let live = live_orders(&store).await;
+    let orders = live.as_array().expect("a list of orders");
+    assert_eq!(orders.len(), 1, "one order is open: {live}");
+    let open = &orders[0];
+    assert_eq!(
+        open["table_id"],
+        table.to_string(),
+        "named with its table, so the order screen knows which table it belongs to"
+    );
+    assert!(
+        open["bill_id"].is_null(),
+        "no bill open on it yet, so a device that reloads opens one rather than resuming"
+    );
+
+    assert_the_lines_read_back(open, &second_line);
 
     // Open a bill: a device that reloads on the payment screen has to resume this one rather than
     // ask for a second, which the domain refuses.
@@ -896,6 +926,24 @@ async fn a_seat_is_recorded_where_the_store_assigns_seats_and_refused_where_it_d
         status,
         StatusCode::OK,
         "a store that assigns seats takes one: {accepted}"
+    );
+
+    // And it survives a reload. A server assigns seats so the food reaches the right person; the
+    // projection dropped the seat the event carried, so `GET /api/orders/live` could not answer for
+    // it and a till that reloaded showed a table of anonymous lines. Asserted here rather than
+    // beside the modifiers, because only this store has the capability on to assert it with.
+    let (status, live) = send(
+        seated.app.clone(),
+        Some(&seated.token),
+        "GET",
+        "/api/orders/live",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        live[0]["lines"][0]["seat"], 3,
+        "the seat comes back with the line a device rebuilds from: {live}"
     );
 }
 

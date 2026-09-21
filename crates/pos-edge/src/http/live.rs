@@ -47,6 +47,15 @@ struct LiveLineResponse {
     /// Whether a station has marked it prepared. Orthogonal to `state`: a fired line is still fired
     /// once it is made, and this is what stops a kitchen display re-showing a ticket it has bumped.
     bumped: bool,
+    /// The modifiers chosen for the line (ADR-0127), as ids — the caller names them from the price
+    /// book it already holds. Always present, empty for a line that carries none, so a reader never
+    /// has to tell "no modifiers" apart from "an older edge that did not say".
+    modifier_menu_item_ids: Vec<String>,
+    /// The seat the line was ordered for, absent for the table's. Omitted from the wire when absent,
+    /// the way every other optional field on this route is: a `seat` of zero is not "no seat", and a
+    /// null would be a second spelling of the same nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seat: Option<u16>,
 }
 
 /// One open order.
@@ -89,6 +98,12 @@ where
                     line_total: line.line_total,
                     state: line.state.as_wire().to_owned(),
                     bumped: line.bumped,
+                    modifier_menu_item_ids: line
+                        .modifier_menu_item_ids
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
+                    seat: line.seat,
                 })
                 .collect(),
         })

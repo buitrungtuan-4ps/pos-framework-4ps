@@ -1119,6 +1119,19 @@ pub struct LiveOrderLine {
     /// Whether a station has marked it prepared (`kitchen.ticket.bumped`). Orthogonal to `state`,
     /// and the reason a kitchen display coming online does not re-show tickets already made.
     pub bumped: bool,
+    /// What was chosen for the line (ADR-0127). Ids; the caller names them from its own price book,
+    /// because an order screen and a kitchen board want today's spelling.
+    ///
+    /// Carried for the reason the header gives — *"this read is what a device has instead of the
+    /// events it was not running to hear"* — and it was not: a kitchen display switched on
+    /// mid-service, which is exactly what this read exists for, rebuilt every ticket with no
+    /// modifiers on it, so a cook could not tell a 25cm from a 30cm.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Whose dish it is, or `None` for the table's — the same omission, one field over.
+    ///
+    /// A server assigns seats so that the food can be put in front of the right person; a till that
+    /// reloaded lost every one of them and showed a table's worth of anonymous lines.
+    pub seat: Option<u16>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -1181,6 +1194,12 @@ struct LineRecord {
     /// change when somebody renames an item next week.
     display_name: DisplayName,
     quantity: Quantity,
+    /// Whose dish it is, when the store assigns seats, or `None` for the table's.
+    ///
+    /// `sales.order_line.added` has carried it since seats were added and this projection dropped
+    /// it, which is the same omission one field over from the modifiers: a till that reloads had no
+    /// way to learn a seat back, so a server rebuilding after a crash saw every line as the table's.
+    seat: Option<u16>,
     course_id: Option<CourseId>,
     /// The per-unit price captured at add time, and two things depend on it.
     ///
@@ -1215,6 +1234,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             menu_item_id: event.menu_item_id,
             display_name: event.display_name,
             quantity: event.quantity,
+            seat: event.seat,
             course_id: event.course_id,
             unit_price: event.unit_price,
             line_total: event.line_total,
@@ -3236,6 +3256,8 @@ impl<S: EventStore> Edge<S> {
                         line_total: record.line_total,
                         state: record.state,
                         bumped: projection.bumped_lines.contains(&order_line_id),
+                        modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
+                        seat: record.seat,
                     })
                     .collect(),
             })
