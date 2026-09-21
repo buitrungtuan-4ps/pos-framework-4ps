@@ -249,8 +249,9 @@ impl fmt::Display for MenuSectionId {
 /// A section is where the operator organises a menu's placements for authoring and printing; a
 /// [`MenuPlacement`] carries an optional `menu_section_id` naming the section it sits under. Sections
 /// are **authoring-only**: the compiled `MenuBook` is a flat set of entries, so a section changes what
-/// the operator sees while authoring, never what the edge is served — the same posture a
-/// [`ModifierGroup`] holds until a `pos-proto` extension carries it.
+/// the operator sees while authoring, never what the edge is served. A [`ModifierGroup`] held the
+/// same posture until [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md) carried it
+/// down; a section has not moved, because nothing at the till asks which section an item was under.
 #[derive(Debug, Clone, Serialize)]
 pub struct MenuSection {
     /// The section id.
@@ -301,31 +302,14 @@ pub struct MenuPlacement {
     pub available: bool,
 }
 
-/// A modifier group's identifier — a ULID minted at creation. A modifier group is an authoring
-/// concept (a compiled `MenuEntry` does not yet carry modifiers — that is a later `pos-proto`
-/// extension), so its id lives beside the seam like [`MenuId`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct ModifierGroupId(Ulid);
-
-impl ModifierGroupId {
-    /// Wraps a ULID as a modifier-group id.
-    #[must_use]
-    pub const fn new(ulid: Ulid) -> Self {
-        Self(ulid)
-    }
-
-    /// The underlying ULID.
-    #[must_use]
-    pub const fn as_ulid(self) -> Ulid {
-        self.0
-    }
-}
-
-impl fmt::Display for ModifierGroupId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
+/// A modifier group's identifier — a ULID minted at creation.
+///
+/// This is `pos-proto`'s id, not a second one. It sat here while a group was authoring-only, for the
+/// reason [`MenuId`] still does: an id that never crosses the seam does not belong in the wire
+/// vocabulary. [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md) moved the group
+/// itself across, so the id follows it, exactly as [`MenuItemId`] already had. Re-exported rather
+/// than merely imported so every caller that says `catalog::ModifierGroupId` keeps saying it.
+pub use pos_proto::ids::ModifierGroupId;
 
 /// A modifier group — a set of modifier choices with a min/max selection rule, attached to items
 /// (ADR-0066 entities 4 and 5).
@@ -333,9 +317,14 @@ impl fmt::Display for ModifierGroupId {
 /// A **modifier is itself an item** (a [`MenuItemId`] priced in the same money, ADR-0063), so this
 /// entity needs no separate modifier type: `member_item_ids` are the items offered as choices, and
 /// `attached_item_ids` are the items this group modifies (a pizza's "Size", "Extra toppings"). The
-/// selection rule is `min_select..=max_select`. This is **authoring only** today — the compiled
-/// [`pos_proto::MenuEntry`] carries no modifier reference yet; wiring modifiers to the edge is a
-/// `pos-proto`/ADR-0063 extension and its own resolver slice.
+/// selection rule is `min_select..=max_select`.
+///
+/// This is the **authoring** shape, and it reaches a store compiled
+/// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)):
+/// [`crate::catalog_compiler::compile_menu`] inverts the attachment — the operator pins one group to
+/// forty pizzas, the till asks the opposite question once per tap — and emits a
+/// [`pos_proto::MenuModifierGroup`] carrying the rule, the name and the members, with no `tenant_id`,
+/// `etag` or `status`. An archived group is simply not published.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModifierGroup {
     /// The group id.

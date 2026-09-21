@@ -129,7 +129,8 @@ fn demo_menu() -> MenuBook {
 }
 
 /// The demo store's configuration document: a `permissions` node with one employee, and a `menu`
-/// node with four items.
+/// node with four products, the three modifiers they are made of, and the two groups that offer
+/// them.
 ///
 /// `None` if the PIN could not be hashed — the OS entropy source being unavailable is the only way
 /// that happens, and a fixture that answered with a roster nobody can sign into would be worse than
@@ -239,9 +240,18 @@ fn demo_floor() -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    use pos_proto::ids::MenuItemId;
+    use pos_proto::ulid::Ulid;
+
     use super::{DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document};
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
+
+    /// The same numbering the fixture above mints its items from, so an assertion names the item it
+    /// means rather than a ULID nobody can read.
+    fn menu_item(id: u128) -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(id))
+    }
 
     /// The fixture is only worth anything if it goes through the published-config seam and comes out
     /// the other side as a roster that signs in and a book that prices — which is the exact pair the
@@ -266,7 +276,29 @@ mod tests {
             session.staff.authorise(DEMO_STAFF_CODE, "0000").is_none(),
             "a wrong PIN is refused, so the fixture is a roster and not a bypass"
         );
-        assert_eq!(session.menu.items().len(), 4, "four items to sell");
+        assert_eq!(
+            session.menu.items().len(),
+            7,
+            "four products plus the three modifiers, which are ordinary priced items (ADR-0066 \
+             entity 4) and so are counted here"
+        );
+        let sizes = session
+            .menu
+            .groups_for(menu_item(101))
+            .first()
+            .copied()
+            .cloned()
+            .expect("the pizza asks what size");
+        assert!(sizes.required(), "a pizza cannot be sold without a size");
+        assert_eq!(
+            sizes.member_menu_item_ids,
+            vec![menu_item(201), menu_item(202)],
+            "and both sizes are on the menu, so the picker has something to offer"
+        );
+        assert!(
+            session.menu.groups_for(menu_item(102)).is_empty(),
+            "a salad asks nothing, which is what keeps adding it one tap"
+        );
         assert!(
             session
                 .menu

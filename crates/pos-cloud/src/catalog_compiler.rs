@@ -27,16 +27,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pos_proto::enums::SalesChannel;
-use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId};
+use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId};
 use pos_proto::text::DisplayName;
 use pos_proto::wire_enum::WireEnum;
 use pos_proto::{
     DisplayButton, DisplayCategory as ProtoDisplayCategory, DisplayPlan,
     DisplaySubcategory as ProtoDisplaySubcategory, LayoutBook, MenuBook, MenuCatalog, MenuEntry,
+    MenuModifierGroup,
 };
 
 use crate::catalog::{
     CatalogItem, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId, MenuPlacement,
+    ModifierGroup,
 };
 use crate::registry::EntityStatus;
 
@@ -104,7 +106,7 @@ pub fn would_cycle(menus: &[Menu], menu_id: MenuId, proposed_parent: MenuId) -> 
 
 /// Compiles one menu (with its inheritance chain) into a per-channel [`MenuBook`].
 ///
-/// `items`, `menus` and `placements` are a tenant's whole authoring model as loaded from a
+/// `items`, `menus`, `placements` and `groups` are a tenant's whole authoring model as loaded from a
 /// [`CatalogStore`](crate::catalog::CatalogStore); `root` is the menu to compile. Archived items are
 /// omitted (retired, not sold); an unavailable placement compiles to a **present but 86'd** entry
 /// (`available = false`), because the store distinguishes "not on the menu" from "on the menu, paused"
@@ -115,6 +117,33 @@ pub fn would_cycle(menus: &[Menu], menu_id: MenuId, proposed_parent: MenuId) -> 
 /// not there at all has no coherent compilation, and silently emitting an empty book would take a
 /// store's whole till layout away without a word.
 ///
+/// # Modifier groups
+///
+/// [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md) makes this the place
+/// attachment is **inverted**: the operator pins one "Size" group to forty pizzas, and the till asks
+/// the opposite question once per tap — *what must I ask about this item?* — so each entry is emitted
+/// carrying the ids of the groups attached to it, and the groups themselves are carried once on the
+/// catalog rather than forty times inside the entries.
+///
+/// Three things are dropped on the way down, each per channel, because a group is only a rule about
+/// things this channel actually sells:
+///
+///   * an **archived** group is not published at all (ADR-0127 decision 2, the same posture an
+///     archived item gets);
+///   * a **member this channel does not price** is not offered on it — a modifier is an ordinary item
+///     (ADR-0066 entity 4), so an id with no entry beside it is a button the till cannot price, and
+///     delivery legitimately prices fewer sizes than dine-in;
+///   * a group left with **no member, or fewer than `min_select` of them**, is not published on that
+///     channel and its id is stripped from the entries there. Publishing a rule that cannot be
+///     satisfied would not make the store ask a better question — it would take the item off sale on
+///     that channel entirely, which is a worse answer than the one the till gives today. The check is
+///     forgiving for [`compile_layout_book`]'s reason and not [`CompileError::UnknownItem`]'s: an
+///     unpriced member is a pricing gap in one channel, not a reference to something that is not
+///     there.
+///
+/// The group's `display_name_translations` are empty because the authoring model has no per-locale
+/// name for a group yet; the field is carried so adding them later changes no shape.
+///
 /// # Errors
 ///
 /// [`CompileError`] when a menu or a parent is missing, any menu in the chain is archived, the
@@ -123,12 +152,31 @@ pub fn compile_menu(
     items: &[CatalogItem],
     menus: &[Menu],
     placements: &[MenuPlacement],
+    groups: &[ModifierGroup],
     root: MenuId,
 ) -> Result<MenuBook, CompileError> {
     let item_by_id: BTreeMap<MenuItemId, &CatalogItem> =
         items.iter().map(|item| (item.menu_item_id, item)).collect();
     let menu_by_id: BTreeMap<MenuId, &Menu> =
         menus.iter().map(|menu| (menu.menu_id, menu)).collect();
+
+    // The inversion, built once: item -> the groups pinned to it. A `BTreeSet` so an entry's ids come
+    // out in id order however the operator listed the attachments, which is what keeps a re-compile
+    // of unchanged authoring byte-identical.
+    let mut groups_by_item: BTreeMap<MenuItemId, BTreeSet<ModifierGroupId>> = BTreeMap::new();
+    let mut group_by_id: BTreeMap<ModifierGroupId, &ModifierGroup> = BTreeMap::new();
+    for group in groups
+        .iter()
+        .filter(|group| group.status != EntityStatus::Archived)
+    {
+        group_by_id.insert(group.modifier_group_id, group);
+        for attached in &group.attached_item_ids {
+            groups_by_item
+                .entry(*attached)
+                .or_default()
+                .insert(group.modifier_group_id);
+        }
+    }
 
     // The chain from the requested menu up through its parents, most-specific first.
     let mut chain: Vec<MenuId> = Vec::new();
@@ -199,6 +247,10 @@ pub fn compile_menu(
                 unit_price: price.unit_price,
                 tax_class_id: item.tax_class_id,
                 available: placement.available,
+                modifier_group_ids: groups_by_item
+                    .get(item_id)
+                    .map(|attached| attached.iter().copied().collect())
+                    .unwrap_or_default(),
             };
             by_channel
                 .entry(channel.as_wire())
@@ -209,10 +261,73 @@ pub fn compile_menu(
     }
 
     let mut book = MenuBook::new();
-    for (_wire, (channel, entries)) in by_channel {
-        book = book.with(channel, MenuCatalog::from_items(entries));
+    for (_wire, (channel, mut entries)) in by_channel {
+        let published = publishable_groups(&mut entries, &group_by_id);
+        let mut catalog = MenuCatalog::from_items(entries);
+        for group in published {
+            catalog = catalog.with_modifier_group(group);
+        }
+        book = book.with(channel, catalog);
     }
     Ok(book)
+}
+
+/// One channel's publishable modifier groups, with the ids of the ones it cannot offer stripped from
+/// `entries` as it goes.
+///
+/// Separate from [`compile_menu`] because it runs *after* the channel's last entry has been emitted,
+/// and for the reason it has to: which groups survive depends on which members this channel prices,
+/// which is not known while the entries are still being built. See that function's **Modifier
+/// groups** section for what is dropped and why.
+fn publishable_groups(
+    entries: &mut [MenuEntry],
+    group_by_id: &BTreeMap<ModifierGroupId, &ModifierGroup>,
+) -> Vec<MenuModifierGroup> {
+    let priced: BTreeSet<MenuItemId> = entries.iter().map(|entry| entry.menu_item_id).collect();
+    let attached: BTreeSet<ModifierGroupId> = entries
+        .iter()
+        .flat_map(|entry| entry.modifier_group_ids.iter().copied())
+        .collect();
+
+    let published: Vec<MenuModifierGroup> = attached
+        .iter()
+        .filter_map(|group_id| group_by_id.get(group_id).copied())
+        .filter_map(|group| {
+            let member_menu_item_ids: Vec<MenuItemId> = group
+                .member_item_ids
+                .iter()
+                .copied()
+                .filter(|member| priced.contains(member))
+                .collect();
+            // `u16::MAX` rather than a refusal: a group with more than 65 535 members is not a
+            // selection rule anyone authored, and saturating here only ever makes the rule look
+            // *more* satisfiable, which is the direction the comparison below already allows.
+            let offerable = u16::try_from(member_menu_item_ids.len()).unwrap_or(u16::MAX);
+            if member_menu_item_ids.is_empty() || offerable < group.min_select {
+                return None;
+            }
+            Some(MenuModifierGroup {
+                modifier_group_id: group.modifier_group_id,
+                display_name: DisplayName::new(group.name.as_str()),
+                display_name_translations: BTreeMap::new(),
+                min_select: group.min_select,
+                max_select: group.max_select,
+                member_menu_item_ids,
+            })
+        })
+        .collect();
+
+    // The id goes wherever the rule went, so an entry never names a group this channel's catalog does
+    // not carry. `MenuCatalog::groups_for` skips a dangling id rather than failing, and that is the
+    // safety net for a partial sync, not licence to publish a book that disagrees with itself.
+    let carried: BTreeSet<ModifierGroupId> = published
+        .iter()
+        .map(|group| group.modifier_group_id)
+        .collect();
+    for entry in entries {
+        entry.modifier_group_ids.retain(|id| carried.contains(id));
+    }
+    published
 }
 
 /// Compiles a tenant's display taxonomy and layout buttons into a per-channel [`LayoutBook`] — the
@@ -365,7 +480,7 @@ mod tests {
     use pos_proto::display::GridPosition;
     use pos_proto::enums::SalesChannel;
     use pos_proto::ids::{
-        DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId,
+        DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId, TaxClassId, TenantId,
     };
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::ulid::Ulid;
@@ -374,7 +489,7 @@ mod tests {
     use super::{CompileError, compile_layout_book, compile_menu, would_cycle};
     use crate::catalog::{
         CatalogItem, ChannelPrice, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId,
-        MenuPlacement,
+        MenuPlacement, ModifierGroup,
     };
     use crate::registry::EntityStatus;
 
@@ -455,7 +570,7 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
 
         let dine_in = book
             .catalog_for(SalesChannel::DineIn)
@@ -497,7 +612,7 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
         let entry = book
             .catalog_for(SalesChannel::DineIn)
             .get(item_id(500))
@@ -528,7 +643,7 @@ mod tests {
             placement(11, 500, vec![price(SalesChannel::DineIn, 175_000)], true),
         ];
 
-        let book = compile_menu(&items, &menus, &placements, menu_id(11)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[], menu_id(11)).expect("compile");
         let dine_in = book.catalog_for(SalesChannel::DineIn);
         assert_eq!(
             dine_in.get(item_id(500)).expect("overridden").unit_price,
@@ -553,7 +668,7 @@ mod tests {
             false,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
         let entry = book
             .catalog_for(SalesChannel::DineIn)
             .get(item_id(500))
@@ -578,7 +693,7 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
         assert!(
             book.catalog_for(SalesChannel::DineIn)
                 .get(item_id(500))
@@ -599,7 +714,7 @@ mod tests {
         )];
 
         assert_eq!(
-            compile_menu(&items, &menus, &placements, menu_id(10)),
+            compile_menu(&items, &menus, &placements, &[], menu_id(10)),
             Err(CompileError::UnknownItem(item_id(999)))
         );
     }
@@ -609,7 +724,7 @@ mod tests {
         let items: [CatalogItem; 0] = [];
         let menus = [menu(10, Some(11)), menu(11, Some(10))];
         assert_eq!(
-            compile_menu(&items, &menus, &[], menu_id(10)),
+            compile_menu(&items, &menus, &[], &[], menu_id(10)),
             Err(CompileError::InheritanceCycle(menu_id(10)))
         );
     }
@@ -618,7 +733,7 @@ mod tests {
     fn an_unknown_menu_is_rejected() {
         let items: [CatalogItem; 0] = [];
         assert_eq!(
-            compile_menu(&items, &[], &[], menu_id(42)),
+            compile_menu(&items, &[], &[], &[], menu_id(42)),
             Err(CompileError::UnknownMenu(menu_id(42)))
         );
     }
@@ -639,12 +754,275 @@ mod tests {
             ),
             placement(10, 500, vec![price(SalesChannel::DineIn, 3)], true),
         ];
-        let first = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
-        let second = compile_menu(&items, &menus, &placements, menu_id(10)).expect("compile");
+        let first = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let second = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
         assert_eq!(
             serde_json::to_string(&first).expect("serialise"),
             serde_json::to_string(&second).expect("serialise"),
             "the same authoring compiles to a byte-identical snapshot"
+        );
+    }
+
+    fn modifier_group_id(n: u128) -> ModifierGroupId {
+        ModifierGroupId::new(Ulid::from_u128(n))
+    }
+
+    fn group(
+        id: u128,
+        name: &str,
+        min_select: u16,
+        max_select: u16,
+        members: &[u128],
+        attached: &[u128],
+    ) -> ModifierGroup {
+        ModifierGroup {
+            modifier_group_id: modifier_group_id(id),
+            tenant_id: tenant(),
+            name: name.to_owned(),
+            min_select,
+            max_select,
+            member_item_ids: members.iter().copied().map(item_id).collect(),
+            attached_item_ids: attached.iter().copied().map(item_id).collect(),
+            status: EntityStatus::Active,
+        }
+    }
+
+    /// Two pizzas, both sizes, all four priced dine-in. Enough authoring for every test below to vary
+    /// one thing and leave the rest alone.
+    fn pizzas_and_sizes() -> ([CatalogItem; 4], [Menu; 1], Vec<MenuPlacement>) {
+        let items = [
+            item(500, "Margherita"),
+            item(501, "Marinara"),
+            item(600, "25cm"),
+            item(601, "30cm"),
+        ];
+        let menus = [menu(10, None)];
+        let placements = vec![
+            placement(10, 500, vec![price(SalesChannel::DineIn, 150_000)], true),
+            placement(10, 501, vec![price(SalesChannel::DineIn, 140_000)], true),
+            placement(10, 600, vec![price(SalesChannel::DineIn, 0)], true),
+            placement(10, 601, vec![price(SalesChannel::DineIn, 40_000)], true),
+        ];
+        (items, menus, placements)
+    }
+
+    #[test]
+    fn a_group_is_inverted_onto_every_item_it_is_attached_to() {
+        // ADR-0127 decision 3: the operator pins one group to two pizzas; the till asks the opposite
+        // question, so each entry names the group and the catalog carries the rule exactly once.
+        let (items, menus, placements) = pizzas_and_sizes();
+        let groups = [group(900, "Size", 1, 1, &[600, 601], &[500, 501])];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+        let dine_in = book.catalog_for(SalesChannel::DineIn);
+
+        assert_eq!(
+            dine_in.modifier_groups().len(),
+            1,
+            "one rule, not one copy per pizza"
+        );
+        let published = dine_in.modifier_groups().first().expect("the group");
+        assert_eq!(published.modifier_group_id, modifier_group_id(900));
+        assert_eq!(published.display_name.as_str(), "Size");
+        assert!(published.required(), "min_select 1 is what required means");
+        assert_eq!(published.max_select, 1);
+        assert_eq!(
+            published.member_menu_item_ids,
+            vec![item_id(600), item_id(601)]
+        );
+        assert!(
+            published.display_name_translations.is_empty(),
+            "authoring has no per-locale group name yet"
+        );
+
+        for pizza in [500, 501] {
+            assert_eq!(
+                dine_in
+                    .groups_for(item_id(pizza))
+                    .first()
+                    .expect("the pizza asks")
+                    .modifier_group_id,
+                modifier_group_id(900)
+            );
+        }
+        assert!(
+            dine_in.groups_for(item_id(600)).is_empty(),
+            "a size is an ordinary item and attaches nothing"
+        );
+    }
+
+    #[test]
+    fn an_entry_names_its_groups_in_id_order_however_they_were_authored() {
+        // The order an operator attached them in is not a fact the book should carry: a re-compile of
+        // unchanged authoring has to stay byte-identical, so the inversion sorts.
+        let (items, menus, placements) = pizzas_and_sizes();
+        let groups = [
+            group(902, "Extras", 0, 1, &[601], &[500]),
+            group(901, "Size", 1, 1, &[600, 601], &[500]),
+        ];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+        assert_eq!(
+            book.catalog_for(SalesChannel::DineIn)
+                .get(item_id(500))
+                .expect("the pizza")
+                .modifier_group_ids,
+            vec![modifier_group_id(901), modifier_group_id(902)]
+        );
+    }
+
+    #[test]
+    fn an_archived_group_is_not_published() {
+        // ADR-0127 decision 2: the compiled view has no `status` to reason about, so a retired group
+        // simply does not cross — the same posture an archived item gets.
+        let (items, menus, placements) = pizzas_and_sizes();
+        let mut retired = group(900, "Size", 1, 1, &[600, 601], &[500]);
+        retired.status = EntityStatus::Archived;
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[retired], menu_id(10)).expect("compile");
+        let dine_in = book.catalog_for(SalesChannel::DineIn);
+
+        assert!(dine_in.modifier_groups().is_empty());
+        assert!(
+            dine_in
+                .get(item_id(500))
+                .expect("the pizza still sells")
+                .modifier_group_ids
+                .is_empty(),
+            "and no entry is left naming it"
+        );
+    }
+
+    #[test]
+    fn a_member_a_channel_does_not_price_is_not_offered_on_it() {
+        // A modifier is an ordinary item, so it is on a channel only if it is priced there. Delivery
+        // sells one size; publishing the other would give the till a button it cannot price.
+        let items = [
+            item(500, "Margherita"),
+            item(600, "25cm"),
+            item(601, "30cm"),
+        ];
+        let menus = [menu(10, None)];
+        let placements = [
+            placement(
+                10,
+                500,
+                vec![
+                    price(SalesChannel::DineIn, 150_000),
+                    price(SalesChannel::Delivery, 180_000),
+                ],
+                true,
+            ),
+            placement(
+                10,
+                600,
+                vec![
+                    price(SalesChannel::DineIn, 0),
+                    price(SalesChannel::Delivery, 0),
+                ],
+                true,
+            ),
+            placement(10, 601, vec![price(SalesChannel::DineIn, 40_000)], true),
+        ];
+        let groups = [group(900, "Size", 1, 1, &[600, 601], &[500])];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+
+        assert_eq!(
+            book.catalog_for(SalesChannel::DineIn)
+                .modifier_groups()
+                .first()
+                .expect("dine-in asks")
+                .member_menu_item_ids,
+            vec![item_id(600), item_id(601)]
+        );
+        assert_eq!(
+            book.catalog_for(SalesChannel::Delivery)
+                .modifier_groups()
+                .first()
+                .expect("delivery still asks")
+                .member_menu_item_ids,
+            vec![item_id(600)],
+            "only the size delivery prices"
+        );
+    }
+
+    #[test]
+    fn a_group_a_channel_cannot_satisfy_is_dropped_there() {
+        // Delivery prices the pizza and neither size. Publishing a `min_select = 1` rule with nothing
+        // to select would not make the store ask a better question — it would take the pizza off
+        // delivery altogether, which is worse than the answer the till gives today.
+        let items = [item(500, "Margherita"), item(600, "25cm")];
+        let menus = [menu(10, None)];
+        let placements = [
+            placement(
+                10,
+                500,
+                vec![
+                    price(SalesChannel::DineIn, 150_000),
+                    price(SalesChannel::Delivery, 180_000),
+                ],
+                true,
+            ),
+            placement(10, 600, vec![price(SalesChannel::DineIn, 0)], true),
+        ];
+        let groups = [group(900, "Size", 1, 1, &[600], &[500])];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+
+        assert_eq!(
+            book.catalog_for(SalesChannel::DineIn)
+                .modifier_groups()
+                .len(),
+            1,
+            "dine-in prices a size, so dine-in asks"
+        );
+        let delivery = book.catalog_for(SalesChannel::Delivery);
+        assert!(delivery.modifier_groups().is_empty());
+        assert!(
+            delivery
+                .get(item_id(500))
+                .expect("the pizza still sells on delivery")
+                .modifier_group_ids
+                .is_empty(),
+            "the id goes with the rule, so the book stays self-consistent"
+        );
+    }
+
+    #[test]
+    fn a_group_attached_to_nothing_this_menu_sells_is_not_published() {
+        // A group is a rule about this menu's items. One pinned only to an item this menu does not
+        // place is not part of it, and carrying it down would be noise the till scans past.
+        let (items, menus, placements) = pizzas_and_sizes();
+        let groups = [group(900, "Size", 1, 1, &[600, 601], &[999])];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+        assert!(
+            book.catalog_for(SalesChannel::DineIn)
+                .modifier_groups()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_optional_group_with_nothing_left_to_offer_is_dropped_too() {
+        // `min_select = 0` makes the rule satisfiable by choosing nothing, so the survivor count does
+        // not trip the comparison — but a picker with no buttons is still a picker nobody can use.
+        let (items, menus, placements) = pizzas_and_sizes();
+        let groups = [group(900, "Extras", 0, 2, &[999], &[500])];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+        assert!(
+            book.catalog_for(SalesChannel::DineIn)
+                .modifier_groups()
+                .is_empty()
         );
     }
 
@@ -770,7 +1148,7 @@ mod tests {
             true,
         )];
         assert_eq!(
-            compile_menu(&items, &[retired], &placements, menu_id(100)),
+            compile_menu(&items, &[retired], &placements, &[], menu_id(100)),
             Err(CompileError::ArchivedMenu(menu_id(100)))
         );
     }
@@ -789,7 +1167,7 @@ mod tests {
             placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
         ];
         assert_eq!(
-            compile_menu(&items, &[parent, child], &placements, menu_id(101)),
+            compile_menu(&items, &[parent, child], &placements, &[], menu_id(101)),
             Err(CompileError::ArchivedMenu(menu_id(100)))
         );
     }
@@ -805,7 +1183,7 @@ mod tests {
             placement(100, 1, vec![price(SalesChannel::DineIn, 100_000)], true),
             placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
         ];
-        let book = compile_menu(&items, &[parent, child], &placements, menu_id(101))
+        let book = compile_menu(&items, &[parent, child], &placements, &[], menu_id(101))
             .expect("an all-active chain compiles");
         for id in [item_id(1), item_id(2)] {
             assert!(
