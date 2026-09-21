@@ -31,6 +31,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Fix SSRF IPv6 translation bypass via ISATAP and NAT64 local-use prefixes in `pos-cloud`.** Updated IPv6 address classification in `crates/pos-cloud/src/webhook/ssrf.rs` to inspect ISATAP interface identifiers across all 64-bit IPv6 prefixes and NAT64 local-use subnets (`64:ff9b:1::/48`), preventing SSRF filter bypasses.
+
 - **Every `pos-cloud` response carries `Strict-Transport-Security`.** `max-age=31536000;
   includeSubDomains`, beside the `nosniff`, `DENY` and `no-referrer` headers the same middleware
   already sets. Caddy redirects `http` to `https` already; what this closes is the redirect itself —
