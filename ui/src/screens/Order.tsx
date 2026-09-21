@@ -8,11 +8,15 @@ import { formatMoney } from "../lib/money";
 import type { LayoutButton, MenuItemResponse } from "../api/types";
 import {
   addItem,
+  chooseSeat,
   fireOrder,
+  floorTables,
   linesForTable,
   loadCheck,
   openBill,
   reasonsFor,
+  seatFor,
+  seatsEnabled,
   state,
   tableState,
   unfiredLinesForTable,
@@ -64,6 +68,12 @@ export function Order() {
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
   // be a row count they made themselves (`docs/ui-ux.md` §3).
   const unfired = () => unfiredLinesForTable(params.id);
+
+  // How many the store said this table seats, from the published floor plan. Zero means the plan
+  // recorded no capacity, and a picker with no seats in it is worse than none — so the control only
+  // appears where the store both does seats and said how many this table has.
+  const seatCount = () => floorTables().find((table) => table.id === params.id)?.seats ?? 0;
+  const showSeats = () => seatsEnabled() && seatCount() > 0;
 
   const takePayment = () =>
     guard(async () => {
@@ -202,6 +212,13 @@ export function Order() {
                 >
                   {line.name}
                 </span>
+                {/* Which seat it was ordered for, on the line that carries it. A line with none is
+                    the table's, and says nothing rather than saying "no seat". */}
+                <Show when={line.seat !== undefined}>
+                  <span class="rounded-token bg-surface-muted px-2 text-sm tabular-nums text-ink-muted" data-outcome="line-seat">
+                    {t("order.seat_short", { seat: line.seat ?? 0 })}
+                  </span>
+                </Show>
                 <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) }}>
                   {formatMoney(line.lineTotal)}
                 </span>
@@ -308,6 +325,37 @@ export function Order() {
               </button>
             </div>
           )}
+        </Show>
+
+        {/* Whose dish the next items are. Chosen before the items, as `docs/ui-ux.md` §3 asks, and
+            sticky: a server orders a whole seat's worth at once, so making it per-item would be one
+            extra tap per dish. Tapping the chosen seat again clears it, which is how "this one is
+            for the table" is said without a second control.
+
+            Absent entirely unless the store assigns seats — the edge refuses a seat when the
+            capability is off, and offering an act that can only be refused teaches an operator the
+            till is unreliable. */}
+        <Show when={showSeats()}>
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <span class="text-sm text-ink-muted">{t("order.seat_for")}</span>
+            <For each={Array.from({ length: seatCount() }, (_, index) => index + 1)}>
+              {(seat) => (
+                <button
+                  type="button"
+                  class="min-h-touch w-11 rounded-token border border-line tabular-nums"
+                  classList={{
+                    "bg-primary text-primary-ink": seatFor(params.id) === seat,
+                    "text-ink": seatFor(params.id) !== seat,
+                  }}
+                  aria-pressed={seatFor(params.id) === seat}
+                  data-step="chooseSeat"
+                  onClick={() => chooseSeat(params.id, seat)}
+                >
+                  {seat}
+                </button>
+              )}
+            </For>
+          </div>
         </Show>
 
         {/*

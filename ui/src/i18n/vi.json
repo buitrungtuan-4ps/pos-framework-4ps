@@ -72,6 +72,8 @@
   "order.fired": "Đã báo bếp",
   "order.menu": "Thực đơn",
   "order.menu_empty": "Cửa hàng này chưa có thực đơn được công bố.",
+  "order.seat_for": "Ghế",
+  "order.seat_short": "Ghế {seat}",
   "order.send": "Gửi bếp",
   "order.send_count": "Gửi bếp · {count, plural, other {# món}}",
   "order.subtotal": "Tạm tính",
