@@ -28,6 +28,13 @@ export interface LineResponse {
   state: string;
 }
 
+// How many a line should now be. A quantity and no money: the edge holds the unit price the device
+// captured when the line was added and extends the line itself, so a till cannot quote a total that
+// does not follow from the price it showed.
+export interface QuantityRequest {
+  quantity: Quantity;
+}
+
 export interface FireRequest {
   station_id: string;
 }

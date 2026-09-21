@@ -118,6 +118,10 @@ async function openShift(page) {
 // floor, which is where signing in leaves the device.
 const PRECONDITIONS = {
   "Add an item to an open order": seatTable,
+  "Change how many of a line": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);

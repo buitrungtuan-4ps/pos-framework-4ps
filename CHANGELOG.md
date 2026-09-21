@@ -16,6 +16,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **A line says how many, and two taps change it.** The till could only ever add *one* of a thing —
+  `quantity: { milli: 1000 }`, hard-coded, with a comment at the call site admitting it was the only
+  quantity on offer — so an order for three beers was three taps and three rows on the ticket.
+  - `POST /api/lines/{id}/quantity` emits `sales.order_line.updated`, an event `pos-proto` has
+    carried with exactly this shape since the schema was written and which **nothing had ever
+    emitted**.
+  - **The request carries a quantity and no money.** The projection now keeps the `unit_price` the
+    device captured at add time — `sales.order_line.added` always carried it and the fold was
+    dropping it — so the edge extends the line itself rather than being told what it comes to. A
+    guest cannot be charged a total that does not follow from the price they were quoted, and
+    today's menu is never consulted, because a line never re-reads the live menu (§14.2).
+  - **A fired line refuses.** The new `amend` trigger is a self-transition on the two editable
+    states only, so the refusal comes from the state machine rather than from a permission: there is
+    no PIN that makes it legal, because the food exists and stock moved against the old number.
+    Changing your mind after sending is a void and a fresh line. `docs/state-machines.md` shows the
+    new column.
+  - **Zero is refused at the door**, as a malformed request rather than a domain refusal. Taking a
+    line off an order is a **void** — its own event, its own reason code, and a manager once the
+    kitchen has seen it — and a quantity of zero must not become a quieter way to perform one. The
+    minus control stops at one for the same reason.
+  - **Upgrade note.** None. The route is additive and the event was already published.
+
 ### Security
 
 - **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.

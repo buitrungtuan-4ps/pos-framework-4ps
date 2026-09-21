@@ -23,12 +23,12 @@ state's wire token, or `·` when the trigger is not valid in that state.
 
 ### `order_line`
 
-| state | hold | resume | fire | void |
-|---|---|---|---|---|
-| `ORDER_LINE_STATE_ADDED` | `ORDER_LINE_STATE_HELD` | · | `ORDER_LINE_STATE_FIRED` | `ORDER_LINE_STATE_VOIDED` |
-| `ORDER_LINE_STATE_HELD` | · | `ORDER_LINE_STATE_ADDED` | `ORDER_LINE_STATE_FIRED` | `ORDER_LINE_STATE_VOIDED` |
-| `ORDER_LINE_STATE_FIRED` | · | · | · | `ORDER_LINE_STATE_VOIDED` |
-| `ORDER_LINE_STATE_VOIDED` *(terminal)* | · | · | · | · |
+| state | hold | resume | fire | void | amend |
+|---|---|---|---|---|---|
+| `ORDER_LINE_STATE_ADDED` | `ORDER_LINE_STATE_HELD` | · | `ORDER_LINE_STATE_FIRED` | `ORDER_LINE_STATE_VOIDED` | `ORDER_LINE_STATE_ADDED` |
+| `ORDER_LINE_STATE_HELD` | · | `ORDER_LINE_STATE_ADDED` | `ORDER_LINE_STATE_FIRED` | `ORDER_LINE_STATE_VOIDED` | `ORDER_LINE_STATE_HELD` |
+| `ORDER_LINE_STATE_FIRED` | · | · | · | `ORDER_LINE_STATE_VOIDED` | · |
+| `ORDER_LINE_STATE_VOIDED` *(terminal)* | · | · | · | · | · |
 
 ### `bill`
 

@@ -332,6 +332,23 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // A quantity somebody changed — on this device or another one. Folded for the same reason a
+    // void is: two servers on one table must not disagree about how many, and the running total on
+    // the order screen is derived from these lines.
+    case "sales.order_line.updated": {
+      const lineId = str(payload, "order_line_id");
+      const quantity = record(payload["quantity"]);
+      const lineTotal = asMoney(payload["line_total"]);
+      if (lineId !== null && state.lines[lineId] !== undefined) {
+        if (quantity !== null && typeof quantity["milli"] === "number") {
+          setState("lines", lineId, "quantityMilli", quantity["milli"]);
+        }
+        if (lineTotal !== null) {
+          setState("lines", lineId, "lineTotal", lineTotal);
+        }
+      }
+      break;
+    }
     // A void, from whichever device performed it (ADR-0115). Folded rather than only applied
     // locally, so a second till showing the same table stops offering to fire a line a colleague
     // has just cancelled — and so the kitchen board drops it, since `firedLines` keys on the state
@@ -723,6 +740,23 @@ export async function fireOrder(tableId: string): Promise<void> {
         if (held !== undefined) {
           held.state = line.state;
         }
+      }
+    }),
+  );
+}
+
+// Changes how many of a line, while the kitchen has not been told about it.
+//
+// Sends a quantity and no money: the edge holds the unit price captured when the line was added and
+// extends the line itself, so this cannot quote the guest a total that does not follow from the
+// price on the menu they were shown.
+export async function setQuantity(lineId: string, quantityMilli: number): Promise<void> {
+  const line = await api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } });
+  setState(
+    produce((draft) => {
+      const held = draft.lines[line.order_line_id];
+      if (held !== undefined) {
+        held.state = line.state;
       }
     }),
   );

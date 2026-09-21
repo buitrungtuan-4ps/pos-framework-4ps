@@ -43,6 +43,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {
+    task: "Change how many of a line",
+    budget: 2,
+    note: "One tap on the line's own stepper. Declared on the **+** button: both controls call the same action, and the map names an action rather than an element, so declaring the pair would measure the same tap twice. Minus is the same single tap and is deliberately disabled at one — zero is not a smaller order, it is a void, which carries a reason and a manager once the kitchen has the ticket.",
+    steps: [{ route: "/table/:id", action: "setQuantity" }],
+    outcome: { route: "/table/:id", mark: "line-quantity" },
+  },
+  {
     task: "Fire the open lines to the kitchen",
     budget: 2,
     note: "The send button is fixed on the order screen and shows the unsent count. This note described a button that did not exist: the screen carried a Send on every row, so this task really cost one tap per line and the gate could not see it — a declaration naming an action is satisfied by any element calling it, however many of them there are. One button now sends the whole order in one transaction, which is what makes the two honest.",
