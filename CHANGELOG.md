@@ -18,6 +18,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A bill can be discounted.** `billing.discount.applied` has been defined in `pos-proto`, with
+  exactly this shape, since the schema was written, and `billing::assemble` has taken a
+  `bill_discount` and allocated it across tax classes for just as long. **Nothing ever emitted the
+  event** and the edge passed `Money::zero` in, so the allocation ran on every bill and could only
+  ever produce the same answer. `POST /api/bills/{id}/discount` emits it, and the pay screen has a
+  panel for it.
+  - **An unpublished ceiling is zero, not unlimited.** `billing.discount.apply` is granted to a
+    **server** and is not PIN-flagged — its own description is "apply a discount up to the role's
+    configured ceiling" — and no store publishes a ceiling: nothing in the cloud authors one and no
+    config node carries one. Read as "no limit", this would have handed every server an unbounded
+    till. Read as zero, a discount needs `billing.discount.override_ceiling` and a manager's PIN
+    until a store says otherwise, and the day a ceiling is published a small discount starts going
+    through with **no code change**.
+  - **`security.permission.overridden` finally carries `exceeded_by`.** The field has been `None` at
+    every call site, with a comment on the void path saying a void is not an amount over a ceiling.
+    A discount over one is that case.
+  - **The reductions may not take a bill below nothing**, and the *sum* is what is checked — two
+    discounts that are each legal can be illegal together, and only the total can say so.
+  - `BillTrigger::Reduce` is a self-transition on `OPEN` only, so a settled or voided bill is
+    refused by the machine rather than by a permission: there is no PIN that makes it legal, because
+    taking money back after payment is a refund (ADR-0028).
+  - **Upgrade note.** None. The route is additive, the event was already published, and a store that
+    applies no discount behaves exactly as before.
+
+### Fixed
+
+- **The running check ignored discounts.** `check_totals` read the *order*, which knows nothing
+  about a reduction, so a till would have quoted a guest full price while the settle charged the
+  discounted one. It goes through the bill when there is one now, and `GET /api/tables/{id}/check`
+  carries `discount_total` and `comp_total` so the screen can show why the figure moved.
+
+### Added
+
 - **The order screen can be searched.** A box above the item grid filters the menu as an operator
   types, and one tap on a match sells it (#367).
   - It matches **both** names an item has: the price book's `display_name`, and the caption the

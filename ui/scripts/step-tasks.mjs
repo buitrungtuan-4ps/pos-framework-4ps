@@ -149,6 +149,19 @@ export const TASKS = [
       "the same missing moment as the fired-line void above — the manager's badge and PIN are typed between the second and third taps, and the harness types only before the first",
   },
   {
+    task: "Take money off a bill",
+    budget: 3,
+    note: "Three, at §6's ceiling for a rare action: open the bill, take money off, cite a reason. The amount and the manager's badge are **typed**, and typing is not a tap — the same accounting the shift float and the void's PIN get. The manager is not this screen's choice: `billing.discount.apply` is granted to a server and carries no PIN flag, but no store publishes the ceiling that permission's own description refers to, so the edge reads it as zero and answers `403` naming the override. When a ceiling is published a small discount will go through without one, and this flow will not have grown or lost a tap either way.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "askDiscount" },
+      { route: "/table/:id/pay", action: "discountReason" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "bill-discounted" },
+    unreplayable:
+      "the same missing moment as the two voids above — the amount and the manager's badge and PIN go into fields that exist only once the panel is open, and the harness types only in a precondition, before the first tap",
+  },
+  {
     task: "Bump a ticket on the kitchen display",
     budget: 1,
     note: "A tap anywhere on the card. One, not two: the kitchen has both hands full.",

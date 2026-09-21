@@ -344,6 +344,7 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Charge a counter (takeaway) order in cash",
       "Charge a counter order by card",
       "Charge a counter order in cash, taking a tip",
+      "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",
     ].sort(),
