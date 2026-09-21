@@ -132,5 +132,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0123](0123-a-superseded-box-opens-nothing-new.md) | A superseded box opens nothing new, and finishes everything it holds | Accepted |
 | [0124](0124-a-store-that-can-be-restored.md) | A store that can be restored: the shop seals its own archive | Accepted |
 | [0125](0125-a-release-is-one-decision-many-writes.md) | A release is one decision and many writes: nodes × stores, scheduled in each store's own clock | Accepted |
+| [0127](0127-modifier-groups-reach-the-edge.md) | Modifier groups reach the edge: the compiled book carries the rule, and the edge enforces it | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
