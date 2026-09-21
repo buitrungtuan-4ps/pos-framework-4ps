@@ -349,6 +349,8 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/catalog/item-subcategories",
     "/admin/catalog/item-subcategories/{item_subcategory_id}",
     "/admin/catalog/items",
+    "/admin/catalog/courses",
+    "/admin/catalog/courses/{course_id}",
     "/admin/catalog/items/{menu_item_id}",
     "/admin/catalog/layout-buttons",
     "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",

@@ -39,7 +39,7 @@ use pos_cloud::auth::rate_limit::SlidingRateLimiter;
 use pos_cloud::auth::totp::{DIGITS, TotpSecret, code_at};
 use pos_cloud::campaigns::{CampaignStore, CampaignStoreError};
 use pos_cloud::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, DisplayCategory, DisplaySubcategory,
+    CatalogItem, CatalogStore, CatalogStoreError, Course, DisplayCategory, DisplaySubcategory,
     ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu, MenuId,
     MenuPlacement, MenuSection, ModifierGroup, TaxClass,
 };
@@ -10243,6 +10243,7 @@ struct FakeCatalog {
     display_subcategories: Arc<Mutex<Vec<Versioned<DisplaySubcategory>>>>,
     layout_buttons: Arc<Mutex<Vec<Versioned<LayoutButton>>>>,
     modifier_groups: Arc<Mutex<Vec<Versioned<ModifierGroup>>>>,
+    courses: Arc<Mutex<Vec<Versioned<Course>>>>,
     menus: Arc<Mutex<Vec<Versioned<Menu>>>>,
     menu_sections: Arc<Mutex<Vec<Versioned<MenuSection>>>>,
     placements: Arc<Mutex<Vec<Versioned<MenuPlacement>>>>,
@@ -10737,6 +10738,53 @@ impl CatalogStore for FakeCatalog {
             }
         }
         Ok(UpdateOutcome::NotFound)
+    }
+
+    async fn create_course(&self, course: &Course) -> Result<Version, CatalogStoreError> {
+        let version = self.mint();
+        self.courses
+            .lock()
+            .expect("lock")
+            .push(Versioned::new(course.clone(), version.clone()));
+        Ok(version)
+    }
+
+    async fn list_courses(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<Course>>, CatalogStoreError> {
+        // Sorted as the real store sorts it: the order is the entity's meaning, and a fake that
+        // handed courses back in insertion order would let a test pass here and fail on Postgres.
+        let mut rows: Vec<Versioned<Course>> = self
+            .courses
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.record.tenant_id == tenant_id)
+            .cloned()
+            .collect();
+        rows.sort_by_key(|row| (row.record.sort, row.record.course_id));
+        Ok(rows)
+    }
+
+    async fn update_course(
+        &self,
+        course: &Course,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        let version = self.mint();
+        let mut rows = self.courses.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.record.course_id == course.course_id && row.record.tenant_id == course.tenant_id
+        }) else {
+            return Ok(UpdateOutcome::NotFound);
+        };
+        if &row.etag != expected {
+            return Ok(UpdateOutcome::VersionMismatch);
+        }
+        row.record = course.clone();
+        row.etag = version.clone();
+        Ok(UpdateOutcome::Updated(version))
     }
 
     async fn create_menu(&self, menu: &Menu) -> Result<Version, CatalogStoreError> {
@@ -14329,6 +14377,99 @@ async fn catalog_display_taxonomy_and_layout_buttons_round_trip() {
         .await
         .expect("route list layout buttons again");
     assert_eq!(json_body(empty).await.as_array().expect("array").len(), 0);
+}
+
+/// A course can be created, listed **in service order**, renamed, moved and archived
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+///
+/// Every `course_id` in the tree pointed at nothing before this: `sales.order_line.added` carried
+/// one, a station routing rule matched on one and the edge honoured it, and there was no entity to
+/// name. The listing order is asserted because the order *is* the meaning — starter before main
+/// before dessert — and a course list handed back in insertion order is a taxonomy rather than a
+/// service sequence.
+#[tokio::test]
+async fn catalog_courses_round_trip_and_list_in_service_order() {
+    let router = catalog_app(provisioned_admin(), FakeCatalog::default());
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+
+    // Created out of order on purpose: the sequence has to come from `sort`, not from the order
+    // somebody happened to type them in.
+    let mut ids = Vec::new();
+    for (name, sort) in [("Dessert", 30), ("Starter", 10), ("Main", 20)] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/catalog/courses",
+                &serde_json::json!({ "tenant_id": tenant, "name": name, "sort": sort }),
+                &cookie,
+            ))
+            .await
+            .expect("route create course");
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let body = json_body(created).await;
+        assert_eq!(body["name"], name);
+        assert_eq!(body["sort"], sort);
+        ids.push((
+            body["course_id"].as_str().expect("a course id").to_owned(),
+            body["etag"].as_str().expect("an etag").to_owned(),
+        ));
+    }
+
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/catalog/courses?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route list courses");
+    let rows = json_body(listed).await;
+    let rows = rows.as_array().expect("array");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["name"].as_str().expect("a name"))
+            .collect::<Vec<_>>(),
+        vec!["Starter", "Main", "Dessert"],
+        "the list is the service sequence, not the order they were typed in"
+    );
+
+    // A course moves and archives in one PATCH. A store that serves dessert before the main course
+    // for a tasting menu says so this way; nothing here privileges a particular sequence.
+    let (dessert_id, dessert_etag) = &ids[0];
+    let updated = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/catalog/courses/{dessert_id}"),
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": "Pudding",
+                "sort": 5,
+                "status": "archived",
+            }),
+            &cookie,
+            dessert_etag,
+        ))
+        .await
+        .expect("route update course");
+    assert_eq!(updated.status(), StatusCode::OK);
+    let updated = json_body(updated).await;
+    assert_eq!(updated["name"], "Pudding");
+    assert_eq!(updated["sort"], 5);
+    assert_eq!(updated["status"], "archived");
+
+    // A nameless course is refused: a course with no name is a position nobody can pick.
+    let nameless = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/courses",
+            &serde_json::json!({ "tenant_id": tenant, "name": "   ", "sort": 0 }),
+            &cookie,
+        ))
+        .await
+        .expect("route create nameless course");
+    assert_eq!(nameless.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

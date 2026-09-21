@@ -191,6 +191,7 @@ mod tests {
             tax_class_id: TaxClassId::new(ulid(2)),
             item_category_id: Some(ItemCategoryId::new(ulid(3))),
             item_subcategory_id: None,
+            course_id: None,
             image_ref: None,
             status: EntityStatus::Active,
         };
@@ -217,6 +218,7 @@ mod tests {
             tax_class_id: TaxClassId::new(ulid(2)),
             item_category_id: None,
             item_subcategory_id: None,
+            course_id: None,
             image_ref: None,
             status: EntityStatus::Archived,
         };

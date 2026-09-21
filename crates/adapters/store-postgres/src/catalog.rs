@@ -38,6 +38,9 @@ pub struct CatalogItemRow {
     pub item_category_id: Option<String>,
     /// The operational sub-category id (a ULID string), or `None`.
     pub item_subcategory_id: Option<String>,
+    /// The course this item goes out on (a ULID string), or `None` for an item on no course
+    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    pub course_id: Option<String>,
     /// The item's image (a media id ULID string), or `None` (ADR-0075).
     pub image_ref: Option<String>,
     /// `active` or `archived`.
@@ -205,9 +208,28 @@ pub struct PostgresCatalog {
     pool: Pool,
 }
 
+/// A course as listed — identity, name, its place in the service sequence, and status
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+#[derive(Clone, Debug)]
+pub struct CatalogCourseRow {
+    /// The course id (a ULID string).
+    pub course_id: String,
+    /// The owning tenant.
+    pub tenant_id: String,
+    /// The human name (`Starter`, `Main`, `Dessert`).
+    pub name: String,
+    /// Where it falls in the service sequence, ascending.
+    pub sort: i32,
+    /// `active` or `archived`.
+    pub status: String,
+    /// The version the row was read at, for a conditional write (ADR-0094). Opaque.
+    pub version: String,
+}
+
 /// The columns both item reads return, in a stable order matching [`catalog_item_row`].
 const CATALOG_ITEM_COLUMNS: &str = "menu_item_id, tenant_id, name, name_translations::text, \
-     tax_class_id, item_category_id, item_subcategory_id, image_ref, status, xmin::text";
+     tax_class_id, item_category_id, item_subcategory_id, course_id, image_ref, status, \
+     xmin::text";
 
 /// A field the item master can be ordered by, as store-postgres knows it.
 ///
@@ -290,6 +312,7 @@ impl PostgresCatalog {
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
+        course_id: Option<&str>,
         image_ref: Option<&str>,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
@@ -297,8 +320,8 @@ impl PostgresCatalog {
             .query_one(
                 "INSERT INTO catalog_items \
                  (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
-                 item_subcategory_id, image_ref) \
-                 VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8) \
+                 item_subcategory_id, course_id, image_ref) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9) \
                  RETURNING xmin::text",
                 &[
                     &menu_item_id,
@@ -308,6 +331,7 @@ impl PostgresCatalog {
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,
+                    &course_id,
                     &image_ref,
                 ],
             )
@@ -411,6 +435,7 @@ impl PostgresCatalog {
         tax_class_id: &str,
         item_category_id: Option<&str>,
         item_subcategory_id: Option<&str>,
+        course_id: Option<&str>,
         image_ref: Option<&str>,
         status: &str,
         expected: &str,
@@ -420,9 +445,9 @@ impl PostgresCatalog {
             .query_opt(
                 "UPDATE catalog_items SET name = $3, name_translations = $4::text::jsonb, \
                  tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, \
-                 image_ref = $8, status = $9, updated_at = now() \
+                 course_id = $8, image_ref = $9, status = $10, updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2 \
-                 AND xmin::text = $10 RETURNING xmin::text",
+                 AND xmin::text = $11 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &menu_item_id,
@@ -431,6 +456,7 @@ impl PostgresCatalog {
                     &tax_class_id,
                     &item_category_id,
                     &item_subcategory_id,
+                    &course_id,
                     &image_ref,
                     &status,
                     &expected,
@@ -1190,6 +1216,105 @@ impl PostgresCatalog {
         Ok(row.get(0))
     }
 
+    /// Inserts a course ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn insert_course(
+        &self,
+        course_id: &str,
+        tenant_id: &str,
+        name: &str,
+        sort: i32,
+    ) -> Result<String, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_one(
+                "INSERT INTO catalog_courses (course_id, tenant_id, name, sort) \
+                 VALUES ($1, $2, $3, $4) \
+                 RETURNING xmin::text",
+                &[&course_id, &tenant_id, &name, &sort],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.get(0))
+    }
+
+    /// Lists a tenant's courses **in service order**, ties broken by id.
+    ///
+    /// Ordered here rather than by the caller because the order is the entity's meaning: a course
+    /// list is a sequence, and handing one back in insertion order would make every reader sort it
+    /// again or, worse, not.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_courses(&self, tenant_id: &str) -> Result<Vec<CatalogCourseRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT course_id, tenant_id, name, sort, status, xmin::text \
+                 FROM catalog_courses WHERE tenant_id = $1 ORDER BY sort ASC, course_id ASC",
+                &[&tenant_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| CatalogCourseRow {
+                course_id: row.get(0),
+                tenant_id: row.get(1),
+                name: row.get(2),
+                sort: row.get(3),
+                status: row.get(4),
+                version: row.get(5),
+            })
+            .collect())
+    }
+
+    /// Renames a course, sets its position and/or its status. Applies only at `expected`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_course(
+        &self,
+        tenant_id: &str,
+        course_id: &str,
+        name: &str,
+        sort: i32,
+        status: &str,
+        expected: &str,
+    ) -> Result<RowUpdate, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let updated = connection
+            .query_opt(
+                "UPDATE catalog_courses \
+                 SET name = $3, sort = $4, status = $5, updated_at = now() \
+                 WHERE tenant_id = $1 AND course_id = $2 \
+                 AND xmin::text = $6 RETURNING xmin::text",
+                &[&tenant_id, &course_id, &name, &sort, &status, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        if let Some(row) = updated {
+            return Ok(RowUpdate::Updated(row.get(0)));
+        }
+        let present = connection
+            .query_opt(
+                "SELECT 1 FROM catalog_courses WHERE tenant_id = $1 AND course_id = $2",
+                &[&tenant_id, &course_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(if present.is_some() {
+            RowUpdate::VersionMismatch
+        } else {
+            RowUpdate::NotFound
+        })
+    }
+
     /// Lists a tenant's modifier groups, newest first.
     ///
     /// # Errors
@@ -1664,9 +1789,10 @@ fn catalog_item_row(row: &tokio_postgres::Row) -> CatalogItemRow {
         tax_class_id: row.get(4),
         item_category_id: row.get(5),
         item_subcategory_id: row.get(6),
-        image_ref: row.get(7),
-        status: row.get(8),
-        version: row.get(9),
+        course_id: row.get(7),
+        image_ref: row.get(8),
+        status: row.get(9),
+        version: row.get(10),
     }
 }
 

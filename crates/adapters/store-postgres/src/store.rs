@@ -239,6 +239,11 @@ const MIGRATION_0064: &str = include_str!("../migrations/0064_releases.sql");
 /// only reading available. This column is what lets a tenant say otherwise.
 const MIGRATION_0065: &str = include_str!("../migrations/0065_role_discount_ceiling.sql");
 
+/// The course entity every `course_id` in the tree already pointed at, and the column that lets an
+/// item declare which course it is on
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+const MIGRATION_0066: &str = include_str!("../migrations/0066_catalog_courses.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -557,6 +562,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0065)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0066)
             .await
             .map_err(unavailable)
     }
