@@ -27,6 +27,9 @@ export interface OrderLine {
   quantityMilli: number;
   lineTotal: Money;
   state: string;
+  // Whose dish it is, when the store assigns seats. Absent means the table, which is every line on
+  // a store that does not do seats and every line nobody assigned on one that does.
+  seat?: number;
 }
 
 export interface TableCard {
@@ -90,6 +93,13 @@ interface StoreShape {
   // `null` for either means "the price book has not loaded yet"; for `acceptedTender` a loaded
   // `null` means the store restricts nothing, which is why the accessor below distinguishes them.
   tipsEnabled: boolean;
+  // Whether the store assigns items to seats, from `GET /api/menu`. False until the read lands, so
+  // a till that has not synced offers no picker rather than offering one the edge would refuse.
+  seatsEnabled: boolean;
+  // The seat the next items go to, per table. Absent means "the table", which is every line on
+  // every store that does not do seats — and the honest default even on one that does, because a
+  // server who has not said whose dish it is has not said.
+  seatForTable: Record<string, number>;
   acceptedTender: string[] | null;
   // The notes this store's guests carry, from `GET /api/locale` (ADR-0105). `null` means the locale
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
@@ -142,6 +152,8 @@ const [state, setState] = createStore<StoreShape>({
   // Closed until the edge says otherwise: a till that offers a tip the store does not take is worse
   // than one that waits a moment for the price book.
   tipsEnabled: false,
+  seatsEnabled: false,
+  seatForTable: {},
   acceptedTender: null,
   cashDenominations: null,
   reasonCodes: [],
@@ -436,7 +448,16 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
   if (orderLineId === null || orderId === null || name === null || lineTotal === null) {
     return null;
   }
-  return { orderLineId, orderId, name, quantityMilli: milli, lineTotal, state: "ORDER_LINE_STATE_ADDED" };
+  const seat = payload["seat"];
+  return {
+    orderLineId,
+    orderId,
+    name,
+    quantityMilli: milli,
+    lineTotal,
+    state: "ORDER_LINE_STATE_ADDED",
+    seat: typeof seat === "number" ? seat : undefined,
+  };
 }
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.
@@ -516,6 +537,10 @@ export async function addItem(tableId: string, item: MenuItemResponse): Promise<
     line_total: item.unit_price,
     tax_class_id: item.tax_class_id,
     tax_rate: item.tax_rate,
+    // Whose dish it is, when the store assigns seats and a server has said. Left off otherwise —
+    // the edge refuses a seat on a store with the capability off, so sending one unasked would turn
+    // every add into a refusal on the stores that make up most of them.
+    seat: state.seatsEnabled ? state.seatForTable[tableId] : undefined,
     note_present: false,
   };
   const response = await api.addLine(tableId, line);
@@ -530,6 +555,7 @@ export async function addItem(tableId: string, item: MenuItemResponse): Promise<
         quantityMilli: 1000,
         lineTotal: item.unit_price,
         state: response.state,
+        seat: line.seat,
       };
     }),
   );
@@ -560,6 +586,22 @@ export function storeCurrency(): string {
 // `Capability::Tips`, and the settled event records the amount. None of it could ever fire, because
 // the till had no tip entry at all — so `tip_amount` was zero on every payment a real store took.
 // This is the gate that field is behind.
+// Which seat the next items on this table go to, or `undefined` for the table itself.
+export function seatFor(tableId: string): number | undefined {
+  return state.seatForTable[tableId];
+}
+
+// Chooses the seat the next items go to. Tapping the seat already chosen clears it, so "back to the
+// table" is the same control rather than a second one — and a server who has not decided whose dish
+// it is can say so.
+export function chooseSeat(tableId: string, seat: number): void {
+  setState("seatForTable", tableId, state.seatForTable[tableId] === seat ? undefined! : seat);
+}
+
+export function seatsEnabled(): boolean {
+  return state.seatsEnabled;
+}
+
 export function tipsEnabled(): boolean {
   return state.tipsEnabled;
 }
@@ -583,6 +625,7 @@ export async function loadMenu(): Promise<void> {
     setState("menu", response.items);
     setState("currency", response.currency);
     setState("tipsEnabled", response.tips_enabled);
+    setState("seatsEnabled", response.seats_enabled);
     setState("acceptedTender", response.accepted_tender);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.

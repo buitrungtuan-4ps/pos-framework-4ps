@@ -74,6 +74,8 @@
   "order.menu": "Menu",
   "order.menu_empty": "No menu published for this store yet.",
   "order.more": "One more {item}",
+  "order.seat_for": "Seat",
+  "order.seat_short": "Seat {seat}",
   "order.send": "Send to kitchen",
   "order.send_count": "Send to kitchen · {count, plural, one {# item} other {# items}}",
   "order.subtotal": "Subtotal",

@@ -137,6 +137,10 @@ export interface MenuResponse {
   // false: the edge refuses a tip on such a store, and offering the guest something that will be
   // refused is worse than not offering it.
   tips_enabled: boolean;
+  // Whether this store assigns items to seats (§10 `Capability::Seats`). Off by default — most
+  // counters have no seats — and the edge refuses a seat on a store that has it off, so the till
+  // offers the picker only when this is true rather than offering an act that would be refused.
+  seats_enabled: boolean;
   // The payment methods this store accepts, as their wire names, or `null` when nothing is
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.

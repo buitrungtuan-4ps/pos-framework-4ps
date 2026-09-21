@@ -122,6 +122,7 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  "Order an item for a particular seat": seatTable,
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);
