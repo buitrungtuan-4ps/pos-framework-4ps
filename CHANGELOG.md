@@ -18,6 +18,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **[ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) — a course is something the
+  catalog names.** A decision record, no behaviour change. A course is built end to end and the thing
+  itself does not exist: `CourseId` is a wire id, `sales.order_line.added` carries one,
+  `POST /api/tables/{id}/lines` accepts one, `pos_proto::floor::RoutingRule` matches on one and the
+  edge honours it, `Capability::Courses` gates a fire-by-course and `decide_line` refuses it when the
+  capability is off — with a test. **Nothing creates, names, orders, lists or publishes a course.**
+  Every `course_id` in the tree is a foreign key to a table that is not there, which is sharpest in
+  the cloud's own admin API: a routing rule keyed on a course is accepted after checking only that it
+  does not also name an item, published to a store, honoured there, and matches nothing for ever. The
+  record decides the entity, its `sort` (which is the whole meaning of the grouping), that the *item*
+  declares its course rather than the server, that it rides the `menu` node additively, and that a
+  routing rule's course must exist. Fire rounds, a course-level hold and per-course pacing are named
+  as out of scope rather than omitted.
+
 - **The till reads the store profile.** `docs/ui-ux.md` §3 has promised since P6 that *"the store
   profile decides the starting screen and flow — same components, different assembly, not three
   applications"*, and §10's capability model has carried the profiles all along: a counter preset, a
