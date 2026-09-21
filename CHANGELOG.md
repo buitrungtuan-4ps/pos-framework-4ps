@@ -130,6 +130,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ship. The skip disappears when `png` follows onto 0.9.
 
 - **Optimized menu item lookups in Inventory authoring screen.** Memoized menu items into an $O(1)$ lookup Map using `createMemo` in `dashboard/src/screens/Inventory.tsx`, eliminating repeated $O(N)$ linear scans per recipe row.
+- **Improve keyboard focus visibility and ARIA label in pos-edge-ui's StatusBar.** Added explicit `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` rings to interactive links and buttons, and a dynamic `aria-label` to the theme toggle button in `ui/src/components/StatusBar.tsx`.
 - **Improve focus visibility on overlay close/dismiss buttons.** Added `focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent` and `rounded-token` styling to close buttons in `ToastHost`, `Modal`, and `Drawer` components for better keyboard accessibility in `dashboard/src/components/`.
 
 ### Added
