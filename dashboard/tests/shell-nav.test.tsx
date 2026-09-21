@@ -272,4 +272,13 @@ describe("the breadcrumb", () => {
     await waitFor(() => expect(whoami).toHaveBeenCalled());
     expect(crumbs()).toEqual(["Admins"]);
   });
+
+  it("marks the last item in the breadcrumb with aria-current='page'", async () => {
+    mountShell("/t/" + TENANT + "/store-settings");
+    await waitFor(() => expect(whoami).toHaveBeenCalled());
+    const nav = screen.getByLabelText("Breadcrumb");
+    const currentPageItem = nav.querySelector("[aria-current='page']");
+    expect(currentPageItem).not.toBeNull();
+    expect(currentPageItem?.textContent).toBe("Store settings");
+  });
 });
