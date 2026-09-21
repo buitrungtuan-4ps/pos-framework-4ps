@@ -22,7 +22,7 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::{BillId, OrderId, ReasonCodeId, TableId};
+use pos_proto::ids::{BillId, OrderId, OrderLineId, ReasonCodeId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
@@ -413,6 +413,93 @@ where
             comp_total: totals.comp_total,
             tax_total: totals.tax_total,
             total_due: totals.total_due,
+        })
+        .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// The parts a split proposes, each the order lines one new bill will cover.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SplitRequest {
+    parts: Vec<Vec<OrderLineId>>,
+}
+
+/// The bills a split produced, in the order the parts were given.
+#[derive(Debug, Serialize)]
+pub(crate) struct SplitResponse {
+    bill_ids: Vec<String>,
+}
+
+/// `POST /api/bills/{id}/split` — partition a bill's lines into two or more bills
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+///
+/// No manager and no PIN, unlike the void beside it: a split partitions amounts that are already
+/// captured and creates, forgives and moves nothing (decision 6). Everything that can refuse it is
+/// the domain's — the bill must be open, and the parts must be a partition of what it covers.
+pub(crate) async fn split<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<SplitRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    match edge.split_bill(actor, bill_id, request.parts).await {
+        Ok(bill_ids) => Json(SplitResponse {
+            bill_ids: bill_ids.iter().map(ToString::to_string).collect(),
+        })
+        .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// The bills a merge folds into the target.
+#[derive(Debug, Deserialize)]
+pub(crate) struct MergeRequest {
+    absorbed_bill_ids: Vec<BillId>,
+}
+
+/// The surviving bill and everything it now covers.
+#[derive(Debug, Serialize)]
+pub(crate) struct MergeResponse {
+    bill_id: String,
+}
+
+/// `POST /api/bills/{id}/merge` — fold other bills into this one, which survives
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+///
+/// The path names the **target**: it is the bill the cashier is standing in front of, and it keeps
+/// its identity. Every absorbed bill must be open and on the same table, which is a floor
+/// restriction rather than a model one — settling moves a table, and a bill over two tables makes
+/// "which table moved?" a question with two answers.
+pub(crate) async fn merge<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    Json(request): Json<MergeRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    if request.absorbed_bill_ids.is_empty() {
+        // Merging nothing in is not a merge; it is the bill it already was. Malformed rather than
+        // refused by the domain, in the same class as a path segment that is not a ULID.
+        return bad_request("a merge names at least one bill to fold in");
+    }
+    match edge
+        .merge_bills(actor, bill_id, request.absorbed_bill_ids)
+        .await
+    {
+        Ok(bill_id) => Json(MergeResponse {
+            bill_id: bill_id.to_string(),
         })
         .into_response(),
         Err(error) => error_response(&error),

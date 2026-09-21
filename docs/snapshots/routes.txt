@@ -19,7 +19,9 @@ GET /api/tables/{id}
 GET /api/tables/{id}/check
 POST /api/activate
 POST /api/bills/{id}/discount
+POST /api/bills/{id}/merge
 POST /api/bills/{id}/settle
+POST /api/bills/{id}/split
 POST /api/bills/{id}/void
 POST /api/kds/bump
 POST /api/lines/{id}/fire

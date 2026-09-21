@@ -18,6 +18,41 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A bill splits and merges** ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)).
+  `billing.bill.split` and `billing.bill.merged` were defined in `pos-proto`, with their exact
+  shapes, since the schema was written, and **nothing ever emitted either**. A table of six who
+  wanted to pay separately was six tables opened as a workaround, or one bill and arithmetic done on
+  paper beside the till.
+  - **A bill covers lines, not an order.** This is the change everything else rests on: what a bill
+    owed used to be assembled from *every* line of its order, so two bills on one order would each
+    have owed all of it and there was nothing to partition. `billing.bill.opened` now carries
+    `order_line_ids` — additive, `#[serde(default)]`, and a bill opened before it still means "every
+    unvoided line on the order", which is what it always meant.
+  - **`BillState` gains terminal `SPLIT` and `MERGED`**, additive with the zero value untouched and
+    **no `PROTOCOL_VERSION` bump** (ADR-0024). Two values rather than one `CLOSED`, because *"where
+    did this bill go?"* is answered by a split's parts and by a merge's target, and one value would
+    make two answers into one. Terminal is what stops the same food being charged twice, and it sits
+    in the machine beside `SETTLED`'s refusal rather than in projection bookkeeping next to it.
+  - **A split is a partition, and the domain checks it is one**: at least two parts, none empty,
+    every line in exactly one, and no line the bill does not cover. Each fault is named separately
+    because each says something different to whoever has to fix it — a stale screen is not bad
+    arithmetic.
+  - **Each part computes its own tax and rounding**, so the parts' totals can differ from the
+    source's by the cash rounding on each. That is the correct answer rather than a discrepancy: the
+    source's total was quoted and never charged.
+  - **Neither act carries a permission or a PIN.** A void forgives money and a discount reduces it;
+    a split partitions amounts already captured and a merge concatenates them, so nothing is created,
+    forgiven or moved out of the store. A prompt here would be paid for on every table, every
+    service, for an act that cannot lose money.
+  - **A merge is restricted to one table** — a floor restriction, not a model one: settling moves a
+    table, and a bill over two tables makes "which table moved?" a question with two answers.
+  - Two routes added, none removed: `POST /api/bills/{id}/split` and `POST /api/bills/{id}/merge`.
+  - **Splitting evenly into N is deliberately not this.** It is probably what most people mean by
+    the phrase, and it cannot be expressed as a partition of lines at all — four equal shares of a
+    seven-line bill correspond to no grouping of those seven lines. Until it has its own record it is
+    several payments against one bill, which settling already supports. The **split-by-seat** button
+    is a partition the screen can compute from the seat each line now carries, and is the screen's.
+
 - **[ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) — a course is something the
   catalog names.** A decision record, no behaviour change. A course is built end to end and the thing
   itself does not exist: `CourseId` is a wire id, `sales.order_line.added` carries one,

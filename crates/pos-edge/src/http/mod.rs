@@ -321,6 +321,10 @@ where
         .route("/api/lines/{id}/void", post(lines::void::<S>))
         .route("/api/bills/{id}/void", post(bills::void::<S>))
         .route("/api/bills/{id}/discount", post(bills::discount::<S>))
+        // Split and merge (ADR-0128). Neither carries a permission or a PIN: both move amounts
+        // that are already captured, and a prompt here would be paid for on every table.
+        .route("/api/bills/{id}/split", post(bills::split::<S>))
+        .route("/api/bills/{id}/merge", post(bills::merge::<S>))
         // The cash shift: open, blind count, close.
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
@@ -417,6 +421,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnknownOrder
         | AppError::BillAlreadyOpen
         | AppError::UnknownBill
+        | AppError::BillsOnDifferentTables
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen
         | AppError::AwaitingStaffConfirmation

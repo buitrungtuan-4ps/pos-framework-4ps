@@ -77,6 +77,14 @@ wire_enum! {
     Settled = "SETTLED",
     /// Voided after settlement, which requires a manager and a reason.
     Voided = "VOIDED",
+    /// Partitioned into two or more bills, which now owe what this one did
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). Terminal: the parts are
+    /// where the money is, and undoing a split is a fresh merge rather than a restoration.
+    Split = "SPLIT",
+    /// Folded into another bill, which now owes what this one did. Terminal, and deliberately not
+    /// the same value as [`Self::Split`]: *"where did this bill go?"* is answered by a split's parts
+    /// and by a merge's target, and one value would make two answers into one.
+    Merged = "MERGED",
 }
 
 wire_enum! {

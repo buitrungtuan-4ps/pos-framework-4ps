@@ -292,10 +292,22 @@ triggers! {
         /// two states, where there is no arm at all — a settled bill is not discounted, it is
         /// refunded, and a voided one is owed nothing to reduce.
         Reduce => "reduce",
+        /// Partition the bill's lines into two or more new bills
+        /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+        ///
+        /// A move, not a self-transition: the source stops owing anything and the parts owe it
+        /// instead, and `Split` being terminal is what stops the same food being charged twice.
+        Split => "split",
+        /// Fold this bill into another, which takes its lines.
+        ///
+        /// On the **absorbed** bill, which is the one that moves; the target stays `Open` and is not
+        /// stepped, because it is the bill the cashier is standing in front of and it has not
+        /// changed state by gaining lines.
+        Merge => "merge",
     }
 }
 
-/// The lifecycle of a bill: `Open`, then terminal `Settled` or `Voided`.
+/// The lifecycle of a bill: `Open`, then terminal `Settled`, `Voided`, `Split` or `Merged`.
 ///
 /// Distinct from [`Order`]: one order may split across several bills, and several orders may merge
 /// into one. `Settled` being terminal is what makes `bill:settle` a one-time transition
@@ -325,12 +337,17 @@ impl StateMachine for Bill {
             (BillState::Open, BillTrigger::Settle) => BillState::Settled,
             (BillState::Open, BillTrigger::Void) => BillState::Voided,
             (BillState::Open, BillTrigger::Reduce) => BillState::Open,
+            (BillState::Open, BillTrigger::Split) => BillState::Split,
+            (BillState::Open, BillTrigger::Merge) => BillState::Merged,
             _ => return None,
         })
     }
 
     fn is_terminal(state: BillState) -> bool {
-        matches!(state, BillState::Settled | BillState::Voided)
+        matches!(
+            state,
+            BillState::Settled | BillState::Voided | BillState::Split | BillState::Merged
+        )
     }
 
     fn rank(state: BillState) -> u8 {
@@ -338,6 +355,8 @@ impl StateMachine for Bill {
             BillState::Open => 0,
             BillState::Settled => 1,
             BillState::Voided => 2,
+            BillState::Split => 3,
+            BillState::Merged => 4,
             BillState::Unspecified => u8::MAX,
         }
     }
