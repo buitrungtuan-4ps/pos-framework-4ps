@@ -40,6 +40,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A NAT64 local-use address could still smuggle a forbidden IPv4 past the webhook SSRF filter.**
+  The `64:ff9b:1::/48` branch added in #362 read its embedded address from segment 4 whole, but
+  RFC 6052 §2.2 splits a /48 prefix's embedded IPv4 around the reserved `u` octet at bits 64-71 —
+  the address is bits 48-63 and 72-87. `64:ff9b:1:c000:2:500:808:808` embeds the documentation
+  address `192.0.2.5` and was classified as public. The extraction now follows the RFC, and the test
+  covering it uses a range that needs the *late* bytes to decide (`192.0.2.0/24`), because a wrong
+  reading of bytes 2 and 3 usually lands in the same forbidden /8 as the right one and hides the
+  bug. **Upgrade note:** none.
+
+### Security
+
 - **Referrer-Policy header on pos-edge UI assets.** Added `Referrer-Policy: no-referrer` response header when serving static UI assets on `pos-edge` (`crates/pos-edge/src/http/assets.rs`) to prevent sensitive referrer information from leaking to external origins when external resources or links are loaded from the UI.
 
 ### Changed
