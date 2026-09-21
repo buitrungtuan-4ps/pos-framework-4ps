@@ -382,6 +382,11 @@ pub struct RoleTemplateRow {
     pub permissions_json: String,
     /// `active` or `archived`.
     pub status: String,
+    /// How much this role may discount without a manager, in the currency's minor unit, or `None`
+    /// when the tenant has configured no ceiling. `None` and `Some(0)` both mean no discount goes
+    /// through today; they are kept apart because the first is an absence and the second is a
+    /// policy, and a console that could not tell them apart would have to invent a number.
+    pub discount_ceiling_minor: Option<i64>,
     /// The version the row was read at, for a conditional write
     /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
@@ -389,7 +394,8 @@ pub struct RoleTemplateRow {
 }
 
 /// The role-template columns a read returns; `permissions` is read as its `jsonb` text.
-const ROLE_TEMPLATE_COLUMNS: &str = "id, tenant_id, name, permissions::text, status, xmin::text";
+const ROLE_TEMPLATE_COLUMNS: &str =
+    "id, tenant_id, name, permissions::text, status, discount_ceiling_minor, xmin::text";
 
 /// An assignment as listed — identity plus the three ids it binds.
 #[derive(Clone, Debug)]
@@ -456,14 +462,15 @@ impl PostgresPeople {
         tenant_id: &str,
         name: &str,
         permissions_json: &str,
+        discount_ceiling_minor: Option<i64>,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_one(
-                "INSERT INTO role_templates (id, tenant_id, name, permissions) \
-                 VALUES ($1, $2, $3, $4::text::jsonb) \
+                "INSERT INTO role_templates (id, tenant_id, name, permissions, discount_ceiling_minor) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5) \
                  RETURNING xmin::text",
-                &[&id, &tenant_id, &name, &permissions_json],
+                &[&id, &tenant_id, &name, &permissions_json, &discount_ceiling_minor],
             )
             .await
             .map_err(unavailable)?;
@@ -529,21 +536,24 @@ impl PostgresPeople {
         name: &str,
         permissions_json: &str,
         status: &str,
+        discount_ceiling_minor: Option<i64>,
         expected: &str,
     ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let updated = connection
             .query_opt(
                 "UPDATE role_templates \
-                 SET name = $3, permissions = $4::text::jsonb, status = $5, updated_at = now() \
+                 SET name = $3, permissions = $4::text::jsonb, status = $5, \
+                     discount_ceiling_minor = $6, updated_at = now() \
                  WHERE tenant_id = $1 AND id = $2 \
-                 AND xmin::text = $6 RETURNING xmin::text",
+                 AND xmin::text = $7 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &id,
                     &name,
                     &permissions_json,
                     &status,
+                    &discount_ceiling_minor,
                     &expected,
                 ],
             )
@@ -667,7 +677,8 @@ fn role_template_row(row: &tokio_postgres::Row) -> RoleTemplateRow {
         name: row.get(2),
         permissions_json: row.get(3),
         status: row.get(4),
-        version: row.get(5),
+        discount_ceiling_minor: row.get(5),
+        version: row.get(6),
     }
 }
 

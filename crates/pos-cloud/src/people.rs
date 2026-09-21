@@ -401,6 +401,19 @@ pub struct RoleTemplate {
     pub name: String,
     /// The granted permission ids, each a `pos-core` catalogue id.
     pub permissions: Vec<String>,
+    /// How much this role may discount before it needs a manager, in the currency's minor unit.
+    ///
+    /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
+    /// description is *"apply a discount up to the role's configured ceiling"*, and until this field
+    /// existed there was nowhere to configure one. The edge reads an absent ceiling as **zero**
+    /// rather than as "no limit" — the safe direction — so a role that leaves this `None` keeps
+    /// today's behaviour exactly: every discount needs `billing.discount.override_ceiling` and a
+    /// manager's PIN.
+    ///
+    /// `None` and `Some(0)` land in the same place and are not the same statement. The first is an
+    /// absence; the second is a tenant saying this role discounts nothing. Never negative — the
+    /// column refuses it, and so does the route.
+    pub discount_ceiling_minor: Option<i64>,
     /// Active or archived.
     pub status: EntityStatus,
 }
@@ -416,6 +429,19 @@ pub struct NewRoleTemplate {
     pub name: String,
     /// The granted permission ids (validated against the catalogue by the caller).
     pub permissions: Vec<String>,
+    /// How much this role may discount before it needs a manager, in the currency's minor unit.
+    ///
+    /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
+    /// description is *"apply a discount up to the role's configured ceiling"*, and until this field
+    /// existed there was nowhere to configure one. The edge reads an absent ceiling as **zero**
+    /// rather than as "no limit" — the safe direction — so a role that leaves this `None` keeps
+    /// today's behaviour exactly: every discount needs `billing.discount.override_ceiling` and a
+    /// manager's PIN.
+    ///
+    /// `None` and `Some(0)` land in the same place and are not the same statement. The first is an
+    /// absence; the second is a tenant saying this role discounts nothing. Never negative — the
+    /// column refuses it, and so does the route.
+    pub discount_ceiling_minor: Option<i64>,
 }
 
 /// An update to a role template's name, permission set, and/or status.
@@ -429,6 +455,19 @@ pub struct RoleTemplateUpdate {
     pub name: String,
     /// The new permission set.
     pub permissions: Vec<String>,
+    /// How much this role may discount before it needs a manager, in the currency's minor unit.
+    ///
+    /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
+    /// description is *"apply a discount up to the role's configured ceiling"*, and until this field
+    /// existed there was nowhere to configure one. The edge reads an absent ceiling as **zero**
+    /// rather than as "no limit" — the safe direction — so a role that leaves this `None` keeps
+    /// today's behaviour exactly: every discount needs `billing.discount.override_ceiling` and a
+    /// manager's PIN.
+    ///
+    /// `None` and `Some(0)` land in the same place and are not the same statement. The first is an
+    /// absence; the second is a tenant saying this role discounts nothing. Never negative — the
+    /// column refuses it, and so does the route.
+    pub discount_ceiling_minor: Option<i64>,
     /// The new status (archiving retires the role without deleting it).
     pub status: EntityStatus,
 }

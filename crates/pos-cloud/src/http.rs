@@ -5334,6 +5334,11 @@ struct CreateRoleRequest {
     tenant_id: String,
     name: String,
     permissions: Vec<String>,
+    /// How much this role may discount before it needs a manager, in the currency's minor unit.
+    /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
+    /// discount then needs a manager, exactly as it does today.
+    #[serde(default)]
+    discount_ceiling_minor: Option<i64>,
 }
 
 /// Update a role template's name, permission set, and status.
@@ -5342,6 +5347,11 @@ struct UpdateRoleRequest {
     tenant_id: String,
     name: String,
     permissions: Vec<String>,
+    /// How much this role may discount before it needs a manager, in the currency's minor unit.
+    /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
+    /// discount then needs a manager, exactly as it does today.
+    #[serde(default)]
+    discount_ceiling_minor: Option<i64>,
     status: String,
 }
 
@@ -5975,6 +5985,16 @@ where
             &[("permissions", "INVALID_ENUM_VALUE")],
         );
     }
+    if request
+        .discount_ceiling_minor
+        .is_some_and(|minor| minor < 0)
+    {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "discount_ceiling_minor cannot be negative",
+            &[("discount_ceiling_minor", "OUT_OF_RANGE")],
+        );
+    }
     let Some(role_template_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoleTemplateId::new)
     else {
@@ -5985,6 +6005,7 @@ where
         tenant_id,
         name: request.name.clone(),
         permissions: request.permissions.clone(),
+        discount_ceiling_minor: request.discount_ceiling_minor,
     };
     match state.people.create(&new_role).await {
         Ok(version) => {
@@ -5992,6 +6013,7 @@ where
                 "id": role_template_id.to_string(),
                 "name": request.name,
                 "permissions": request.permissions,
+                "discount_ceiling_minor": request.discount_ceiling_minor,
             });
             audit_action(
                 &state.audit,
@@ -6066,11 +6088,22 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    if request
+        .discount_ceiling_minor
+        .is_some_and(|minor| minor < 0)
+    {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "discount_ceiling_minor cannot be negative",
+            &[("discount_ceiling_minor", "OUT_OF_RANGE")],
+        );
+    }
     let update = RoleTemplateUpdate {
         role_template_id,
         tenant_id,
         name: request.name.clone(),
         permissions: request.permissions.clone(),
+        discount_ceiling_minor: request.discount_ceiling_minor,
         status,
     };
     let expected = match if_match(&headers) {
@@ -6083,6 +6116,7 @@ where
                 "id": role_template_id.to_string(),
                 "name": request.name,
                 "permissions": request.permissions,
+                "discount_ceiling_minor": request.discount_ceiling_minor,
                 "status": status.as_str(),
             });
             audit_action(

@@ -140,6 +140,7 @@ fn session() -> EdgeSession {
             permissions: PermissionSet::EMPTY
                 .with(Permission::VoidFiredLine)
                 .with(Permission::VoidBill),
+            discount_ceiling: None,
             pin_phc: Some(hash_of(MANAGER_PIN)),
         },
     );

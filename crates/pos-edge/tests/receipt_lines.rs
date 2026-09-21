@@ -92,6 +92,7 @@ fn session_naming(named: &str) -> EdgeSession {
         StaffAuth {
             employee_id: Some(server().employee_id),
             permissions: PermissionSet::EMPTY.with(Permission::VoidFiredLine),
+            discount_ceiling: None,
             pin_phc: None,
         },
     );
