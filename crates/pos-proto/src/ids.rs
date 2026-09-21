@@ -143,6 +143,15 @@ resource_id! {
     MenuItemId
 }
 resource_id! {
+    /// A set of modifier choices with a min/max selection rule, attached to items
+    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md) entity 5,
+    /// [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    ///
+    /// The cloud has had its own `ModifierGroupId` since the catalog was authored; this is the same
+    /// identifier crossing into the compiled book, exactly as `MenuItemId` does.
+    ModifierGroupId
+}
+resource_id! {
     /// An ingredient held in stock.
     IngredientId
 }

@@ -63,8 +63,8 @@ use serde::Serialize;
 
 use pos_core::capability::Capability;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{MenuItemId, TaxClassId};
-use pos_proto::menu::MenuEntry;
+use pos_proto::ids::{MenuItemId, ModifierGroupId, TaxClassId};
+use pos_proto::menu::{MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::{SalesChannel, WireEnum as _, locale::TaxRateTable, text::DisplayName};
 
@@ -127,6 +127,12 @@ pub(crate) struct MenuResponse {
     /// restriction that happens to allow everything" — and so a method added to the enum later is
     /// accepted by an unrestricted store without a config change.
     accepted_tender: Option<Vec<&'static str>>,
+    /// Every modifier group any item above attaches, listed once
+    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    ///
+    /// Empty on a store that has published none, which is every store until the console attaches
+    /// one — and the till then asks nothing, exactly as it did before this field existed.
+    modifier_groups: Vec<ModifierGroupResponse>,
 }
 
 /// One sellable item, priced and taxed as this store sells it.
@@ -143,9 +149,34 @@ pub(crate) struct MenuItemResponse {
     /// The rate for that class on this channel, or `None` when the store's table has no row —
     /// a configuration error the till surfaces rather than papers over with zero.
     tax_rate: Option<Ratio>,
+    /// The modifier groups the till must ask about before this item is sold
+    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    ///
+    /// Ids, not copies: the groups themselves are listed once on the response below, because one
+    /// "Size" group attached to forty pizzas would otherwise be forty copies of the same rule on
+    /// every menu read.
+    modifier_group_ids: Vec<ModifierGroupId>,
     /// Whether the item can be sold right now. An item present but 86'd is shown and refused, not
     /// hidden, so staff can see why it cannot be ordered.
     available: bool,
+}
+
+/// One modifier group, as the till asks it.
+#[derive(Debug, Serialize)]
+pub(crate) struct ModifierGroupResponse {
+    /// The group's identifier, which an item above names.
+    modifier_group_id: ModifierGroupId,
+    /// The name to show, already in the store's display language — the same resolution the item's
+    /// own name gets ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    display_name: DisplayName,
+    /// How many choices a guest must make. **Zero means optional**; the till has no separate
+    /// `required` flag to disagree with this number, and neither does the book.
+    min_select: u16,
+    /// How many choices a guest may make at most.
+    max_select: u16,
+    /// The items offered as choices. Each is an ordinary item in `items` above, with its own price
+    /// — which is how a large pizza costs more than a small one without a second pricing concept.
+    member_menu_item_ids: Vec<MenuItemId>,
 }
 
 impl MenuItemResponse {
@@ -161,8 +192,22 @@ impl MenuItemResponse {
             tax_class_id: entry.tax_class_id,
             // An item whose class carries no rate cannot be quoted to a guest, so it is not
             // sellable however the catalogue flags it.
+            modifier_group_ids: entry.modifier_group_ids.clone(),
             available: entry.available && tax_rate.is_some(),
             tax_rate,
+        }
+    }
+}
+
+impl ModifierGroupResponse {
+    /// One published group, with its name resolved for the store's display language.
+    fn from_group(group: &MenuModifierGroup, locale: &str) -> Self {
+        Self {
+            modifier_group_id: group.modifier_group_id,
+            display_name: group.localized_name(locale).clone(),
+            min_select: group.min_select,
+            max_select: group.max_select,
+            member_menu_item_ids: group.member_menu_item_ids.clone(),
         }
     }
 }
@@ -174,6 +219,7 @@ where
 {
     let session = edge.session();
     let channel = session.sales_channel;
+    let language = session.display_language.clone().unwrap_or_default();
     let items = session
         .menu
         .items()
@@ -193,6 +239,14 @@ where
                 .accepted_tender
                 .as_ref()
                 .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
+            // The same resolution the reason-code and QR routes use: the store's language, or the
+            // empty string, which every `localized_name` treats as "no translation, use the base".
+            modifier_groups: session
+                .menu
+                .modifier_groups()
+                .iter()
+                .map(|group| ModifierGroupResponse::from_group(group, &language))
+                .collect(),
         }),
     )
         .into_response()
@@ -221,6 +275,7 @@ mod tests {
             display_name_translations: std::collections::BTreeMap::new(),
             unit_price: Money::new(CurrencyCode::VND, 150_000),
             tax_class_id: class(),
+            modifier_group_ids: Vec::new(),
             available,
         }
     }

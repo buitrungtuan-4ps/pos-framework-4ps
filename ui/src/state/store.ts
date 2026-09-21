@@ -12,9 +12,11 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  DiscountResponse,
   LineRequest,
   LayoutCategory,
   MenuItemResponse,
+  ModifierGroup,
   PaymentRequest,
   ReasonCodeEntry,
 } from "../api/types";
@@ -96,6 +98,10 @@ interface StoreShape {
   // Whether the store assigns items to seats, from `GET /api/menu`. False until the read lands, so
   // a till that has not synced offers no picker rather than offering one the edge would refuse.
   seatsEnabled: boolean;
+  // The store's modifier groups, from the same `GET /api/menu` read as the price book (ADR-0127).
+  // Empty until it lands and on every store that has published none, which is every store today —
+  // and the till then asks nothing, exactly as it did before the field existed.
+  modifierGroups: ModifierGroup[];
   // What kind of shop this is, from the same read. `docs/ui-ux.md` §3: the store profile decides the
   // starting screen and the flow — *"same components, different assembly, not three applications"*.
   //
@@ -163,6 +169,7 @@ const [state, setState] = createStore<StoreShape>({
   // than one that waits a moment for the price book.
   tipsEnabled: false,
   seatsEnabled: false,
+  modifierGroups: [],
   tablesEnabled: true,
   kdsEnabled: true,
   seatForTable: {},
@@ -356,6 +363,23 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // A quantity somebody changed — on this device or another one. Folded for the same reason a
+    // void is: two servers on one table must not disagree about how many, and the running total on
+    // the order screen is derived from these lines.
+    case "sales.order_line.updated": {
+      const lineId = str(payload, "order_line_id");
+      const quantity = record(payload["quantity"]);
+      const lineTotal = asMoney(payload["line_total"]);
+      if (lineId !== null && state.lines[lineId] !== undefined) {
+        if (quantity !== null && typeof quantity["milli"] === "number") {
+          setState("lines", lineId, "quantityMilli", quantity["milli"]);
+        }
+        if (lineTotal !== null) {
+          setState("lines", lineId, "lineTotal", lineTotal);
+        }
+      }
+      break;
+    }
     // A void, from whichever device performed it (ADR-0115). Folded rather than only applied
     // locally, so a second till showing the same table stops offering to fire a line a colleague
     // has just cancelled — and so the kitchen board drops it, since `firedLines` keys on the state
@@ -518,7 +542,33 @@ export async function clean(tableId: string): Promise<void> {
 // straight back rather than recomputed here: the price and the rate are what the store published and
 // what the guest was shown (roadmap-v3 E5). An item the edge reported unavailable is refused before
 // the round-trip — the button is disabled too, but the guard belongs with the action.
-export async function addItem(tableId: string, item: MenuItemResponse): Promise<void> {
+/// The groups this item attaches, in the order it names them (ADR-0127).
+///
+/// A group the item names and the store has not published is skipped rather than blocking the sale,
+/// the same way the compiled book's own `groups_for` skips it: a partial publish is a real state,
+/// and a till that stopped selling a pizza over a late-arriving "extra cheese" would be worse than
+/// one that asks a question fewer.
+export function groupsFor(item: MenuItemResponse): ModifierGroup[] {
+  return item.modifier_group_ids
+    .map((id) => state.modifierGroups.find((group) => group.modifier_group_id === id))
+    .filter((group): group is ModifierGroup => group !== undefined);
+}
+
+/// Whether `chosen` satisfies every group this item attaches — the same arithmetic the edge runs,
+/// so the till refuses before the round trip rather than after it. The edge is still the authority:
+/// this exists to keep a refusal off the screen, not to replace the check.
+export function modifiersSatisfied(item: MenuItemResponse, chosen: string[]): boolean {
+  return groupsFor(item).every((group) => {
+    const count = chosen.filter((id) => group.member_menu_item_ids.includes(id)).length;
+    return count >= group.min_select && count <= group.max_select;
+  });
+}
+
+export async function addItem(
+  tableId: string,
+  item: MenuItemResponse,
+  modifiers: string[] = [],
+): Promise<void> {
   if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
     throw new Error(`${item.display_name} is not sellable`);
   }
@@ -536,6 +586,9 @@ export async function addItem(tableId: string, item: MenuItemResponse): Promise<
     // the edge refuses a seat on a store with the capability off, so sending one unasked would turn
     // every add into a refusal on the stores that make up most of them.
     seat: state.seatsEnabled ? state.seatForTable[tableId] : undefined,
+    // The choices a guest made, which the edge validates against the published groups before it
+    // writes anything (ADR-0127 decision 5). Empty on every item that attaches none.
+    modifier_menu_item_ids: modifiers,
     note_present: false,
   };
   const response = await api.addLine(tableId, line);
@@ -631,6 +684,7 @@ export async function loadMenu(): Promise<void> {
     setState("currency", response.currency);
     setState("tipsEnabled", response.tips_enabled);
     setState("seatsEnabled", response.seats_enabled);
+    setState("modifierGroups", response.modifier_groups);
     setState("tablesEnabled", response.tables_enabled);
     setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
@@ -795,6 +849,23 @@ export async function fireOrder(tableId: string): Promise<void> {
   );
 }
 
+// Changes how many of a line, while the kitchen has not been told about it.
+//
+// Sends a quantity and no money: the edge holds the unit price captured when the line was added and
+// extends the line itself, so this cannot quote the guest a total that does not follow from the
+// price on the menu they were shown.
+export async function setQuantity(lineId: string, quantityMilli: number): Promise<void> {
+  const line = await api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } });
+  setState(
+    produce((draft) => {
+      const held = draft.lines[line.order_line_id];
+      if (held !== undefined) {
+        held.state = line.state;
+      }
+    }),
+  );
+}
+
 export async function fire(lineId: string): Promise<void> {
   // The edge derives the fired line's station from the published routing (ADR-0072); the station we
   // send is only the fallback it uses when the store has published no station plan yet.
@@ -826,6 +897,28 @@ export async function voidLine(
 //
 // The table goes back to occupied. The bill is gone but the order is not — the lines are still
 // there, and a cashier who voided the wrong bill can open another one on the same table.
+/// Takes money off a bill, and hands back what it now comes to.
+///
+/// The edge's own figures are returned rather than a bare acknowledgement, and the caller shows
+/// them: the till must never subtract a discount from a total itself, because the tax follows the
+/// reduced base and a second opinion about it is a second price for the same meal.
+///
+/// The approval is optional in the shape and required by the act today. No store publishes a
+/// discount ceiling, so the edge reads it as zero and every discount needs a manager — but the till
+/// sends the same request either way, and the edge answers when the manager is what is missing.
+export async function applyDiscount(
+  billId: string,
+  amount: Money,
+  reasonCodeId: string,
+  approval: ApproverRequest,
+): Promise<DiscountResponse> {
+  return api.discountBill(billId, {
+    amount,
+    reason_code_id: reasonCodeId,
+    ...approval,
+  });
+}
+
 export async function voidBill(
   billId: string,
   reasonCodeId: string,

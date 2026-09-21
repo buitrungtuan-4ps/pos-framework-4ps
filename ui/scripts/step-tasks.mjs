@@ -39,8 +39,26 @@ export const TASKS = [
     task: "Add an item to an open order",
     budget: 2,
     note: "The item grid is on the order screen, so an item is one tap. §6's headline case.",
-    steps: [{ route: "/table/:id", action: "addItem" }],
+    steps: [{ route: "/table/:id", action: "onItem" }],
     outcome: { route: "/table/:id", mark: "line-added" },
+  },
+  {
+    task: "Add an item that needs a choice",
+    budget: 3,
+    note: "An item the store attaches a modifier group to: tap it, choose, confirm. Three, and the ceiling for a *common* action is two — declared at three anyway, for the reason the tipped settle is declared at four. The choices are the point: a pizza sold without its size is priced wrong, and the edge refuses it (ADR-0127 decision 5), so there is no two-tap shape of this that is also correct. What the declaration does buy is the guarantee the common case did not move: an item attaching no group never opens the picker and still sells in the one tap \"Add an item\" declares — put the picker in front of every item and that task goes red, not this one.",
+    steps: [
+      { route: "/table/:id", action: "onItem" },
+      { route: "/table/:id", action: "chooseModifier" },
+      { route: "/table/:id", action: "confirmItem" },
+    ],
+    outcome: { route: "/table/:id", mark: "line-added" },
+  },
+  {
+    task: "Change how many of a line",
+    budget: 2,
+    note: "One tap on the line's own stepper. Declared on the **+** button: both controls call the same action, and the map names an action rather than an element, so declaring the pair would measure the same tap twice. Minus is the same single tap and is deliberately disabled at one — zero is not a smaller order, it is a void, which carries a reason and a manager once the kitchen has the ticket.",
+    steps: [{ route: "/table/:id", action: "setQuantity" }],
+    outcome: { route: "/table/:id", mark: "line-quantity" },
   },
   {
     task: "Order an item for a particular seat",
@@ -48,7 +66,7 @@ export const TASKS = [
     note: "Two, at the ceiling, and the second tap is the item itself — choosing the seat is the first. Declared as its own task rather than as a step inside \"Add an item\", for the reason the tipped settles are separate: a seat is *optional*, and folding it in would make the common flow read as two taps when it is one. The choice is sticky because a server orders a whole seat's worth at once; per-item it would cost a tap per dish. The control is absent entirely unless the store assigns seats, so on most stores this task does not exist.",
     steps: [
       { route: "/table/:id", action: "chooseSeat" },
-      { route: "/table/:id", action: "addItem" },
+      { route: "/table/:id", action: "onItem" },
     ],
     outcome: { route: "/table/:id", mark: "line-seat" },
   },
@@ -56,7 +74,7 @@ export const TASKS = [
     task: "Find an item by name and add it",
     budget: 2,
     note: "One tap, and the typing before it is not one — the same accounting the shift float and the manager's PIN get. That is the whole claim: a menu too long for the grid costs the flow nothing extra to sell from. Declared separately from \"Add an item\" although it taps the same control and ends the same way, because the claim is different and the harness proves it differently: the precondition types the query **and asserts the grid narrowed to one button**, so a search that stopped filtering fails here while the plain add stays green. Put search behind a button and this goes red twice over — the box the precondition fills would be gone, and the flow would have grown the tap this says it does not need.",
-    steps: [{ route: "/table/:id", action: "addItem" }],
+    steps: [{ route: "/table/:id", action: "onItem" }],
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {
@@ -147,6 +165,19 @@ export const TASKS = [
     outcome: { route: "/table/:id/pay", mark: "bill-voided" },
     unreplayable:
       "the same missing moment as the fired-line void above — the manager's badge and PIN are typed between the second and third taps, and the harness types only before the first",
+  },
+  {
+    task: "Take money off a bill",
+    budget: 3,
+    note: "Three, at §6's ceiling for a rare action: open the bill, take money off, cite a reason. The amount and the manager's badge are **typed**, and typing is not a tap — the same accounting the shift float and the void's PIN get. The manager is not this screen's choice: `billing.discount.apply` is granted to a server and carries no PIN flag, but no store publishes the ceiling that permission's own description refers to, so the edge reads it as zero and answers `403` naming the override. When a ceiling is published a small discount will go through without one, and this flow will not have grown or lost a tap either way.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "askDiscount" },
+      { route: "/table/:id/pay", action: "discountReason" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "bill-discounted" },
+    unreplayable:
+      "the same missing moment as the two voids above — the amount and the manager's badge and PIN go into fields that exist only once the panel is open, and the harness types only in a precondition, before the first tap",
   },
   {
     task: "Bump a ticket on the kitchen display",
