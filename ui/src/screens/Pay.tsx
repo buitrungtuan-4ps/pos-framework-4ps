@@ -6,6 +6,7 @@ import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "
 import { t, type MessageKey } from "../i18n";
 import { formatMoney, money, quickCashFor } from "../lib/money";
 import {
+  applyDiscount,
   cashDenominations,
   loadCheck,
   openBill,
@@ -21,6 +22,11 @@ import {
 // store can hold reasons for one and not the other — and the picker here offers only the entries
 // that declare this one.
 const VOID_BILL = "REASON_ACTION_VOID_BILL";
+
+// The action a discount cites. Its own action, like the void's: a store may publish "Goodwill" for
+// knocking money off and not for cancelling a bill, and the edge refuses a reason published for
+// the wrong one — so a picker that offered both would offer a refusal.
+const DISCOUNT = "REASON_ACTION_DISCOUNT";
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
 // and its change, an optional tip, or card for the exact amount. On settlement it shows the gapless
@@ -91,6 +97,13 @@ export function Pay() {
   const [voided, setVoided] = createSignal(false);
   const [approverCode, setApproverCode] = createSignal("");
   const [approverPin, setApproverPin] = createSignal("");
+  // Taking money off before it settles. The manager fields above are shared with the void, which is
+  // correct rather than lazy: only one of the two panels is ever open, and a cashier who typed a
+  // badge for one and then changed their mind should not type it again for the other.
+  const [discounting, setDiscounting] = createSignal(false);
+  // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
+  // than becoming a figure the screen then reformats under the operator's fingers.
+  const [discountText, setDiscountText] = createSignal("");
 
   onMount(() => {
     void loadCheck(params.id)
@@ -236,6 +249,57 @@ export function Pay() {
       );
   };
 
+  // Minor units, or null while what has been typed is not a number the till can send. Integer the
+  // whole way (ADR-0028): the field takes digits and nothing else, so there is no decimal to lose.
+  const discountAmount = () => {
+    const typed = discountText().trim();
+    if (typed === "" || !/^[0-9]+$/.test(typed)) {
+      return null;
+    }
+    const amount = Number(typed);
+    return amount > 0 ? amount : null;
+  };
+
+  // The reason buttons stay disabled until there is an amount and a manager, for the reason the
+  // void's are: a button that can only produce a refusal teaches an operator the till is unreliable.
+  const readyToDiscount = () =>
+    discountAmount() !== null && approverCode().trim() !== "" && approverPin() !== "";
+
+  const closeDiscount = () => {
+    setDiscounting(false);
+    setDiscountText("");
+    setApproverCode("");
+    setApproverPin("");
+  };
+
+  const askDiscount = () => {
+    setError(null);
+    setDiscounting(true);
+  };
+
+  // The second tap: apply it, citing this reason and the manager. The edge answers with the whole
+  // re-priced bill and the screen takes that figure — it never subtracts the discount itself,
+  // because the tax follows the reduced base and a second opinion about it is a second price.
+  const discountReason = (reasonCodeId: string) => {
+    const id = billId();
+    const amount = discountAmount();
+    if (id === null || amount === null) {
+      return;
+    }
+    setError(null);
+    void applyDiscount(id, money(currency(), amount), reasonCodeId, {
+      approver_code: approverCode().trim(),
+      approver_pin: approverPin(),
+    })
+      .then((totals) => {
+        setCheck(totals);
+        closeDiscount();
+      })
+      .catch((caught: unknown) =>
+        setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+      );
+  };
+
   // What the screen becomes once the bill is voided: no money was taken, and the order is still
   // sitting on the table to be charged again. The way back is the order, not the floor — a voided
   // bill usually means the cashier is about to open the right one.
@@ -266,7 +330,36 @@ export function Pay() {
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
             <Show when={check()} fallback={<p class="text-2xl font-semibold tabular-nums">{"—"}</p>}>
               {(totals) => (
-                <p class="text-2xl font-semibold tabular-nums">{formatMoney(totals().total_due)}</p>
+                <>
+                  {/* A reduced bill says so and by how much. A total that simply came out smaller
+                      than the food on the table is the kind of figure a guest queries and nobody
+                      at the till can explain. Shown only when there is one, because a row of
+                      zeroes on every bill is noise the eye learns to skip. */}
+                  <Show when={totals().discount_total.amount_minor > 0}>
+                    <p
+                      class="flex justify-between text-sm text-ink-muted"
+                      data-outcome="bill-discounted"
+                    >
+                      <span>{t("pay.discount_applied")}</span>
+                      <span class="tabular-nums">
+                        {"− "}
+                        {formatMoney(totals().discount_total)}
+                      </span>
+                    </p>
+                  </Show>
+                  <Show when={totals().comp_total.amount_minor > 0}>
+                    <p class="flex justify-between text-sm text-ink-muted">
+                      <span>{t("pay.comp_applied")}</span>
+                      <span class="tabular-nums">
+                        {"− "}
+                        {formatMoney(totals().comp_total)}
+                      </span>
+                    </p>
+                  </Show>
+                  <p class="text-2xl font-semibold tabular-nums">
+                    {formatMoney(totals().total_due)}
+                  </p>
+                </>
               )}
             </Show>
 
@@ -394,6 +487,92 @@ export function Pay() {
               keeps the void at the three taps §6 allows a rare action (pay, void, reason) rather
               than spending one on a request that could only come back `403`.
             */}
+            {/*
+              Taking money off (roadmap B2.2). Three taps from the order screen — pay, discount,
+              reason — which is §6's ceiling for a rare action and the same shape the bill void has.
+              The amount and the manager's badge are **typed**, and typing is not a tap, exactly as
+              the shift float and the void's PIN are not.
+
+              The manager is not this screen's rule. `billing.discount.apply` is granted to a server
+              and carries no PIN flag — but no store publishes the discount ceiling that permission's
+              own description refers to, so the edge reads the ceiling as zero and answers `403`
+              naming `billing.discount.override_ceiling`. The fields are here because that is the
+              answer today; when a store publishes a ceiling, a small discount will start going
+              through and this panel will not have to change.
+            */}
+            <Show
+              when={discounting()}
+              fallback={
+                <button
+                  type="button"
+                  class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+                  disabled={billId() === null || reasonsFor(DISCOUNT).length === 0}
+                  data-step="askDiscount"
+                  onClick={() => askDiscount()}
+                >
+                  {t("pay.discount")}
+                </button>
+              }
+            >
+              <div class="mt-6 rounded-token border border-line bg-surface p-3">
+                <h2 class="font-semibold">{t("pay.discount_title")}</h2>
+                <label class="mt-2 block text-sm">
+                  {t("pay.discount_amount")}
+                  <input
+                    id="discount-amount"
+                    type="text"
+                    inputmode="numeric"
+                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2 tabular-nums"
+                    value={discountText()}
+                    onInput={(event) => setDiscountText(event.currentTarget.value)}
+                  />
+                </label>
+                <p class="mt-2 text-sm text-ink-muted">{t("pay.discount_manager")}</p>
+                <label class="mt-2 block text-sm">
+                  {t("pay.approver_code")}
+                  <input
+                    type="text"
+                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                    value={approverCode()}
+                    onInput={(event) => setApproverCode(event.currentTarget.value)}
+                  />
+                </label>
+                <label class="mt-2 block text-sm">
+                  {t("pay.approver_pin")}
+                  <input
+                    type="password"
+                    inputmode="numeric"
+                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                    value={approverPin()}
+                    onInput={(event) => setApproverPin(event.currentTarget.value)}
+                  />
+                </label>
+                <p class="mt-3 text-sm text-ink-muted">{t("pay.discount_reason")}</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <For each={reasonsFor(DISCOUNT)}>
+                    {(reason) => (
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                        disabled={!readyToDiscount()}
+                        data-step="discountReason"
+                        onClick={() => discountReason(reason.reason_code_id)}
+                      >
+                        {reason.display_name}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                  onClick={() => closeDiscount()}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
+            </Show>
+
             <Show
               when={voidingBill()}
               fallback={

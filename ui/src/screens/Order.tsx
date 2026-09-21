@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { formatMoney } from "../lib/money";
+import { formatMoney, formatQuantity } from "../lib/money";
 import { matches } from "../lib/search";
 import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
@@ -15,6 +15,7 @@ import {
   fireOrder,
   floorTables,
   linesForTable,
+  setQuantity,
   loadCheck,
   openBill,
   reasonsFor,
@@ -328,6 +329,48 @@ export function Order() {
                 >
                   {line.name}
                 </span>
+                {/* How many, and the two taps that change it. Only while the line is still
+                    editable: once the kitchen has the ticket the number is settled, and the edge
+                    refuses an amend from its state machine rather than from a permission.
+
+                    Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
+                    no order — that is a void, which carries a reason and, after a fire, a manager.
+                    Letting the stepper walk into it would give that act a second, quieter spelling. */}
+                <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
+                  <span class="inline-flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="min-h-touch w-11 rounded-token border border-line text-lg text-ink disabled:opacity-40"
+                      disabled={line.quantityMilli <= 1000}
+                      aria-label={t("order.fewer", { item: line.name })}
+                      onClick={() =>
+                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli - 1000))
+                      }
+                    >
+                      {"−"}
+                    </button>
+                    <span class="w-8 text-center tabular-nums" data-outcome="line-quantity">
+                      {formatQuantity(line.quantityMilli)}
+                    </span>
+                    <button
+                      type="button"
+                      class="min-h-touch w-11 rounded-token border border-line text-lg text-ink"
+                      aria-label={t("order.more", { item: line.name })}
+                      data-step="setQuantity"
+                      onClick={() =>
+                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli + 1000))
+                      }
+                    >
+                      {"+"}
+                    </button>
+                  </span>
+                </Show>
+                {/* A line already with the kitchen shows its count without the controls. */}
+                <Show when={line.state !== "ORDER_LINE_STATE_ADDED" && line.quantityMilli !== 1000}>
+                  <span class="tabular-nums text-ink-muted">
+                    {formatQuantity(line.quantityMilli)}
+                  </span>
+                </Show>
                 {/* Which seat it was ordered for, on the line that carries it. A line with none is
                     the table's, and says nothing rather than saying "no seat". */}
                 <Show when={line.seat !== undefined}>

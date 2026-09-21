@@ -18,6 +18,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **[ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) — a course is something the
+  catalog names.** A decision record, no behaviour change. A course is built end to end and the thing
+  itself does not exist: `CourseId` is a wire id, `sales.order_line.added` carries one,
+  `POST /api/tables/{id}/lines` accepts one, `pos_proto::floor::RoutingRule` matches on one and the
+  edge honours it, `Capability::Courses` gates a fire-by-course and `decide_line` refuses it when the
+  capability is off — with a test. **Nothing creates, names, orders, lists or publishes a course.**
+  Every `course_id` in the tree is a foreign key to a table that is not there, which is sharpest in
+  the cloud's own admin API: a routing rule keyed on a course is accepted after checking only that it
+  does not also name an item, published to a store, honoured there, and matches nothing for ever. The
+  record decides the entity, its `sort` (which is the whole meaning of the grouping), that the *item*
+  declares its course rather than the server, that it rides the `menu` node additively, and that a
+  routing rule's course must exist. Fire rounds, a course-level hold and per-course pacing are named
+  as out of scope rather than omitted.
+- **A bill can be discounted.** `billing.discount.applied` has been defined in `pos-proto`, with
+  exactly this shape, since the schema was written, and `billing::assemble` has taken a
+  `bill_discount` and allocated it across tax classes for just as long. **Nothing ever emitted the
+  event** and the edge passed `Money::zero` in, so the allocation ran on every bill and could only
+  ever produce the same answer. `POST /api/bills/{id}/discount` emits it, and the pay screen has a
+  panel for it.
+  - **An unpublished ceiling is zero, not unlimited.** `billing.discount.apply` is granted to a
+    **server** and is not PIN-flagged — its own description is "apply a discount up to the role's
+    configured ceiling" — and no store publishes a ceiling: nothing in the cloud authors one and no
+    config node carries one. Read as "no limit", this would have handed every server an unbounded
+    till. Read as zero, a discount needs `billing.discount.override_ceiling` and a manager's PIN
+    until a store says otherwise, and the day a ceiling is published a small discount starts going
+    through with **no code change**.
+  - **`security.permission.overridden` finally carries `exceeded_by`.** The field has been `None` at
+    every call site, with a comment on the void path saying a void is not an amount over a ceiling.
+    A discount over one is that case.
+  - **The reductions may not take a bill below nothing**, and the *sum* is what is checked — two
+    discounts that are each legal can be illegal together, and only the total can say so.
+  - `BillTrigger::Reduce` is a self-transition on `OPEN` only, so a settled or voided bill is
+    refused by the machine rather than by a permission: there is no PIN that makes it legal, because
+    taking money back after payment is a refund (ADR-0028).
+  - **Upgrade note.** None. The route is additive, the event was already published, and a store that
+    applies no discount behaves exactly as before.
 - **A pizza knows its sizes.** A modifier is already an ordinary catalog item with its own price and
   its own recipe, and a **modifier group** is already a min/max selection rule attached to items
   (ADR-0066 entities 4 and 5). The console has authored both for as long as the catalog has existed,
@@ -78,6 +114,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The running check ignored discounts.** `check_totals` read the *order*, which knows nothing
+  about a reduction, so a till would have quoted a guest full price while the settle charged the
+  discounted one. It goes through the bill when there is one now, and `GET /api/tables/{id}/check`
+  carries `discount_total` and `comp_total` so the screen can show why the figure moved.
+
 - **Every screen on the till scrolled sideways on a phone, and the navigation was a 20 px target on
   all of them.** `docs/ui-ux.md` §1 principle 9 has named four device classes since P6 and the
   screens adapted on Tailwind's stock `sm`/`lg`/`xl`; principle 2 asks for 48 px targets and
@@ -97,8 +138,60 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
     claims. Reverting the status bar turns all three red, naming the element that sticks out.
 
+### Changed
+
+- **ADR-0128 records how a bill splits and merges**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)). `billing.bill.split` and
+  `billing.bill.merged` have been defined in `pos-proto` since the schema was written and **nothing
+  has ever emitted either**, because two structural things were missing: a bill has no lines (it
+  bills a whole order, and the amount owed is assembled by reading every line of that order), and a
+  bill whose lines have moved has nowhere to go (`BillState` is `OPEN`, `SETTLED`, `VOIDED`). The
+  record decides that a bill covers a **set of order lines**, that `BillState` gains the terminal
+  values `SPLIT` and `MERGED` (additive, no `PROTOCOL_VERSION` bump), that a split is a **partition**
+  the domain checks rather than a carve-off, that each resulting bill computes its own tax and
+  rounding rather than being allocated a share of the source's, that a merge keeps the target's
+  identity, and that **neither act needs a permission or a manager** — a split partitions money
+  already captured and a merge concatenates it, so nothing is created or forgiven. Splitting evenly
+  by N is explicitly **not** this and is left to its own record, with the reason: four equal shares
+  of a seven-line bill correspond to no grouping of those seven lines. Amended after review to
+  answer whether a bill stays traceable through split → merge → split: **`billing.bill.opened`
+  gains `order_line_ids`** (additive), because without it the log recorded which *bills* a split
+  produced and never which *lines* went where — so the property the split event states about
+  itself could not be checked from the store's own log, and a store replaying it could not
+  rebuild which bill owed what. The record now also states that the lineage is acyclic by
+  construction, that a split commits atomically, that undoing one is a new merge rather than a
+  restoration, and that no receipt number is consumed by either act. Two gaps are named rather
+  than implied: the event log is append-only but **not chained** (no sequence, no hash of the
+  previous record), which the strictest cash-register regimes require and which needs its own
+  record; and `order_line_ids` grows with the order. No code yet.
+  **Upgrade note:** none — a decision record.
+
+- **The ADR index had stopped being updated.** `docs/adr/README.md` listed records up to 0125 while
+  0126 was merged; its row is added here alongside 0128's.
+
 ### Added
 
+- **A line says how many, and two taps change it.** The till could only ever add *one* of a thing —
+  `quantity: { milli: 1000 }`, hard-coded, with a comment at the call site admitting it was the only
+  quantity on offer — so an order for three beers was three taps and three rows on the ticket.
+  - `POST /api/lines/{id}/quantity` emits `sales.order_line.updated`, an event `pos-proto` has
+    carried with exactly this shape since the schema was written and which **nothing had ever
+    emitted**.
+  - **The request carries a quantity and no money.** The projection now keeps the `unit_price` the
+    device captured at add time — `sales.order_line.added` always carried it and the fold was
+    dropping it — so the edge extends the line itself rather than being told what it comes to. A
+    guest cannot be charged a total that does not follow from the price they were quoted, and
+    today's menu is never consulted, because a line never re-reads the live menu (§14.2).
+  - **A fired line refuses.** The new `amend` trigger is a self-transition on the two editable
+    states only, so the refusal comes from the state machine rather than from a permission: there is
+    no PIN that makes it legal, because the food exists and stock moved against the old number.
+    Changing your mind after sending is a void and a fresh line. `docs/state-machines.md` shows the
+    new column.
+  - **Zero is refused at the door**, as a malformed request rather than a domain refusal. Taking a
+    line off an order is a **void** — its own event, its own reason code, and a manager once the
+    kitchen has seen it — and a quantity of zero must not become a quieter way to perform one. The
+    minus control stops at one for the same reason.
+  - **Upgrade note.** None. The route is additive and the event was already published.
 - **The order screen can be searched.** A box above the item grid filters the menu as an operator
   types, and one tap on a match sells it (#367).
   - It matches **both** names an item has: the price book's `display_name`, and the caption the
