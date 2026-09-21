@@ -79,6 +79,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `ui/tests/replay.spec.mjs` loads every screen at each of the three widths and asserts both
     claims. Reverting the status bar turns all three red, naming the element that sticks out.
 
+### Changed
+
+- **ADR-0128 records how a bill splits and merges**
+  ([ADR-0128](docs/adr/0128-a-bill-splits-and-merges.md)). `billing.bill.split` and
+  `billing.bill.merged` have been defined in `pos-proto` since the schema was written and **nothing
+  has ever emitted either**, because two structural things were missing: a bill has no lines (it
+  bills a whole order, and the amount owed is assembled by reading every line of that order), and a
+  bill whose lines have moved has nowhere to go (`BillState` is `OPEN`, `SETTLED`, `VOIDED`). The
+  record decides that a bill covers a **set of order lines**, that `BillState` gains the terminal
+  values `SPLIT` and `MERGED` (additive, no `PROTOCOL_VERSION` bump), that a split is a **partition**
+  the domain checks rather than a carve-off, that each resulting bill computes its own tax and
+  rounding rather than being allocated a share of the source's, that a merge keeps the target's
+  identity, and that **neither act needs a permission or a manager** — a split partitions money
+  already captured and a merge concatenates it, so nothing is created or forgiven. Splitting evenly
+  by N is explicitly **not** this and is left to its own record, with the reason: four equal shares
+  of a seven-line bill correspond to no grouping of those seven lines. Amended after review to
+  answer whether a bill stays traceable through split → merge → split: **`billing.bill.opened`
+  gains `order_line_ids`** (additive), because without it the log recorded which *bills* a split
+  produced and never which *lines* went where — so the property the split event states about
+  itself could not be checked from the store's own log, and a store replaying it could not
+  rebuild which bill owed what. The record now also states that the lineage is acyclic by
+  construction, that a split commits atomically, that undoing one is a new merge rather than a
+  restoration, and that no receipt number is consumed by either act. Two gaps are named rather
+  than implied: the event log is append-only but **not chained** (no sequence, no hash of the
+  previous record), which the strictest cash-register regimes require and which needs its own
+  record; and `order_line_ids` grows with the order. No code yet.
+  **Upgrade note:** none — a decision record.
+
+- **The ADR index had stopped being updated.** `docs/adr/README.md` listed records up to 0125 while
+  0126 was merged; its row is added here alongside 0128's.
+
 ### Added
 
 - **The order screen can be searched.** A box above the item grid filters the menu as an operator
