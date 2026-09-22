@@ -297,7 +297,9 @@ export function Order() {
 
   return (
     <section class="grid gap-4 p-4 terminal:grid-cols-[1fr_20rem]">
-      <div>
+      {/* `min-w-0` on both grid items, or neither can shrink below its content and the column runs
+          wider than a phone: a grid item's `min-width` is `auto`, not `0`. */}
+      <div class="min-w-0">
         <div class="mb-3 flex items-center gap-3">
           <a href="/" class="text-sm text-ink-muted no-underline">
             {t("common.back_floor")}
@@ -330,7 +332,7 @@ export function Order() {
                 {/* A voided line stays on the order, struck through. Removing the row would make a
                     mis-tapped void invisible to the person who made it — the guest is not charged
                     either way, and seeing what was cancelled is how the mistake gets noticed. */}
-                <span class="flex flex-1 flex-col">
+                <span class="flex min-w-0 flex-1 flex-col">
                   <span classList={{ "line-through text-ink-muted": voided(line) }}>
                     {line.name}
                   </span>
@@ -738,7 +740,7 @@ export function Order() {
         </div>
       </div>
 
-      <aside>
+      <aside class="min-w-0">
         <h2 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
         {/*
           The box that makes a long menu usable. `type="search"` rather than `text` so the browser

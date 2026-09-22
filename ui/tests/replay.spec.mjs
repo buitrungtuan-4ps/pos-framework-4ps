@@ -525,23 +525,69 @@ for (const device of DEVICE_CLASSES) {
 
         const overflow = await page.evaluate(() => {
           const root = document.documentElement;
-          if (root.scrollWidth <= root.clientWidth + 1) {
-            return null;
-          }
           // Name the widest thing that sticks out, so the failure says what to fix rather than
           // that something, somewhere, is too wide.
-          let worst = null;
-          for (const element of document.querySelectorAll("*")) {
-            const box = element.getBoundingClientRect();
-            if (box.width > 0 && box.right > root.clientWidth + 1 && (worst === null || box.right > worst.right)) {
-              worst = { right: Math.round(box.right), tag: element.tagName.toLowerCase(), classes: String(element.className).slice(0, 70) };
+          const widest = (limit) => {
+            let worst = null;
+            for (const element of document.querySelectorAll("*")) {
+              const box = element.getBoundingClientRect();
+              if (box.width > 0 && box.right > limit + 1 && (worst === null || box.right > worst.right)) {
+                worst = { right: Math.round(box.right), tag: element.tagName.toLowerCase(), classes: String(element.className).slice(0, 70) };
+              }
             }
+            return worst;
+          };
+
+          if (root.scrollWidth > root.clientWidth + 1) {
+            return { kind: "document", page: root.scrollWidth, viewport: root.clientWidth, worst: widest(root.clientWidth) };
           }
-          return { page: root.scrollWidth, viewport: root.clientWidth, worst };
+
+          // The document not scrolling sideways is not the same as nothing being cut off, and for a
+          // year it was the only thing asked. A box whose `overflow` is not `visible` on either axis
+          // computes to `auto` on the other, so `overflow-y-auto` quietly makes an element a
+          // *horizontal* scroller too — its content then overflows **inside it**, the document stays
+          // exactly the viewport's width, and this gate saw nothing.
+          //
+          // That is not theoretical: the order screen ran 55px wider than a phone this way. The
+          // content was reachable only by scrolling a container with no scrollbar and no affordance,
+          // and one ordinary tap auto-scrolled it, cutting "← Floor", "Subtotal" and "Tax" off the
+          // left with nothing to say they were there.
+          // An author who writes `overflow-x-auto` asked for a horizontal scroller and gets one: the
+          // placed floor plan is a room you pan around. What this catches is the container that
+          // became one *without being asked*.
+          const askedToScroll = /(^|\s)(overflow-x-auto|overflow-x-scroll|overflow-auto|overflow-scroll)(\s|$)/;
+          for (const element of document.querySelectorAll("*")) {
+            if (element.scrollWidth <= element.clientWidth + 1) {
+              continue;
+            }
+            const style = getComputedStyle(element);
+            if (style.overflowX === "visible") {
+              continue;
+            }
+            // The `sr-only` pattern is a 1px box with hidden overflow. Its content always overflows,
+            // by design, and none of it is on screen to be cut off.
+            if (element.clientWidth <= 1 || element.clientHeight <= 1) {
+              continue;
+            }
+            if (askedToScroll.test(String(element.className))) {
+              continue;
+            }
+            return {
+              kind: "container",
+              tag: element.tagName.toLowerCase(),
+              classes: String(element.className).slice(0, 70),
+              content: element.scrollWidth,
+              box: element.clientWidth,
+              hiddenPx: element.scrollWidth - element.clientWidth,
+              overflowX: style.overflowX,
+              worst: widest(element.clientWidth),
+            };
+          }
+          return null;
         });
         expect(
           overflow,
-          `${path} scrolls sideways on a ${device.name}: ${JSON.stringify(overflow)}`,
+          `${path} is cut off sideways on a ${device.name}: ${JSON.stringify(overflow)}`,
         ).toBeNull();
       }
 
