@@ -145,3 +145,15 @@ store-scoped screen editing that store's own published value.
 **What this costs.** The result is close to the option the record rejected, and saying so is the
 point of an amendment rather than a quiet rewrite: the console is simpler than ADR-0136 planned, and
 the one place a store's own marks appear in it is the field that edits that store's own settings.
+
+**And it needs no code.** The console already draws every figure with the reader's locale —
+`separators()` in `dashboard/src/lib/format.ts` reads `locale()`, and every money surface goes
+through it: `formatAmount` on StoreHub, Reports and Menus, and `MoneyField`, which Menus alone uses.
+The one exception this amendment carves out turns out not to be a money figure at all: store
+settings edits the cash-rounding increment as a plain text field holding the raw minor-unit integer,
+beside the denominations it holds as a comma-joined list, so there is no formatting to change.
+
+So ADR-0136's four surfaces are three. The receipt and the till each needed a change and got one;
+the console needed a **decision**, and the decision is that what it already does is right. That is
+worth writing down precisely because the alternative — a fourth pull request that touches nothing —
+would have looked like the plan being followed.
