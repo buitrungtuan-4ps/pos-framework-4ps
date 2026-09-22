@@ -18,6 +18,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store publishes its chain head — the anchor**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The half a hash chain cannot do
+  alone: a chain verifies happily after its tail is cut off, and after an edit whose later links
+  were re-derived, because the algorithm is in the source. What a store **cannot** do is rewrite
+  what the cloud has already received.
+  - New event `store.chain.anchored`, published at shift close — a reconciliation point a human
+    already attends to, and one that bounds how much history a store could rewrite unobserved to a
+    single shift. **The guarantee therefore reaches back to the last anchor, not the last event.**
+  - `EventStore::chain_head` on the port. An adapter that keeps no chain answers `None`, which is
+    true rather than a stand-in, and a store with nothing to anchor publishes nothing.
+  - The **fake chains too**, which is what makes this testable: a fake that answered "no chain"
+    would have let the edge's own tests pass while the anchor never fired — exactly the failure
+    this line of work exists to stop.
+  - The anchor reports the chain as it stood *before it was itself written*, because a record
+    cannot contain its own hash. A sale landing between the read and the commit leaves it a record
+    or two behind; that still extends the previous anchor and the next covers the gap.
+
+  **Still to come:** the cloud storing each anchor and refusing one that does not extend the last.
+  Until then the anchor is a durable record outside the store's reach, but nobody is comparing
+  them automatically.
+
+  **Upgrade note:** no protocol bump. `store.chain.anchored` is a new event type, additive; the
+  snapshot carries it and nothing was renamed or removed.
+
 - **The event log chains at the edge** ([ADR-0131](docs/adr/0131-a-chained-event-log.md)).
   The table was append-only by convention and by nothing else — three columns with no link between
   rows, in a SQLite file on a PC in a shop. An `UPDATE` to an amount left `PRAGMA integrity_check`
