@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Memoized store/group lookups and option lists in Releases screen.** Reduced lookup overhead in `dashboard/src/screens/Releases.tsx` from $O(P \times S)$ to $O(P + S)$ using `createMemo` Map lookups and single-pass stats aggregation.
+
 ### Added
 
 - **A course is something the catalog names** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
