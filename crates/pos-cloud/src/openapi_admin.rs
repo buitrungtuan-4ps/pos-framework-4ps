@@ -113,6 +113,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_generate_recovery_codes,
         crate::http::admin_recovery_codes_status,
         crate::http::admin_acknowledge_region,
+        crate::http::admin_chain_findings,
         crate::http::admin_list_reason_codes,
         crate::http::admin_get_reason_code,
         crate::http::admin_create_reason_code,

@@ -23,6 +23,7 @@ import type {
   CampaignPreview,
   CapabilityCatalogue,
   CatalogItem,
+  ChainFinding,
   Country,
   FloorTable,
   RoutingRule,
@@ -2247,6 +2248,15 @@ export const api = {
     const params = new URLSearchParams({ tenant_id: tenantId });
     if (storeId) params.set("store_id", storeId);
     return requestJson<ReconcileRun[]>("GET", `/admin/reconcile?${params.toString()}`);
+  },
+
+  // --- chain findings (ADR-0131 decision 4, ADR-0132) ---
+  // The contradictions the cloud refused: two hashes claiming one store's chain at one length.
+  // Behind console.data.read, tenant-scoped; an optional storeId narrows to one store.
+  listChainFindings: (tenantId: string, storeId?: string) => {
+    const params = new URLSearchParams({ tenant_id: tenantId });
+    if (storeId) params.set("store_id", storeId);
+    return requestJson<ChainFinding[]>("GET", `/admin/chain-findings?${params.toString()}`);
   },
 
   // --- console audit trail (ADR-0069, Track G2) ---

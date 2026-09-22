@@ -100,6 +100,17 @@ export const SCREENS = {
     tenantScoped: true,
     icon: "refresh-cw",
   },
+  // The contradictions the cloud refused between what a store claims its log hashes to and what the
+  // cloud already holds (ADR-0131 decision 4, ADR-0132). Declared next to reconciliation because the
+  // two are neighbours in kind — one asks whether the cloud's copy is *complete*, this one whether
+  // it is *consistent* — but it navigates under compliance, where the question is asked from.
+  chainFindings: {
+    path: "/chain-findings",
+    key: "nav.chainFindings",
+    scope: "tenant",
+    tenantScoped: true,
+    icon: "shield-check",
+  },
   // Console-level: alerts and the audit trail span every tenant, including server-wide conditions
   // that belong to none (ADR-0073), so neither takes a tenant in its URL.
   alerts: { path: "/alerts", key: "nav.alerts", tenantScoped: false, icon: "triangle-alert" },
@@ -396,9 +407,11 @@ export const NAV_GROUPS: readonly {
   // Who and what may reach this console: console users, machine keys, and the endpoints it calls
   // out to. All three answer "who is allowed in, or out".
   { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks"] },
-  // What an auditor or a regulator asks for: what was done, by whom, and what a named person's
-  // data may be made to do (ADR-0076, Decree 13).
-  { key: "nav.group.compliance", items: ["audit", "subjects"] },
+  // What an auditor or a regulator asks for: what was done, by whom, what a named person's data
+  // may be made to do (ADR-0076, Decree 13), and whether the trading record itself is intact
+  // (ADR-0131, ADR-0132). Chain integrity sits here rather than under the estate because it is not
+  // a fact about a box — it is the question an auditor asks of the books.
+  { key: "nav.group.compliance", items: ["audit", "subjects", "chainFindings"] },
   // The signed-in admin's own account, which belongs to no tenant.
   { key: "nav.group.account", items: ["mySessions", "mySecurity"] },
 ];

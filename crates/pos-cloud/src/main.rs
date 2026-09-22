@@ -456,7 +456,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // timer.
     let relay_wake = wake::SharedWake::new();
 
+    // The anchor ledger, shared: `Cloud` writes findings into it at ingest and this router reads
+    // them back for the console. One handle, so the screen shows what the ingest actually recorded.
+    let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
+
     let service = http::router(app)
+        .merge(http::chain_router(
+            Arc::clone(&chain_anchors),
+            store.admin(),
+            SystemClock,
+        ))
         .merge(http::reconcile_router(
             store.reconcile(),
             store.admin(),

@@ -18,6 +18,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A human can see a chain finding** — `GET /admin/chain-findings` and a **Chain integrity** screen
+  in the console ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4,
+  [ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+  - Until this, a refusal reached a human only as a line in the server's log and a durable row
+    nobody could read. For a mechanism whose entire product is *being noticed*, that was most of
+    the way to not having it.
+  - The screen lists the contradictions the cloud refused: the store, the position in its chain,
+    **both** hashes side by side — the pair *is* the finding, and either alone says nothing — the
+    event that offered the losing one, and when the **cloud** noticed. The cloud's clock, not the
+    store's: a store that is tampering with its log controls the other one.
+  - **An empty table means "nothing is wrong", not "nothing has happened yet"**, and it says so.
+    Every other screen's empty state means the latter, and an operator who reads this one the same
+    way learns to skip it.
+  - The screen also states, on the screen rather than only in an ADR, what a clean table does **not**
+    mean: the check reaches back to a store's last published head and no further, a record the cloud
+    has not received is a gap to reconcile rather than tampering, and this is tamper-evident and
+    never a certificate — any claim resting on it is for the company's tax advisors to make.
+  - It navigates under **compliance**, beside the audit trail and the subject register, not under the
+    estate: it is not a fact about a box, it is the question an auditor asks of the books.
+  - Behind `console.data.read`, tenant-scoped, narrowed to the store in context when there is one.
+
+  **Upgrade note:** no migration and no protocol change. One new read route; nothing existing moved
+  or was renamed.
+
 - **The cloud recomputes the chain from the events it holds — what closes truncation**
   ([ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor closed
   recomputation. This closes the other one.

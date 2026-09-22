@@ -1343,6 +1343,24 @@ export interface ReconcileRun {
   readonly ran_at_ms: number;
 }
 
+/**
+ * One refused chain claim from `GET /admin/chain-findings`
+ * ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4,
+ * [ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+ *
+ * Two hashes claiming to describe one store's chain at one length, and only one of them can be
+ * true. Positions, hashes and identifiers only — never event contents.
+ */
+export interface ChainFinding {
+  readonly finding_id: string;
+  readonly store_id: string;
+  readonly chain_seq: number;
+  readonly held_head: string;
+  readonly offered_head: string;
+  readonly offered_event_id: string;
+  readonly noticed_at_ms: number;
+}
+
 /** One background loop's health from `GET /admin/health/tasks` (ADR-0068 slice 4). */
 export interface TaskHealthEntry {
   readonly task: string;
