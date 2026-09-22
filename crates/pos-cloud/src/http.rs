@@ -7402,34 +7402,49 @@ struct ConfigLocaleState<Cfg, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
-    /// How many decimal places each currency the platform has a pack for has
-    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)), computed
-    /// once from the compiled registry at start-up — the same shape `CountryState` holds its views
-    /// in, and for the same reason: the registry does not change while the process runs.
-    exponents: Arc<CurrencyExponents>,
+    /// The country packs' values a store's `locale` node carries, computed once from the compiled
+    /// registry at start-up — the same shape `CountryState` holds its views in, and for the same
+    /// reason: the registry does not change while the process runs.
+    facts: Arc<PackedFacts>,
 }
 
-/// How many decimal places a currency has, by currency.
+/// The country-pack values that ride a store's `locale` node, indexed by whatever identifies each.
 ///
-/// Keyed on the **currency** rather than the country because the exponent is a property of the
-/// currency — the cent is two places wherever the dollar is spent — and a store's currency is chosen
-/// on the settings form independently of the country it sits in. Keying on the country would give a
-/// Vietnamese store trading in dollars the đồng's zero.
-type CurrencyExponents = std::collections::BTreeMap<CurrencyCode, u8>;
+/// They are keyed differently on purpose, and the difference is the fact each one is *about*:
+///
+/// * the **exponent** belongs to the currency — the cent is two places wherever the dollar is spent
+///   — and a store picks its currency on the settings form independently of where it sits, so a
+///   country key would hand a Vietnamese store trading in dollars the đồng's zero;
+/// * the **retention period** belongs to the jurisdiction, because it answers to that country's
+///   privacy law rather than to what the shop takes payment in.
+#[derive(Debug, Default)]
+struct PackedFacts {
+    /// How many decimal places each currency the platform has a pack for has
+    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    exponents: std::collections::BTreeMap<CurrencyCode, u8>,
+    /// How long each country's pack says a store keeps a personal record, in days
+    /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
+    retention_days: std::collections::BTreeMap<CountryCode, u16>,
+}
 
-/// Builds that map from the compiled country modules.
+/// Builds those from the compiled country modules.
 ///
-/// Two packs naming one currency must agree about it, so the first wins and the order is the
-/// registry's — deterministic rather than merely unspecified.
-fn currency_exponents(registry: &CountryRegistry) -> CurrencyExponents {
-    let mut exponents = CurrencyExponents::new();
+/// Two packs naming one currency must agree about its exponent, so the first wins and the order is
+/// the registry's — deterministic rather than merely unspecified. A country appears once, so its
+/// retention period raises no such question.
+fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
+    let mut facts = PackedFacts::default();
     for module in registry.modules() {
         let pack = module.locale_pack();
-        exponents
+        facts
+            .exponents
             .entry(pack.currency_code)
             .or_insert(pack.currency_exponent);
+        facts
+            .retention_days
+            .insert(module.country_code(), pack.default_retention_days);
     }
-    exponents
+    facts
 }
 
 /// A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA
@@ -7515,7 +7530,7 @@ where
             admin,
             clock,
             audit,
-            exponents: Arc::new(currency_exponents(registry)),
+            facts: Arc::new(packed_facts(registry)),
         })
 }
 
@@ -7579,7 +7594,7 @@ fn checked_denominations(request: &PublishLocaleRequest) -> Result<Vec<i64>, Res
 )]
 fn checked_locale_node(
     request: &PublishLocaleRequest,
-    exponents: &CurrencyExponents,
+    facts: &PackedFacts,
 ) -> Result<serde_json::Value, Response> {
     // Checked first because it is the field this route did not use to have: a caller built against
     // the older shape must be told *that*, rather than being led through the fields it did send.
@@ -7642,12 +7657,34 @@ fn checked_locale_node(
     // Omitted for a currency no pack names, which is the "absent leaves what the session has" case
     // `PublishedLocale` was deliberately built with — saying nothing rather than publishing a guess.
     // Unreachable from the console, whose currency picker is filled from this same country list.
-    if let Some(exponent) = exponents.get(&currency)
+    if let Some(exponent) = facts.exponents.get(&currency)
         && let serde_json::Value::Object(map) = &mut locale_value
     {
         map.insert(
             "currency_exponent".to_owned(),
             serde_json::Value::from(*exponent),
+        );
+    }
+    // How long the store keeps a personal record before its own sweep scrubs it
+    // ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)), which the edge has read from
+    // this node since that record and which this node has never carried.
+    //
+    // Harmless so far, and worth saying why rather than implying a breach: every pack,
+    // `LocalePack::default` and the edge's bootstrap all say 365, so no store's period is wrong
+    // today and the sweep on the edge's ticker really does run. What the gap would have cost is the
+    // *next* change — each pack's figure is marked "a default, not a determination", and the day
+    // somebody sets a country's real period every store would have gone on forgetting at 365 while
+    // the publish looked applied.
+    //
+    // From the pack rather than from the request, for the reason the exponent is: a retention period
+    // answers to a privacy notice, and a form field invites a number that suits the shop rather than
+    // the law.
+    if let Some(days) = facts.retention_days.get(&country)
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "default_retention_days".to_owned(),
+            serde_json::Value::from(*days),
         );
     }
     // The display language is optional: include it only when a non-blank code was given, so a store
@@ -7699,7 +7736,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let locale_value = match checked_locale_node(&request, &state.exponents) {
+    let locale_value = match checked_locale_node(&request, &state.facts) {
         Ok(node) => node,
         Err(refusal) => return refusal,
     };
@@ -28197,7 +28234,7 @@ mod locale_node_tests {
     //! Covered here rather than through the route because `checked_locale_node` *is* what the route
     //! validates: the handler around it holds a permission check, two ULID parses and a config-tree
     //! write, none of which can tell you whether the node an edge receives is complete.
-    use super::{PublishLocaleRequest, checked_locale_node, currency_exponents};
+    use super::{PublishLocaleRequest, checked_locale_node, packed_facts};
     use crate::countries;
     use serde_json::Value;
 
@@ -28225,11 +28262,9 @@ mod locale_node_tests {
         // never fires because `0` is not nullish. An Indian store then draws 26145 paise as
         // `INR 26,145` and prints `INR 26145` on a tax invoice — the two defects #416 and #417
         // were merged to fix.
-        let node = checked_locale_node(
-            &request("IN", "INR"),
-            &currency_exponents(&countries::registry()),
-        )
-        .expect("a valid publish");
+        let node =
+            checked_locale_node(&request("IN", "INR"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
         assert_eq!(
             node.get("currency_exponent").and_then(Value::as_u64),
             Some(2),
@@ -28238,15 +28273,94 @@ mod locale_node_tests {
     }
 
     #[test]
+    fn the_node_tells_the_store_how_long_to_keep_a_personal_record() {
+        // ADR-0107 gave the edge its own retention sweep and had it read this key. The node never
+        // carried it, so every store ran on the bootstrap 365 instead of its country's figure.
+        //
+        // Nothing was wrong *yet* — all four packs say 365 — which is precisely why it needed a
+        // test rather than a reader noticing. The figure each pack carries is marked "a default,
+        // not a determination"; the first time one is set for real, this is what makes the publish
+        // mean something.
+        let node =
+            checked_locale_node(&request("IN", "INR"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
+        assert_eq!(
+            node.get("default_retention_days").and_then(Value::as_u64),
+            Some(365),
+            "the store's retention period has to reach the store: {node}"
+        );
+    }
+
+    /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
+    ///
+    /// Written out rather than derived, because the two sides sit in different crates with nothing
+    /// linking them: `crates/pos-edge/src/config_client.rs` declares what an edge parses, this
+    /// function declares what a cloud sends, and the silence between them is where
+    /// `currency_exponent` and `default_retention_days` both sat through the releases that depended
+    /// on them.
+    ///
+    /// Both directions are checked, because the gap has appeared both ways round: a key the edge
+    /// reads and the cloud never sends is a feature that does nothing, and a key the cloud sends and
+    /// the edge never reads is a payload nobody consumes. Neither shows up as a failure anywhere
+    /// else.
+    ///
+    /// It cannot force the list to grow when a field is added to the edge — nothing can, across a
+    /// crate boundary — but it does fail the moment this side changes, which is the half that
+    /// publishes.
+    #[test]
+    fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
+        // `crates/pos-edge/src/config_client.rs`, `struct PublishedLocale`.
+        const READ_BY_THE_EDGE: &[&str] = &[
+            "currency_code",
+            "currency_exponent",
+            "timezone",
+            "cutoff_hour",
+            "prices_include_tax",
+            "cash_rounding_increment",
+            "cash_denominations",
+            "default_retention_days",
+        ];
+        // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
+        // against a store's region (ADR-0114); `display_language` is applied when the menu book is
+        // compiled rather than onto the session.
+        const THE_CLOUD_S_OWN: &[&str] = &["country_code", "display_language"];
+
+        let node =
+            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
+        let object = node.as_object().expect("the node is an object");
+
+        let missing: Vec<&&str> = READ_BY_THE_EDGE
+            .iter()
+            .filter(|key| !object.contains_key(**key))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the edge parses these and the node does not send them, so they do nothing: {missing:?}"
+        );
+
+        let unclaimed: Vec<&String> = object
+            .keys()
+            .filter(|key| {
+                !READ_BY_THE_EDGE.contains(&key.as_str())
+                    && !THE_CLOUD_S_OWN.contains(&key.as_str())
+            })
+            .collect();
+        assert!(
+            unclaimed.is_empty(),
+            "the node sends these and nothing reads them — add them to `PublishedLocale` or to the \
+             list above, whichever is true: {unclaimed:?}"
+        );
+    }
+
+    #[test]
     fn a_zero_decimal_currency_says_zero_rather_than_saying_nothing() {
         // The đồng's exponent really is zero, and that has to be *published* rather than left to
         // the edge's bootstrap to coincide with. The two are indistinguishable on a Vietnamese
         // store, which is exactly why the rupee case above is the one that catches this.
-        let node = checked_locale_node(
-            &request("VN", "VND"),
-            &currency_exponents(&countries::registry()),
-        )
-        .expect("a valid publish");
+        let node =
+            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
         assert_eq!(
             node.get("currency_exponent").and_then(Value::as_u64),
             Some(0),
