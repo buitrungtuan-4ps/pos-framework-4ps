@@ -260,6 +260,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store with courses turned off could not fire a line that belonged to a course.**
+  `LineCommand::Fire { course }` says in its own doc that the field means the line is being fired
+  *as part of a course*, and that is what `courses_enabled` gates. Both edge fire paths passed the
+  line's **taxonomy** instead — the course the item happens to be on — so on a store with courses
+  disabled, `POST /api/lines/{id}/fire` refused the line and `POST /api/orders/{id}/fire` refused
+  the **whole order** with it, because one refusal aborts the batch. Nothing gates *adding* a line
+  with a course, so the state was reachable and the food had no way to the kitchen short of voiding
+  the line. Both paths now pass `None`: firing everything is not firing by course. The station
+  lookup still reads the line's course, because where the food goes is a different question from
+  when it goes.
+
 - **Setting a store's display language no longer empties its menu of modifier groups.**
   `MenuCatalog::localized` ([ADR-0074](docs/adr/0074-localization-and-tax.md)) rebuilt the catalog
   from its items alone, so a store that published a `locale` node received a `menu` node carrying
