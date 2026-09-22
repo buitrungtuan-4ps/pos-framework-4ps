@@ -542,6 +542,7 @@ mod item_tests {
                 tax_class_id: tax_class(),
                 item_category_id: None,
                 item_subcategory_id: None,
+                course_id: None,
                 image_ref: None,
                 status: EntityStatus::Active,
             },

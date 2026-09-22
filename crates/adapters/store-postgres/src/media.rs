@@ -134,7 +134,6 @@ impl PostgresMedia {
         let total = window_total(
             &connection,
             &rows,
-            4,
             "SELECT count(*) FROM media_assets WHERE tenant_id = $1",
             &[&tenant_id],
         )

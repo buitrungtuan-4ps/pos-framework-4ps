@@ -24,19 +24,20 @@ use std::collections::{BTreeMap, HashSet};
 
 use store_postgres::{
     AdminInviteRow, AdminLoginRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow,
-    AuditLogRow, AuditOrder, BrandRow, CampaignRow, CatalogItemRow, CatalogLayoutButtonRow,
-    CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow,
-    CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, EmployeeOrder, EmployeeRow, FleetStoreRow,
-    InventoryRow, ItemOrder, MediaAssetRow, NewScheduledPublishRow, NewSessionRow, NewVoucherRow,
-    OrderQueueRow, PendingOrderRow, PostgresActivationCodes, PostgresAdmin, PostgresAlerts,
-    PostgresApiKeys, PostgresArtifacts, PostgresAudit, PostgresCampaigns, PostgresCatalog,
-    PostgresConfigTrees, PostgresDeviceProposals, PostgresFleet, PostgresFloor, PostgresInventory,
-    PostgresMedia, PostgresOrderQueue, PostgresPeople, PostgresReasonCodes, PostgresReconcile,
-    PostgresRegistry, PostgresRollups, PostgresScheduledPublishes, PostgresStore,
-    PostgresStoreDirectory, PostgresSubjects, PostgresTaskHealth, PostgresTaxRates,
-    PostgresTranslations, PostgresVouchers, PostgresWebhooks, ReasonCodeRow, ReleaseArtifactRow,
-    RoleTemplateRow, RoutingRuleRow, RowUpdate, ScheduledPublishRow, StationRow, StoreRow,
-    TableRow, TaskHealthRow, TaxRateRow, TenantRow, VoucherRow,
+    AuditLogRow, AuditOrder, BrandRow, CampaignRow, CatalogCourseRow, CatalogItemRow,
+    CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow, CatalogModifierGroupRow,
+    CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow, DeviceRow, EmployeeOrder,
+    EmployeeRow, FleetStoreRow, InventoryRow, ItemOrder, MediaAssetRow, NewScheduledPublishRow,
+    NewSessionRow, NewVoucherRow, OrderQueueRow, PendingOrderRow, PostgresActivationCodes,
+    PostgresAdmin, PostgresAlerts, PostgresApiKeys, PostgresArtifacts, PostgresAudit,
+    PostgresCampaigns, PostgresCatalog, PostgresConfigTrees, PostgresDeviceProposals,
+    PostgresFleet, PostgresFloor, PostgresInventory, PostgresMedia, PostgresOrderQueue,
+    PostgresPeople, PostgresReasonCodes, PostgresReconcile, PostgresRegistry, PostgresRollups,
+    PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
+    PostgresTaskHealth, PostgresTaxRates, PostgresTranslations, PostgresVouchers, PostgresWebhooks,
+    ReasonCodeRow, ReleaseArtifactRow, RoleTemplateRow, RoutingRuleRow, RowUpdate,
+    ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
+    VoucherRow,
 };
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
@@ -80,7 +81,7 @@ use crate::auth::apikey::{
 use crate::auth::totp::TotpSecret;
 use crate::campaigns::{CampaignStore, CampaignStoreError};
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Course, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemListFilter, ItemSort, ItemSubcategory,
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
@@ -4081,6 +4082,14 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<Versioned<CatalogItem>, Ca
     // failing the whole list — a malformed blob must not take a store's menu away.
     let name_translations: BTreeMap<String, String> =
         serde_json::from_str(&row.name_translations).unwrap_or_default();
+    // A malformed `course_id` degrades to "on no course" rather than failing the list, the same
+    // never-blank posture the image below takes: a bad id must not take a store's menu away, and an
+    // item on no course is a real and correct state (ADR-0130).
+    let course_id = row
+        .course_id
+        .as_deref()
+        .and_then(|text| text.parse::<Ulid>().ok())
+        .map(CourseId::new);
     // A malformed `image_ref` (not a ULID) degrades to "no image" rather than failing the list — the
     // never-blank / placeholder posture (ADR-0075), the same as a media asset that was later deleted.
     let image_ref = row
@@ -4099,6 +4108,7 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<Versioned<CatalogItem>, Ca
             tax_class_id: parse_catalog_tax_class(&row.tax_class_id)?,
             item_category_id,
             item_subcategory_id,
+            course_id,
             image_ref,
             status: EntityStatus::from_db(&row.status),
         },
@@ -4272,6 +4282,30 @@ fn parse_catalog_item_id_list(json: &str) -> Result<Vec<MenuItemId>, CatalogStor
     raw.iter().map(|text| parse_catalog_item_id(text)).collect()
 }
 
+/// Converts a stored course row into the domain [`Course`]
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+fn catalog_course_record(row: CatalogCourseRow) -> Result<Versioned<Course>, CatalogStoreError> {
+    let course_id = row
+        .course_id
+        .parse::<Ulid>()
+        .map(CourseId::new)
+        .map_err(|error| {
+            CatalogStoreError::new(format!("stored course id is not a ULID: {error}"))
+        })?;
+    let version = Version::new(row.version);
+    Ok(Versioned::new(
+        Course {
+            course_id,
+            tenant_id: parse_registry_tenant(&row.tenant_id)
+                .map_err(|error| CatalogStoreError::new(error.to_string()))?,
+            name: row.name,
+            sort: row.sort,
+            status: EntityStatus::from_db(&row.status),
+        },
+        version,
+    ))
+}
+
 fn catalog_modifier_group_record(
     row: CatalogModifierGroupRow,
 ) -> Result<Versioned<ModifierGroup>, CatalogStoreError> {
@@ -4376,6 +4410,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let course = item.course_id.map(|id| id.to_string());
         let image_ref = item.image_ref.map(|id| id.to_string());
         self.insert_item(
             &item.menu_item_id.to_string(),
@@ -4385,6 +4420,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            course.as_deref(),
             image_ref.as_deref(),
         )
         .await
@@ -4444,6 +4480,7 @@ impl CatalogStore for PostgresCatalog {
         let subcategory = item.item_subcategory_id.map(|id| id.to_string());
         let name_translations = serde_json::to_string(&item.name_translations)
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        let course = item.course_id.map(|id| id.to_string());
         let image_ref = item.image_ref.map(|id| id.to_string());
         self.set_item(
             &item.tenant_id.to_string(),
@@ -4453,6 +4490,7 @@ impl CatalogStore for PostgresCatalog {
             &item.tax_class_id.to_string(),
             category.as_deref(),
             subcategory.as_deref(),
+            course.as_deref(),
             image_ref.as_deref(),
             item.status.as_str(),
             expected.as_str(),
@@ -4792,6 +4830,47 @@ impl CatalogStore for PostgresCatalog {
             &item_id_list_json(&group.member_item_ids)?,
             &item_id_list_json(&group.attached_item_ids)?,
             group.status.as_str(),
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn create_course(&self, course: &Course) -> Result<Version, CatalogStoreError> {
+        self.insert_course(
+            &course.course_id.to_string(),
+            &course.tenant_id.to_string(),
+            &course.name,
+            course.sort,
+        )
+        .await
+        .map(Version::new)
+        .map_err(|error| CatalogStoreError::new(error.to_string()))
+    }
+
+    async fn list_courses(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<Course>>, CatalogStoreError> {
+        let rows = self
+            .fetch_courses(&tenant_id.to_string())
+            .await
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
+        rows.into_iter().map(catalog_course_record).collect()
+    }
+
+    async fn update_course(
+        &self,
+        course: &Course,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, CatalogStoreError> {
+        self.set_course(
+            &course.tenant_id.to_string(),
+            &course.course_id.to_string(),
+            &course.name,
+            course.sort,
+            course.status.as_str(),
             expected.as_str(),
         )
         .await

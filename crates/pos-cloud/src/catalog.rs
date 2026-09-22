@@ -28,7 +28,9 @@ use serde::{Deserialize, Serialize};
 
 use pos_proto::display::GridPosition;
 use pos_proto::enums::SalesChannel;
-use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId};
+use pos_proto::ids::{
+    CourseId, DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId,
+};
 use pos_proto::money::Money;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -191,6 +193,18 @@ pub struct CatalogItem {
     pub item_category_id: Option<ItemCategoryId>,
     /// The operational sub-category, refining the category, or `None` (entity 3).
     pub item_subcategory_id: Option<ItemSubcategoryId>,
+    /// The course this item goes out on, or `None` for an item on no course
+    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).
+    ///
+    /// Carried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same
+    /// reason: a pizza is a main, and making a server say so on every tap would be a tap per dish
+    /// for a fact the catalog already knows. `None` is every item in every store today and stays
+    /// correct.
+    ///
+    /// A **per-line override** is deliberately not modelled. The request it would serve — *"bring my
+    /// main with the starters"* — is about when the food goes, and firing already answers that;
+    /// relabelling a line's course to mean "sooner" would put a timing decision inside a taxonomy.
+    pub course_id: Option<CourseId>,
     /// The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display
     /// only; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder.
     pub image_ref: Option<MediaId>,
@@ -342,6 +356,39 @@ pub struct ModifierGroup {
     /// The items this group is attached to (the products that show this modifier set).
     pub attached_item_ids: Vec<MenuItemId>,
     /// Active or archived.
+    pub status: EntityStatus,
+}
+
+/// A course — the **service** taxonomy, when a dish goes out
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+///
+/// Deliberately distinct from an [`ItemCategory`] (operational — what an item reports under) and from
+/// a [`DisplayCategory`] (presentational — where a screen puts it). A dessert wine reports under
+/// drinks and goes out with dessert, and collapsing any two of the three would make one of those
+/// facts unsayable.
+///
+/// The `sort` is the point rather than decoration: "starter before main before dessert" is the
+/// entire meaning of the grouping, and a set of names with no order is a taxonomy rather than a
+/// service sequence. Ties break by id in the compiler, as everywhere else, so a re-compile of
+/// unchanged authoring stays byte-identical.
+///
+/// Its id is [`pos_proto::ids::CourseId`], which has crossed the seam since the schema was written —
+/// it is on `sales.order_line.added` and on a published routing rule. The entity is what was
+/// missing.
+#[derive(Debug, Clone, Serialize)]
+pub struct Course {
+    /// The course id.
+    pub course_id: CourseId,
+    /// The owning tenant.
+    pub tenant_id: TenantId,
+    /// The human name (`Starter`, `Main`, `Dessert`).
+    pub name: String,
+    /// Where it falls in the service sequence, ascending. Not unique: two courses a store considers
+    /// interchangeable may share a position, and forcing an operator to renumber the whole menu to
+    /// insert one between two others would be a worse rule than letting the id break the tie.
+    pub sort: i32,
+    /// Active or archived. An archived course is not published, the same posture an archived item
+    /// and an archived modifier group already get.
     pub status: EntityStatus,
 }
 
@@ -691,6 +738,26 @@ pub trait CatalogStore {
         expected: &Version,
     ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
 
+    /// Inserts a course.
+    fn create_course(
+        &self,
+        course: &Course,
+    ) -> impl Future<Output = Result<Version, CatalogStoreError>> + Send;
+
+    /// Lists a tenant's courses.
+    fn list_courses(
+        &self,
+        tenant_id: TenantId,
+    ) -> impl Future<Output = Result<Vec<Versioned<Course>>, CatalogStoreError>> + Send;
+
+    /// Renames a course, sets its position in the service sequence and/or its status. Returns
+    /// whether a row changed.
+    fn update_course(
+        &self,
+        course: &Course,
+        expected: &Version,
+    ) -> impl Future<Output = Result<UpdateOutcome, CatalogStoreError>> + Send;
+
     /// Inserts a menu.
     fn create_menu(
         &self,
@@ -788,7 +855,7 @@ mod tests {
     use pos_proto::wire_enum::Open;
 
     use super::{
-        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+        CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Course, DisplayCategory,
         DisplaySubcategory, ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton,
         Menu, MenuId, MenuPlacement, MenuSection, ModifierGroup, TaxClass,
     };
@@ -808,6 +875,7 @@ mod tests {
         display_subcategories: Mutex<Vec<Versioned<DisplaySubcategory>>>,
         layout_buttons: Mutex<Vec<Versioned<LayoutButton>>>,
         modifier_groups: Mutex<Vec<Versioned<ModifierGroup>>>,
+        courses: Mutex<Vec<Versioned<Course>>>,
         menus: Mutex<Vec<Versioned<Menu>>>,
         menu_sections: Mutex<Vec<Versioned<MenuSection>>>,
         placements: Mutex<Vec<Versioned<MenuPlacement>>>,
@@ -1308,6 +1376,54 @@ mod tests {
             Ok(UpdateOutcome::Updated(version))
         }
 
+        async fn create_course(&self, course: &Course) -> Result<Version, CatalogStoreError> {
+            let version = self.mint();
+            self.courses
+                .lock()
+                .expect("lock")
+                .push(Versioned::new(course.clone(), version.clone()));
+            Ok(version)
+        }
+
+        async fn list_courses(
+            &self,
+            tenant_id: TenantId,
+        ) -> Result<Vec<Versioned<Course>>, CatalogStoreError> {
+            // Sorted here as the real store sorts it, because the order *is* the entity's meaning:
+            // a fake that handed courses back in insertion order would let a caller pass a test it
+            // would fail against Postgres.
+            let mut rows: Vec<Versioned<Course>> = self
+                .courses
+                .lock()
+                .expect("lock")
+                .iter()
+                .filter(|row| row.record.tenant_id == tenant_id)
+                .cloned()
+                .collect();
+            rows.sort_by_key(|row| (row.record.sort, row.record.course_id));
+            Ok(rows)
+        }
+
+        async fn update_course(
+            &self,
+            course: &Course,
+            expected: &Version,
+        ) -> Result<UpdateOutcome, CatalogStoreError> {
+            let version = self.mint();
+            let mut rows = self.courses.lock().expect("lock");
+            let Some(row) = rows.iter_mut().find(|row| {
+                row.record.course_id == course.course_id && row.record.tenant_id == course.tenant_id
+            }) else {
+                return Ok(UpdateOutcome::NotFound);
+            };
+            if &row.etag != expected {
+                return Ok(UpdateOutcome::VersionMismatch);
+            }
+            row.record = course.clone();
+            row.etag = version.clone();
+            Ok(UpdateOutcome::Updated(version))
+        }
+
         async fn create_menu(&self, menu: &Menu) -> Result<Version, CatalogStoreError> {
             let version = self.mint();
             self.menus
@@ -1503,6 +1619,7 @@ mod tests {
             tax_class_id: tax_class(1),
             item_category_id: None,
             item_subcategory_id: None,
+            course_id: None,
             image_ref: None,
             status: EntityStatus::Active,
         }

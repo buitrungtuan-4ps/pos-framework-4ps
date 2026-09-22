@@ -62,9 +62,9 @@ pub use archives::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 pub use audit::{AuditLogRow, AuditOrder, PostgresAudit};
 pub use campaigns::{CampaignRow, PostgresCampaigns};
 pub use catalog::{
-    CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow, CatalogMenuSectionRow,
-    CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow, CatalogTaxonomyRow,
-    ItemOrder, PostgresCatalog,
+    CatalogCourseRow, CatalogItemRow, CatalogLayoutButtonRow, CatalogMenuRow,
+    CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
+    CatalogTaxonomyRow, ItemOrder, PostgresCatalog,
 };
 pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 pub use config_trees::{

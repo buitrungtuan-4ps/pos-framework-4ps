@@ -147,7 +147,7 @@ use crate::auth::rate_limit::SlidingRateLimiter;
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::campaigns::{CampaignStore, CampaignStoreError, to_node as campaigns_to_node};
 use crate::catalog::{
-    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, DisplayCategory,
+    CatalogItem, CatalogStore, CatalogStoreError, ChannelPrice, Course, DisplayCategory,
     DisplaySubcategory, ItemCategory, ItemCategoryId, ItemListFilter, ItemSort, ItemSubcategory,
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
@@ -5326,6 +5326,27 @@ struct UpdateEmployeeRequest {
 struct SetPinRequest {
     tenant_id: String,
     pin: String,
+}
+
+/// Create a course — a named point in the service sequence (ADR-0130).
+#[derive(Debug, Clone, Deserialize)]
+struct CreateCourseRequest {
+    tenant_id: String,
+    name: String,
+    /// Where it falls in the sequence, ascending. Absent is `0`, which puts a first course first
+    /// and leaves the id to break the tie with any other unpositioned one.
+    #[serde(default)]
+    sort: i32,
+}
+
+/// Update a course's name, position and/or status.
+#[derive(Debug, Clone, Deserialize)]
+struct UpdateCourseRequest {
+    tenant_id: String,
+    name: String,
+    #[serde(default)]
+    sort: i32,
+    status: String,
 }
 
 /// Create a role template — a named subset of the `pos-core` permission catalogue (§9).
@@ -11998,6 +12019,14 @@ where
                 .delete(admin_remove_layout_button::<Cat, A, C>),
         )
         .route(
+            "/admin/catalog/courses",
+            get(admin_list_courses::<Cat, A, C>).post(admin_create_course::<Cat, A, C>),
+        )
+        .route(
+            "/admin/catalog/courses/{course_id}",
+            axum::routing::patch(admin_update_course::<Cat, A, C>),
+        )
+        .route(
             "/admin/catalog/modifier-groups",
             get(admin_list_modifier_groups::<Cat, A, C>)
                 .post(admin_create_modifier_group::<Cat, A, C>),
@@ -12052,6 +12081,10 @@ struct CreateItemRequest {
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
+    /// The course this item goes out on (ADR-0130). Absent leaves it on none, which is every item
+    /// in every store today.
+    #[serde(default)]
+    course_id: Option<String>,
     /// The item's photo — a media id (ADR-0075), or absent/empty for none.
     #[serde(default)]
     image_ref: Option<String>,
@@ -12070,6 +12103,10 @@ struct UpdateItemRequest {
     item_category_id: Option<String>,
     #[serde(default)]
     item_subcategory_id: Option<String>,
+    /// The course this item goes out on (ADR-0130). Absent leaves it on none, which is every item
+    /// in every store today.
+    #[serde(default)]
+    course_id: Option<String>,
     /// The item's photo — a media id (ADR-0075), or absent/empty for none.
     #[serde(default)]
     image_ref: Option<String>,
@@ -18745,6 +18782,11 @@ where
                 tax_class_id: new_item.tax_class_id,
                 item_category_id: new_item.item_category_id,
                 item_subcategory_id: new_item.item_subcategory_id,
+                // The import format carries no course, the same way it carries no translations.
+                // An item imported onto no course is an item the operator then puts on one, which
+                // is better than guessing a service sequence from a spreadsheet column that is not
+                // there.
+                course_id: None,
                 image_ref: new_item.image_ref,
                 status: new_item.status,
             };
@@ -18961,6 +19003,9 @@ where
     else {
         return ulid_refusal(&["item_category_id"]);
     };
+    let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
+        return ulid_refusal(&["course_id"]);
+    };
     let Ok(item_subcategory_id) = parse_optional_ulid(
         request.item_subcategory_id.as_deref(),
         ItemSubcategoryId::new,
@@ -18983,6 +19028,7 @@ where
         tax_class_id,
         item_category_id,
         item_subcategory_id,
+        course_id,
         image_ref,
         status: EntityStatus::Active,
     };
@@ -19049,6 +19095,9 @@ where
     else {
         return ulid_refusal(&["item_category_id"]);
     };
+    let Ok(course_id) = parse_optional_ulid(request.course_id.as_deref(), CourseId::new) else {
+        return ulid_refusal(&["course_id"]);
+    };
     let Ok(item_subcategory_id) = parse_optional_ulid(
         request.item_subcategory_id.as_deref(),
         ItemSubcategoryId::new,
@@ -19066,6 +19115,7 @@ where
         tax_class_id,
         item_category_id,
         item_subcategory_id,
+        course_id,
         image_ref,
         status,
     };
@@ -20228,6 +20278,174 @@ where
             StatusCode::NO_CONTENT.into_response()
         }
         Ok(false) => not_found("layout button"),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin lists a tenant's courses, **in service order**
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+async fn admin_list_courses<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.list_courses(tenant_id).await {
+        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin creates a course; the id is minted here and returned once.
+async fn admin_create_course<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateCourseRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    if request.name.trim().is_empty() {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
+    }
+    let Some(course_id) =
+        mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(CourseId::new)
+    else {
+        return catalog_entropy_unavailable();
+    };
+    let record = Course {
+        course_id,
+        tenant_id,
+        name: request.name,
+        sort: request.sort,
+        status: EntityStatus::Active,
+    };
+    match state.catalog.create_course(&record).await {
+        Ok(version) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(record.tenant_id),
+                "course.create",
+                "course",
+                &record.course_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_created(record, &version)
+        }
+        Err(error) => catalog_error_response(&error),
+    }
+}
+
+/// A super-admin renames a course, moves it in the service sequence and/or archives it.
+async fn admin_update_course<Cat, A, C>(
+    State(state): State<CatalogState<Cat, A, C>>,
+    headers: HeaderMap,
+    Path(course_id): Path<String>,
+    Json(request): Json<UpdateCourseRequest>,
+) -> Response
+where
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageCatalog,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (course_id, tenant_id) =
+        match parse_ulid_fields([("course_id", &course_id), ("tenant_id", &request.tenant_id)]) {
+            Ok([course_id, tenant_id]) => (CourseId::new(course_id), TenantId::new(tenant_id)),
+            Err(refusal) => return refusal,
+        };
+    if request.name.trim().is_empty() {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name is required",
+            &[("name", "REQUIRED")],
+        );
+    }
+    let Some(status) = parse_entity_status(&request.status) else {
+        return entity_status_refusal();
+    };
+    let record = Course {
+        course_id,
+        tenant_id,
+        name: request.name,
+        sort: request.sort,
+        status,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state.catalog.update_course(&record, &expected).await {
+        Ok(UpdateOutcome::Updated(version)) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(record.tenant_id),
+                "course.update",
+                "course",
+                &record.course_id.to_string(),
+                None,
+                serde_json::to_value(&record).ok(),
+            )
+            .await;
+            versioned_ok(record, &version)
+        }
+        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
+        Ok(UpdateOutcome::NotFound) => not_found("course"),
         Err(error) => catalog_error_response(&error),
     }
 }

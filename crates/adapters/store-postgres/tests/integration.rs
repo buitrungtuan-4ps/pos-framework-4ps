@@ -6968,6 +6968,7 @@ mod catalog_item_pages {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await
                 .expect("insert an item");
@@ -7002,6 +7003,7 @@ mod catalog_item_pages {
                     None,
                     None,
                     None,
+                    None,
                 )
                 .await
                 .expect("a create must reach the database, not fail at the driver");
@@ -7022,6 +7024,7 @@ mod catalog_item_pages {
                     "Margherita Classic",
                     r#"{"vi":"Bánh Margherita cổ điển"}"#,
                     "tax-standard",
+                    None,
                     None,
                     None,
                     None,
@@ -7214,6 +7217,7 @@ mod catalog_item_pages {
                         None,
                         None,
                         None,
+                        None,
                     )
                     .await
                     .expect("insert an item");
@@ -7278,6 +7282,7 @@ mod catalog_item_pages {
                         "Margherita",
                         "{}",
                         "tax-standard",
+                        None,
                         None,
                         None,
                         None,

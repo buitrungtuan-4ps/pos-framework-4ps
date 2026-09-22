@@ -156,7 +156,6 @@ impl PostgresVouchers {
         let total = window_total(
             &connection,
             &rows,
-            5,
             "SELECT count(*) FROM vouchers WHERE tenant_id = $1 AND campaign_id = $2",
             &[&tenant_id, &campaign_id],
         )

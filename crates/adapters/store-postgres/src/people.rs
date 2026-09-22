@@ -241,7 +241,6 @@ impl PostgresPeople {
         let total = window_total(
             &connection,
             &rows,
-            7,
             &format!("SELECT count(*) FROM employees WHERE tenant_id = $1 AND {EMPLOYEE_SEARCH}"),
             &[&tenant_id, &search],
         )

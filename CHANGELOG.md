@@ -18,6 +18,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A course is something the catalog names** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+  A course was built end to end and the thing itself did not exist: `CourseId` is a wire id,
+  `sales.order_line.added` carries one, `POST /api/tables/{id}/lines` accepts one,
+  `pos_proto::floor::RoutingRule` matches on one and the edge honours it, `Capability::Courses` gates
+  a fire-by-course and `decide_line` refuses it when the capability is off — with a test. **Nothing
+  created, named, ordered, listed or published a course**, so every `course_id` in the tree was a
+  foreign key to a table that was not there.
+  - `pos_cloud::catalog::Course` — tenant-scoped, with a **`sort`** that is the point rather than
+    decoration: "starter before main before dessert" is the entire meaning of the grouping, and a set
+    of names with no order is a taxonomy rather than a service sequence. Ties break by id, so a
+    re-compile of unchanged authoring stays byte-identical.
+  - `GET`/`POST /admin/catalog/courses` and `PATCH /admin/catalog/courses/{course_id}`. The listing
+    is **in service order**, because the order is the entity's meaning and a caller that had to sort
+    it again would eventually not.
+  - **The item declares its course**, exactly as it carries its tax class: a pizza is a main, and
+    making a server say so on every tap would be a tap per dish for a fact the catalog knows. `None`
+    is every item in every store today and stays correct.
+  - **Still to come, and named rather than omitted:** the compiled `menu` node does not carry the
+    courses yet, so a store cannot read them; and nothing fires by course, though the domain command
+    and its capability gate have been written and tested all along. Each is its own change against
+    the same record.
+
 - **A failed replay says which flow failed.** Both browser gates reported a failure only into the
   job log, and for `console-replay` that is the one place it cannot be read: the runner dumps the
   Postgres service container's output at teardown, thousands of lines of it, so the failing
