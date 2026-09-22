@@ -106,6 +106,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The currency's exponent was never actually published, so both fixes that depend on it were
+  inert.** [ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) says the exponent
+  *"rides the `locale` config node to the store and is served on `GET /api/locale`"*. It did not: the
+  node the cloud writes carried the currency, timezone, cutoff, tax posture, rounding increment and
+  denominations, and no exponent. The cloud now derives it from the compiled country pack for the
+  store's currency and writes it with the rest.
+
+  Until this, an Indian store kept the đồng-shaped zero the edge's bootstrap starts with. `GET
+  /api/locale` served that zero as though it were an answer, and neither front end's fallback table
+  could correct it — the till's `?? fallbackExponent(...)` does not fire on a `0`, because `0` is not
+  nullish. So the till drew ₹261.45 as `INR 26,145` and the receipt printed `INR 26145`: precisely
+  the two defects the previous release fixed, still present on any real store.
+
+  It is the `?? 0` ADR-0134 was written to kill, reappearing one layer up — the cloud supplying the
+  zero instead of the front end. That is why the exponent is taken from the country pack rather than
+  added to the publish form: an operator who can type it can state that the rupee has three decimals,
+  and ADR-0134 made the pack the authority so that nobody has to.
+
+  It is keyed on the **currency**, not the country. A store picks its currency independently of where
+  it sits, and keying on the country would hand a Vietnamese store trading in dollars the đồng's
+  zero. A currency no pack names is omitted rather than guessed, which is the "absent leaves what the
+  store has" case the node was built with.
+
+  **Upgrade note:** none, and nothing needs republishing by hand — but a store only receives the
+  value when its locale node is next published, so a store on a two-decimal currency keeps showing
+  minor units until someone saves its settings. Vietnam and Japan see no difference either way: their
+  exponent is zero, which is also why this went unnoticed.
+
 - **A receipt printed raw minor units, on a document that is a tax invoice.** `format_money` in
   `pos-edge` rendered `"{code} {amount_minor}"`, so a guest in India who paid ₹1,049.00 was handed a
   receipt reading `INR 104900`, and a Vietnamese one read `VND 97900`. It now reads `INR 1,049.00`
