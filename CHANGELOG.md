@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **[ADR-0131](docs/adr/0131-a-chained-event-log.md) — the event log chains, and the cloud holds the anchor.**
+  The record only, no behaviour yet. `docs/architecture.md` called the log append-only; that described
+  the code, not the data. The table is three columns with nothing linking one row to the next, and it
+  is a SQLite file on a PC in a shop — three settled bills totalling 2,500,000 VND can become two
+  totalling 700,000 with `integrity_check` still reporting `ok`.
+  - The decision is `seq` + `prev_hash` on the envelope, verified at startup with no internet, with
+    the chain head published to the cloud at each shift close.
+  - **The anchor is not optional garnish.** A chain alone misses two cases, both checked rather than
+    assumed: deleting the *last* records leaves a perfectly linked chain, and an attacker who edits a
+    record and re-derives every subsequent hash produces one that verifies. A store cannot rewrite
+    what the cloud has already seen, which is what closes both.
+  - No signing, no secure element: none of the six markets served (Vietnam, Japan, India, Cambodia,
+    Indonesia, the United States) is in the EU, so NF525, KassenSichV and RKSV are out of scope. A
+    market that needs them needs a new ADR first.
+  - **Not a compliance claim.** The record names Japan's 電子帳簿保存法 and the US state
+    sales-suppression statutes as the two regimes this shape speaks to, and says explicitly that
+    whether it discharges a legal duty is for the company's tax advisors, per jurisdiction.
+
 - **Fire by course** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
   `LineCommand::Fire { course }` and its `courses_enabled` gate had been written and tested in the
   domain since before there was a course to name, and **nothing ever filled the field**. This is the

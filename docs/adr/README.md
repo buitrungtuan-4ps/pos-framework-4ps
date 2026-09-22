@@ -137,5 +137,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0128](0128-a-bill-splits-and-merges.md) | A bill splits and merges: a bill covers lines, and the parts partition them exactly | Accepted |
 | [0129](0129-a-receipt-itemises-what-was-sold.md) | A receipt itemises what was sold: name, quantity, unit price and amount per line | Accepted |
 | [0130](0130-a-course-is-something-the-catalog-names.md) | A course is something the catalog names: the entity every `course_id` in the tree already points at | Accepted |
+| [0131](0131-a-chained-event-log.md) | The event log chains, and the cloud holds the anchor: tamper-evidence for a log that is append-only only by convention | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
