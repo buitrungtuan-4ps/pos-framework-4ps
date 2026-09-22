@@ -44,7 +44,7 @@ export function ContextPicker() {
     }
     const onPointerDown = (event: PointerEvent) => {
       if (container && !container.contains(event.target as Node)) {
-        setOpen(false);
+        setTimeout(() => setOpen(false), 0);
       }
     };
     document.addEventListener("pointerdown", onPointerDown);

@@ -62,14 +62,14 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   });
 
   // Clicking outside closes the menu. Bound only while open and on `pointerdown` so a press outside
-  // dismisses the popover immediately.
+  // dismisses the popover without interrupting pending clicks on other elements.
   createEffect(() => {
     if (!open()) {
       return;
     }
     const onPointerDown = (event: PointerEvent) => {
       if (container && !container.contains(event.target as Node)) {
-        setOpen(false);
+        setTimeout(() => setOpen(false), 0);
       }
     };
     document.addEventListener("pointerdown", onPointerDown);
