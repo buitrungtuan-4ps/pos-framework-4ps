@@ -26,6 +26,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use pos_ports::event_store::EventStore;
+use pos_proto::locale::NumberFormat;
 
 use crate::app::Edge;
 
@@ -52,6 +53,14 @@ pub(crate) struct LocaleResponse {
     /// Whether the prices on this store's menu already contain their tax
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     prices_include_tax: bool,
+    /// How this store writes a number
+    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)): the decimal
+    /// mark, the group mark, and how many digits go in a group.
+    ///
+    /// Sent for the reason `currency_exponent` is — a till cannot work it out, and the one it
+    /// invented was `en-US` for every store in every country. Nothing on the screen reads it yet;
+    /// the till follows in its own change, because it alters a figure a cashier is looking at.
+    number_format: NumberFormat,
 }
 
 /// `GET /api/locale` — the store's published money settings, read from the live session.
@@ -68,6 +77,7 @@ where
             cash_denominations: session.cash_denominations.clone(),
             cash_rounding_increment: session.cash_rounding_increment,
             prices_include_tax: session.prices_include_tax,
+            number_format: session.number_format.clone(),
         }),
     )
         .into_response()

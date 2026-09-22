@@ -51,7 +51,7 @@ use pos_proto::display::LayoutBook;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::inventory::PublishedInventory;
-use pos_proto::locale::TaxRateTable;
+use pos_proto::locale::{NumberFormat, TaxRateTable};
 use pos_proto::menu::MenuBook;
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
@@ -125,6 +125,47 @@ struct PublishedLocale {
     /// which would scrub a buyer the moment the invoice was printed.
     #[serde(default)]
     default_retention_days: Option<u16>,
+    /// How this store's country writes a number
+    /// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Absent for a
+    /// cloud that predates the field, which leaves the session's own — the `en-US`-shaped default
+    /// every surface used before the node could say otherwise.
+    #[serde(default)]
+    number_format: Option<PublishedNumberFormat>,
+}
+
+/// A published number format, in the permissive shape the rest of this struct uses.
+///
+/// Separators are `String` rather than `char` and are narrowed on the way in, for the reason
+/// `currency_code` is a `String` here and a `CurrencyCode` after: a value this struct cannot
+/// deserialize takes the **whole** locale node down with it, and a store that loses its currency and
+/// its timezone because somebody published a two-character group separator is a worse outcome than
+/// one that keeps the format it had.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct PublishedNumberFormat {
+    decimal_separator: String,
+    group_separator: String,
+    digits_per_group: u8,
+}
+
+impl PublishedNumberFormat {
+    /// The domain form, or `None` when the publish does not describe one.
+    ///
+    /// A separator has to be exactly one character — not zero, which would run the digits together,
+    /// and not two, which no formatter here can place. A group of zero digits would loop forever in
+    /// any grouping routine that trusted it.
+    fn validate(&self) -> Option<NumberFormat> {
+        let mut decimal = self.decimal_separator.chars();
+        let mut group = self.group_separator.chars();
+        let (decimal_separator, group_separator) = (decimal.next()?, group.next()?);
+        if decimal.next().is_some() || group.next().is_some() || self.digits_per_group == 0 {
+            return None;
+        }
+        Some(NumberFormat {
+            decimal_separator,
+            group_separator,
+            digits_per_group: self.digits_per_group,
+        })
+    }
 }
 
 /// Maps published permission-id strings to a [`PermissionSet`], dropping any id the running
@@ -426,6 +467,16 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         // and would destroy the document's own evidence (ADR-0107).
         if let Some(days) = locale.default_retention_days.filter(|days| *days > 0) {
             session.retention_days = days;
+        }
+        // Applied only when the publish both states one and states a usable one, so a cloud that
+        // predates the field — or one that published a separator no formatter can place — leaves the
+        // store writing numbers the way it already did rather than blank.
+        if let Some(format) = locale
+            .number_format
+            .as_ref()
+            .and_then(PublishedNumberFormat::validate)
+        {
+            session.number_format = format;
         }
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
@@ -1521,6 +1572,151 @@ mod tests {
             bad.currency.as_str(),
             "VND",
             "the valid currency still applied"
+        );
+    }
+
+    #[test]
+    fn a_locale_document_carries_how_the_country_writes_a_number() {
+        // ADR-0136. Vietnam swaps both marks against the compiled default, so a store that received
+        // the node and a store that received nothing are distinguishable — which they are not for
+        // Japan or India, whose format *is* the default.
+        let vietnam = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+                "number_format": {
+                    "decimal_separator": ",",
+                    "group_separator": ".",
+                    "digits_per_group": 3,
+                },
+            }}),
+        );
+        assert_eq!(vietnam.number_format.decimal_separator, ',');
+        assert_eq!(vietnam.number_format.group_separator, '.');
+        assert_eq!(vietnam.number_format.digits_per_group, 3);
+
+        // A cloud that predates the field leaves the store writing numbers the way it already did,
+        // rather than blank — the same contract every other optional value on this node keeps.
+        let unchanged = session_from_config(
+            &vietnam,
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+            }}),
+        );
+        assert_eq!(
+            unchanged.number_format.group_separator, '.',
+            "an absent format is silence, not an instruction to forget one"
+        );
+    }
+
+    /// Every field a published `locale` node carries lands somewhere on the session.
+    ///
+    /// The edge half of the pair. `pos-cloud` has a test asserting its node carries exactly the keys
+    /// on a written-down list; this asserts that each of those keys actually *does* something here.
+    ///
+    /// Two lists rather than one, because no crate depends on both and adding a dependency to make a
+    /// test possible is the wrong trade. What each list buys is that its own side is checked against
+    /// real behaviour instead of against nothing: a key the cloud stopped sending fails there, and a
+    /// key this struct stopped applying fails here. What neither can catch is a field added to both
+    /// lists and to neither implementation — which is what the per-field tests above are for.
+    ///
+    /// Every value below differs from `EdgeSession::bootstrap`, deliberately: a field that silently
+    /// stopped applying would still match a bootstrap this test had copied.
+    #[test]
+    fn every_field_a_locale_node_carries_reaches_the_session() {
+        let bootstrap = EdgeSession::bootstrap();
+        let store = session_from_config(
+            &bootstrap,
+            &serde_json::json!({ "locale": {
+                "currency_code": "INR",
+                "currency_exponent": 2,
+                "timezone": "Asia/Kolkata",
+                "cutoff_hour": 6,
+                "prices_include_tax": true,
+                "cash_rounding_increment": 100,
+                "cash_denominations": [1_000, 2_000],
+                "default_retention_days": 180,
+                "number_format": {
+                    "decimal_separator": ",",
+                    "group_separator": " ",
+                    "digits_per_group": 2,
+                },
+            }}),
+        );
+
+        assert_ne!(store.currency, bootstrap.currency, "currency_code");
+        assert_ne!(
+            store.currency_exponent, bootstrap.currency_exponent,
+            "currency_exponent"
+        );
+        assert_ne!(
+            store.timezone.iana_name(),
+            bootstrap.timezone.iana_name(),
+            "timezone"
+        );
+        assert_ne!(store.cutoff, bootstrap.cutoff, "cutoff_hour");
+        assert_ne!(
+            store.prices_include_tax, bootstrap.prices_include_tax,
+            "prices_include_tax"
+        );
+        assert_ne!(
+            store.cash_rounding_increment, bootstrap.cash_rounding_increment,
+            "cash_rounding_increment"
+        );
+        assert_ne!(
+            store.cash_denominations, bootstrap.cash_denominations,
+            "cash_denominations"
+        );
+        assert_ne!(
+            store.retention_days, bootstrap.retention_days,
+            "default_retention_days"
+        );
+        assert_ne!(
+            store.number_format, bootstrap.number_format,
+            "number_format"
+        );
+    }
+
+    #[test]
+    fn a_malformed_number_format_costs_the_format_and_not_the_whole_node() {
+        // The reason `PublishedNumberFormat` takes `String` separators and narrows them afterwards,
+        // exactly as `currency_code` is a `String` here and a `CurrencyCode` after.
+        //
+        // A `char` field would fail to deserialize, and serde fails the *whole* struct: a store
+        // would lose its currency, its timezone and its cutoff because somebody published a
+        // two-character group separator. Keeping the parse permissive means a bad format costs the
+        // format alone.
+        let store = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "locale": {
+                "currency_code": "VND",
+                "timezone": "Asia/Ho_Chi_Minh",
+                "cutoff_hour": 4,
+                "number_format": {
+                    "decimal_separator": "",
+                    "group_separator": "\u{a0}\u{a0}",
+                    "digits_per_group": 0,
+                },
+            }}),
+        );
+        assert_eq!(
+            store.currency.as_str(),
+            "VND",
+            "the rest of the node still applied"
+        );
+        assert_eq!(
+            store.timezone.iana_name(),
+            Some("Asia/Ho_Chi_Minh"),
+            "including the timezone, which is the one a bad format must not be able to take down"
+        );
+        assert_eq!(
+            store.number_format.group_separator,
+            pos_proto::locale::NumberFormat::default().group_separator,
+            "and the format itself is the one the store already had"
         );
     }
 
