@@ -66,6 +66,10 @@ export interface LiveLine {
   // The seat it was ordered for. Absent from the wire for the table's own lines, and for every line
   // on a store that does not assign seats.
   seat?: number;
+  // The course it goes out on (ADR-0130). Absent for a line on none, and for every line on a store
+  // that has authored no courses. Optional for `modifier_menu_item_ids`'s reason as well: an edge
+  // built before the field sends none.
+  course_id?: string;
 }
 
 // One open order, table or counter.
@@ -140,6 +144,16 @@ export interface ModifierGroup {
   member_menu_item_ids: string[];
 }
 
+// A named point in the service sequence (ADR-0130). Already in service order, ties broken by id, by
+// the cloud compiler — a screen renders them in the order given and must never sort them again: the
+// sequence is the entity's whole meaning, and rebuilding it from a filtered list is how one screen
+// ends up disagreeing with another about what comes first.
+export interface CourseResponse {
+  course_id: string;
+  display_name: string;
+  sort: number;
+}
+
 export interface MenuItemResponse {
   menu_item_id: string;
   display_name: string;
@@ -151,6 +165,9 @@ export interface MenuItemResponse {
   // The groups the till must ask about before this item is sold. Ids, not copies: the groups
   // themselves are listed once on the menu response.
   modifier_group_ids: string[];
+  // The course this item goes out on, absent for an item on none (ADR-0130). The till stamps it
+  // onto the line it adds, which is what gives a fire-by-course something to match.
+  course_id?: string | null;
   available: boolean;
 }
 
@@ -171,6 +188,12 @@ export interface MenuResponse {
   kds_enabled: boolean;
   // Every modifier group any item attaches, listed once — an item names the ones it needs by id.
   modifier_groups: ModifierGroup[];
+  // Whether this store groups its lines into courses (§10 `Capability::Courses`). The edge refuses
+  // a fire-by-course on a store with it off, so the till offers no course control there rather than
+  // offering an act that would be refused.
+  courses_enabled: boolean;
+  // Every course any item goes out on, in service order. Empty until the console authors one.
+  courses: CourseResponse[];
   // The payment methods this store accepts, as their wire names, or `null` when nothing is
   // restricted. `null` is not an empty list — it means "no restriction published", so a method added
   // to the enum later keeps working on an unrestricted store.

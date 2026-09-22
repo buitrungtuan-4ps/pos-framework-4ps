@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Fire by course** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+  `LineCommand::Fire { course }` and its `courses_enabled` gate had been written and tested in the
+  domain since before there was a course to name, and **nothing ever filled the field**. This is the
+  caller that does, and the last of the three changes that record asked for.
+  - `POST /api/orders/{id}/fire/{course_id}` — "starters away", the whole-order fire narrowed to one
+    course. The same transaction boundary, the same published routing, the same staff-confirmation
+    gate, because it is the same routine with a filter rather than a second copy of it.
+  - `GET /api/menu` now carries `courses` (in service order) and each item's `course_id`, and the
+    order screen offers **one button per course that still has food waiting** — in the order the
+    cloud published, never re-sorted by the till. A course whose food has all gone draws no button.
+  - The till stamps the catalog's course onto each line it adds, which is what gives a
+    fire-by-course something to match, and `GET /api/orders/live` carries it so a till that reloads
+    mid-service still knows which of its lines are starters.
+  - `courses_enabled` gates the route and the control together: a store with courses off draws no
+    course row and is **refused** rather than answered with an empty list, so an operator learns why
+    rather than watching a button do nothing.
+
+  **Upgrade note:** no migration and no protocol bump. `/api/menu` and `/api/orders/live` gain
+  fields; both are additive and an older till ignores them. A store that has authored no courses
+  sees no change at all.
+
 - **A course reaches a store** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
   The course entity landed and the compiled `menu` node did not carry it, so a store still could not
   read a single course — the half that change named as still missing.

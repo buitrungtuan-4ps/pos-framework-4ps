@@ -116,6 +116,15 @@ async function addItemWithAChoice(page) {
   await page.locator("#menu-search").fill("");
 }
 
+/** Adds the demo store's starter (the salad), so a course has something waiting. */
+async function addStarter(page) {
+  await page.locator("#menu-search").fill("salad");
+  await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  await page.locator('[data-step="onItem"]').click();
+  await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  await page.locator("#menu-search").fill("");
+}
+
 /** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
 async function sendOrder(page) {
   await page.locator('[data-step="fireOrder"]').click();
@@ -169,6 +178,13 @@ const PRECONDITIONS = {
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);
+  },
+  // A line on a course, so a course has something waiting and the row exists to tap. The salad is
+  // the demo store's starter; reached by name rather than by position for the reason the modifier
+  // flow is, since the first item on the grid is not it.
+  "Fire one course to the kitchen": async (page) => {
+    await seatTable(page);
+    await addStarter(page);
   },
   "Settle a dine-in table in cash": async (page) => {
     await seatTable(page);
@@ -265,6 +281,56 @@ for (const declared of replayed) {
     }
   });
 }
+
+// Not a flow: what the declared "Fire one course" cannot say.
+//
+// That flow asserts the tap exists and that *something* reaches the kitchen — which a
+// fire-by-course that ignored the course entirely would satisfy just as well, because firing
+// everything also fires the starter. The claim worth gating is the **narrowing**: the starters go
+// and nothing else does.
+//
+// So this orders two things the demo store deliberately separates — a salad on the "Starters"
+// course and an iced tea on **no** course, which is what most lines in most stores are — sends the
+// starters, and asserts one line fired and one is still waiting. Send the whole order from the
+// course button and this goes red; drop the course filter on the edge and it goes red; stamp no
+// course on the line as it is added and the button is not there to tap in the first place.
+test("firing one course sends that course and leaves the rest of the order waiting", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+
+    // On no course at all: a drink goes when it is poured. A course fire must not sweep it up.
+    await page.locator("#menu-search").fill("iced tea");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+    await page.locator('[data-step="onItem"]').click();
+    await page.locator("#menu-search").fill("");
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(2);
+
+    // The store publishes two courses but only one of them has food waiting, so only one button is
+    // drawn — a "Send mains" control over nothing is a control that does nothing.
+    await expect(
+      page.locator('[data-step="fireCourse"]'),
+      "the course row offers a button per course with food waiting, and this order has starters only",
+    ).toHaveCount(1);
+    await page.locator('[data-step="fireCourse"]').click();
+
+    await expect(
+      page.locator('[data-outcome="line-fired"]'),
+      "firing the starters sent more than the starters — the course filter is not narrowing anything",
+    ).toHaveCount(1);
+    await expect(
+      page.locator('[data-outcome="line-unsent"]'),
+      "the drink was on no course and should still be waiting",
+    ).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
 
 // Not a flow: the regression for a mistyped PIN, which is the most ordinary event on a shop floor
 // and used to unpair the tablet.
