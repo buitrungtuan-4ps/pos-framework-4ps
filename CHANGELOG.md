@@ -310,6 +310,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   lookup still reads the line's course, because where the food goes is a different question from
   when it goes.
 
+- **`console-replay` was never flaky in the flows it replays — it was dying in dependency install.**
+  Four JS jobs each ran a bare `npm install --global pnpm@10` with no retry, so one registry hiccup
+  failed the job outright: every later step skipped, no report written, no browser launched. The
+  longest job lost that lottery most often, which is how it earned the reputation. It only became
+  legible once the Postgres teardown dump was quietened and the job's log dropped from thousands of
+  lines to 453. The four copies are now one local composite action, `node-setup`, which retries a
+  failed fetch three times and says so in the job log.
+
 - **Setting a store's display language no longer empties its menu of modifier groups.**
   `MenuCatalog::localized` ([ADR-0074](docs/adr/0074-localization-and-tax.md)) rebuilt the catalog
   from its items alone, so a store that published a `locale` node received a `menu` node carrying

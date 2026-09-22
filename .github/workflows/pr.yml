@@ -211,11 +211,10 @@ jobs:
         working-directory: ui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Node ships on the runner; pnpm is installed pinned to the major the
-      # lockfile was written with, and no remote action is added to the pinned-SHA
-      # surface. `--frozen-lockfile` fails if ui/pnpm-lock.yaml is out of date.
-      - name: install pnpm
-        run: npm install --global pnpm@10
+      # `node-setup` installs the pinned pnpm major, retrying a failed fetch --
+      # see that action for what a bare install cost. `--frozen-lockfile` fails if
+      # ui/pnpm-lock.yaml is out of date.
+      - uses: ./.github/actions/node-setup
       - name: install dependencies
         run: pnpm install --frozen-lockfile
       - name: typecheck and build
@@ -239,8 +238,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
-      - name: install pnpm
-        run: npm install --global pnpm@10
+      - uses: ./.github/actions/node-setup
       - name: install dependencies
         working-directory: ui
         run: pnpm install --frozen-lockfile
@@ -314,8 +312,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/rust-setup
-      - name: install pnpm
-        run: npm install --global pnpm@10
+      - uses: ./.github/actions/node-setup
       - name: install dependencies
         working-directory: dashboard
         run: pnpm install --frozen-lockfile
@@ -377,8 +374,7 @@ jobs:
         working-directory: dashboard
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: install pnpm
-        run: npm install --global pnpm@10
+      - uses: ./.github/actions/node-setup
       - name: install dependencies
         run: pnpm install --frozen-lockfile
       - name: typecheck and build
