@@ -93,6 +93,23 @@ pub trait EventStoreHarness: Send + Sync {
     /// require the store to exist — a row in the cloud, row-level security applying to it — and
     /// only the harness knows how to arrange that.
     fn store_id(&self) -> StoreId;
+
+    /// Whether this store stamps a hash chain onto the events it appends
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// **Required, with no default, on purpose.** A default would let an adapter that chains opt
+    /// out of the chain obligations by saying nothing, which is precisely the "adapter's private
+    /// business" [ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 5 exists to end.
+    /// Each harness states its answer where a reviewer can see it.
+    ///
+    /// The declaration is itself checked, in both directions: a harness that says `true` and whose
+    /// store produces no head fails, and so does one that says `false` and whose store produces
+    /// one. So this cannot be set wrong and quietly excuse the store from anything.
+    ///
+    /// `false` is a legitimate answer. The cloud's log is a durable copy of chains the stores
+    /// stamped, not a chain of its own — `store-postgres` answers `None` and is held to keeping
+    /// that answer rather than inventing a head.
+    fn chains(&self) -> bool;
 }
 
 /// Supplies a fresh [`ConfigStore`].

@@ -1,0 +1,41 @@
+name: node-setup
+description: >
+  Install the pinned pnpm major, retrying a failed fetch. A local composite
+  action rather than a third-party one, for the reason rust-setup is: it travels
+  with the commit under review, so it cannot be changed underneath us the way a
+  mutable tag can.
+
+runs:
+  using: composite
+  steps:
+    # Node ships on the runner; pnpm is pinned to the major the lockfiles were
+    # written with, and no remote action joins the pinned-SHA surface.
+    #
+    # The retry is the point. This was four copies of a bare `npm install
+    # --global pnpm@10`, one per JS job, and a single registry hiccup failed the
+    # job outright — every later step skipped, no report written, no browser
+    # launched. `console-replay` is the longest of those jobs, so it lost that
+    # lottery most often and got a reputation for being flaky in the flows it
+    # replays. It was never the flows: the job was dying in dependency install,
+    # three steps before the first one ran.
+    #
+    # npm retries its own fetches twice by default and that was not enough, so
+    # the loop is here as well rather than instead: it also covers a failure
+    # that is not a fetch. Three attempts, backing off, and the last one's output
+    # is the one a reader sees.
+    - shell: bash
+      run: |
+        set -uo pipefail
+        for attempt in 1 2 3; do
+          if npm install --global pnpm@10; then
+            pnpm --version
+            exit 0
+          fi
+          if [ "$attempt" -lt 3 ]; then
+            delay=$((attempt * 10))
+            echo "::warning::pnpm install failed (attempt ${attempt}/3); retrying in ${delay}s"
+            sleep "$delay"
+          fi
+        done
+        echo "::error::pnpm could not be installed after three attempts"
+        exit 1

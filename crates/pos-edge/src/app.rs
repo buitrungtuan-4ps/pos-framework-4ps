@@ -51,7 +51,7 @@ use pos_proto::events::{
     EventType, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
     SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
     SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
-    SecurityPermissionOverridden,
+    SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -1170,6 +1170,12 @@ pub struct LiveOrderLine {
     /// A server assigns seats so that the food can be put in front of the right person; a till that
     /// reloaded lost every one of them and showed a table's worth of anonymous lines.
     pub seat: Option<u16>,
+    /// The course the line goes out on, or `None` for a line on none (ADR-0130).
+    ///
+    /// The third field to ride here for the header's reason, and the one that would have been the
+    /// third to go missing: a till that reloaded mid-service would show every line uncoursed, so the
+    /// course controls would offer to send starters that the screen no longer knew were starters.
+    pub course_id: Option<CourseId>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -2161,6 +2167,9 @@ impl<S: EventStore> Edge<S> {
             device_id,
             employee_id: None,
             shift_id: None,
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         };
         let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
@@ -3301,7 +3310,13 @@ impl<S: EventStore> Edge<S> {
             base_item: record.menu_item_id,
             modifiers: record.modifier_menu_item_ids.clone(),
             quantity: record.quantity,
-            course: record.course_id,
+            // `None`, and not the line's own course. The field says which course is *being fired*
+            // — it is what `courses_enabled` gates — not which one the line belongs to. Passing the
+            // taxonomy here made a store with courses off unable to fire a line that merely
+            // belonged to a course, and nothing gates adding one, so the food had no way to the
+            // kitchen short of a void. The station lookup below still reads the line's course,
+            // because *where* the food goes is a different question from *when* it goes.
+            course: None,
         };
         let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
 
@@ -3534,6 +3549,7 @@ impl<S: EventStore> Edge<S> {
                         bumped: projection.bumped_lines.contains(&order_line_id),
                         modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
                         seat: record.seat,
+                        course_id: record.course_id,
                     })
                     .collect(),
             })
@@ -3638,8 +3654,60 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
         station_id: Option<StationId>,
     ) -> Result<Vec<LineView>, AppError> {
+        self.fire_unsent(actor, order_id, station_id, None).await
+    }
+
+    /// Sends every unsent line **on one course** to the kitchen, in one transaction (ADR-0130).
+    ///
+    /// The other half of the same operator act: "starters away" rather than "send the order". It is
+    /// [`Self::fire_order`] narrowed to one course, and deliberately the same routine — a second
+    /// copy would be a second place for the transaction boundary, the routing and the staff gate to
+    /// drift, and those are exactly the properties that must not differ between the two.
+    ///
+    /// **This is what the `courses_enabled` capability gates.** `LineCommand::Fire { course }` means
+    /// the line is being fired as part of a course, and until now nothing filled it — the gate had a
+    /// domain test and no production caller. A store with courses off is refused here, before the
+    /// empty-list shortcut below, so asking is refused rather than quietly answered with "nothing to
+    /// do" on an order whose starters are all still waiting.
+    ///
+    /// A course with nothing unsent on it returns an empty list, for [`Self::fire_order`]'s reason:
+    /// two devices sending the starters is an ordinary race and the second one finding the work done
+    /// is the right outcome. An order that never had a line on that course is answered the same way,
+    /// because telling the two apart would need the catalog and would turn a race into a refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::CapabilityDisabled`](pos_core::error::DomainError::CapabilityDisabled) when
+    /// the store has courses off, plus everything [`Self::fire_order`] can return.
+    pub async fn fire_course(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        course_id: CourseId,
+        station_id: Option<StationId>,
+    ) -> Result<Vec<LineView>, AppError> {
+        self.fire_unsent(actor, order_id, station_id, Some(course_id))
+            .await
+    }
+
+    /// The one routine both fire paths are: every unsent line on an order, or every unsent line on
+    /// one of its courses, committed together or not at all.
+    async fn fire_unsent(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        station_id: Option<StationId>,
+        course: Option<CourseId>,
+    ) -> Result<Vec<LineView>, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let session = self.session();
+
+        // Before the empty-list shortcut, so a store with courses off is told it cannot fire by
+        // course rather than told there is nothing to fire. `decide_line` would refuse it too, but
+        // only once a line got that far, and an empty course never would.
+        if course.is_some() {
+            ctx.require_capability(Capability::Courses)?;
+        }
 
         // Asked once, for the order. A guest's tabled QR order that nobody has confirmed cannot
         // reach the kitchen, and doing this per line would ask the same question six times.
@@ -3649,7 +3717,10 @@ impl<S: EventStore> Edge<S> {
             StaffStanding::Fireable => {}
         }
 
-        let unfired = self.lock_projection().unfired_lines_for_order(order_id);
+        let mut unfired = self.lock_projection().unfired_lines_for_order(order_id);
+        if let Some(course) = course {
+            unfired.retain(|(_, record)| record.course_id == Some(course));
+        }
         if unfired.is_empty() {
             return Ok(Vec::new());
         }
@@ -3666,7 +3737,11 @@ impl<S: EventStore> Edge<S> {
                 base_item: record.menu_item_id,
                 modifiers: record.modifier_menu_item_ids.clone(),
                 quantity: record.quantity,
-                course: record.course_id,
+                // The course being fired, not the one the line belongs to: `None` from
+                // `fire_order`, because firing everything is not firing by course, and it costs
+                // more here than on the single-line path — one refusal aborts the batch, so one
+                // line on a course would make the whole order unfireable.
+                course,
             };
             let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
             let (envelope, message) = self.prepare(
@@ -4265,6 +4340,7 @@ impl<S: EventStore> Edge<S> {
             variance,
         };
         self.commit_and_publish(&ctx, &payload).await?;
+        self.anchor_chain(&ctx).await?;
 
         self.lock_projection().close_shift_record(shift_id);
         Ok(ShiftView {
@@ -4275,6 +4351,50 @@ impl<S: EventStore> Edge<S> {
             variance: Some(variance),
             print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
         })
+    }
+
+    /// Publishes the head of this store's hash chain
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// The anchor, and the reason the chain is worth anything against a determined hand. A chain
+    /// verifies happily after its tail has been cut off, and after an edit whose later links were
+    /// all re-derived — the algorithm is in the source, so anyone holding the file can rebuild one
+    /// that checks out. What a store cannot do is rewrite what the cloud has already received.
+    ///
+    /// Published **after** the shift's own close event, so the anchor covers it. It therefore
+    /// reports the chain as it stood before the anchor itself was written, because a record cannot
+    /// contain its own hash. A sale landing between the read and the commit leaves it a record or
+    /// two behind, which is safe: it still extends the previous anchor and the next covers the gap.
+    /// The guarantee reaches back to the **last anchor**, not to the last event, and that is the
+    /// cost of anchoring at a boundary a human attends to rather than on every write.
+    ///
+    /// A store whose adapter keeps no chain publishes nothing, which is the honest outcome rather
+    /// than an anchor over a chain that does not exist.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the head cannot be read or the event cannot be committed. A shift close that
+    /// reaches this point has already committed; a failure here is reported to the caller and the
+    /// close stands, because refusing to close a counted shift over a missing anchor would strand
+    /// an operator at the end of the night.
+    async fn anchor_chain(&self, ctx: &DecisionCtx) -> Result<(), AppError> {
+        let Some(anchor) = self
+            .store
+            .chain_head(self.identity.store_id)
+            .await
+            .map_err(AppError::Port)?
+        else {
+            return Ok(());
+        };
+        self.commit_and_publish(
+            ctx,
+            &StoreChainAnchored {
+                chain_seq: anchor.seq,
+                chain_head: anchor.head,
+                unchained: anchor.unchained,
+            },
+        )
+        .await
     }
 
     /// Rebuilds the in-memory projection from the durable event log (P5 crash recovery).
@@ -4762,6 +4882,9 @@ impl<S: EventStore> Edge<S> {
             device_id,
             employee_id: None,
             shift_id: self.current_shift_id(),
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         };
         Ok((
@@ -4819,6 +4942,9 @@ impl<S: EventStore> Edge<S> {
             device_id: ctx.actor.device_id,
             employee_id: Some(ctx.actor.employee_id),
             shift_id: self.current_shift_id(),
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         })
     }
@@ -4876,10 +5002,11 @@ mod tests {
     use pos_ports::subject_store::{SubjectRecord, SubjectStore};
     use pos_ports::{Transactional, TxContext};
     use pos_proto::envelope::EventPayload;
-    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
+    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured, StoreChainAnchored};
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
-        DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
+        CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId,
+        TableId,
     };
     use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::MenuCatalog;
@@ -4931,6 +5058,7 @@ mod tests {
             unit_price: vnd(150_000),
             tax_class_id: EdgeSession::standard_tax_class(),
             modifier_group_ids: Vec::new(),
+            course_id: None,
             available: true,
         });
         Edge::new(
@@ -4955,6 +5083,18 @@ mod tests {
             course_id: None,
             modifier_menu_item_ids: Vec::new(),
             note_present: false,
+        }
+    }
+
+    fn course(n: u128) -> CourseId {
+        CourseId::new(Ulid::from_u128(n))
+    }
+
+    /// The same line, declaring the course it goes out on.
+    fn on_course(n: u128) -> LineDraft {
+        LineDraft {
+            course_id: Some(course(n)),
+            ..a_line()
         }
     }
 
@@ -5034,6 +5174,296 @@ mod tests {
                 edge.line_state(line.order_line_id),
                 Some(OrderLineState::Fired)
             );
+        });
+    }
+
+    /// Fire by course: the starters go, the mains stay, and both happen in one transaction.
+    ///
+    /// The whole point of ADR-0130. `LineCommand::Fire { course }` and its `courses_enabled` gate
+    /// have been written and tested in the domain since before there was a course to name, and
+    /// nothing filled the field — this is the caller that does.
+    #[test]
+    fn firing_a_course_sends_that_course_and_leaves_the_rest() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(250));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let starter = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+            let main = edge
+                .add_line(actor(), table, on_course(901))
+                .await
+                .expect("adds");
+            // An item on no course at all, which a fire-by-course must not sweep up.
+            let uncoursed = edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_course(actor(), starter.order_id, course(900), Some(station))
+                .await
+                .expect("starters away");
+
+            assert_eq!(fired.len(), 1, "only the line on that course is sent");
+            assert_eq!(
+                edge.line_state(starter.order_line_id),
+                Some(OrderLineState::Fired)
+            );
+            assert_eq!(
+                edge.line_state(main.order_line_id),
+                Some(OrderLineState::Added),
+                "the main is still waiting"
+            );
+            assert_eq!(
+                edge.line_state(uncoursed.order_line_id),
+                Some(OrderLineState::Added),
+                "and an item on no course is not swept up by a course fire"
+            );
+        });
+    }
+
+    /// A course with nothing left unsent is an ordinary race, not a refusal — the rule
+    /// `fire_order` already sets for a whole order, applied to the narrowing of it.
+    #[test]
+    fn firing_a_course_twice_is_answered_rather_than_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(251));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let first = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await
+                .expect("starters away");
+            assert_eq!(first.len(), 1);
+
+            let second = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await
+                .expect("the second device finds the work done");
+            assert!(
+                second.is_empty(),
+                "a course with nothing unsent answers with an empty list"
+            );
+
+            let none_such = edge
+                .fire_course(actor(), line.order_id, course(999), Some(station))
+                .await
+                .expect("a course this order never had is the same answer");
+            assert!(none_such.is_empty());
+        });
+    }
+
+    /// The gate, at last with a caller. A store that fires everything at once has no starters to
+    /// send, and asking is refused rather than answered "nothing to do" — which on an order whose
+    /// starters are all still waiting would be a lie.
+    #[test]
+    fn a_store_with_courses_disabled_refuses_to_fire_by_course() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(252));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+
+            // A station is named explicitly so the capability is the *only* thing that can refuse
+            // this: the bootstrap session publishes no routing plan, and without a fallback station
+            // the call fails as `UnroutableLine` instead, which would let this pass for the wrong
+            // reason.
+            let station = StationId::new(Ulid::from_u128(9));
+            let refused = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(super::AppError::Domain(
+                        pos_core::error::DomainError::CapabilityDisabled {
+                            capability: "courses_enabled"
+                        }
+                    ))
+                ),
+                "asking is refused, not answered empty: got {refused:?}"
+            );
+            assert_eq!(
+                edge.line_state(line.order_line_id),
+                Some(OrderLineState::Added),
+                "and nothing was sent"
+            );
+        });
+    }
+
+    /// The refusal comes before the empty-list shortcut. A course the order has no unsent lines on
+    /// would return `Ok(vec![])` if the gate were only `decide_line`'s, because no line would ever
+    /// reach it — so a store with courses off would be told "nothing to do" rather than "you cannot
+    /// do this", and the control would look like it worked.
+    #[test]
+    fn the_courses_gate_is_checked_before_there_is_anything_to_fire() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(253));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            // On no course, so a course fire matches nothing and the shortcut would fire first.
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let refused = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(super::AppError::Domain(
+                        pos_core::error::DomainError::CapabilityDisabled { .. }
+                    ))
+                ),
+                "an empty course on a courses-off store is still a refusal: got {refused:?}"
+            );
+        });
+    }
+
+    /// Fire-everything still sends everything, courses or not. The narrowing must not have narrowed
+    /// the thing it was extracted from.
+    #[test]
+    fn firing_the_order_still_sends_every_line_whatever_course_it_is_on() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(254));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let first = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+            edge.add_line(actor(), table, on_course(901))
+                .await
+                .expect("adds");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_order(actor(), first.order_id, Some(station))
+                .await
+                .expect("send the order");
+            assert_eq!(
+                fired.len(),
+                3,
+                "two courses and an uncoursed line, all sent"
+            );
+        });
+    }
+
+    /// Fire-everything is not fire-by-course, and a store with courses off must still be able to
+    /// send its food to the kitchen.
+    ///
+    /// `LineCommand::Fire { course }`'s own doc says `by_course` "fires it as part of a course and
+    /// requires the `courses_enabled` capability" — it is a statement about *this firing*, not about
+    /// the line's taxonomy. Both edge paths passed the line's `course_id` instead, so on a store
+    /// with courses disabled a line that merely *belongs* to a course could not be fired at all:
+    /// `fire_line` refused it, and `fire_order` refused the whole order with it, because one
+    /// refusal aborts the batch. The food had no way to reach the kitchen short of voiding the line.
+    ///
+    /// `courses_enabled` defaults on, so this bites the store that deliberately turns it off — a
+    /// counter or retail profile, which is exactly the multi-industry case the capability exists
+    /// for. Nothing gates *adding* a line with a course, which is what makes the state reachable.
+    #[test]
+    fn a_store_with_courses_disabled_still_fires_a_line_that_belongs_to_one() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(240));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let draft = LineDraft {
+                course_id: Some(CourseId::new(Ulid::from_u128(900))),
+                ..a_line()
+            };
+            // Nothing refuses this, which is what makes the state below reachable at all.
+            let line = edge.add_line(actor(), table, draft).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_line(actor(), line.order_line_id, Some(station))
+                .await
+                .expect("a store with courses off still sends its food to the kitchen");
+            assert_eq!(fired.state, OrderLineState::Fired);
+        });
+    }
+
+    /// The same refusal on the batch path, where it costs more: one line carrying a course made the
+    /// **whole order** unfireable, because `fire_order` writes all of it or none of it.
+    #[test]
+    fn a_store_with_courses_disabled_still_fires_a_whole_order() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(241));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let plain = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.add_line(
+                actor(),
+                table,
+                LineDraft {
+                    course_id: Some(CourseId::new(Ulid::from_u128(900))),
+                    ..a_line()
+                },
+            )
+            .await
+            .expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_order(actor(), plain.order_id, Some(station))
+                .await
+                .expect("one line on a course does not strand the order");
+            assert_eq!(fired.len(), 2, "both lines reach the kitchen");
         });
     }
 
@@ -6072,6 +6502,116 @@ mod tests {
             assert_eq!(closed.variance, Some(vnd(0)));
             assert!(closed.print_shift_report, "closing prints the shift report");
         });
+    }
+
+    /// Closing a shift publishes the chain head
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// This is the half the chain cannot do alone. A hash chain verifies happily after its tail has
+    /// been cut off, and after an edit whose later links were re-derived — the algorithm is in the
+    /// source. What a store cannot do is rewrite what the cloud has already received, and this
+    /// event is that record leaving the building.
+    #[test]
+    fn closing_a_shift_publishes_the_chain_head() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            edge.count_shift(actor(), opened.shift_id, 500_000)
+                .await
+                .expect("counts");
+            edge.close_shift(actor(), opened.shift_id)
+                .await
+                .expect("closes");
+
+            let anchor = anchor_payload(&edge).await.expect("a shift close anchors");
+            let head = edge
+                .store
+                .chain_head(edge.identity.store_id)
+                .await
+                .expect("reads the head")
+                .expect("the store has a chain");
+
+            assert!(anchor.chain_seq > 0, "the anchor names a real position");
+            assert_eq!(
+                anchor.chain_seq,
+                head.seq - 1,
+                "the anchor reports the chain as it stood *before* it was itself written — a \
+                 record cannot contain its own hash, and claiming otherwise would be a head no \
+                 verification could ever reproduce"
+            );
+            assert_eq!(anchor.chain_head.as_str().len(), 64);
+            assert!(
+                !anchor.chain_head.is_genesis(),
+                "a real digest, not genesis"
+            );
+            assert_eq!(
+                anchor.unchained, 0,
+                "a fresh store has no unchained history"
+            );
+        });
+    }
+
+    /// Two closes produce two anchors, and the second extends the first.
+    ///
+    /// The property the cloud's refusal will be built on: an anchor that went backwards, or whose
+    /// head did not follow, is exactly the tampering this exists to catch.
+    #[test]
+    fn each_anchor_extends_the_one_before_it() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let mut seen: Vec<u64> = Vec::new();
+            for float in [500_000, 600_000] {
+                let opened = edge
+                    .open_shift(actor(), vnd(float))
+                    .await
+                    .expect("opens a shift");
+                edge.count_shift(actor(), opened.shift_id, float)
+                    .await
+                    .expect("counts");
+                edge.close_shift(actor(), opened.shift_id)
+                    .await
+                    .expect("closes");
+                seen.push(
+                    anchor_payloads(&edge)
+                        .await
+                        .last()
+                        .expect("an anchor per close")
+                        .chain_seq,
+                );
+            }
+            assert_eq!(seen.len(), 2);
+            assert!(
+                seen[1] > seen[0],
+                "the second anchor must extend the first, not restate or precede it: {seen:?}"
+            );
+        });
+    }
+
+    /// Every `store.chain.anchored` payload in this store's log, in order.
+    async fn anchor_payloads(edge: &Edge<FakeStore>) -> Vec<StoreChainAnchored> {
+        let events = edge
+            .store
+            .read(&EventQuery::first(
+                edge.identity.store_id,
+                NonZeroU32::new(500).expect("500 is not zero"),
+            ))
+            .await
+            .expect("reads the log");
+        events
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.as_str() == StoreChainAnchored::EVENT_TYPE.as_str()
+            })
+            .filter_map(|envelope| envelope.data.decode().ok())
+            .collect()
+    }
+
+    /// The single anchor in this store's log, when there is exactly one.
+    async fn anchor_payload(edge: &Edge<FakeStore>) -> Option<StoreChainAnchored> {
+        anchor_payloads(edge).await.into_iter().next()
     }
 
     #[test]

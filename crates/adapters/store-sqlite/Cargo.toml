@@ -18,6 +18,11 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 # thread. Only `sync` in the production tree — the channel and oneshot, no runtime; `rt` is a
 # dev-dependency for the contract suite's `block_on`.
 tokio = { version = "1", default-features = false, features = ["sync"] }
+# ADR-0131: the chain digest. SHA-256 on the RustCrypto line already pinned across this
+# workspace (pos-cloud, pos-edge, blob-garage all on sha2 0.11), so no new crypto version
+# enters the graph. `pos-proto` decides *what* is hashed and deliberately does not link
+# this — see `pos_proto::chain` for why the backbone allow-list is left alone.
+sha2 = "0.11"
 
 [dev-dependencies]
 pos-contract-tests = { path = "../../pos-contract-tests" }

@@ -56,6 +56,14 @@ struct LiveLineResponse {
     /// null would be a second spelling of the same nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
     seat: Option<u16>,
+    /// The course the line goes out on, absent for a line on none (ADR-0130). Omitted when absent,
+    /// for the reason `seat` is.
+    ///
+    /// Without it a till that reloaded mid-service drew every line uncoursed, so the course controls
+    /// offered to send starters the screen no longer knew were starters — the same loss `seat` was
+    /// added here to stop, one field over.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    course_id: Option<String>,
 }
 
 /// One open order.
@@ -104,6 +112,7 @@ where
                         .map(ToString::to_string)
                         .collect(),
                     seat: line.seat,
+                    course_id: line.course_id.map(|id| id.to_string()),
                 })
                 .collect(),
         })

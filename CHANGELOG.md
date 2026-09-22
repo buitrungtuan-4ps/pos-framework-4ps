@@ -18,6 +18,300 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **`pnpm screens` photographs every till screen at three device sizes.** A walk that boots the same
+  `examples/minimal-edge` the step gate drives, signs in as the demo employee, takes the store
+  through 17 states and captures each one at a Windows POS size, a 10" Android tablet size and a
+  phone size ([#400](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/400)).
+
+  It is a **record, not a gate**. It asserts nothing and can fail no build, and it runs from its own
+  Playwright config so `pnpm replay` neither collects it nor pays for it. Every step is time-boxed
+  and best-effort: a screen that cannot be reached records the reason and the walk goes on, because
+  a walk that stops at the first unreachable screen photographs nothing.
+
+  The images are not committed. They are regenerated on demand and go stale the moment a component
+  changes, so `ui/screenshots/` joins `ui/test-results/` in `.gitignore` — the harness is the
+  artifact, not its output.
+
+  **Upgrade note:** none — test tooling only, no change to any shipped artifact.
+
+### Fixed
+
+- **Forty-two of the edge's forty-five `/api/*` routes answered without naming their release or
+  their lease standing.** `stamp_edge_version` was applied with `Router::layer` as the last
+  operation of `http::router`, and `serve` merges `domain_router` and `activation_router` *after*
+  that. axum's `layer` wraps only the routes registered when it is called, so the stamp reached the
+  three pairing routes and the asset fallback and missed every route a till actually sells through.
+
+  Both banners that header feeds were therefore dead where they matter most: the version-drift
+  banner ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
+  banner ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). Both readers are
+  fail-silent by design — a missing header leaves the previous value — so an absent header is
+  indistinguishable from agreement, and `edgeIsBehind()` and `edgeIsSuperseded()` simply always
+  returned false. A hosted till that had been replaced would never have said so.
+
+  The stamp now goes on at the end of `compose`, where both the cloud and the LAN-only branch
+  converge, so a box running without a `cloud_url` is covered too.
+
+  Verified against the running binary: before, `GET /api/session` returned `401` with neither
+  header; now every `/api/*` route carries both and `/healthz` still carries neither.
+
+  **Upgrade note:** none — no protocol, schema or permission change. A till that had silently
+  stopped reporting drift starts reporting it again, so an estate mid-rollout may surface
+  version-drift banners it was not showing before. That is the mechanism working.
+
+
+- **A tagged release no longer dies in `npm install`.** The earlier fix said "the four copies are
+  now one local composite action" — it covered the four in `pr.yml` and left the **two in
+  `release.yml` untouched**, because `AGENTS.md` §8 forbids an agent modifying a release workflow
+  without being asked. Both now use the same retrying `node-setup` action.
+
+  It matters more here than on a pull request. A pull-request job that dies in dependency install
+  is re-run by whoever is already watching it; a release job is triggered by a **tag**, so the
+  recovery path is a human noticing that a cut release produced no artifacts and re-running the
+  workflow by hand. The `windows` leg builds the binary the PowerShell installer asks for, so a
+  registry hiccup there is a release with nothing for Windows to install.
+
+  **Upgrade note:** none — CI only, no change to any shipped artifact.
+### Changed
+
+- **`sha2` stays out of the backbone; `pos-proto` owns the whole hashing sequence instead**
+  ([ADR-0133](docs/adr/0133-the-backbone-defines-what-is-hashed-not-how.md)).
+  [ADR-0131](docs/adr/0131-a-chained-event-log.md) split the chain's *preimage* (in `pos-proto`)
+  from its *digest* (in each tier that links `sha2`), and left consolidating them to a later record.
+  Four copies of `ChainHash::of(Sha256::digest(preimage.as_bytes()).into())` had accumulated, which
+  is past the third-occurrence rule.
+  - **Measured before deciding.** Adding `sha2` to `tools/backbone-allowlist.toml` costs thirteen
+    crates with default features — including `getrandom`, `rand_core` and `libc` — or eight with
+    `default-features = false`. One of those eight is `cpufeatures`, whose entire job is reading the
+    host, and which pulls `libc` on `aarch64`. The backbone's forbid-pass exists so a reader can say
+    *these three crates touch nothing about the machine*; that would have made the sentence false,
+    and `deps-rule` resolves for the host it runs on, so CI on x86_64 would not have seen the ARM64
+    difference.
+  - **So the dependency is inverted instead.** `EventEnvelope::chain_hash(&self, link, digest)`
+    builds the preimage, applies the caller's digest and wraps the result. Each tier passes
+    `|bytes| Sha256::digest(bytes).into()` — one line naming the function it already links. The four
+    private helpers are gone, the sequence has one definition, and `pos-proto` gains no dependency.
+  - **Byte-identical**, checked against the old expression rather than assumed: the same envelope
+    and link hash to the same digest before and after.
+
+  **Upgrade note:** none. No stored hash changes, so a store's existing chain still verifies.
+
+### Added
+
+- **Every store is held to the chain, by contract**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 5: *"Verification is a contract test,
+  not an adapter's private business."*). Five new obligations in
+  `pos_contract_tests::event_store`, so `store-sqlite`, `store-postgres` and the in-memory fake are
+  all held to them the way the existing twelve obligations already are.
+  - A store's first record sits at `seq` 1 and links to the genesis constant; the chain is a dense
+    counter with no gaps; only the first record chains to genesis; `chain_head` reports the length
+    and a lowercase 64-character digest that is not genesis; a replayed append advances nothing.
+  - **A fifth case for a batch that is half already-stored and half new** — the shape
+    reconciliation's re-push produces ([ADR-0040](docs/adr/0040-reconciliation.md)). An entirely
+    duplicate batch cannot catch a chain that advances on an ignored row, because nothing persists;
+    a mixed one can, because the next genuinely new record lands one position too far and leaves a
+    hole every later verification reports as a break that never happened.
+  - **Each harness now declares whether its store chains, and the declaration is itself checked** —
+    in both directions. A harness that says it chains and whose store produces no head fails, and so
+    does one that says it does not and whose store produces one. There is no default, so an adapter
+    cannot opt out of the chain obligations by saying nothing, which is the "private business" the
+    decision names.
+  - `store-postgres` declares **false**, and that is the right answer rather than a gap: the cloud's
+    log is a durable copy of chains the stores stamped, and a second chain there would be the cloud
+    vouching for itself. It is held to *keeping* that answer rather than inventing a head.
+
+  **Upgrade note:** `EventStoreHarness` gains a required `chains()` method. Any out-of-tree harness
+  must add it — deliberately required rather than defaulted, so the answer is stated where a
+  reviewer sees it.
+
+- **A human can see a chain finding** — `GET /admin/chain-findings` and a **Chain integrity** screen
+  in the console ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4,
+  [ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+  - Until this, a refusal reached a human only as a line in the server's log and a durable row
+    nobody could read. For a mechanism whose entire product is *being noticed*, that was most of
+    the way to not having it.
+  - The screen lists the contradictions the cloud refused: the store, the position in its chain,
+    **both** hashes side by side — the pair *is* the finding, and either alone says nothing — the
+    event that offered the losing one, and when the **cloud** noticed. The cloud's clock, not the
+    store's: a store that is tampering with its log controls the other one.
+  - **An empty table means "nothing is wrong", not "nothing has happened yet"**, and it says so.
+    Every other screen's empty state means the latter, and an operator who reads this one the same
+    way learns to skip it.
+  - The screen also states, on the screen rather than only in an ADR, what a clean table does **not**
+    mean: the check reaches back to a store's last published head and no further, a record the cloud
+    has not received is a gap to reconcile rather than tampering, and this is tamper-evident and
+    never a certificate — any claim resting on it is for the company's tax advisors to make.
+  - It navigates under **compliance**, beside the audit trail and the subject register, not under the
+    estate: it is not a fact about a box, it is the question an auditor asks of the books.
+  - Behind `console.data.read`, tenant-scoped, narrowed to the store in context when there is one.
+
+  **Upgrade note:** no migration and no protocol change. One new read route; nothing existing moved
+  or was renamed.
+
+- **The cloud recomputes the chain from the events it holds — what closes truncation**
+  ([ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor closed
+  recomputation. This closes the other one.
+  - **Why the anchors could not.** A store cut back to length 20 and then traded on publishes its
+    next anchor *above* anything the cloud holds. Nothing collides; it reads as honest growth. The
+    evidence was never in the anchors — it is in the events, where the cloud holds the original
+    records at those positions and then receives new, different ones claiming the same places.
+  - At every anchor that moves a store's head, the cloud reads the events behind it and
+    **recomputes the chain those records actually make**: one event per position, each `prev_hash`
+    against the hash the cloud derives itself, and the head against what the anchor claims.
+  - **Two findings are accusations and two are not.** A *forked* position and a *broken link* are
+    filed as contradictions. A missing record is **incomplete** — ingest is at-least-once, a broker
+    gap is ordinary, and [ADR-0040](docs/adr/0040-reconciliation.md) exists to fill exactly this;
+    reporting it as fraud would be an accusation manufactured by the recovery mechanism working.
+    A window too large to walk is **unverified**, which is an honest absence of an answer, never a
+    pass.
+  - An anchor is now also checked against **its own envelope**, before anything is read: one
+    claiming a chain at least as long as the record carrying it is impossible and is refused on that
+    one event. Deliberately an inequality and not the tempting `prev_hash == chain_head` — the edge
+    reads its head and *then* commits the anchor, so a sale landing in between leaves it several
+    records above the length it names. A check that is right except when a till is busy is a check
+    that is wrong.
+  - Nothing was added to the write path. The window is read by trading day — the index the log
+    already carries — plus one day back for a shift that crossed the store's own cut-off. No column
+    was promoted onto `events`, no index added to it, and `pos-ports` and `pos-proto` are untouched.
+
+  **Upgrade note:** no migration, no protocol bump and no new table. A cloud composed without the
+  window reader keeps and refuses heads exactly as before, and recomputes nothing — the two are
+  separate so a deployment that cannot afford the read still refuses a forked head.
+
+- **The cloud keeps the anchors, and refuses one that contradicts what it holds**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The store half shipped a durable
+  record outside a store's reach; this is the half that reads it.
+  - Every `store.chain.anchored` event reaching the cloud — through the NATS cursor or through
+    `/internal/ingest`, because both pass the same funnel — is filed against the publishing store.
+    One head per chain length, per store, for ever: the refusal lives in the primary key on
+    `(tenant_id, store_id, chain_seq)` written `ON CONFLICT DO NOTHING`, so it still holds when the
+    layer above has a bug.
+  - **A second, different head at a length already recorded is refused** and the contradiction is
+    recorded with both heads and the event that offered one — the pair *is* the finding, so
+    overwriting either would destroy it. The cloud's own clock stamps when it was noticed; the
+    store's clock is on the anchor, and a store that is tampering with its log controls that one.
+  - **What this closes: recomputation.** A store that rewrites its history and re-derives every
+    later link arrives at a different head for a length the cloud already holds.
+  - **What it does not close: truncation.** A store cut back and then traded on publishes its next
+    anchor *above* anything the cloud holds, which from the anchors alone is honest growth. What
+    gives it away is two different events claiming one `chain.seq` — a property of the event log,
+    not of the anchors. **Closed in the same release by the entry above.**
+  - Three things that are **not** refusals, each with its own reason: an identical re-delivery (at
+    least-once ingest and reconciliation's re-push both guarantee it happens), an anchor arriving
+    late below the head after a broker gap (filed, head unmoved), and a first anchor from a store
+    the cloud has never heard from.
+  - An anchor is never rejected at ingest and a ledger outage never stops the log. The event is
+    stored either way, because what a store said is the evidence — and an outage that halted ingest
+    is exactly the cover somebody tampering would want.
+
+  **Upgrade note:** migration `0067_chain_anchors.sql` adds `chain_anchors` and
+  `chain_anchor_conflicts`, both tenant-scoped under RLS and granted `SELECT, INSERT` only — a
+  grant that allowed `UPDATE` or `DELETE` would hand back the power these tables exist to take
+  away. Applied idempotently at boot; no protocol bump and no change to any published API.
+
+- **A store publishes its chain head — the anchor**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The half a hash chain cannot do
+  alone: a chain verifies happily after its tail is cut off, and after an edit whose later links
+  were re-derived, because the algorithm is in the source. What a store **cannot** do is rewrite
+  what the cloud has already received.
+  - New event `store.chain.anchored`, published at shift close — a reconciliation point a human
+    already attends to, and one that bounds how much history a store could rewrite unobserved to a
+    single shift. **The guarantee therefore reaches back to the last anchor, not the last event.**
+  - `EventStore::chain_head` on the port. An adapter that keeps no chain answers `None`, which is
+    true rather than a stand-in, and a store with nothing to anchor publishes nothing.
+  - The **fake chains too**, which is what makes this testable: a fake that answered "no chain"
+    would have let the edge's own tests pass while the anchor never fired — exactly the failure
+    this line of work exists to stop.
+  - The anchor reports the chain as it stood *before it was itself written*, because a record
+    cannot contain its own hash. A sale landing between the read and the commit leaves it a record
+    or two behind; that still extends the previous anchor and the next covers the gap.
+
+  **Since superseded in the same release:** the cloud now stores each anchor and refuses one that
+  contradicts a head it holds — see the entry above.
+
+  **Upgrade note:** no protocol bump. `store.chain.anchored` is a new event type, additive; the
+  snapshot carries it and nothing was renamed or removed.
+
+- **The event log chains at the edge** ([ADR-0131](docs/adr/0131-a-chained-event-log.md)).
+  The table was append-only by convention and by nothing else — three columns with no link between
+  rows, in a SQLite file on a PC in a shop. An `UPDATE` to an amount left `PRAGMA integrity_check`
+  reporting `ok`.
+  - Every event now carries `seq` and `prev_hash` on its envelope, assigned in the writer thread
+    inside the commit transaction — the only place the previous head is known. The stored row and
+    the outbox copy both carry the link, so the cloud verifies the same bytes the store wrote.
+  - `SqliteStore::verify_chain` walks the chain with no internet and names the first break:
+    a record edited after it was written, one removed from the middle, or one re-linked.
+  - **Two tampers a chain cannot catch alone, and both have a test that asserts it finds nothing:**
+    cutting off the tail leaves what survives perfectly linked, and an attacker who edits a record
+    and re-derives every later link produces a chain that verifies. Those are closed by the cloud
+    anchor, which is the next change — until then this is tamper-**evident**, never tamper-proof.
+  - A break is reported, never fatal. A till that refused to sell because yesterday's log is
+    damaged would turn a record-keeping fault into a closed shop.
+  - Rows written before migration `0013` stay unchained and are counted separately, not blamed.
+    Nothing backfills them: a chain over history nobody can vouch for is the false confidence the
+    record rejects a bare chain for.
+
+  **Upgrade note:** no protocol bump — both envelope fields are additive and an older reader
+  ignores them. A store's chain begins at its first event after the migration; everything earlier
+  verifies as *unchained*.
+
+- **[ADR-0131](docs/adr/0131-a-chained-event-log.md) — the event log chains, and the cloud holds the anchor.**
+  The record only, no behaviour yet. `docs/architecture.md` called the log append-only; that described
+  the code, not the data. The table is three columns with nothing linking one row to the next, and it
+  is a SQLite file on a PC in a shop — three settled bills totalling 2,500,000 VND can become two
+  totalling 700,000 with `integrity_check` still reporting `ok`.
+  - The decision is `seq` + `prev_hash` on the envelope, verified at startup with no internet, with
+    the chain head published to the cloud at each shift close.
+  - **The anchor is not optional garnish.** A chain alone misses two cases, both checked rather than
+    assumed: deleting the *last* records leaves a perfectly linked chain, and an attacker who edits a
+    record and re-derives every subsequent hash produces one that verifies. A store cannot rewrite
+    what the cloud has already seen, which is what closes both.
+  - No signing, no secure element: none of the six markets served (Vietnam, Japan, India, Cambodia,
+    Indonesia, the United States) is in the EU, so NF525, KassenSichV and RKSV are out of scope. A
+    market that needs them needs a new ADR first.
+  - **Not a compliance claim.** The record names Japan's 電子帳簿保存法 and the US state
+    sales-suppression statutes as the two regimes this shape speaks to, and says explicitly that
+    whether it discharges a legal duty is for the company's tax advisors, per jurisdiction.
+
+- **Fire by course** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+  `LineCommand::Fire { course }` and its `courses_enabled` gate had been written and tested in the
+  domain since before there was a course to name, and **nothing ever filled the field**. This is the
+  caller that does, and the last of the three changes that record asked for.
+  - `POST /api/orders/{id}/fire/{course_id}` — "starters away", the whole-order fire narrowed to one
+    course. The same transaction boundary, the same published routing, the same staff-confirmation
+    gate, because it is the same routine with a filter rather than a second copy of it.
+  - `GET /api/menu` now carries `courses` (in service order) and each item's `course_id`, and the
+    order screen offers **one button per course that still has food waiting** — in the order the
+    cloud published, never re-sorted by the till. A course whose food has all gone draws no button.
+  - The till stamps the catalog's course onto each line it adds, which is what gives a
+    fire-by-course something to match, and `GET /api/orders/live` carries it so a till that reloads
+    mid-service still knows which of its lines are starters.
+  - `courses_enabled` gates the route and the control together: a store with courses off draws no
+    course row and is **refused** rather than answered with an empty list, so an operator learns why
+    rather than watching a button do nothing.
+
+  **Upgrade note:** no migration and no protocol bump. `/api/menu` and `/api/orders/live` gain
+  fields; both are additive and an older till ignores them. A store that has authored no courses
+  sees no change at all.
+
+- **A course reaches a store** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+  The course entity landed and the compiled `menu` node did not carry it, so a store still could not
+  read a single course — the half that change named as still missing.
+  - `MenuEntry.course_id` and `MenuCatalog::courses()` / `course_for()`. The **item** declares its
+    course, the courses themselves ride once on the catalog, and a till groups an order into
+    starters, mains and desserts without a second read. Both fields are additive and
+    `#[serde(default)]`: a book that omits them loads unchanged and an edge that predates them
+    ignores them.
+  - The compiler publishes them **in service order**, ties broken by id, so a re-compile of
+    unchanged authoring stays byte-identical. An archived course is not published and an entry
+    naming one compiles with no course rather than being refused; a course nothing on a channel goes
+    out on is not published on that channel, so delivery that prices no dessert gets no empty
+    heading.
+  - **Still to come, and named rather than omitted:** nothing fires by course yet, though
+    `LineCommand::Fire { course }` and its `courses_enabled` gate have been written and tested all
+    along; and a routing rule's `course_id` is still accepted without checking an active course
+    carries it (decision 6), which needs the catalog store threaded into the floor routes.
+
 - **A course is something the catalog names** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
   A course was built end to end and the thing itself did not exist: `CourseId` is a wire id,
   `sales.order_line.added` carries one, `POST /api/tables/{id}/lines` accepts one,
@@ -259,6 +553,58 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     table-service profile — so a store that publishes neither behaves exactly as before.
 
 ### Fixed
+
+- **`console-replay` could hang for two minutes on a listbox that was still open.**
+  The harness's `press()` chose an option from a combobox and returned immediately. The listbox is
+  painted over the rest of the form, so while it was still on screen it intercepted pointer events
+  for the next step's button — and Playwright does not fail an intercepted click, it retries it,
+  for the whole test timeout. A run ended with `<li role="option">Airport branches</li> …
+  intercepts pointer events` repeated 230 times, blaming the control it was trying to reach rather
+  than the one covering it. It now waits for the listbox to close, which is the half it was
+  missing.
+
+- **A station routing rule could name a course that did not exist**
+  ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6, the last gap on
+  that record). `POST /admin/kitchen/routing` accepted a `course_id` after checking only that it did
+  not *also* name an item — because until the course entity existed there was nowhere to look. An
+  operator could send "any line on course X to the pastry station"; the rule published, the store
+  honoured it, and it matched nothing **for ever, silently**, since no line could carry that id
+  either. The write now refuses a `course_id` no active course carries, with `course_id: NOT_FOUND`
+  in the refusal's details. An **archived** course is refused too: the compiler does not publish one,
+  so a rule naming it would be exactly as dead as a rule naming an id nobody ever authored, and one
+  answer for both is one fewer way for them to drift apart. Refused at the write rather than at
+  publish, the way the menu graph's cycle already is — a rule that can never match is a rule an
+  operator will never find out about.
+
+- **A store with courses turned off could not fire a line that belonged to a course.**
+  `LineCommand::Fire { course }` says in its own doc that the field means the line is being fired
+  *as part of a course*, and that is what `courses_enabled` gates. Both edge fire paths passed the
+  line's **taxonomy** instead — the course the item happens to be on — so on a store with courses
+  disabled, `POST /api/lines/{id}/fire` refused the line and `POST /api/orders/{id}/fire` refused
+  the **whole order** with it, because one refusal aborts the batch. Nothing gates *adding* a line
+  with a course, so the state was reachable and the food had no way to the kitchen short of voiding
+  the line. Both paths now pass `None`: firing everything is not firing by course. The station
+  lookup still reads the line's course, because where the food goes is a different question from
+  when it goes.
+
+- **`console-replay` was never flaky in the flows it replays — it was dying in dependency install.**
+  Four JS jobs each ran a bare `npm install --global pnpm@10` with no retry, so one registry hiccup
+  failed the job outright: every later step skipped, no report written, no browser launched. The
+  longest job lost that lottery most often, which is how it earned the reputation. It only became
+  legible once the Postgres teardown dump was quietened and the job's log dropped from thousands of
+  lines to 453. The four copies are now one local composite action, `node-setup`, which retries a
+  failed fetch three times and says so in the job log.
+
+- **Setting a store's display language no longer empties its menu of modifier groups.**
+  `MenuCatalog::localized` ([ADR-0074](docs/adr/0074-localization-and-tax.md)) rebuilt the catalog
+  from its items alone, so a store that published a `locale` node received a `menu` node carrying
+  **no modifier groups at all**. Every item a guest has to be asked about — what size, which base,
+  which sauce ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)) — reached the till
+  attaching nothing, and the till sold it without asking; `GET /api/menu` returned an empty
+  `modifier_groups` list for the same reason. A whole ADR's worth of behaviour was switched off by
+  choosing a language, which for this fleet is every store. The catalog now carries everything it
+  holds across, and resolves the groups' own names in the same pass rather than leaving a menu half
+  in Vietnamese and half in English.
 
 - **The running check ignored discounts.** `check_totals` read the *order*, which knows nothing
   about a reduction, so a till would have quoted a guest full price while the settle charged the

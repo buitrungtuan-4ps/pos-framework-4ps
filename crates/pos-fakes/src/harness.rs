@@ -67,6 +67,14 @@ impl EventStoreHarness for StoreHarness {
         Ok(store.reopen())
     }
 
+    fn chains(&self) -> bool {
+        // The fake chains, and this is the declaration that makes that a checked fact rather than
+        // a comment. It matters more here than anywhere: the domain suite runs against the fake, so
+        // a fake that quietly stopped chaining would leave every edge test that exercises the
+        // anchor passing green while the thing they exist to exercise never fired (ADR-0131).
+        true
+    }
+
     fn store_id(&self) -> StoreId {
         store_id()
     }

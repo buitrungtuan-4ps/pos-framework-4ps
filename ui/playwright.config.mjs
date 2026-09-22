@@ -12,6 +12,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  // The screen walk is a record, not a gate, and it costs minutes (`pnpm screens`, which uses
+  // `playwright.screens.config.mjs`). A pull request should not pay for it here.
+  testIgnore: ["**/screens.spec.mjs"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -22,6 +22,7 @@
 mod activation;
 mod admin;
 mod alerts;
+mod anchors;
 mod apikeys;
 mod archives;
 mod audit;
@@ -57,6 +58,7 @@ pub use admin::{
     NewSessionRow, PostgresAdmin,
 };
 pub use alerts::{AlertRow, PostgresAlerts};
+pub use anchors::{AnchorRow, ConflictRow, ListedConflict, PostgresAnchors};
 pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
 pub use archives::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 pub use audit::{AuditLogRow, AuditOrder, PostgresAudit};

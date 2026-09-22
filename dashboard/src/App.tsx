@@ -109,6 +109,9 @@ const Ota = lazy(() =>
 const Reconcile = lazy(() =>
   import("./screens/Reconcile").then((module) => ({ default: module.Reconcile })),
 );
+const ChainFindings = lazy(() =>
+  import("./screens/ChainFindings").then((module) => ({ default: module.ChainFindings })),
+);
 const Floor = lazy(() =>
   import("./screens/Floor").then((module) => ({ default: module.Floor })),
 );
@@ -173,6 +176,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   fleet: Fleet,
   ota: Ota,
   reconcile: Reconcile,
+  chainFindings: ChainFindings,
   alerts: Alerts,
   audit: Audit,
   stores: Stores,

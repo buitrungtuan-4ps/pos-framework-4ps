@@ -8,7 +8,9 @@ use std::num::NonZeroU32;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
 use tokio_postgres::NoTls;
 
-use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+use pos_ports::event_store::{
+    AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
+};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{EventId, StoreId, TenantId};
@@ -243,6 +245,11 @@ const MIGRATION_0065: &str = include_str!("../migrations/0065_role_discount_ceil
 /// item declare which course it is on
 /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 const MIGRATION_0066: &str = include_str!("../migrations/0066_catalog_courses.sql");
+
+/// The chain heads a store publishes, and the contradictions among them
+/// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4). The primary key on
+/// `(tenant_id, store_id, chain_seq)` is the refusal: one head per chain length, for ever.
+const MIGRATION_0067: &str = include_str!("../migrations/0067_chain_anchors.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -567,6 +574,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0066)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0067)
+            .await
             .map_err(unavailable)
     }
 
@@ -661,6 +672,14 @@ impl PostgresStore {
     #[must_use]
     pub fn reconcile(&self) -> crate::reconcile::PostgresReconcile {
         crate::reconcile::PostgresReconcile::new(self.pool.clone())
+    }
+
+    /// The chain-anchor ledger over this pool ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AnchorLedger` seam over it.
+    #[must_use]
+    pub fn chain_anchors(&self) -> crate::anchors::PostgresAnchors {
+        crate::anchors::PostgresAnchors::new(self.pool.clone())
     }
 
     /// The OTA release registry over this pool ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
@@ -1031,6 +1050,13 @@ impl EventStore for PostgresStore {
             events.push(serde_json::from_str(&envelope).map_err(encode)?);
         }
         Ok(events)
+    }
+
+    /// `None`: the cloud's copy of the log is not chained (ADR-0131). The chain is a property of
+    /// the *store's* own log, written by its single writer; the cloud receives events already
+    /// stamped and verifies them against the anchor rather than re-deriving a chain of its own.
+    async fn chain_head(&self, _store_id: StoreId) -> Result<Option<ChainAnchor>, PortError> {
+        Ok(None)
     }
 
     async fn contains(&self, store_id: StoreId, event_id: EventId) -> Result<bool, PortError> {

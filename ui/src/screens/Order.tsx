@@ -12,6 +12,7 @@ import {
   chooseSeat,
   groupsFor,
   modifiersSatisfied,
+  fireCourse,
   fireOrder,
   floorTables,
   linesForTable,
@@ -25,6 +26,7 @@ import {
   state,
   tableState,
   unfiredLinesForTable,
+  unsentCoursesForTable,
   voidLine,
   type OrderLine,
 } from "../state/store";
@@ -73,6 +75,10 @@ export function Order() {
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
   // be a row count they made themselves (`docs/ui-ux.md` §3).
   const unfired = () => unfiredLinesForTable(params.id);
+
+  // The courses with food still waiting, in the store's service order. Empty on a store with courses
+  // off, which is what keeps the row off those tills entirely rather than drawing an empty heading.
+  const unsentCourses = () => unsentCoursesForTable(params.id);
 
   // How many the store said this table seats, from the published floor plan. Zero means the plan
   // recorded no capacity, and a picker with no seats in it is worse than none — so the control only
@@ -399,7 +405,13 @@ export function Order() {
                     every one of them at once, so a control per row would be one tap out of six
                     doing what one tap now does for all. */}
                 <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
-                  <span class="text-sm text-ink-muted">{t("order.unsent")}</span>
+                  {/* Marked, because "still waiting" is a state a gate has to be able to see. The
+                      row's own `line-added` marks every line whatever its state, so it cannot say
+                      which of them the kitchen has not been told about — and a fire-by-course that
+                      sent the whole order would look identical through it. */}
+                  <span class="text-sm text-ink-muted" data-outcome="line-unsent">
+                    {t("order.unsent")}
+                  </span>
                 </Show>
                 <Show when={line.state === "ORDER_LINE_STATE_FIRED"}>
                   <span class="text-sm text-ok" data-outcome="line-fired">
@@ -662,6 +674,47 @@ export function Order() {
           asking the phone for something special.
         */}
         <div class="sticky bottom-0 -mx-4 mt-4 border-t border-line bg-canvas px-4 pb-4 pt-3 tablet:static tablet:mx-0 tablet:border-0 tablet:bg-transparent tablet:p-0">
+          {/*
+            Send one course at a time, above the button that sends everything (ADR-0130).
+
+            Only the courses that still have food waiting: a "Send desserts" button on a table whose
+            desserts have already gone is a control that does nothing, and an operator who presses a
+            few of those stops trusting the row. Drawn in the store's published service order and
+            never re-sorted here — the sequence is the whole meaning of a course, and a screen that
+            rebuilt it from what it happened to be showing is how one till ends up disagreeing with
+            another about what comes first.
+
+            Absent entirely on a store with courses off, because the edge refuses a fire-by-course
+            there: offering it would be an act the store will not honour, which is the rule
+            `tips_enabled` and `seats_enabled` already follow.
+          */}
+          <Show when={unsentCourses().length > 0}>
+            <div class="mb-3">
+              <h3 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.courses")}</h3>
+              <div class="flex flex-wrap gap-2">
+                <For each={unsentCourses()}>
+                  {(course) => {
+                    const waiting = () =>
+                      unfired().filter((line) => line.courseId === course.course_id).length;
+                    return (
+                      <button
+                        type="button"
+                        class="min-h-touch flex-1 rounded-token border border-primary px-3 text-base font-semibold text-ink"
+                        data-step="fireCourse"
+                        onClick={() => void guard(() => fireCourse(params.id, course.course_id))}
+                      >
+                        {t("order.send_course_count", {
+                          course: course.display_name,
+                          count: waiting(),
+                        })}
+                      </button>
+                    );
+                  }}
+                </For>
+              </div>
+            </div>
+          </Show>
+
           <button
             type="button"
             class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"

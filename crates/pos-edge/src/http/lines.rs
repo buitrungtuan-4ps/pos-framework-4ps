@@ -233,16 +233,70 @@ where
         Err(error) => return error_response(&error),
     };
 
+    Json(fired_with_tickets(printers.as_deref(), &edge, views).await).into_response()
+}
+
+/// Prints a ticket per fired line and returns the responses, for both batch fire routes.
+///
+/// After the commit, never inside it: a printer that is down must not un-fire food the kitchen is
+/// already making, which is why this runs over views the transaction has already produced.
+async fn fired_with_tickets<S>(
+    printers: Option<&Arc<Printers>>,
+    edge: &Arc<Edge<S>>,
+    views: Vec<LineView>,
+) -> Vec<LineResponse>
+where
+    S: EventStore + Send + Sync + 'static,
+{
     let mut body = Vec::with_capacity(views.len());
     for view in views {
         let mut response = LineResponse::from(view.clone());
         if let Some(fired) = view.fired.as_ref() {
-            let printed = print_ticket_for(printers.as_deref(), &edge, &view, fired).await;
+            let printed = print_ticket_for(printers, edge, &view, fired).await;
             response.ticket_print = Some(printed.as_wire().to_owned());
         }
         body.push(response);
     }
-    Json(body).into_response()
+    body
+}
+
+/// `POST /api/orders/{id}/fire/{course_id}` — send every unsent line on one course (ADR-0130).
+///
+/// [`fire_order`] narrowed to one course: "starters away" rather than "send the order". A separate
+/// route rather than a field on the fire body, because they are two different operator acts and one
+/// of them is gated — burying that in an optional field would make whether the store needs
+/// `courses_enabled` depend on what happened to be in the JSON.
+///
+/// A store with courses off is refused here rather than answered with an empty list, so an operator
+/// who taps a course control that should not exist learns why. A course with nothing unsent on it
+/// answers `200` with an empty list, for the reason [`fire_order`] does: two devices sending the
+/// starters is an ordinary race.
+///
+/// Tickets print afterwards, one per line, exactly as the other two fire routes do.
+pub(crate) async fn fire_course<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path((id, course)): Path<(String, String)>,
+    Json(request): Json<FireRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
+        return bad_request("an order id is a ULID");
+    };
+    let Some(course_id) = parse_ulid(&course).map(CourseId::new) else {
+        return bad_request("a course id is a ULID");
+    };
+    let views = match edge
+        .fire_course(actor, order_id, course_id, request.station_id)
+        .await
+    {
+        Ok(views) => views,
+        Err(error) => return error_response(&error),
+    };
+    Json(fired_with_tickets(printers.as_deref(), &edge, views).await).into_response()
 }
 
 /// Runs the kitchen-ticket effect and says what came of it.

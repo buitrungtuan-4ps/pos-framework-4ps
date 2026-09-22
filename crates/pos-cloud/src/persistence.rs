@@ -43,14 +43,25 @@ use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
+use store_postgres::{AnchorRow, ConflictRow, PostgresAnchors};
+
+use sha2::{Digest as _, Sha256};
+
+use crate::anchor::{
+    AnchorConflict, AnchorError, AnchorLedger, ChainWindow, ConflictReport, HeldAnchors,
+    StoreAnchor,
+};
 use crate::archive::{ArchiveStore, ArchiveStoreError, ExpiredArchive, StoreArchive};
 
 use pos_ports::PortError;
 use pos_ports::dynamic::BoxFuture;
+use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
+use pos_proto::chain::ChainHash;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -5534,4 +5545,211 @@ fn store_archive_from_row(row: StoreArchiveRow) -> Result<StoreArchive, ArchiveS
 
 fn archive_unavailable(error: &PortError) -> ArchiveStoreError {
     ArchiveStoreError::Unavailable(error.to_string())
+}
+
+// --- The anchor ledger (ADR-0131 decision 4) -----------------------------------------------------
+
+/// The id a contradiction is filed under: a digest of the finding, not a fresh ULID.
+///
+/// Derived rather than minted so that re-delivering the same bad anchor — which at-least-once ingest
+/// and reconciliation's re-push both guarantee will happen — lands on the row already there instead
+/// of adding another. The inputs are everything that makes one finding distinct from another: whose
+/// log, at what length, what was held, and what was offered against it. Two separate attempts to
+/// rewrite the same point in a store's history differ in `offered_head` and so stay two rows.
+fn conflict_id(tenant: TenantId, report: &ConflictReport) -> String {
+    let mut digest = Sha256::new();
+    for part in [
+        tenant.to_string(),
+        report.store.to_string(),
+        report.chain_seq.to_string(),
+        report.held_head.as_str().to_owned(),
+        report.offered_head.as_str().to_owned(),
+    ] {
+        digest.update(part.as_bytes());
+        // A separator, so `("ab", "cd")` and `("a", "bcd")` cannot collide into one id.
+        digest.update(b"\n");
+    }
+    ChainHash::of(digest.finalize().into()).as_str().to_owned()
+}
+
+/// Maps one stored anchor row onto the ledger's view of it.
+fn anchor_from_row(store: StoreId, row: &AnchorRow) -> Result<StoreAnchor, AnchorError> {
+    Ok(StoreAnchor {
+        store,
+        chain_seq: u64::try_from(row.chain_seq)
+            .map_err(|_| AnchorError::new("a stored anchor chain_seq is negative"))?,
+        head: ChainHash::from_hex(&row.chain_head),
+        unchained: u64::try_from(row.unchained)
+            .map_err(|_| AnchorError::new("a stored anchor unchained count is negative"))?,
+        observed_at: Timestamp::from_milliseconds_since_epoch(row.observed_at)
+            .map_err(|_| AnchorError::new("a stored anchor observed_at is out of range"))?,
+    })
+}
+
+impl ChainWindow for PostgresAnchors {
+    fn events_in_window<'a>(
+        &'a self,
+        tenant: TenantId,
+        store: StoreId,
+        day: &'a BusinessDate,
+        days_back: u8,
+        limit: u32,
+    ) -> BoxFuture<'a, Result<Vec<EventEnvelope<RawPayload>>, AnchorError>> {
+        Box::pin(async move {
+            let rows = self
+                .events_in_window(
+                    &tenant.to_string(),
+                    &store.to_string(),
+                    &day.to_string(),
+                    i32::from(days_back),
+                    i64::from(limit),
+                )
+                .await
+                .map_err(|error| AnchorError::new(error.to_string()))?;
+            // An envelope that will not deserialise is skipped rather than failing the window: it is
+            // a corrupt row, and losing the whole audit to one of them would hand a store exactly the
+            // way to stop being audited.
+            Ok(rows
+                .iter()
+                .filter_map(|row| match serde_json::from_str(row) {
+                    Ok(envelope) => Some(envelope),
+                    Err(error) => {
+                        tracing::warn!(
+                            store = %store,
+                            %error,
+                            "a stored envelope did not deserialise; it is left out of this chain window"
+                        );
+                        None
+                    }
+                })
+                .collect())
+        })
+    }
+}
+
+impl AnchorLedger for PostgresAnchors {
+    fn held_for(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        chain_seq: u64,
+    ) -> BoxFuture<'_, Result<HeldAnchors, AnchorError>> {
+        Box::pin(async move {
+            // A length beyond `i64` is not a chain any store will ever hold, and it is not this
+            // layer's business to have an opinion about it: nothing is held there, which is true.
+            let Ok(offered_seq) = i64::try_from(chain_seq) else {
+                return Ok(HeldAnchors::default());
+            };
+            let (head, at_offered_length) = self
+                .held_for(&tenant.to_string(), &store.to_string(), offered_seq)
+                .await
+                .map_err(|error| AnchorError::new(error.to_string()))?;
+            Ok(HeldAnchors {
+                head: head
+                    .as_ref()
+                    .map(|row| anchor_from_row(store, row))
+                    .transpose()?,
+                at_offered_length: at_offered_length
+                    .as_ref()
+                    .map(|row| anchor_from_row(store, row))
+                    .transpose()?,
+            })
+        })
+    }
+
+    fn accept<'a>(
+        &'a self,
+        tenant: TenantId,
+        anchor: &'a StoreAnchor,
+    ) -> BoxFuture<'a, Result<(), AnchorError>> {
+        Box::pin(async move {
+            let row = AnchorRow {
+                chain_seq: i64::try_from(anchor.chain_seq)
+                    .map_err(|_| AnchorError::new("a chain_seq beyond i64 cannot be recorded"))?,
+                chain_head: anchor.head.as_str().to_owned(),
+                unchained: i64::try_from(anchor.unchained).unwrap_or(i64::MAX),
+                observed_at: anchor.observed_at.as_milliseconds_since_epoch(),
+            };
+            self.record_anchor(&tenant.to_string(), &anchor.store.to_string(), &row)
+                .await
+                .map_err(|error| AnchorError::new(error.to_string()))
+        })
+    }
+
+    fn record_conflict<'a>(
+        &'a self,
+        tenant: TenantId,
+        report: &'a ConflictReport,
+    ) -> BoxFuture<'a, Result<(), AnchorError>> {
+        Box::pin(async move {
+            let row = ConflictRow {
+                chain_seq: i64::try_from(report.chain_seq).unwrap_or(i64::MAX),
+                held_head: report.held_head.as_str().to_owned(),
+                offered_head: report.offered_head.as_str().to_owned(),
+                offered_event_id: report.offered_event_id.to_string(),
+            };
+            self.record_conflict(
+                &conflict_id(tenant, report),
+                &tenant.to_string(),
+                &report.store.to_string(),
+                &row,
+            )
+            .await
+            .map_err(|error| AnchorError::new(error.to_string()))
+        })
+    }
+
+    fn list_conflicts(
+        &self,
+        tenant: TenantId,
+        store: Option<StoreId>,
+        limit: u32,
+    ) -> BoxFuture<'_, Result<Vec<AnchorConflict>, AnchorError>> {
+        Box::pin(async move {
+            let store_string = store.map(|id| id.to_string());
+            let rows = self
+                .list_conflicts(
+                    &tenant.to_string(),
+                    store_string.as_deref(),
+                    i64::from(limit),
+                )
+                .await
+                .map_err(|error| AnchorError::new(error.to_string()))?;
+            rows.into_iter()
+                .map(|row| {
+                    let store = row
+                        .store_id
+                        .parse::<Ulid>()
+                        .map(StoreId::new)
+                        .map_err(|_| {
+                            AnchorError::new("a stored conflict store_id is not a ULID")
+                        })?;
+                    let offered_event_id = row
+                        .conflict
+                        .offered_event_id
+                        .parse::<Ulid>()
+                        .map(EventId::new)
+                        .map_err(|_| {
+                            AnchorError::new("a stored conflict offered_event_id is not a ULID")
+                        })?;
+                    Ok(AnchorConflict {
+                        conflict_id: row.conflict_id,
+                        noticed_at: Timestamp::from_milliseconds_since_epoch(row.noticed_at)
+                            .map_err(|_| {
+                                AnchorError::new("a stored conflict noticed_at is out of range")
+                            })?,
+                        report: ConflictReport {
+                            store,
+                            chain_seq: u64::try_from(row.conflict.chain_seq).map_err(|_| {
+                                AnchorError::new("a stored conflict chain_seq is negative")
+                            })?,
+                            held_head: ChainHash::from_hex(&row.conflict.held_head),
+                            offered_head: ChainHash::from_hex(&row.conflict.offered_head),
+                            offered_event_id,
+                        },
+                    })
+                })
+                .collect()
+        })
+    }
 }

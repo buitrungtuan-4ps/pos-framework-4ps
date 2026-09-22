@@ -12,6 +12,7 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  CourseResponse,
   DiscountResponse,
   LineRequest,
   LayoutCategory,
@@ -39,6 +40,10 @@ export interface OrderLine {
   // — so a line read "Margherita" whether the server picked 25cm or 30cm, on the order screen and on
   // the kitchen board alike. The price was right and the caption said nothing.
   modifierMenuItemIds: string[];
+  // The course this line goes out on, when the store runs courses (ADR-0130). Absent means the line
+  // is on no course, which is every line on a store that has authored none — and a fire-by-course
+  // never sweeps one up.
+  courseId?: string;
 }
 
 export interface TableCard {
@@ -119,6 +124,15 @@ interface StoreShape {
   // floor a moment after its price book arrives.
   tablesEnabled: boolean;
   kdsEnabled: boolean;
+  // Whether the store groups its lines into courses, from the same `GET /api/menu` read (ADR-0130).
+  // False until it lands, for `seatsEnabled`'s reason rather than `tablesEnabled`'s: it gates what
+  // the till *offers*, so an unsynced till offers no course control rather than one the edge would
+  // refuse.
+  coursesEnabled: boolean;
+  // The store's courses, in the service order the compiler emitted. Rendered in the order given and
+  // never sorted again here: the sequence is the entity's whole meaning, and a second place deciding
+  // it is a second place for it to be decided differently.
+  courses: CourseResponse[];
   // The seat the next items go to, per table. Absent means "the table", which is every line on
   // every store that does not do seats — and the honest default even on one that does, because a
   // server who has not said whose dish it is has not said.
@@ -176,6 +190,8 @@ const [state, setState] = createStore<StoreShape>({
   // than one that waits a moment for the price book.
   tipsEnabled: false,
   seatsEnabled: false,
+  coursesEnabled: false,
+  courses: [],
   modifierGroups: [],
   tablesEnabled: true,
   kdsEnabled: true,
@@ -493,6 +509,10 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
     // Absent on every line written before the field existed, and on every device that sends none.
     // An absent list is no modifiers, which is what the edge means by it too.
     modifierMenuItemIds: Array.isArray(chosen) ? chosen.filter(isString) : [],
+    // The course the adding device stamped, folded here for the reason the seat is: this is what a
+    // *second* till has instead of the add it did not make, and without it that till's course
+    // controls would not know which of its lines are starters.
+    courseId: isString(payload["course_id"]) ? payload["course_id"] : undefined,
   };
 }
 
@@ -623,6 +643,13 @@ export async function addItem(
     // the edge refuses a seat on a store with the capability off, so sending one unasked would turn
     // every add into a refusal on the stores that make up most of them.
     seat: state.seatsEnabled ? state.seatForTable[tableId] : undefined,
+    // The course the *catalog* says this item goes out on (ADR-0130) — a pizza is a main, and making
+    // a server say so on every tap would be a tap per dish for a fact the store already published.
+    //
+    // Gated the way the seat is, and for the same reason: the edge refuses a fire-by-course on a
+    // store with courses off, so a line stamped on such a store would carry an id nothing can act
+    // on. `?? undefined` because the wire form is nullable and `null` is not an absent field.
+    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
     // The choices a guest made, which the edge validates against the published groups before it
     // writes anything (ADR-0127 decision 5). Empty on every item that attaches none.
     modifier_menu_item_ids: modifiers,
@@ -642,6 +669,7 @@ export async function addItem(
         state: response.state,
         seat: line.seat,
         modifierMenuItemIds: modifiers,
+        courseId: line.course_id,
       };
     }),
   );
@@ -688,6 +716,27 @@ export function seatsEnabled(): boolean {
   return state.seatsEnabled;
 }
 
+// The courses this table still has unsent food on, in the store's service order (ADR-0130).
+//
+// Only the courses with something to send: a "Send desserts" button on a table whose desserts have
+// all gone is a control that does nothing, and the operator learns to distrust the row. The order is
+// the compiler's, taken as given — `state.courses` arrives sorted, and sorting it again here would
+// be a second place deciding the service sequence.
+//
+// Empty on a store with courses off, so the row simply is not drawn: the edge refuses a
+// fire-by-course there, and offering one would be an act it will not honour.
+export function unsentCoursesForTable(tableId: string): CourseResponse[] {
+  if (!state.coursesEnabled) {
+    return [];
+  }
+  const waiting = new Set(
+    unfiredLinesForTable(tableId)
+      .map((line) => line.courseId)
+      .filter(isString),
+  );
+  return state.courses.filter((course) => waiting.has(course.course_id));
+}
+
 /// Whether this store runs table service — the flag the home screen and the floor link read.
 export function tablesEnabled(): boolean {
   return state.tablesEnabled;
@@ -726,6 +775,8 @@ export async function loadMenu(): Promise<void> {
     setState("tablesEnabled", response.tables_enabled);
     setState("kdsEnabled", response.kds_enabled);
     setState("acceptedTender", response.accepted_tender);
+    setState("coursesEnabled", response.courses_enabled);
+    setState("courses", response.courses);
   } catch {
     // The counter keeps whatever it last loaded; the next boot or reload tries again.
   }
@@ -831,6 +882,9 @@ export async function loadLiveOrders(): Promise<void> {
             // both mean the line carries no modifiers, and the till draws the same row either way.
             modifierMenuItemIds: line.modifier_menu_item_ids ?? [],
             seat: line.seat,
+            // `?? undefined` because the wire omits it rather than sending null, and an absent
+            // course is a line on none — the state every line is in until a store authors one.
+            courseId: line.course_id ?? undefined,
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;
@@ -879,6 +933,31 @@ export async function fireOrder(tableId: string): Promise<void> {
     return;
   }
   const fired = await api.fireOrder(orderId, { station_id: state.defaultStation });
+  setState(
+    produce((draft) => {
+      for (const line of fired) {
+        const held = draft.lines[line.order_line_id];
+        if (held !== undefined) {
+          held.state = line.state;
+        }
+      }
+    }),
+  );
+}
+
+// Sends the unsent lines on one course of this table's order — "starters away" (ADR-0130).
+//
+// `fireOrder` narrowed to one course, and deliberately the same shape: one tap, one request, and the
+// edge commits the course's lines together or not at all. The screen offers this only for courses
+// that still have something waiting, so the empty case is not a button an operator can press — but
+// it is answered rather than refused if a colleague gets there first, which is why nothing here
+// treats an empty response as a failure.
+export async function fireCourse(tableId: string, courseId: string): Promise<void> {
+  const orderId = state.tableOrder[tableId];
+  if (orderId === undefined) {
+    return;
+  }
+  const fired = await api.fireCourse(orderId, courseId, { station_id: state.defaultStation });
   setState(
     produce((draft) => {
       for (const line of fired) {

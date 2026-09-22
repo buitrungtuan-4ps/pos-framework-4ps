@@ -53,6 +53,7 @@
 
 pub mod activation;
 pub mod alerts;
+pub mod anchor;
 pub mod archive;
 pub mod archive_retention;
 pub mod assets;
@@ -61,6 +62,7 @@ pub mod auth;
 pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
+pub mod chain_audit;
 pub mod clock;
 pub mod cloud;
 pub mod config;

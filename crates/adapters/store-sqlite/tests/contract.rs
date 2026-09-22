@@ -83,6 +83,12 @@ impl EventStoreHarness for StoreHarness {
         Self::open(path)
     }
 
+    fn chains(&self) -> bool {
+        // The store tier stamps the chain (ADR-0131): this is the log a shop's PC holds, and the
+        // one anybody with access to that machine could edit.
+        true
+    }
+
     fn store_id(&self) -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
     }

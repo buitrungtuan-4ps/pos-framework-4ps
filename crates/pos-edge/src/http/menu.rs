@@ -63,8 +63,8 @@ use serde::Serialize;
 
 use pos_core::capability::Capability;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{MenuItemId, ModifierGroupId, TaxClassId};
-use pos_proto::menu::{MenuEntry, MenuModifierGroup};
+use pos_proto::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
+use pos_proto::menu::{MenuCourse, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::{SalesChannel, WireEnum as _, locale::TaxRateTable, text::DisplayName};
 
@@ -133,6 +133,27 @@ pub(crate) struct MenuResponse {
     /// Empty on a store that has published none, which is every store until the console attaches
     /// one — and the till then asks nothing, exactly as it did before this field existed.
     modifier_groups: Vec<ModifierGroupResponse>,
+    /// Whether this store groups its lines into courses (§10 `Capability::Courses`, on by default).
+    ///
+    /// The flag that decides whether the till offers a course control at all. A counter that fires
+    /// everything at once has no starters to send, and `POST /api/orders/{id}/fire/{course_id}`
+    /// refuses a store with this off — so offering the control there would be an action the edge
+    /// will not honour, the same failure `tips_enabled` was added to stop.
+    courses_enabled: bool,
+    /// The courses any item above goes out on, **in service order**
+    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    ///
+    /// Joins this response in the change that consumes it, which is the rule this module's header
+    /// sets: the course picker that fires "starters away" is in this change, and the compiled book
+    /// has carried these only since the change before it.
+    ///
+    /// Already sorted, ties broken by id, by the cloud compiler. A till must render them in the
+    /// order given and must not sort them again: the sequence is the entity's whole meaning, and a
+    /// screen that rebuilt it from a filtered list is how "main" ends up before "starter".
+    ///
+    /// Empty on a store that has published none, which is every store until the console authors
+    /// one — and the till then offers no course control, exactly as it did before this field.
+    courses: Vec<CourseResponse>,
 }
 
 /// One sellable item, priced and taxed as this store sells it.
@@ -156,9 +177,32 @@ pub(crate) struct MenuItemResponse {
     /// "Size" group attached to forty pizzas would otherwise be forty copies of the same rule on
     /// every menu read.
     modifier_group_ids: Vec<ModifierGroupId>,
+    /// The course this item goes out on, or absent for an item on none (ADR-0130).
+    ///
+    /// An id, not a name: the courses are listed once on the response below, for the reason the
+    /// modifier groups are. The till reads it to group an order into starters, mains and desserts,
+    /// and to know which lines a fire-by-course will send.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    course_id: Option<CourseId>,
     /// Whether the item can be sold right now. An item present but 86'd is shown and refused, not
     /// hidden, so staff can see why it cannot be ordered.
     available: bool,
+}
+
+/// One course, as the till offers it.
+#[derive(Debug, Serialize)]
+pub(crate) struct CourseResponse {
+    /// The course's identifier, which an item above names and a fire-by-course sends.
+    course_id: CourseId,
+    /// The name to show, already in the store's display language — the same resolution the item's
+    /// and the group's names get ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    display_name: DisplayName,
+    /// Where it falls in the service sequence, ascending.
+    ///
+    /// Carried as well as pre-sorted, because a screen that filters the list still needs to know the
+    /// gaps, and rebuilding the order from position in a filtered list is how one screen disagrees
+    /// with another about what comes first.
+    sort: i32,
 }
 
 /// One modifier group, as the till asks it.
@@ -193,8 +237,20 @@ impl MenuItemResponse {
             // An item whose class carries no rate cannot be quoted to a guest, so it is not
             // sellable however the catalogue flags it.
             modifier_group_ids: entry.modifier_group_ids.clone(),
+            course_id: entry.course_id,
             available: entry.available && tax_rate.is_some(),
             tax_rate,
+        }
+    }
+}
+
+impl CourseResponse {
+    /// One published course, with its name resolved for the store's display language.
+    fn from_course(course: &MenuCourse, locale: &str) -> Self {
+        Self {
+            course_id: course.course_id,
+            display_name: course.localized_name(locale).clone(),
+            sort: course.sort,
         }
     }
 }
@@ -247,6 +303,15 @@ where
                 .iter()
                 .map(|group| ModifierGroupResponse::from_group(group, &language))
                 .collect(),
+            courses_enabled: session.capabilities.enabled(Capability::Courses),
+            // The compiler's order, passed through untouched. Sorting here would be a second place
+            // for the service sequence to be decided, and the two would eventually disagree.
+            courses: session
+                .menu
+                .courses()
+                .iter()
+                .map(|course| CourseResponse::from_course(course, &language))
+                .collect(),
         }),
     )
         .into_response()
@@ -276,6 +341,7 @@ mod tests {
             unit_price: Money::new(CurrencyCode::VND, 150_000),
             tax_class_id: class(),
             modifier_group_ids: Vec::new(),
+            course_id: None,
             available,
         }
     }

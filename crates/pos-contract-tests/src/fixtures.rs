@@ -118,6 +118,9 @@ where
         device_id: DeviceId::new(Ulid::from_u128(1)),
         employee_id: None,
         shift_id: None,
+        // Unchained, which is what an adapter receives from a caller that has not stamped
+        // one. The chain obligations build their own stamped envelopes (ADR-0131).
+        chain: None,
         data: RawPayload::encode(payload).expect("a fixture payload serialises"),
     }
 }

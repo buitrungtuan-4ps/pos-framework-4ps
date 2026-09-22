@@ -12,10 +12,12 @@ use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
+use pos_ports::event_store::ChainAnchor;
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, PortName, Transactional};
+use pos_proto::chain::ChainStatus;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, ConfigVersionId, DeviceId, EventId, OrderId, StoreId, SubjectId};
 use pos_proto::time::{BusinessDate, Timestamp};
@@ -564,6 +566,31 @@ impl Transactional for SqliteStore {
     }
 }
 
+impl SqliteStore {
+    /// Walks this store's hash chain and reports the first break
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// Inherent rather than on `EventStore`, because it is a diagnostic a store runs on itself at
+    /// startup and not a capability every caller of the port needs. It reads with no internet, per
+    /// [ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md): a store that cannot
+    /// reach the cloud must still be able to detect its own corruption.
+    ///
+    /// A break is a **report**, not a refusal. Nothing here stops the store trading — a till that
+    /// refused to sell because yesterday's log is damaged would turn a record-keeping fault into a
+    /// closed shop, which is the worse failure.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the store cannot be reached.
+    pub async fn verify_chain(&self, store_id: StoreId) -> Result<ChainStatus, PortError> {
+        self.ask(PortName::EventStore, move |reply| Command::VerifyChain {
+            store_id,
+            reply,
+        })
+        .await
+    }
+}
+
 impl EventStore for SqliteStore {
     async fn append(
         &self,
@@ -603,6 +630,14 @@ impl EventStore for SqliteStore {
             store_id,
             after,
             limit,
+            reply,
+        })
+        .await
+    }
+
+    async fn chain_head(&self, store_id: StoreId) -> Result<Option<ChainAnchor>, PortError> {
+        self.ask(PortName::EventStore, move |reply| Command::ChainHead {
+            store_id,
             reply,
         })
         .await

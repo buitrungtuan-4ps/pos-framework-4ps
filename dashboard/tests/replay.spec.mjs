@@ -153,6 +153,25 @@ async function press(page, action, description, value) {
   const options = page.locator('[role="listbox"] [role="option"]');
   if ((await options.count()) > 0) {
     await options.first().click();
+    // And then wait for it to close, which is the half this was missing.
+    //
+    // The listbox is painted over the rest of the form, so while it is still on screen it
+    // intercepts pointer events for whatever sits under it — including the next step's button.
+    // Playwright does not fail that click; it retries it, for the full two-minute test timeout,
+    // and the run ends with `<li role="option">Airport branches</li> ... intercepts pointer
+    // events` repeated 230 times. It reads as the *next* control being broken, which is the
+    // wrong place to look entirely.
+    //
+    // Whether it bites depends on how quickly the runner repaints, so it failed in CI and not
+    // on a developer's machine — the shape every intermittent failure in this harness has had.
+    await page
+      .locator('[role="listbox"]')
+      .waitFor({ state: "hidden", timeout: SETTLE_MS })
+      .catch(() => {
+        // A listbox that stays open is a real fault, but not this helper's to diagnose: the
+        // step that follows will fail on its own terms, and with a better message than a
+        // timeout here.
+      });
   }
 }
 

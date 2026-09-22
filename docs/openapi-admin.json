@@ -10,6 +10,80 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/admin/chain-findings": {
+      "get": {
+        "tags": [
+          "fleet"
+        ],
+        "summary": "Lists a tenant's most recent refused chain claims, newest first. Tenant-scoped (a store's\nfindings are its tenant's data), behind [`ConsolePermission::Read`].",
+        "operationId": "admin_chain_findings",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose findings to read (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "Narrow to one store (a ULID); absent reads across the tenant's stores",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contradictions the cloud refused, newest first. Each is two hashes claiming to describe one store's chain at one length, and only one of them can be true. An empty list is the expected answer: it means nothing was refused, not that nothing was checked"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The anchor ledger is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/config-releases": {
       "get": {
         "tags": [

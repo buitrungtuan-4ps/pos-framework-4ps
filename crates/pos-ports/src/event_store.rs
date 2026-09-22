@@ -26,6 +26,7 @@
 
 use core::num::NonZeroU32;
 
+use pos_proto::chain::ChainHash;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{EventId, StoreId};
 use serde::{Deserialize, Serialize};
@@ -60,6 +61,22 @@ impl OutboxPosition {
     pub const fn get(self) -> u64 {
         self.0
     }
+}
+
+/// A store's chain head, as the anchor publishes it (ADR-0131).
+///
+/// Deliberately not [`pos_proto::chain::ChainStatus`]: that is the result of *walking* a chain and
+/// says whether it is broken, which is a diagnostic. This is the position itself, which is what
+/// gets published — a caller that wants to know whether the chain is sound asks the adapter for a
+/// walk, and a caller that wants to anchor it asks for this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainAnchor {
+    /// How many records the chain holds.
+    pub seq: u64,
+    /// The hash of the most recent one.
+    pub head: ChainHash,
+    /// How many records carry no chain because they predate it. Not a fault.
+    pub unchained: u64,
 }
 
 /// One undelivered event, with the position that acknowledges it.
@@ -175,6 +192,26 @@ pub trait EventStore: Transactional {
         &self,
         query: &EventQuery,
     ) -> impl Future<Output = Result<Vec<EventEnvelope<RawPayload>>, PortError>> + Send;
+
+    /// The head of this store's hash chain, or `None` when it holds none
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// `None` is a real and common answer, not a failure: an adapter that does not chain says so
+    /// here rather than inventing a head, and a store whose whole log predates the chain has none
+    /// yet. A caller publishing the anchor simply has nothing to publish.
+    ///
+    /// Outside a transaction, like [`Self::read`]: it is read at a shift close to publish the
+    /// anchor, and the answer being a record or two stale is safe — the anchor still extends the
+    /// previous one, and the next covers the gap. It is deliberately *not* how the writer assigns
+    /// the next link, which it does inside the commit where nothing can interleave.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the store cannot be reached.
+    fn chain_head(
+        &self,
+        store_id: StoreId,
+    ) -> impl Future<Output = Result<Option<ChainAnchor>, PortError>> + Send;
 
     /// Whether an event is already stored.
     ///

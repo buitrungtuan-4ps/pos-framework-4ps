@@ -9,6 +9,9 @@ publish.workspace      = true
 repository.workspace   = true
 
 [dependencies]
+# ADR-0131: the fake chains its log exactly as the real adapter does, so the edge tests exercise
+# the anchor rather than a stand-in that never fires. Same RustCrypto line as everywhere else.
+sha2 = "0.11"
 pos-ports = { path = "../pos-ports" }
 pos-proto = { path = "../pos-proto" }
 # A normal dependency rather than a dev one, because `harness` is part of this crate's public
