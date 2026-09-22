@@ -18604,6 +18604,11 @@ struct CountryView {
     code: String,
     display_name: String,
     currency_code: String,
+    /// How many decimal places that currency has
+    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)). Beside the
+    /// code because the console's own money fields edit minor units and need the same fact the till
+    /// does.
+    currency_exponent: u8,
     default_language: String,
     decimal_separator: String,
     group_separator: String,
@@ -18647,6 +18652,7 @@ where
             code: module.country_code().as_str().to_owned(),
             display_name: module.display_name().to_owned(),
             currency_code: pack.currency_code.as_str().to_owned(),
+            currency_exponent: pack.currency_exponent,
             default_language: pack.default_language.as_str().to_owned(),
             decimal_separator: pack.number_format.decimal_separator.to_string(),
             group_separator: pack.number_format.group_separator.to_string(),

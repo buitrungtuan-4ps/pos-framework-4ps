@@ -18,6 +18,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A country states how many decimals its currency has.** `LocalePack` gains `currency_exponent`,
+  beside the cash increment and the denominations it already carries: `0` for the đồng and the yen,
+  `2` for the paisa and the cent ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+  It rides the `locale` config node to the store and is served on `GET /api/locale`, and the console's
+  `GET /admin/countries` carries it too.
+
+  Money is an integer in the currency's minor unit, and this is the one fact that turns that integer
+  back into something a person reads. Nothing in the tree held it: `pos-proto` has it only in prose,
+  and the till had a three-row table ending in `?? 0` — right for the đồng and the yen, and silently
+  wrong for the rupee. `countries/in` is a supplied, tested pack denominating in INR.
+
+  **Required on `LocalePack`, optional on the wire**, which is not an inconsistency. Required means a
+  country pack that omits it does not compile, which is a stronger gate than any check and needs no
+  new check; optional on the `locale` node means a cloud that predates the field still publishes
+  something an edge can apply, and an absent value leaves the store's figure alone rather than being
+  read as a published zero.
+
+  This release carries the value and nothing yet reads it: the till's formatting and the printed
+  receipt follow separately, because the second changes a document a guest is handed.
+
+  **Upgrade note:** none. A store that publishes no `currency_exponent` behaves exactly as before. A
+  country module added after this release must state one — a new required field on `LocalePack` —
+  which is a compile error, not a runtime surprise.
+
 - **The tip keys offer amounts a guest can actually hand over.** Where the store's country rounds its
   cash, the 5/10/15% keys round with it. A 98,000₫ bill used to offer 4,900₫, 9,800₫ and 14,700₫ —
   three whole numbers and three amounts nobody can put on a table, Vietnam's smallest note being

@@ -100,6 +100,12 @@ struct PublishedPermissions {
 #[derive(serde::Deserialize)]
 struct PublishedLocale {
     currency_code: String,
+    /// How many decimal places the currency has (ADR-0134). `#[serde(default)]` because a cloud
+    /// that predates the field must still publish a locale node this edge can apply, and `None`
+    /// then means "leave what the session has" — not zero, which would be the very silent default
+    /// that record is about.
+    #[serde(default)]
+    currency_exponent: Option<u8>,
     timezone: String,
     cutoff_hour: u8,
     /// Whether this store quotes tax-inclusive prices (ADR-0104). `#[serde(default)]` so a locale
@@ -389,6 +395,12 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         if let Ok(currency) = CurrencyCode::parse(&locale.currency_code) {
             session.currency = currency;
         }
+        // Applied only when stated, so an older publish leaves the session's figure alone rather
+        // than silently making every price a whole unit.
+        if let Some(exponent) = locale.currency_exponent {
+            session.currency_exponent = exponent;
+        }
+
         if let Ok(timezone) = StoreTimeZone::from_iana_name(&locale.timezone) {
             session.timezone = timezone;
         }
@@ -1523,11 +1535,17 @@ mod tests {
                 "timezone": "Asia/Kolkata",
                 "cutoff_hour": 4,
                 "prices_include_tax": true,
+                "currency_exponent": 2,
                 "cash_rounding_increment": 100,
                 "cash_denominations": [1_000, 2_000, 5_000, 10_000],
             }}),
         );
         assert_eq!(india.cash_rounding_increment, Some(100), "₹1 in paise");
+        assert_eq!(
+            india.currency_exponent, 2,
+            "a hundred paise to the rupee (ADR-0134) — and not the same fact as the rounding above: \
+             the invoice rounds to the whole rupee, a price is still quoted in paise"
+        );
         assert_eq!(india.cash_denominations, vec![1_000, 2_000, 5_000, 10_000]);
         assert!(india.prices_include_tax, "MRP is inclusive");
 
@@ -1540,6 +1558,7 @@ mod tests {
                 "timezone": "Asia/Tokyo",
                 "cutoff_hour": 6,
                 "prices_include_tax": true,
+                "currency_exponent": 0,
                 "cash_denominations": [1_000, 5_000, 10_000],
             }}),
         );
@@ -1548,6 +1567,12 @@ mod tests {
             "the 1-yen coin circulates, so there is nothing to round to"
         );
         assert_eq!(japan.cash_denominations, vec![1_000, 5_000, 10_000]);
+        assert_eq!(
+            japan.currency_exponent, 0,
+            "the sen was demonetised in 1953, so a yen has no subunit to print — and this had to \
+             come *down* from India's 2, which is what makes it an applied value rather than a \
+             default that happens to match"
+        );
     }
 
     #[test]
@@ -1567,6 +1592,11 @@ mod tests {
         assert!(!rebuilt.prices_include_tax);
         assert_eq!(rebuilt.cash_rounding_increment, None);
         assert!(rebuilt.cash_denominations.is_empty());
+        assert_eq!(
+            rebuilt.currency_exponent, 0,
+            "a node that does not state an exponent leaves the session's, which here is the \
+             bootstrap's đồng — absent must never be read as a published zero (ADR-0134)"
+        );
     }
 
     #[test]

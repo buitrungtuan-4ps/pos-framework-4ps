@@ -71,6 +71,10 @@ impl CountryModule for India {
         LocalePack {
             country_code: CountryCode::IN,
             currency_code: CurrencyCode::INR,
+            // A hundred paise to the rupee (ADR-0134). Not the same fact as the rounding below:
+            // the invoice rounds to the whole rupee because no sub-rupee coin settles it, while a
+            // *price* is still quoted in paise and printed with two decimals.
+            currency_exponent: 2,
             tax_rate_table: rate_table(),
             // 1,234,567 — and India actually writes 12,34,567, grouping by two above the first three
             // (the lakh–crore system). `digits_per_group` is a single number and cannot say that, so

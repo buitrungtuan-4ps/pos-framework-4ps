@@ -62,6 +62,10 @@ impl CountryModule for Japan {
         LocalePack {
             country_code: CountryCode::JP,
             currency_code: CurrencyCode::JPY,
+            // The yen has no subunit in circulation — the sen was demonetised in 1953 — so
+            // `amount_minor` is a whole yen (ADR-0134). The same fact as the 1-yen coin below:
+            // nothing finer exists to round to, and nothing finer exists to print.
+            currency_exponent: 0,
             tax_rate_table: rate_table(),
             // 1,234,567 — the ordinary Western arrangement. Japanese prose also groups by 万 (ten
             // thousand), but a price on a receipt is written this way.
