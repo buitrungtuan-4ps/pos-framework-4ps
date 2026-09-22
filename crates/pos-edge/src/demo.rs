@@ -68,6 +68,10 @@ fn demo_employee() -> EmployeeId {
 /// The iced tea is 39,500₫ so that one item, bought alone, produces 43,450₫ — and five percent of
 /// that is 2,172.5. A fixture whose every number divides is a fixture that proves the easy half.
 ///
+/// The bottled water is here for the same kind of reason at the other end of the range: at 9,000₫ it
+/// is the only bill small enough that a 1,000₫ cash increment swallows the difference between a 5%
+/// and a 15% tip, which is the case the till's tip keys have to stand down on.
+///
 /// The tax class is [`EdgeSession::standard_tax_class`], the one the bootstrap rate table carries a
 /// rate for on every channel — an entry naming any other class would price fine and then refuse to
 /// settle, which is a worse first run than no menu at all.
@@ -78,6 +82,22 @@ fn demo_employee() -> EmployeeId {
 /// environment says which one, exactly as it says which port to bind.
 fn table_service() -> bool {
     !std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("counter"))
+}
+
+/// Whether this demo store's country rounds its cash — `POS_DEMO_PROFILE=cash-rounding`.
+///
+/// A property of the *country*, not of the shop: Vietnam rounds to the thousand đồng because that is
+/// the smallest note, India to the rupee because no smaller coin settles the difference, Japan not
+/// at all because the 1-yen coin circulates ([ADR-0105](../../../docs/adr/0105-country-pack.md)).
+/// The default demo store rounds nothing, which is the posture every other flow is written against
+/// and the one that leaves a total with awkward arithmetic in it.
+///
+/// It is a third profile rather than a second flag on the counter one because the two are
+/// orthogonal: a counter cafe in Hanoi rounds its cash and a table-service restaurant in Tokyo does
+/// not. This profile leaves table service on, so the flows that drive the floor drive it unchanged.
+fn cash_rounding() -> bool {
+    std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("cash-rounding"))
 }
 
 fn demo_menu() -> MenuBook {
@@ -124,6 +144,13 @@ fn demo_menu() -> MenuBook {
         // letter rather than `d` with a mark on it. Those are the two cases the fold has to handle
         // separately, and `đặc` is one syllable carrying both.
         .with(item(104, "Phở bò đặc biệt", 99_000))
+        // The cheapest thing on the menu, and it is here for the arithmetic at the bottom of the
+        // range rather than for the thirst. A store that rounds its cash to 1,000 đồng rounds this
+        // bill to 10,000, and five, ten and fifteen percent of that snap to 1,000, 1,000 and 2,000 —
+        // two identical buttons and a row a cashier cannot choose from. That is the case the till's
+        // tip keys have to stand down on, and with every other item priced in the tens of thousands
+        // there was no bill small enough to reach it.
+        .with(item(105, "Bottled water", 9_000))
         .with(item(201, "Size — 25cm", 0))
         .with(item(202, "Size — 30cm", 40_000))
         .with(item(210, "Extra cheese", 25_000))
@@ -182,16 +209,27 @@ fn demo_menu() -> MenuBook {
 /// one profile, because there was no way to run the other one. A contributor can now see what a
 /// counter cafe sees, and `ui/tests/replay.spec.mjs` drives it.
 ///
-/// An environment variable rather than a second example binary: the two profiles differ by one
-/// published flag, and a second `main.rs` would be a second copy of the boot path — which is the
-/// thing that drifts.
+/// # The cash-rounding profile
+///
+/// `POS_DEMO_PROFILE=cash-rounding` publishes the same store with a `locale` node naming Vietnam's
+/// own increment, 1,000 đồng. ADR-0105 has carried `cash_rounding_increment` since it was written
+/// and no fixture ever published one, so the whole posture — the core's rounding adjustment, the
+/// till's tip keys, what a guest is actually asked for — had no browser gate over it at all.
+///
+/// It is the one profile where a total is guaranteed to be a round note, which is why it cannot be
+/// the default: the fractional-tip replay needs a total that is *not*, and no single store can be
+/// both.
+///
+/// An environment variable rather than a second example binary: the profiles differ by a published
+/// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
+/// that drifts.
 #[must_use]
 pub fn config_document() -> Option<serde_json::Value> {
     let permissions: Vec<&str> = Permission::ALL
         .iter()
         .map(|permission| permission.meta().id)
         .collect();
-    Some(serde_json::json!({
+    let mut document = serde_json::json!({
         "permissions": {
             "staff": [{
                 "id": demo_employee().to_string(),
@@ -215,7 +253,37 @@ pub fn config_document() -> Option<serde_json::Value> {
         // gate ever saw — the same dark corner the floor plan sat in until it was published here.
         // The floor above gives every table a capacity, which is what the picker offers.
         "seats_enabled": true,
-    }))
+    });
+    // Published only on the profile that asks for it, so the default store's money settings stay the
+    // bootstrap's and every existing flow reads the totals it always read. A node that was always
+    // present, merely carrying a different increment, would make the two profiles differ by a value
+    // inside a node rather than by the node — and the one that is absent is the one this fixture is
+    // documenting, because absent is what every store publishes today.
+    if cash_rounding()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("locale".to_owned(), demo_locale());
+    }
+    Some(document)
+}
+
+/// The money settings of a store in a country that rounds its cash (ADR-0105).
+///
+/// `currency_code`, `timezone` and `cutoff_hour` carry no default on the wire, so a locale node has
+/// to name them even when the increment is the only thing it is published for; they repeat what the
+/// bootstrap already holds. `cash_denominations` is deliberately **absent**: which notes a guest
+/// carries is a separate fact from what the total rounds to, the till already falls back to its own
+/// table for the currency, and a fixture that published both would not show which of the two the
+/// quick-cash keys come from.
+fn demo_locale() -> serde_json::Value {
+    serde_json::json!({
+        "currency_code": "VND",
+        "timezone": "Asia/Ho_Chi_Minh",
+        "cutoff_hour": 4,
+        // The smallest note in circulation. Anything finer is a figure a cashier cannot settle and a
+        // guest cannot hand over.
+        "cash_rounding_increment": 1_000,
+    })
 }
 
 /// A floor with two named areas and every table placed on the editor's grid.
@@ -310,8 +378,8 @@ mod tests {
         );
         assert_eq!(
             session.menu.items().len(),
-            7,
-            "four products plus the three modifiers, which are ordinary priced items (ADR-0066 \
+            8,
+            "five products plus the three modifiers, which are ordinary priced items (ADR-0066 \
              entity 4) and so are counted here"
         );
         let sizes = session

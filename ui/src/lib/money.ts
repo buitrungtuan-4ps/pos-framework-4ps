@@ -49,6 +49,25 @@ export function percentOf(amountMinor: number, percent: number): number {
   return negative ? -rounded : rounded;
 }
 
+// Snaps an amount to the nearest multiple of `increment`, halves away from zero.
+//
+// The mirror of `Money::round_to_increment` on the edge. A fact about a country's **coinage**, not
+// about its tax: Vietnam's smallest note is 1,000 đồng and India's smallest coin is the rupee, so an
+// amount off the increment is one nobody can hand over. An `increment` of zero or less means the
+// country rounds nothing — Japan, where the 1-yen coin circulates — and the amount passes through.
+//
+// The halving is written as a doubled comparison rather than `increment / 2`, so an odd increment
+// cannot round its own midpoint on a half unit that then multiplies back up.
+export function roundToIncrement(amountMinor: number, increment: number): number {
+  if (increment <= 0) {
+    return amountMinor;
+  }
+  const negative = amountMinor < 0;
+  const steps = Math.trunc((Math.abs(amountMinor) * 2 + increment) / (increment * 2));
+  const rounded = steps * increment;
+  return negative ? -rounded : rounded;
+}
+
 export function quantity(whole: number): Quantity {
   return { milli: whole * 1000 };
 }

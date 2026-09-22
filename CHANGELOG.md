@@ -18,6 +18,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The tip keys offer amounts a guest can actually hand over.** Where the store's country rounds its
+  cash, the 5/10/15% keys round with it. A 98,000₫ bill used to offer 4,900₫, 9,800₫ and 14,700₫ —
+  three whole numbers and three amounts nobody can put on a table, Vietnam's smallest note being
+  1,000 đồng. It now offers 5,000₫, 10,000₫ and 15,000₫. A country that rounds nothing — Japan, where
+  the 1-yen coin circulates, and the United States — is unaffected: the exact share stands.
+
+  The snap stands down on a bill too small for the increment. At 10,000₫ the three shares snap to
+  1,000, 1,000 and 2,000: two buttons reading the same amount on a row that carries an amount and
+  nothing else, and a key labelled nothing but "1,000₫" that is really a 10% tip. The exact figures
+  are shown instead — less tidy, and the only set of three a person can choose between.
+
+  `cash_rounding_increment` has been in ADR-0105 since it was written and no fixture had ever
+  published one, so `POS_DEMO_PROFILE=cash-rounding` now publishes a `locale` node carrying
+  Vietnam's own increment. It is a third demo profile rather than a flag on the counter one because
+  the two are orthogonal — a counter cafe in Hanoi rounds its cash and a table-service restaurant in
+  Tokyo does not — and it cannot be the default, because the fractional-tip replay needs a total that
+  is *not* a round note and no single store can be both. The demo menu gains a 9,000₫ bottled water:
+  with everything else priced in the tens of thousands there was no bill small enough to reach the
+  stand-down.
+
+  **Upgrade note:** none. A store that publishes no `cash_rounding_increment` sees exactly what it
+  saw before.
+
 - **The kitchen board says how long each ticket has been waiting, and marks the late ones.** Every
   fired line now carries its age, counting up once a second, and a ticket past ten minutes takes a
   `danger` border and reads its time in `danger` ink.

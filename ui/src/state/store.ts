@@ -150,6 +150,12 @@ interface StoreShape {
   // read has not landed; an empty array is a real answer and means "the exact amount only". The
   // difference matters, because the fallback below applies to the first and not the second.
   cashDenominations: number[] | null;
+  // What this country's cash rounds to, in minor units, from `GET /api/locale` (ADR-0105) — 1,000
+  // for Vietnam's smallest note, 100 paise for India's rupee. `null` covers both "the read has not
+  // landed" and "this country rounds nothing", Japan being the second. One field for the two,
+  // because the till does the same thing either way: it rounds nothing, which is the answer that
+  // cannot be wrong.
+  cashRoundingIncrement: number | null;
   // The store's managed reason list, from `GET /api/reason-codes` (ADR-0115). Empty until the read
   // lands — and empty is never a real answer here, because the edge falls back to the framework
   // default set when nothing is published. A picker with nothing in it therefore means "the read has
@@ -206,6 +212,7 @@ const [state, setState] = createStore<StoreShape>({
   seatForTable: {},
   acceptedTender: null,
   cashDenominations: null,
+  cashRoundingIncrement: null,
   reasonCodes: [],
   bumped: {},
   shift: null,
@@ -830,6 +837,13 @@ export function cashDenominations(): readonly number[] {
   return state.cashDenominations ?? fallbackQuickCash(storeCurrency());
 }
 
+// What this store's cash rounds to, in minor units, or `null` for a country that rounds nothing
+// (ADR-0105). No compiled-in fallback table behind it, unlike the quick-cash keys: guessing a
+// country's coinage would have a till round a guest's money to an increment nobody published.
+export function cashRoundingIncrement(): number | null {
+  return state.cashRoundingIncrement;
+}
+
 // Reads the store's money settings from the edge (ADR-0105). Forgiving in the same way `loadMenu`
 // is: a failed read leaves the previous keys in place, so a blip does not strand a cashier with one
 // button mid-service.
@@ -837,6 +851,7 @@ export async function loadLocale(): Promise<void> {
   try {
     const response = await api.locale();
     setState("cashDenominations", response.cash_denominations);
+    setState("cashRoundingIncrement", response.cash_rounding_increment);
   } catch {
     // Keep whatever is loaded; the next boot or reload tries again.
   }
