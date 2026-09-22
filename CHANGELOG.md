@@ -299,6 +299,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A station routing rule could name a course that did not exist**
+  ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6, the last gap on
+  that record). `POST /admin/kitchen/routing` accepted a `course_id` after checking only that it did
+  not *also* name an item — because until the course entity existed there was nowhere to look. An
+  operator could send "any line on course X to the pastry station"; the rule published, the store
+  honoured it, and it matched nothing **for ever, silently**, since no line could carry that id
+  either. The write now refuses a `course_id` no active course carries, with `course_id: NOT_FOUND`
+  in the refusal's details. An **archived** course is refused too: the compiler does not publish one,
+  so a rule naming it would be exactly as dead as a rule naming an id nobody ever authored, and one
+  answer for both is one fewer way for them to drift apart. Refused at the write rather than at
+  publish, the way the menu graph's cycle already is — a rule that can never match is a rule an
+  operator will never find out about.
+
 - **A store with courses turned off could not fire a line that belonged to a course.**
   `LineCommand::Fire { course }` says in its own doc that the field means the line is being fired
   *as part of a course*, and that is what `courses_enabled` gates. Both edge fire paths passed the

@@ -17029,6 +17029,7 @@ fn floor_app_with_audit(
     admin: FakeAdmin,
     floor: FakeFloor,
     audit: Arc<dyn AuditRecorder>,
+    catalog: FakeCatalog,
 ) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -17038,7 +17039,7 @@ fn floor_app_with_audit(
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::floor_router(floor, admin, clock(), audit))
+    http::router(app).merge(http::floor_router(floor, admin, clock(), audit, catalog))
 }
 
 #[tokio::test]
@@ -17055,6 +17056,7 @@ async fn floor_routes_crud_lifecycle_audited() {
         admin,
         FakeFloor::default(),
         Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
     );
     let cookie = admin_cookie(&router).await;
     let tenant_ulid = tenant().as_ulid().to_string();
@@ -17242,6 +17244,138 @@ async fn floor_routes_crud_lifecycle_audited() {
     }
 }
 
+/// A routing rule may only match a course the tenant actually carries
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+///
+/// This was the sharpest form of the course having no entity behind it: the write checked only that
+/// `menu_item_id` and `course_id` were not both set, because there was nowhere to look. An operator
+/// could send "any line on course X to the pastry station", the rule published, the store honoured
+/// it — and it matched nothing, for ever, silently, because no line could carry that id either.
+///
+/// Refused at the write rather than at publish, the way the menu graph's cycle is, and for the
+/// reason the record gives: *a rule that can never match is a rule an operator will never find out
+/// about.*
+#[tokio::test]
+async fn a_routing_rule_may_only_name_a_course_the_tenant_carries() {
+    let catalog = FakeCatalog::default();
+    let router = floor_app_with_audit(
+        provisioned_admin(),
+        FakeFloor::default(),
+        Arc::new(NoopAuditRecorder),
+        catalog.clone(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let station_ulid = Ulid::from_u128(0x57A).to_string();
+
+    let rule = |course: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "station_id": station_ulid,
+            "course_id": course,
+        })
+    };
+
+    // Nothing authored yet, so every course id is one the tenant does not carry.
+    let unknown = Ulid::from_u128(0x00C0_FFEE).to_string();
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &rule(&unknown),
+            &cookie,
+        ))
+        .await
+        .expect("route the rule");
+    assert_eq!(
+        refused.status(),
+        StatusCode::BAD_REQUEST,
+        "a rule naming a course nothing carries is refused at the write"
+    );
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "course_id",
+        "the refusal names the field that is wrong: {body}"
+    );
+    assert_eq!(
+        body["error"]["details"][0]["reason"], "NOT_FOUND",
+        "and says why, rather than leaving the console to guess: {body}"
+    );
+
+    // Author the course, and the same rule is accepted.
+    let course_id = CourseId::new(Ulid::from_u128(0x00C0_FFEE));
+    catalog
+        .create_course(&Course {
+            course_id,
+            tenant_id: tenant(),
+            name: "Starters".to_owned(),
+            sort: 10,
+            status: EntityStatus::Active,
+        })
+        .await
+        .expect("author the course");
+    let accepted = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &rule(&unknown),
+            &cookie,
+        ))
+        .await
+        .expect("route the rule");
+    assert_eq!(
+        accepted.status(),
+        StatusCode::CREATED,
+        "the same rule is accepted once the course exists"
+    );
+}
+
+/// An archived course is as gone as one that never existed.
+///
+/// The compiler does not publish an archived course, so a rule naming one would be exactly as dead
+/// as a rule naming an id nobody ever authored. One answer for both, so they cannot drift into
+/// different behaviour later — and an operator who retires "Dessert" and then writes a rule against
+/// it finds out now rather than at the next service.
+#[tokio::test]
+async fn a_routing_rule_may_not_name_an_archived_course() {
+    let catalog = FakeCatalog::default();
+    let router = floor_app_with_audit(
+        provisioned_admin(),
+        FakeFloor::default(),
+        Arc::new(NoopAuditRecorder),
+        catalog.clone(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let course_id = CourseId::new(Ulid::from_u128(0xDEAD));
+    catalog
+        .create_course(&Course {
+            course_id,
+            tenant_id: tenant(),
+            name: "Dessert".to_owned(),
+            sort: 30,
+            status: EntityStatus::Archived,
+        })
+        .await
+        .expect("author the retired course");
+
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "station_id": Ulid::from_u128(0x57A).to_string(),
+                "course_id": course_id.as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the rule");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+}
+
 /// The main app (sharing one config-tree store) merged with the floor CRUD and floor-publish routers,
 /// so a test can author master data and then publish it, reading the effective config back (ADR-0072).
 fn floor_publish_app(
@@ -17249,6 +17383,7 @@ fn floor_publish_app(
     floor: FakeFloor,
     config: FakeConfigTrees,
     audit: Arc<dyn AuditRecorder>,
+    catalog: FakeCatalog,
 ) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -17264,6 +17399,7 @@ fn floor_publish_app(
             admin.clone(),
             clock(),
             Arc::clone(&audit),
+            catalog,
         ))
         .merge(http::floor_publish_router(
             floor,
@@ -17283,6 +17419,7 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
         FakeFloor::default(),
         config,
         Arc::new(NoopAuditRecorder),
+        FakeCatalog::default(),
     );
     let cookie = admin_cookie(&router).await;
     let tenant_ulid = tenant().as_ulid().to_string();
