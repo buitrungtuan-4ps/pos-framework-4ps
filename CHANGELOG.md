@@ -18,6 +18,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud recomputes the chain from the events it holds — what closes truncation**
+  ([ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor closed
+  recomputation. This closes the other one.
+  - **Why the anchors could not.** A store cut back to length 20 and then traded on publishes its
+    next anchor *above* anything the cloud holds. Nothing collides; it reads as honest growth. The
+    evidence was never in the anchors — it is in the events, where the cloud holds the original
+    records at those positions and then receives new, different ones claiming the same places.
+  - At every anchor that moves a store's head, the cloud reads the events behind it and
+    **recomputes the chain those records actually make**: one event per position, each `prev_hash`
+    against the hash the cloud derives itself, and the head against what the anchor claims.
+  - **Two findings are accusations and two are not.** A *forked* position and a *broken link* are
+    filed as contradictions. A missing record is **incomplete** — ingest is at-least-once, a broker
+    gap is ordinary, and [ADR-0040](docs/adr/0040-reconciliation.md) exists to fill exactly this;
+    reporting it as fraud would be an accusation manufactured by the recovery mechanism working.
+    A window too large to walk is **unverified**, which is an honest absence of an answer, never a
+    pass.
+  - An anchor is now also checked against **its own envelope**, before anything is read: one
+    claiming a chain at least as long as the record carrying it is impossible and is refused on that
+    one event. Deliberately an inequality and not the tempting `prev_hash == chain_head` — the edge
+    reads its head and *then* commits the anchor, so a sale landing in between leaves it several
+    records above the length it names. A check that is right except when a till is busy is a check
+    that is wrong.
+  - Nothing was added to the write path. The window is read by trading day — the index the log
+    already carries — plus one day back for a shift that crossed the store's own cut-off. No column
+    was promoted onto `events`, no index added to it, and `pos-ports` and `pos-proto` are untouched.
+
+  **Upgrade note:** no migration, no protocol bump and no new table. A cloud composed without the
+  window reader keeps and refuses heads exactly as before, and recomputes nothing — the two are
+  separate so a deployment that cannot afford the read still refuses a forked head.
+
 - **The cloud keeps the anchors, and refuses one that contradicts what it holds**
   ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The store half shipped a durable
   record outside a store's reach; this is the half that reads it.
@@ -35,9 +65,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - **What it does not close: truncation.** A store cut back and then traded on publishes its next
     anchor *above* anything the cloud holds, which from the anchors alone is honest growth. What
     gives it away is two different events claiming one `chain.seq` — a property of the event log,
-    not of the anchors, and deliberately a separate piece of work rather than something half-done
-    here. Said plainly because a mechanism believed to catch more than it does is worse than one
-    that catches nothing.
+    not of the anchors. **Closed in the same release by the entry above.**
   - Three things that are **not** refusals, each with its own reason: an identical re-delivery (at
     least-once ingest and reconciliation's re-push both guarantee it happens), an anchor arriving
     late below the head after a broker gap (filed, head unmoved), and a first anchor from a store

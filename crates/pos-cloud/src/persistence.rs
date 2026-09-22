@@ -48,17 +48,20 @@ use store_postgres::{AnchorRow, ConflictRow, PostgresAnchors};
 use sha2::{Digest as _, Sha256};
 
 use crate::anchor::{
-    AnchorConflict, AnchorError, AnchorLedger, ConflictReport, HeldAnchors, StoreAnchor,
+    AnchorConflict, AnchorError, AnchorLedger, ChainWindow, ConflictReport, HeldAnchors,
+    StoreAnchor,
 };
 use crate::archive::{ArchiveStore, ArchiveStoreError, ExpiredArchive, StoreArchive};
 
 use pos_ports::PortError;
 use pos_ports::dynamic::BoxFuture;
+use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::chain::ChainHash;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -5581,6 +5584,47 @@ fn anchor_from_row(store: StoreId, row: &AnchorRow) -> Result<StoreAnchor, Ancho
         observed_at: Timestamp::from_milliseconds_since_epoch(row.observed_at)
             .map_err(|_| AnchorError::new("a stored anchor observed_at is out of range"))?,
     })
+}
+
+impl ChainWindow for PostgresAnchors {
+    fn events_in_window<'a>(
+        &'a self,
+        tenant: TenantId,
+        store: StoreId,
+        day: &'a BusinessDate,
+        days_back: u8,
+        limit: u32,
+    ) -> BoxFuture<'a, Result<Vec<EventEnvelope<RawPayload>>, AnchorError>> {
+        Box::pin(async move {
+            let rows = self
+                .events_in_window(
+                    &tenant.to_string(),
+                    &store.to_string(),
+                    &day.to_string(),
+                    i32::from(days_back),
+                    i64::from(limit),
+                )
+                .await
+                .map_err(|error| AnchorError::new(error.to_string()))?;
+            // An envelope that will not deserialise is skipped rather than failing the window: it is
+            // a corrupt row, and losing the whole audit to one of them would hand a store exactly the
+            // way to stop being audited.
+            Ok(rows
+                .iter()
+                .filter_map(|row| match serde_json::from_str(row) {
+                    Ok(envelope) => Some(envelope),
+                    Err(error) => {
+                        tracing::warn!(
+                            store = %store,
+                            %error,
+                            "a stored envelope did not deserialise; it is left out of this chain window"
+                        );
+                        None
+                    }
+                })
+                .collect())
+        })
+    }
 }
 
 impl AnchorLedger for PostgresAnchors {

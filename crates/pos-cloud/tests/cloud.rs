@@ -21,7 +21,8 @@ use pos_cloud::activation::{
 };
 use pos_cloud::alerts::{AlertKind, AlertRecord, AlertStore, AlertStoreError};
 use pos_cloud::anchor::{
-    AnchorConflict, AnchorError, AnchorLedger, ConflictReport, HeldAnchors, StoreAnchor,
+    AnchorConflict, AnchorError, AnchorLedger, ChainWindow, ConflictReport, HeldAnchors,
+    StoreAnchor,
 };
 use pos_cloud::audit::{
     AuditActor, AuditEntry, AuditId, AuditQuery, AuditRecorder, AuditSink, AuditStore,
@@ -113,7 +114,7 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
-use pos_proto::chain::ChainHash;
+use pos_proto::chain::{ChainHash, ChainLink};
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
@@ -130,6 +131,7 @@ use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
+use sha2::{Digest as _, Sha256};
 
 /// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
 const SALT: &[u8] = b"a-fixed-test-slt";
@@ -20192,7 +20194,7 @@ fn artifact_fixture(
             release: "1.4.0".to_owned(),
             target,
             size_bytes: i64::try_from(body.len()).expect("a representable size"),
-            sha256: sha2::Sha256::digest(body)
+            sha256: Sha256::digest(body)
                 .iter()
                 .fold(String::new(), |mut hex, byte| {
                     use core::fmt::Write as _;
@@ -24783,4 +24785,349 @@ async fn a_run_of_shift_closes_walks_the_head_forward() {
         ]
     );
     assert!(ledger.conflicts().is_empty());
+}
+
+// --- Recomputing the chain behind an anchor (ADR-0132) -------------------------------------------
+
+/// A log the cloud holds, as the chain window reads it.
+#[derive(Debug, Default)]
+struct FakeWindow {
+    events: Vec<EventEnvelope<RawPayload>>,
+    /// When set, every read fails — the ingest must stand anyway.
+    unreadable: bool,
+}
+
+impl ChainWindow for FakeWindow {
+    fn events_in_window<'a>(
+        &'a self,
+        _tenant: TenantId,
+        _store: StoreId,
+        _day: &'a BusinessDate,
+        _days_back: u8,
+        limit: u32,
+    ) -> pos_ports::dynamic::BoxFuture<'a, Result<Vec<EventEnvelope<RawPayload>>, AnchorError>>
+    {
+        if self.unreadable {
+            return Box::pin(async { Err(AnchorError::new("the log is down")) });
+        }
+        let page: Vec<EventEnvelope<RawPayload>> =
+            self.events.iter().take(limit as usize).cloned().collect();
+        Box::pin(async move { Ok(page) })
+    }
+}
+
+/// The hash of one record, the way the edge computes it.
+fn record_hash(event: &EventEnvelope<RawPayload>, link: &ChainLink) -> ChainHash {
+    let preimage = event.chain_preimage(link).expect("a fixture record hashes");
+    ChainHash::of(Sha256::digest(preimage.as_bytes()).into())
+}
+
+/// A correctly chained run of `count` records, exactly as an edge writes them.
+///
+/// Really hashed, not stamped with invented values: a fixture whose links do not hold would make
+/// every "this log is sound" assertion vacuous.
+fn honest_log(count: u32) -> Vec<EventEnvelope<RawPayload>> {
+    let mut log = Vec::new();
+    let mut link = ChainLink::first();
+    for seed in 1..=count {
+        let mut event = fixtures::activation(store_id(), seed);
+        let hash = record_hash(&event, &link);
+        event.chain = Some(link.clone());
+        link = ChainLink::following(link.seq, hash);
+        log.push(event);
+    }
+    log
+}
+
+/// The head of a chained run.
+fn log_head(log: &[EventEnvelope<RawPayload>]) -> ChainHash {
+    let last = log.last().expect("a non-empty log");
+    record_hash(last, last.chain.as_ref().expect("a chained record"))
+}
+
+/// An anchor event sitting one position above `log`, reporting its head — what a shift close writes.
+fn anchor_over(log: &[EventEnvelope<RawPayload>], seed: u32) -> EventEnvelope<RawPayload> {
+    let head = log_head(log);
+    let mut event = fixtures::envelope(
+        store_id(),
+        seed,
+        &pos_proto::events::StoreChainAnchored {
+            chain_seq: log.len() as u64,
+            chain_head: head.clone(),
+            unchained: 0,
+        },
+    );
+    event.chain = Some(ChainLink::following(log.len() as u64, head));
+    event
+}
+
+#[tokio::test]
+async fn an_anchor_over_an_honest_log_is_accepted_and_the_chain_holds() {
+    let log = honest_log(5);
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: log.clone(),
+            unreadable: false,
+        }));
+
+    cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(5, log_head(&log).as_str().to_owned())],
+        "the head is kept, and the records behind it reproduce it"
+    );
+    assert!(ledger.conflicts().is_empty());
+}
+
+#[tokio::test]
+async fn an_anchor_claiming_a_chain_as_long_as_its_own_record_is_refused() {
+    // Impossible: the anchor is written *into* the chain it describes, so it always sits above it.
+    // Caught on one record, before anything is read.
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    let mut event = anchor_event(1, 42, "ab");
+    event.chain = Some(ChainLink::following(41, ChainHash::from_hex("aa")));
+    cloud.ingest(&[event]).await.expect("ingest");
+
+    assert!(
+        ledger.heads().is_empty(),
+        "an impossible anchor never becomes a store's head"
+    );
+}
+
+#[tokio::test]
+async fn an_anchor_that_links_to_one_head_and_reports_another_is_refused_and_recorded() {
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    // Adjacent — seq 43 reporting length 42 — so `prev_hash` must be the head it reports.
+    let mut event = anchor_event(1, 42, "ff");
+    event.chain = Some(ChainLink::following(42, ChainHash::from_hex("aa")));
+    cloud.ingest(&[event]).await.expect("ingest");
+
+    assert!(ledger.heads().is_empty());
+    let conflicts = ledger.conflicts();
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].chain_seq, 42);
+    assert_eq!(conflicts[0].held_head, ChainHash::from_hex("aa"));
+    assert_eq!(conflicts[0].offered_head, ChainHash::from_hex("ff"));
+}
+
+#[tokio::test]
+async fn a_busy_till_does_not_make_an_anchor_look_forged() {
+    // The edge reads its head and *then* commits the anchor, so a sale landing in between leaves
+    // the anchor several records above the length it names. This is a Friday night, not a fraud.
+    let log = honest_log(8);
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: log.clone(),
+            unreadable: false,
+        }));
+
+    // Reports length 5, but sits at position 9 — four sales landed in between.
+    let head_at_five = record_hash(&log[4], log[4].chain.as_ref().expect("chained"));
+    let mut event = fixtures::envelope(
+        store_id(),
+        100,
+        &pos_proto::events::StoreChainAnchored {
+            chain_seq: 5,
+            chain_head: head_at_five.clone(),
+            unchained: 0,
+        },
+    );
+    event.chain = Some(ChainLink::following(8, log_head(&log)));
+
+    cloud.ingest(&[event]).await.expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(5, head_at_five.as_str().to_owned())],
+        "the anchor is accepted; nothing about it is a contradiction"
+    );
+    assert!(ledger.conflicts().is_empty());
+}
+
+#[tokio::test]
+async fn a_window_the_cloud_cannot_read_never_stops_the_log() {
+    let log = honest_log(4);
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: Vec::new(),
+            unreadable: true,
+        }));
+
+    let outcome = cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+
+    assert_eq!(outcome.appended, 1);
+    assert_eq!(
+        ledger.heads().len(),
+        1,
+        "the head is still kept; only the recomputation was lost"
+    );
+}
+
+#[tokio::test]
+async fn a_cloud_with_no_window_still_keeps_and_refuses_heads() {
+    // The two are composed apart on purpose: a deployment that cannot afford the window read still
+    // refuses a forked head.
+    let log = honest_log(3);
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+    cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+    assert_eq!(ledger.heads().len(), 1);
+}
+
+#[tokio::test]
+async fn a_backfilled_anchor_does_not_re_walk_history_somebody_was_already_shown() {
+    // A late anchor below the head describes records the anchor above it already covered.
+    let log = honest_log(5);
+    let ledger = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: log.clone(),
+            unreadable: true,
+        }));
+
+    // The window is unreadable, so a walk would log an error; the point is that none is attempted.
+    cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![
+            (5, log_head(&log).as_str().to_owned()),
+            (42, "ab".to_owned())
+        ],
+        "the backfill is filed and the head stays where it was"
+    );
+}
+
+#[tokio::test]
+async fn a_truncated_and_re_traded_log_is_caught_through_the_whole_path() {
+    // **The case ADR-0131 could not close and ADR-0132 exists for**, and the one
+    // `store-sqlite/tests/chain.rs::truncating_the_tail_is_not_caught_by_the_chain_alone` asserts a
+    // bare chain misses.
+    //
+    // The store cut its log back and traded on, so the cloud now holds the original record at
+    // position 4 and a different one claiming the same place. The anchor above it looks like honest
+    // growth — nothing collides, its head is accepted — and the fork is found anyway, because the
+    // events say what the anchors cannot.
+    let log = honest_log(6);
+    let mut with_a_second_history = log.clone();
+    let mut impostor = fixtures::activation(store_id(), 900);
+    impostor.chain = log[3].chain.clone();
+    with_a_second_history.push(impostor);
+
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: with_a_second_history,
+            unreadable: false,
+        }));
+
+    cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(6, log_head(&log).as_str().to_owned())],
+        "the anchor itself is unremarkable — that is exactly why the anchors alone miss this"
+    );
+    let conflicts = ledger.conflicts();
+    assert_eq!(
+        conflicts.len(),
+        1,
+        "the contradiction is filed, not only logged: {conflicts:?}"
+    );
+    assert_eq!(conflicts[0].chain_seq, 4, "at the contested position");
+    assert_ne!(
+        conflicts[0].held_head, conflicts[0].offered_head,
+        "two records at one position hash to two different answers, and the pair is the finding"
+    );
+    assert_eq!(
+        conflicts[0].offered_event_id,
+        fixtures::event_id(900),
+        "the finding names the record that claimed a place already taken"
+    );
+}
+
+#[tokio::test]
+async fn an_edited_record_is_caught_through_the_whole_path() {
+    // The cloud re-derives the chain from its own copies rather than trusting that the store did.
+    let mut log = honest_log(5);
+    let head = log_head(&log);
+    let anchor = anchor_over(&log, 100);
+    // Somebody edited record 3 after the fact. Record 4 still links to what 3 used to be.
+    log[2].data = RawPayload::encode(&pos_proto::events::DeviceActivationCompleted {
+        activated_device_id: DeviceId::new(Ulid::from_u128(0xDEAD)),
+    })
+    .expect("a fixture payload serialises");
+
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: log,
+            unreadable: false,
+        }));
+
+    cloud.ingest(&[anchor]).await.expect("ingest");
+
+    assert_eq!(ledger.heads(), vec![(5, head.as_str().to_owned())]);
+    let conflicts = ledger.conflicts();
+    assert!(
+        conflicts.iter().any(|conflict| conflict.chain_seq == 4),
+        "record 4 links to a record 3 that no longer exists: {conflicts:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_gap_in_the_window_is_never_filed_as_a_contradiction() {
+    // A broker gap. ADR-0040 exists to fill exactly this, and filing it here would put an
+    // accusation in the record because the recovery mechanism was doing its job.
+    let log = honest_log(6);
+    let mut with_a_gap = log.clone();
+    with_a_gap.remove(2);
+
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new())
+        .with_anchor_ledger(ledger.clone())
+        .with_chain_window(Arc::new(FakeWindow {
+            events: with_a_gap,
+            unreadable: false,
+        }));
+
+    cloud
+        .ingest(&[anchor_over(&log, 100)])
+        .await
+        .expect("ingest");
+
+    assert_eq!(ledger.heads().len(), 1, "the head is still kept");
+    assert!(
+        ledger.conflicts().is_empty(),
+        "a gap is a prompt to reconcile, never a contradiction to record"
+    );
 }

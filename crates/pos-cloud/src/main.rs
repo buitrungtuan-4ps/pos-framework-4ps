@@ -86,7 +86,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // catches careless editing and not fraud — the algorithm is in the source, so anyone holding the
     // shop's database file can rewrite a record and re-derive every later link. What makes the chain
     // mean something is this: a head recorded where the store cannot reach it.
-    let cloud = cloud.with_anchor_ledger(Arc::new(store.chain_anchors()));
+    let cloud = cloud
+        .with_anchor_ledger(Arc::new(store.chain_anchors()))
+        // And the log reader that recomputes the chain behind each accepted head
+        // ([ADR-0132](../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)). The anchor
+        // closes recomputation; this is what closes truncation, because a store cut back and traded
+        // on leaves two different events claiming one position and only the events show it.
+        .with_chain_window(Arc::new(store.chain_anchors()));
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
     // `Arc<dyn AuditRecorder>` across the CloudApp router and the registry sub-router, so a handler
