@@ -8,6 +8,7 @@
 //! store's *real* areas and tables (not a hardcoded eight) and routes fires by the published rules.
 //! Empty until the console publishes a floor; the UI keeps its own fallback while it is.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -17,6 +18,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use pos_ports::event_store::EventStore;
+use pos_proto::WireEnum;
 use pos_proto::floor::{FloorPlan, StationPlan};
 
 use crate::app::Edge;
@@ -28,6 +30,20 @@ pub(crate) struct FloorResponse {
     floor: FloorPlan,
     /// The kitchen stations and item→station routing.
     stations: StationPlan,
+    /// What each table is doing right now, keyed by table id: free, occupied, awaiting payment,
+    /// needs cleaning.
+    ///
+    /// Beside the plan rather than inside it, because the two are different kinds of fact. The plan
+    /// is *configuration* — what the console published, the same for every device, changing when
+    /// somebody edits the floor. A table's state is *live*, changes every time a guest sits down,
+    /// and belongs to this store's projection. Folding it into `FloorPlan` would have put a running
+    /// value into `pos-proto`'s published shape and made a device's reload rewrite config.
+    ///
+    /// Sent because a device that has just started has **no other way to learn it**. The states
+    /// reach a running till on the fan-out, and a till that was not running when the guests sat down
+    /// never saw those events — so before this, a reload drew every occupied table as free, on the
+    /// home screen, and a server could seat a table that already had people at it.
+    table_states: BTreeMap<String, String>,
 }
 
 /// `GET /api/floor` — the store's published floor plan and kitchen stations, read from the live
@@ -37,11 +53,24 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     let session = edge.session();
+    // Every table the store published, so a reader never has to tell "free" apart from "this edge
+    // did not say". A table the projection has never heard of reads free, which is what it is.
+    let table_states = session
+        .floor
+        .tables()
+        .map(|table| {
+            (
+                table.table_id.to_string(),
+                edge.table_state(table.table_id).as_wire().to_owned(),
+            )
+        })
+        .collect();
     (
         StatusCode::OK,
         Json(FloorResponse {
             floor: session.floor.clone(),
             stations: session.stations.clone(),
+            table_states,
         }),
     )
         .into_response()
