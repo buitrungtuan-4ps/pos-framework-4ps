@@ -744,6 +744,38 @@ test("a kitchen board that reloads still knows when the food was ordered", async
   }
 });
 
+// A till that reloads still knows which tables have people at them.
+//
+// The floor is the home screen, and it drew every table free after a refresh. `GET /api/floor`
+// served the published *plan* — areas, tables, stations — and no state, so a device learned
+// occupancy only from the fan-out. A device that was not running when the guests sat down never saw
+// those events, and a shift change, a crashed tab or a second till brought online all produce
+// exactly that device.
+//
+// The consequence was not cosmetic: a server looking at the home screen would be told a table with
+// people at it was free, and could seat guests on top of them.
+//
+// Asserts the *card*, not an API field, because what went wrong was what an operator saw.
+test("a till that reloads still knows which tables are occupied", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await navigateTo(page, "/");
+
+    const firstDot = page.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+
+    // Everything this device folded from the fan-out is gone.
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]').first()).toBeVisible();
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
 test("every flow is replayed except the ones that say why they cannot be", () => {

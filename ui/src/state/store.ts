@@ -278,8 +278,20 @@ export async function loadFloor(): Promise<void> {
         draft.floor = tables;
         // Rebuild the table-state map for the synced tables, preserving any live state already folded
         // from the fan-out and defaulting new tables to free.
+        // The edge's own view wins where it has one, because on the boot that matters this device
+        // has folded nothing: the states reach a running till on the fan-out, and a till that was
+        // not running when the guests sat down never saw those events. Before the edge sent them,
+        // a reload drew every occupied table as free — on the home screen, so a server could seat a
+        // table that already had people at it.
+        //
+        // Falling back to the state already folded, then to free, so an edge too old to send the
+        // map leaves a running till exactly as it was rather than wiping it.
+        const published = response.table_states ?? {};
         draft.tableState = Object.fromEntries(
-          tables.map((table) => [table.id, draft.tableState[table.id] ?? "TABLE_STATE_FREE"]),
+          tables.map((table) => [
+            table.id,
+            published[table.id] ?? draft.tableState[table.id] ?? "TABLE_STATE_FREE",
+          ]),
         );
       }
       if (defaultStation !== undefined) {

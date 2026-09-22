@@ -59,6 +59,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A till that reloaded showed every occupied table as free.** The floor is the home screen, and
+  `GET /api/floor` served only the published *plan* — areas, tables, stations. A device learned which
+  tables had people at them from the fan-out alone, so a device that was not running when the guests
+  sat down never saw those events: a shift change, a crashed tab or a second till brought online all
+  produce exactly that device.
+
+  Not cosmetic. A server looking at the home screen was told a table with guests at it was free, and
+  could seat people on top of them.
+
+  The response now carries `table_states`, a map of table id to live state, beside the plan rather
+  than inside it — the plan is configuration and a table's state is not, so folding it into
+  `FloorPlan` would have put a running value into `pos-proto`'s published shape. The till prefers the
+  edge's view, falls back to whatever it had already folded, then to free, so an edge too old to send
+  the map leaves a running till exactly as it was rather than wiping it.
+
+  **Upgrade note:** none. `table_states` is additive and optional.
+
 - **The till re-downloaded its whole bundle on every reload.** `assets::serve` set a content type
   and three security headers and nothing else — no `Cache-Control`, no `ETag`, no `Last-Modified` —
   so a browser had no basis to reuse anything and asked for all 198 KB again each time. Vite writes
