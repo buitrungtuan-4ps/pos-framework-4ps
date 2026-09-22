@@ -776,6 +776,51 @@ test("a till that reloads still knows which tables are occupied", async ({ page 
   }
 });
 
+// A tip on a bill that is not a round number still settles.
+//
+// The pay screen computed its tip keys with `(total * percent) / 100` — a float division on a money
+// path. For as long as every price in the fixture was a round thousand and the rate was ten percent
+// exclusive, every total was a multiple of a hundred and every key came out whole, so neither the
+// screen nor this gate had anything to show. Off that grid the 5% key of a 304,733₫ bill is
+// 15,236.65; `Money.amount_minor` is an `i64` and the edge's deserializer refuses it outright.
+//
+// The cashier's experience is what makes it worth a test rather than a lint. The keys *look* right
+// — the formatter truncates on the way to the screen, so 2,172.5 draws as "2,172₫". Nothing fails
+// until the settle, and what fails there is the generic store error, with the guest's money already
+// on the counter and no hint that the tip button was the cause.
+//
+// So this walks the whole tipped settle rather than reading the key: tap 5%, tender, pay, and the
+// bill must be settled at the end. The iced tea is priced at 39,500₫ for exactly this — see the
+// fixture note in `crates/pos-edge/src/demo.rs`.
+test("a tip on a bill that is not a round number still settles", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    // The one demo item priced off a round thousand. 39,500₫ plus ten percent is 43,450₫, and five
+    // percent of that is 2,172.5 — the half đồng this test exists for.
+    await page.locator("#menu-search").fill("tea");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+    await page.locator('[data-step="onItem"]').click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+
+    await page.locator('[data-step="takePayment"]').click();
+    // Asserted, not merely awaited: the tip keys are a share of this figure, so a test that tapped
+    // before the check landed would take five percent of nothing and prove the opposite of the point.
+    await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
+
+    await page.locator('[data-step="setTip"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
 test("every flow is replayed except the ones that say why they cannot be", () => {

@@ -32,6 +32,23 @@ export function zeroLike(m: Money): Money {
   return { currency_code: m.currency_code, amount_minor: 0 };
 }
 
+// A percentage of an amount, in **whole** minor units.
+//
+// Not a style preference. `Money.amount_minor` is an `i64` on the wire, and the edge's deserializer
+// refuses a fraction outright — a till that sent one got back a type error and showed the cashier a
+// generic store error with the guest standing there. JavaScript has a single number type, so
+// "integer" here means the value that *leaves* this function is one: the division is rounded rather
+// than left to produce 15236.65.
+//
+// Half away from zero, which is what `Money::round_to_increment` does on the edge, so a figure this
+// screen suggests and a figure the edge would have computed agree rather than differing by a unit.
+export function percentOf(amountMinor: number, percent: number): number {
+  const negative = amountMinor < 0;
+  const scaled = Math.abs(amountMinor) * percent;
+  const rounded = Math.trunc((scaled * 2 + 100) / 200);
+  return negative ? -rounded : rounded;
+}
+
 export function quantity(whole: number): Quantity {
   return { milli: whole * 1000 };
 }
