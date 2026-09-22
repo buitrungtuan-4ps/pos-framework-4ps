@@ -21,7 +21,7 @@
 // capabilities. Both folded controls are set-once preferences that persist per browser, which is
 // what makes a click acceptable; a control an operator uses during a task would not belong here.
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 
 import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
@@ -50,6 +50,7 @@ const ROLE_LABEL = {
 
 export function AccountMenu(props: { onSignOut: () => void }) {
   const [open, setOpen] = createSignal(false);
+  let container: HTMLDivElement | undefined;
   const location = useLocation();
   useEscape(open, () => setOpen(false));
 
@@ -58,6 +59,21 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   createEffect(() => {
     void location.pathname;
     setOpen(false);
+  });
+
+  // Clicking outside closes the menu. Bound only while open and on `pointerdown` so a press outside
+  // dismisses the popover immediately.
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (container && !container.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
   });
 
   // `null` covers both "whoami has not answered yet" and "whoami failed", because the signal cannot
@@ -73,7 +89,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   };
 
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("account.open")}

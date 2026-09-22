@@ -4,7 +4,7 @@
 // is no longer reachable. The chosen ids are what every screen reads (state/session); the names are
 // shown, and the ULID sits underneath, muted, for reference only.
 
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
@@ -35,7 +35,21 @@ export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
+  let container: HTMLDivElement | undefined;
   useEscape(open, () => setOpen(false));
+
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (container && !container.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
+  });
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -188,7 +202,7 @@ export function ContextPicker() {
     storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
 
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("context.change")}

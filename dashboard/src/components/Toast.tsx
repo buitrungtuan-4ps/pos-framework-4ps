@@ -4,7 +4,7 @@
 // operator missed is not lost. The primitive lives here; the CRUD kit (F2) routes write outcomes
 // through it. Message text is already translated by the caller.
 
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 
 import { t } from "../i18n";
 import { useEscape } from "../lib/escape";
@@ -71,9 +71,24 @@ export function ToastHost() {
 /** The top-bar bell: a count of recent notifications and a dropdown of their history. */
 export function NotificationBell() {
   const [open, setOpen] = createSignal(false);
+  let container: HTMLDivElement | undefined;
   useEscape(open, () => setOpen(false));
+
+  createEffect(() => {
+    if (!open()) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      if (container && !container.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
+  });
+
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("notifications.open")}

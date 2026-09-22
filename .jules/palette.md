@@ -7,3 +7,8 @@
 
 **Learning:** Breadcrumb trails implemented as un-ordered elements without structured list items (`<ol>` / `<li>`) or `aria-current="page"` fail to communicate structural parent-child navigation hierarchy and current page location to screen reader users.
 **Action:** Wrap breadcrumb items in semantic `<ol>` / `<li>` lists inside `<nav aria-label="...">` and mark the final item representing the active screen with `aria-current="page"`.
+
+## 2026-08-18 - Click-Outside Dismissal for Topbar Dropdown Overlays
+
+**Learning:** Topbar dropdown popovers and overlays (like `AccountMenu`, `NotificationBell`, and `ContextPicker`) that rely solely on button toggles and Escape keys create friction when users attempt to dismiss them by clicking elsewhere on the page. Binding a document `pointerdown` listener scoped to the open state with a root `container` ref enables seamless click-outside dismissal across pointer and touch interactions.
+**Action:** Always wrap topbar popovers in a root element `ref` and attach a document `pointerdown` click-outside dismiss effect while `open()` is true.
