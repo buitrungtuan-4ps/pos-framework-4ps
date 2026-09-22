@@ -4,8 +4,14 @@ import { ApiError, api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
-import { formatMoney, money, quickCashFor } from "../lib/money";
-import { cashDenominations, settle, tenderAccepted, tipsEnabled } from "../state/store";
+import { money, quickCashFor } from "../lib/money";
+import {
+  cashDenominations,
+  formatAmount,
+  settle,
+  tenderAccepted,
+  tipsEnabled,
+} from "../state/store";
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
 // (ADR-0093).
@@ -168,7 +174,7 @@ export function Takeaway() {
                               : t("counter.queue_number", { number: order.queue_number })}
                           </span>
                           <span class="text-lg font-semibold tabular-nums">
-                            {formatMoney(order.total_due)}
+                            {formatAmount(order.total_due)}
                           </span>
                         </span>
                         <span class="mt-1 block text-sm text-ink-muted">
@@ -208,7 +214,7 @@ export function Takeaway() {
                       ? t("counter.no_queue_number")
                       : t("counter.queue_number", { number: order().queue_number ?? 0 })}
                   </p>
-                  <p class="text-2xl font-semibold tabular-nums">{formatMoney(order().total_due)}</p>
+                  <p class="text-2xl font-semibold tabular-nums">{formatAmount(order().total_due)}</p>
 
                   <Show when={error()}>
                     {(message) => (
@@ -241,7 +247,7 @@ export function Takeaway() {
                             data-step="setTip"
                             onClick={() => setTip(amount)}
                           >
-                            {formatMoney(money(currency(), amount))}
+                            {formatAmount(money(currency(), amount))}
                           </button>
                         )}
                       </For>
@@ -262,14 +268,14 @@ export function Takeaway() {
                         >
                           {amount === total()
                             ? t("pay.exact")
-                            : formatMoney(money(currency(), amount))}
+                            : formatAmount(money(currency(), amount))}
                         </button>
                       )}
                     </For>
                   </div>
                   <p class="mt-2 text-sm text-ink-muted">
                     {t("pay.change")}:{" "}
-                    <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
+                    <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
                   </p>
                   </Show>
 
@@ -310,7 +316,7 @@ export function Takeaway() {
                   </Show>
                   <p class="mt-2 text-sm text-ink-muted">
                     {t("pay.change")}:{" "}
-                    <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
+                    <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
                   </p>
                   <button
                     type="button"
