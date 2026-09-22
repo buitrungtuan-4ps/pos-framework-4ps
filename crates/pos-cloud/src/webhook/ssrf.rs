@@ -247,7 +247,8 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
     let is_documentation = (a == 192 && b == 0 && c == 2)
         || (a == 198 && b == 51 && c == 100)
         || (a == 203 && b == 0 && c == 113);
-    if ip.is_unspecified() {
+    if a == 0 {
+        // 0.0.0.0/8 (RFC 1122 "This host on this network", including 0.0.0.0 unspecified).
         Some(ForbiddenReason::Unspecified)
     } else if ip.is_loopback() {
         Some(ForbiddenReason::Loopback)
@@ -536,6 +537,8 @@ mod tests {
             ("172.16.9.9", ForbiddenReason::Private),
             ("192.168.1.1", ForbiddenReason::Private),
             ("0.0.0.0", ForbiddenReason::Unspecified),
+            ("0.0.0.1", ForbiddenReason::Unspecified),
+            ("0.255.255.255", ForbiddenReason::Unspecified),
             ("100.64.0.1", ForbiddenReason::SharedCgn),
             ("198.18.0.1", ForbiddenReason::Benchmarking),
             ("255.255.255.255", ForbiddenReason::Reserved),

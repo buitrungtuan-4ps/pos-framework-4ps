@@ -379,6 +379,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Refuse IPv4 `0.0.0.0/8` range ("This host on this network") in webhook SSRF filter.**
+  `Ipv4Addr::is_unspecified()` in Rust std only checks for `0.0.0.0`, leaving other addresses in the `0.0.0.0/8` range (such as `0.0.0.1` or `0.1.2.3`) unclassified and allowing potential SSRF bypasses depending on OS network stack / socket binding behavior. `classify_v4` now checks `a == 0` to block the entire `0.0.0.0/8` range as `ForbiddenReason::Unspecified`. **Upgrade note:** none.
+
 - **A NAT64 local-use address could still smuggle a forbidden IPv4 past the webhook SSRF filter.**
   The `64:ff9b:1::/48` branch added in #362 read its embedded address from segment 4 whole, but
   RFC 6052 §2.2 splits a /48 prefix's embedded IPv4 around the reserved `u` octet at bits 64-71 —
