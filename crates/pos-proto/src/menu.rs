@@ -241,7 +241,12 @@ impl MenuCatalog {
         }
     }
 
-    /// A catalog from its rows.
+    /// A catalog from its rows, carrying no modifier groups.
+    ///
+    /// The items are the catalog's reason to exist, so this is the constructor a test reaches for; a
+    /// catalog that also carries groups is built by adding them. Deliberately **not** used to
+    /// rebuild an existing catalog — see [`localized`](Self::localized), which has to carry every
+    /// other field across and once did not.
     #[must_use]
     pub const fn from_items(items: Vec<MenuEntry>) -> Self {
         Self {
@@ -322,15 +327,24 @@ impl MenuCatalog {
         self.items.len()
     }
 
-    /// The same catalog with every entry's [`display_name`](MenuEntry::display_name) resolved to
-    /// `language` (ADR-0074) — the store's display language applied once, at the edge, so the priced
-    /// line and receipt read in the store's language. An entry with no translation for `language`
-    /// keeps its default name (never-blank). The lookup by id is unchanged, so repricing a base item
-    /// or a modifier reads the localized name uniformly.
+    /// The same catalog with every name resolved to `language` (ADR-0074) — the store's display
+    /// language applied once, at the edge, so the priced line, the receipt and the till's own
+    /// prompts read in the store's language. A name with no translation for `language` keeps its
+    /// default (never-blank). The lookup by id is unchanged, so repricing a base item or a modifier
+    /// reads the localized name uniformly.
+    ///
+    /// **Everything the catalog carries comes across.** This was written as `from_items(…)`, which
+    /// silently dropped the modifier groups
+    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)): a store that
+    /// published a display language got a menu with no groups on it at all, so an item the guest
+    /// must be asked about was sold without asking. Resolving a name is not a reason to lose a rule,
+    /// and the shape is now "the same catalog, with the names resolved" rather than "a new catalog
+    /// from these items" — which is what let a second field go missing without a word.
     #[must_use]
     pub fn localized(&self, language: &str) -> Self {
-        Self::from_items(
-            self.items
+        Self {
+            items: self
+                .items
                 .iter()
                 .map(|entry| {
                     let mut localized = entry.clone();
@@ -338,7 +352,16 @@ impl MenuCatalog {
                     localized
                 })
                 .collect(),
-        )
+            modifier_groups: self
+                .modifier_groups
+                .iter()
+                .map(|group| {
+                    let mut localized = group.clone();
+                    localized.display_name = group.localized_name(language).clone();
+                    localized
+                })
+                .collect(),
+        }
     }
 }
 
@@ -862,6 +885,77 @@ mod tests {
                 .expect("the one item")
                 .modifier_group_ids
                 .is_empty()
+        );
+    }
+
+    /// Localizing a catalog must not empty it of anything but a name.
+    ///
+    /// `localized` rebuilt the catalog with `from_items`, which carries no modifier groups — so a
+    /// store that published a display language served a menu with no groups on it. Every item that
+    /// must be asked about ("what size?", "which base?") arrived at the till attaching nothing, and
+    /// was sold without the question. It is a whole ADR's worth of behaviour turned off by setting a
+    /// locale, which is why this asserts on the groups rather than on the names.
+    #[test]
+    fn localizing_a_catalog_keeps_its_modifier_groups() {
+        let pizza = translated().with_modifier_groups(vec![group_id(700)]);
+        let catalog = MenuCatalog::new()
+            .with(pizza)
+            .with_modifier_group(size_group())
+            .with_modifier_group(toppings_group());
+
+        let vietnamese = catalog.localized("vi");
+        assert_eq!(
+            vietnamese.modifier_groups().len(),
+            2,
+            "a store that set a display language still gets every group the cloud published"
+        );
+        assert_eq!(
+            vietnamese.groups_for(item(500)).len(),
+            1,
+            "and the attachment still resolves, so the till still asks the question"
+        );
+        assert_eq!(
+            vietnamese
+                .get(item(500))
+                .expect("the pizza")
+                .display_name
+                .as_str(),
+            "Bánh Margherita",
+            "the name it was localized for is still resolved"
+        );
+    }
+
+    /// The group's own name is resolved too, and by the same call — a half-localized catalog (items
+    /// in Vietnamese, "Size" in English) is the state that would come of carrying the groups across
+    /// untouched, and it is not what ADR-0074's "applied once, at the edge" means.
+    #[test]
+    fn localizing_a_catalog_resolves_its_group_names() {
+        let mut size = size_group();
+        size.display_name_translations
+            .insert("vi".to_owned(), DisplayName::new("Cỡ"));
+        let catalog = MenuCatalog::new()
+            .with(margherita().with_modifier_groups(vec![group_id(700), group_id(701)]))
+            .with_modifier_group(size)
+            .with_modifier_group(toppings_group());
+
+        let vietnamese = catalog.localized("vi");
+        let groups = vietnamese.groups_for(item(500));
+        assert_eq!(
+            groups
+                .first()
+                .expect("the size group")
+                .display_name
+                .as_str(),
+            "Cỡ"
+        );
+        assert_eq!(
+            groups
+                .get(1)
+                .expect("the toppings group")
+                .display_name
+                .as_str(),
+            "Extra toppings",
+            "a group with no translation for the locale keeps its default name"
         );
     }
 }
