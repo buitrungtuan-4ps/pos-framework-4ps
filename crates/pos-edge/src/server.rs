@@ -670,6 +670,10 @@ where
     // config-pull loop that keeps it current (ADR-0111). Empty until a store publishes an `origins`
     // node, which allows same-origin and nothing else — exactly today's behaviour.
     let origins = Arc::clone(&state.origins);
+    // Taken out here for the same reason `origins` is — `router` consumes the state — and applied
+    // once the last sub-router has been merged, because a layer cannot reach a route that does not
+    // exist yet (see [`crate::http::stamp_version`]).
+    let standing = Arc::clone(&state.standing);
 
     // The domain routes share the same pairing state the infra router serves, so the device-token
     // check (ADR-0084) validates tokens against the very set `/api/pair` issues them into. The config
@@ -766,6 +770,13 @@ where
     } else {
         tracing::info!("no cloud_url set; running LAN-only (no activation or cloud sync)");
     }
+
+    // Every route this binary serves now exists, so the stamp can reach all of them (ADR-0111,
+    // ADR-0123). Here rather than inside the cloud branch above, because a LAN-only box merges no
+    // activation router and would otherwise be the one deployment that answers without a version.
+    // This is the last thing done to the application: a route merged below this line has no release
+    // and no lease standing on its answers.
+    let app = crate::http::stamp_version(app, standing);
 
     Ok(Composed {
         app,

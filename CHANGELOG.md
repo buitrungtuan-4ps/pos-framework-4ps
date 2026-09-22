@@ -36,6 +36,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Forty-two of the edge's forty-five `/api/*` routes answered without naming their release or
+  their lease standing.** `stamp_edge_version` was applied with `Router::layer` as the last
+  operation of `http::router`, and `serve` merges `domain_router` and `activation_router` *after*
+  that. axum's `layer` wraps only the routes registered when it is called, so the stamp reached the
+  three pairing routes and the asset fallback and missed every route a till actually sells through.
+
+  Both banners that header feeds were therefore dead where they matter most: the version-drift
+  banner ([ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
+  banner ([ADR-0123](docs/adr/0123-a-superseded-box-opens-nothing-new.md)). Both readers are
+  fail-silent by design — a missing header leaves the previous value — so an absent header is
+  indistinguishable from agreement, and `edgeIsBehind()` and `edgeIsSuperseded()` simply always
+  returned false. A hosted till that had been replaced would never have said so.
+
+  The stamp now goes on at the end of `compose`, where both the cloud and the LAN-only branch
+  converge, so a box running without a `cloud_url` is covered too.
+
+  Verified against the running binary: before, `GET /api/session` returned `401` with neither
+  header; now every `/api/*` route carries both and `/healthz` still carries neither.
+
+  **Upgrade note:** none — no protocol, schema or permission change. A till that had silently
+  stopped reporting drift starts reporting it again, so an estate mid-rollout may surface
+  version-drift banners it was not showing before. That is the mechanism working.
+
+
 - **A tagged release no longer dies in `npm install`.** The earlier fix said "the four copies are
   now one local composite action" — it covered the four in `pr.yml` and left the **two in
   `release.yml` untouched**, because `AGENTS.md` §8 forbids an agent modifying a release workflow

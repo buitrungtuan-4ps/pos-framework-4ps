@@ -19,10 +19,16 @@
 //! Driven with `tower::ServiceExt::oneshot`: no socket, no browser, and a header is a value a test
 //! can read.
 
+use std::sync::Arc;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode, header};
-use pos_edge::{AppState, EdgeConfig};
+use pos_edge::{
+    AppState, Edge, EdgeConfig, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, Pairing,
+    Sessions, StoreIdentity,
+};
+use pos_fakes::FakeStore;
 use pos_proto::ids::StoreId;
 use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
@@ -38,16 +44,52 @@ const EDGE_VERSION: &str = "pos-edge-version";
 /// happens *after* pairing.
 const LEASE_STANDING: &str = "pos-lease-standing";
 
-/// A router with `published` as this store's origin allow-list.
+/// The application as [`serve`](pos_edge::serve) composes it: the infra router, the domain router
+/// merged into it, and the stamp applied **last**.
+///
+/// Composed rather than taken from `http::router` alone, and that detail is the whole reason this
+/// file was rewritten. The earlier version built `http::router(state)` by itself, which does not
+/// register `/api/session` at all: the request fell through to the asset fallback, came back
+/// `200 text/html`, and the header assertion passed on a response that had nothing to do with the
+/// route it named. It was indistinguishable from the `/api/floorplan` fallback test below it, and
+/// it reported the layer as working while forty-two of forty-five routes went unstamped in the
+/// binary an operator actually runs.
+///
+/// So: every route asserted here is a route that exists, and every test asserts the **status** as
+/// well as the header. A fallback cannot stand in for a domain route again without the status
+/// giving it away.
 fn app(published: &[&str]) -> Router {
     let store = StoreId::new(Ulid::from_u128(1));
     let config = EdgeConfig::new("127.0.0.1:0".parse().expect("valid addr"), store);
-    let state = AppState::new(config);
+    let pairing = Arc::new(Pairing::new());
+    let state = AppState::new(config).with_pairing(Arc::clone(&pairing));
     state
         .origins
         .replace(published)
         .expect("the test's origins are valid");
-    pos_edge::http::router(state)
+    // Taken before `router` consumes the state, exactly as `serve` does.
+    let standing = Arc::clone(&state.standing);
+    let origins = Arc::clone(&state.origins);
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(store),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("edge composes"),
+    );
+    let app = pos_edge::http::router(state).merge(pos_edge::http::domain_router(
+        edge,
+        InMemoryQueueNumbers::new(),
+        Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new()),
+        pos_edge::print_queue::InMemoryPrintQueue::new(),
+        pos_edge::print_wake::SharedPrintWake::new(),
+        pairing,
+        Arc::new(Sessions::new()),
+        &origins,
+    ));
+    pos_edge::http::stamp_version(app, standing)
 }
 
 /// A plain same-origin `GET`.
@@ -70,9 +112,11 @@ fn stamped(headers: &axum::http::HeaderMap) -> Option<String> {
 
 /// Every `/api/*` answer carries the running release.
 ///
-/// `/api/session` refuses an unpaired device, and that is the point: the header is on the refusal
-/// too. The call that fails is exactly the call an operator is looking at when they ask which
-/// version this box is running.
+/// `/api/session` refuses an unpaired device, and that is the point twice over: the header is on the
+/// refusal too — the call that fails is exactly the call an operator is looking at when they ask
+/// which version this box is running — and the `401` proves the request reached the real route
+/// rather than the asset fallback. Assert the status first; without it this test cannot tell a
+/// registered route from a missing one.
 #[tokio::test]
 async fn an_api_response_carries_the_running_release() {
     let response = app(&[])
@@ -80,10 +124,52 @@ async fn an_api_response_carries_the_running_release() {
         .await
         .expect("the router answers");
     assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "the premise: /api/session is a registered route that refuses an unpaired device, \
+         not a path falling through to the asset fallback",
+    );
+    assert_eq!(
         stamped(response.headers()).as_deref(),
         Some(pos_edge::version::VERSION),
         "an /api response must name the release that answered it",
     );
+}
+
+/// A route merged in after the infra router carries it too.
+///
+/// This is the case that was broken and that nothing caught. `Router::layer` wraps only the routes
+/// registered when it is called, so while the stamp was applied inside `http::router` it reached the
+/// three pairing routes and the asset fallback and missed every domain route — forty of the
+/// forty-five an edge publishes, including all of these. One route from the merged surface is
+/// enough to pin the composition order; `routes_snapshot.rs` owns the full list.
+#[tokio::test]
+async fn a_route_merged_after_the_infra_router_is_stamped_too() {
+    for uri in ["/api/menu", "/api/floor", "/api/orders/open"] {
+        let response = app(&[])
+            .oneshot(get(uri))
+            .await
+            .expect("the router answers");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{uri} must be a registered domain route that refuses an unpaired device",
+        );
+        assert_eq!(
+            stamped(response.headers()).as_deref(),
+            Some(pos_edge::version::VERSION),
+            "{uri} is merged after the infra router, and a layer applied before the merge \
+             would silently miss it",
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(LEASE_STANDING)
+                .and_then(|value| value.to_str().ok()),
+            Some("active"),
+            "{uri} must carry the lease standing for the same reason",
+        );
+    }
 }
 
 /// The asset fallback's answer carries it too, which is the failure this exists to explain.
@@ -175,6 +261,11 @@ async fn an_api_response_says_whether_this_box_is_still_the_store() {
         .oneshot(get("/api/session"))
         .await
         .expect("the router answers");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "the premise, again: a real route answered this, not the fallback",
+    );
     assert_eq!(
         response
             .headers()
