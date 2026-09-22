@@ -27,6 +27,12 @@ config.toml
 # replay (ADR-0109). Diagnostic output, regenerated on every run.
 /ui/test-results/
 /ui/playwright-report/
+
+# What the screen walk leaves behind: a PNG of every screen at every device size,
+# plus the index that names them (`ui/tests/screens.spec.mjs`). A record, regenerated
+# on demand and stale the moment a component changes — the harness is the artifact,
+# not its output.
+/ui/screenshots/
 /dashboard/test-results/
 /dashboard/playwright-report/
 /dashboard/node_modules/

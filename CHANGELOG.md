@@ -16,6 +16,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **`pnpm screens` photographs every till screen at three device sizes.** A walk that boots the same
+  `examples/minimal-edge` the step gate drives, signs in as the demo employee, takes the store
+  through 17 states and captures each one at a Windows POS size, a 10" Android tablet size and a
+  phone size ([#400](https://github.com/buitrungtuan-4ps/pos-framework-4ps/pull/400)).
+
+  It is a **record, not a gate**. It asserts nothing and can fail no build, and it runs from its own
+  Playwright config so `pnpm replay` neither collects it nor pays for it. Every step is time-boxed
+  and best-effort: a screen that cannot be reached records the reason and the walk goes on, because
+  a walk that stops at the first unreachable screen photographs nothing.
+
+  The images are not committed. They are regenerated on demand and go stale the moment a component
+  changes, so `ui/screenshots/` joins `ui/test-results/` in `.gitignore` — the harness is the
+  artifact, not its output.
+
+  **Upgrade note:** none — test tooling only, no change to any shipped artifact.
+
 ### Fixed
 
 - **A tagged release no longer dies in `npm install`.** The earlier fix said "the four copies are

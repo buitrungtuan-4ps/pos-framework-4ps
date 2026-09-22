@@ -15,6 +15,7 @@
     "i18n:parity": "node scripts/i18n-parity.mjs",
     "steps": "node scripts/step-budget.mjs",
     "replay": "playwright test",
+    "screens": "playwright test --config playwright.screens.config.mjs",
     "classes": "node scripts/device-classes.mjs"
   },
   "dependencies": {
