@@ -37,6 +37,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+use crate::chain::{ChainLink, preimage};
 use crate::ids::{BrandId, DeviceId, EmployeeId, EventId, ShiftId, StoreId, TenantId};
 use crate::time::{BusinessDate, Timestamp};
 
@@ -101,6 +102,20 @@ pub struct EventEnvelope<D> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shift_id: Option<ShiftId>,
 
+    /// Where this record sits in its store's hash chain, or `None` for one written before
+    /// the chain existed ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// Additive, and `None` is a real answer rather than a defect: a store's chain begins
+    /// at its first record after the migration, and everything earlier verifies as
+    /// **unchained** rather than as broken. Backfilling would compute a chain over history
+    /// nobody can vouch for, which is the false confidence the record rejects.
+    ///
+    /// It rides on the envelope rather than in a store's own columns so that it crosses
+    /// every channel the envelope does — a cloud reader verifies the same bytes the store
+    /// wrote, instead of taking the store's word for its own integrity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain: Option<ChainLink>,
+
     /// The payload.
     pub data: D,
 }
@@ -109,7 +124,14 @@ impl<D> EventEnvelope<D> {
     /// Replaces the payload, keeping every context field.
     ///
     /// Used by the decode step, and by anything that needs to map a payload without
-    /// restating eleven fields.
+    /// restating twelve fields.
+    ///
+    /// **Every field is restated here, which is a hazard**: a field added to the struct
+    /// and forgotten here is silently dropped by every caller, and nothing fails to
+    /// compile because the struct literal is still complete. `MenuCatalog::localized`
+    /// lost its modifier groups that exact way. `chain` in particular must survive —
+    /// a decode step that dropped it would leave every decoded event looking unchained.
+    /// `keeps_every_field_including_the_chain` below is the guard.
     pub fn map_data<T>(self, transform: impl FnOnce(D) -> T) -> EventEnvelope<T> {
         EventEnvelope {
             event_id: self.event_id,
@@ -123,8 +145,32 @@ impl<D> EventEnvelope<D> {
             device_id: self.device_id,
             employee_id: self.employee_id,
             shift_id: self.shift_id,
+            chain: self.chain,
             data: transform(self.data),
         }
+    }
+}
+
+impl<D: Serialize> EventEnvelope<D> {
+    /// The bytes this record's chain hash is taken over, for a proposed link.
+    ///
+    /// The record is serialized **with its own chain field cleared**, because a record
+    /// cannot contain its own hash and a preimage over a half-filled link would depend on
+    /// which half was filled. The link is then prepended by
+    /// [`chain::preimage`](crate::chain::preimage), which is where the exact format lives.
+    ///
+    /// The caller digests the result — see that module for why `pos-proto` does not.
+    ///
+    /// # Errors
+    ///
+    /// The payload failed to serialize, which for a stored envelope means it was built
+    /// from a type whose `Serialize` can fail.
+    pub fn chain_preimage(&self, link: &ChainLink) -> Result<String, serde_json::Error> {
+        let mut body = serde_json::to_value(self)?;
+        if let Some(object) = body.as_object_mut() {
+            object.remove("chain");
+        }
+        Ok(preimage(link, &serde_json::to_string(&body)?))
     }
 }
 
@@ -290,4 +336,145 @@ pub trait EventPayload: Serialize + serde::de::DeserializeOwned {
 
     /// Every field name, for the personal-data name check and the snapshot.
     const FIELD_NAMES: &'static [&'static str];
+}
+
+#[cfg(test)]
+mod chain_tests {
+    use super::{EventEnvelope, EventTypeRef, RawPayload};
+    use crate::chain::{ChainHash, ChainLink};
+    use crate::events::EventType;
+    use crate::ids::{BrandId, DeviceId, EmployeeId, EventId, ShiftId, StoreId, TenantId};
+    use crate::time::{BusinessDate, Timestamp};
+    use crate::ulid::Ulid;
+
+    fn envelope() -> EventEnvelope<RawPayload> {
+        EventEnvelope {
+            event_id: EventId::new(Ulid::from_parts(1_767_225_600_000, 1)),
+            event_type: EventTypeRef::from_known(EventType::BillingBillSettled),
+            event_time: Timestamp::from_milliseconds_since_epoch(1_767_225_600_000)
+                .expect("instant"),
+            business_date: BusinessDate::from_ymd(2026, 8, 13).expect("date"),
+            schema_version: 1,
+            tenant_id: TenantId::new(Ulid::from_parts(1, 1)),
+            brand_id: BrandId::new(Ulid::from_parts(1, 2)),
+            store_id: StoreId::new(Ulid::from_parts(1, 3)),
+            device_id: DeviceId::new(Ulid::from_parts(1, 4)),
+            employee_id: Some(EmployeeId::new(Ulid::from_parts(1, 5))),
+            shift_id: Some(ShiftId::new(Ulid::from_parts(1, 6))),
+            chain: None,
+            data: RawPayload::encode(&serde_json::json!({"amount_minor": 500_000}))
+                .expect("payload"),
+        }
+    }
+
+    /// `map_data` restates every field by hand, so a new field is dropped silently and
+    /// nothing fails to compile. `MenuCatalog::localized` lost its modifier groups that
+    /// exact way, and a decode step that dropped `chain` would leave every decoded event
+    /// looking unchained — which reads as "written before the chain existed", not as
+    /// tampering, so nothing would ever report it.
+    #[test]
+    fn map_data_keeps_every_field_including_the_chain() {
+        let link = ChainLink::following(41, ChainHash::of([7; 32]));
+        let original = EventEnvelope {
+            chain: Some(link.clone()),
+            ..envelope()
+        };
+
+        let mapped = original.clone().map_data(|payload| payload);
+
+        assert_eq!(mapped.chain, Some(link), "the chain survived the map");
+        // And everything else, compared as a whole rather than field by field — a
+        // per-field list here would have the same blind spot as the function it guards.
+        assert_eq!(mapped, original);
+    }
+
+    #[test]
+    fn the_preimage_excludes_the_records_own_chain_field() {
+        let link = ChainLink::first();
+        let unstamped = envelope();
+        let stamped = EventEnvelope {
+            chain: Some(link.clone()),
+            ..envelope()
+        };
+
+        assert_eq!(
+            unstamped.chain_preimage(&link).expect("preimage"),
+            stamped.chain_preimage(&link).expect("preimage"),
+            "a record cannot contain its own hash, so stamping must not change its preimage"
+        );
+        assert!(
+            !stamped
+                .chain_preimage(&link)
+                .expect("preimage")
+                .contains("\"chain\""),
+            "the chain field is cleared out of the body"
+        );
+    }
+
+    #[test]
+    fn editing_any_part_of_the_record_changes_its_preimage() {
+        let link = ChainLink::first();
+        let original = envelope().chain_preimage(&link).expect("preimage");
+
+        let edited_payload = EventEnvelope {
+            data: RawPayload::encode(&serde_json::json!({"amount_minor": 1})).expect("payload"),
+            ..envelope()
+        };
+        assert_ne!(
+            edited_payload.chain_preimage(&link).expect("preimage"),
+            original,
+            "an edited amount must change the preimage — this is the whole point"
+        );
+
+        let edited_context = EventEnvelope {
+            employee_id: Some(EmployeeId::new(Ulid::from_parts(9, 9))),
+            ..envelope()
+        };
+        assert_ne!(
+            edited_context.chain_preimage(&link).expect("preimage"),
+            original,
+            "context is covered too: who rang the sale is part of the record"
+        );
+    }
+
+    #[test]
+    fn a_record_moved_to_another_position_gets_a_different_preimage() {
+        let record = envelope();
+        let at_one = record
+            .chain_preimage(&ChainLink::first())
+            .expect("preimage");
+        let at_two = record
+            .chain_preimage(&ChainLink::following(1, ChainHash::genesis()))
+            .expect("preimage");
+        assert_ne!(at_one, at_two, "or two records could swap places freely");
+    }
+
+    #[test]
+    fn an_envelope_written_before_the_chain_existed_still_loads() {
+        // Round-tripped through text rather than `serde_json::Value`, because the envelope
+        // borrows on the way in (`BusinessDate` deserializes from a borrowed string) and
+        // `from_value` cannot hand out borrows. That is a property of the existing type,
+        // not of this change.
+        let older = serde_json::to_string(&envelope()).expect("serialise");
+        assert!(
+            !older.contains("\"chain\""),
+            "an unstamped envelope carries no chain field on the wire: {older}"
+        );
+        let loaded: EventEnvelope<RawPayload> =
+            serde_json::from_str(&older).expect("an envelope without the field still loads");
+        assert_eq!(loaded.chain, None, "and reads as unchained, not as broken");
+    }
+
+    #[test]
+    fn a_stamped_envelope_round_trips_through_json() {
+        let stamped = EventEnvelope {
+            chain: Some(ChainLink::following(7, ChainHash::of([2; 32]))),
+            ..envelope()
+        };
+        let json = serde_json::to_string(&stamped).expect("serialise");
+        assert_eq!(
+            serde_json::from_str::<EventEnvelope<RawPayload>>(&json).expect("deserialise"),
+            stamped
+        );
+    }
 }
