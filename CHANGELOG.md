@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-dismiss topbar popover menus on click outside.** The `AccountMenu`, `NotificationBell`, and `ContextPicker` dropdown overlays in `dashboard/` now close automatically when clicking anywhere outside the popover element.
+
 ### Added
 
 - **A course is something the catalog names** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
