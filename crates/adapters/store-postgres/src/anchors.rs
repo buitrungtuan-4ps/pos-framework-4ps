@@ -161,6 +161,50 @@ impl PostgresAnchors {
         Ok(())
     }
 
+    /// Every event the cloud holds for one store over `days_back + 1` trading days ending at
+    /// `business_date`, in `event_id` order, capped at `limit` — the window a chain recomputation
+    /// walks ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+    ///
+    /// The day is the filter, against `events_tenant_store_date`
+    /// ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md)), and it is the partition
+    /// key too, so this is a partition slice rather than a scan. Chain positions are read out of the
+    /// envelopes by the caller: nothing here touches a JSON operator, and no column was promoted
+    /// onto the most-written table in the system to make this query tidier.
+    ///
+    /// `days_back` exists because a shift that crosses the store's own day cut-off puts part of the
+    /// window on the previous trading date. The arithmetic is PostgreSQL's — `pos-proto`'s
+    /// `BusinessDate` deliberately offers none, and inventing calendar arithmetic in Rust to avoid
+    /// one `interval` would be the worse trade.
+    ///
+    /// Returns the raw envelope text. Deserialising is `pos-cloud`'s, which is where the wire types
+    /// live; this adapter's job is the rows.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn events_in_window(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        business_date: &str,
+        days_back: i32,
+        limit: i64,
+    ) -> Result<Vec<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT envelope::text FROM events \
+                 WHERE tenant_id = $1 AND store_id = $2 \
+                   AND business_date <= to_date($3, 'YYYY-MM-DD') \
+                   AND business_date >= to_date($3, 'YYYY-MM-DD') - make_interval(days => $4) \
+                 ORDER BY event_id LIMIT $5",
+                &[&tenant_id, &store_id, &business_date, &days_back, &limit],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(|row| row.get(0)).collect())
+    }
+
     /// Lists a tenant's most recent refused anchors, newest first, capped at `limit`. An optional
     /// `store_id` narrows to one store.
     ///

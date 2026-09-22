@@ -62,6 +62,7 @@ pub mod auth;
 pub mod campaigns;
 pub mod catalog;
 pub mod catalog_compiler;
+pub mod chain_audit;
 pub mod clock;
 pub mod cloud;
 pub mod config;

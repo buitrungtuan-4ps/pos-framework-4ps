@@ -43,9 +43,10 @@
 //! away would destroy the finding.
 
 use pos_ports::dynamic::BoxFuture;
-use pos_proto::Timestamp;
 use pos_proto::chain::ChainHash;
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{EventId, StoreId, TenantId};
+use pos_proto::{BusinessDate, Timestamp};
 
 /// A failure of the anchor ledger itself — the database is unreachable.
 #[derive(Debug, thiserror::Error)]
@@ -234,6 +235,44 @@ pub trait AnchorLedger: Send + Sync + core::fmt::Debug {
         store: Option<StoreId>,
         limit: u32,
     ) -> BoxFuture<'_, Result<Vec<AnchorConflict>, AnchorError>>;
+}
+
+/// Reads the events the cloud holds for one store's trading day, so the chain they make can be
+/// recomputed ([ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
+///
+/// # Why this is not `EventStore::read`
+///
+/// [`pos_ports::event_store::EventQuery`] pages a store's log by `event_id` and has no notion of a
+/// trading day. Adding one would change a port every adapter implements to serve a question only
+/// the cloud asks. [ADR-0040](../../../docs/adr/0040-reconciliation.md) already made this choice
+/// for the reconciliation diff — a seam here, filled by `store-postgres` — and this follows it.
+///
+/// The day is the filter because it is the index the event log already carries
+/// ([ADR-0022](../../../docs/adr/0022-events-partition-strategy.md)); the chain positions are read
+/// out of the envelopes afterwards, so nothing is filtered on a JSON operator and no column is
+/// promoted onto the most-written table in the system.
+pub trait ChainWindow: Send + Sync + core::fmt::Debug {
+    /// Every event the cloud holds for `store` over `days_back + 1` trading days ending at `day`,
+    /// in `event_id` order, capped at `limit`.
+    ///
+    /// `days_back` is there because a shift that crosses the store's own day cut-off puts part of
+    /// its window on the previous trading date. A window that holds more than `limit` events returns
+    /// the first `limit` of them; the caller then sees the short read as an *incomplete* window
+    /// rather than as a clean one, which is the honest reading and the one
+    /// [ADR-0132](../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md) decision 4
+    /// asks for.
+    ///
+    /// # Errors
+    ///
+    /// [`AnchorError`] if the log could not be read.
+    fn events_in_window<'a>(
+        &'a self,
+        tenant: TenantId,
+        store: StoreId,
+        day: &'a BusinessDate,
+        days_back: u8,
+        limit: u32,
+    ) -> BoxFuture<'a, Result<Vec<EventEnvelope<RawPayload>>, AnchorError>>;
 }
 
 /// Decides what to do with an offered anchor, given what the cloud holds.
