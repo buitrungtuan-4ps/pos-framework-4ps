@@ -36,6 +36,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The till re-downloaded its whole bundle on every reload.** `assets::serve` set a content type
+  and three security headers and nothing else — no `Cache-Control`, no `ETag`, no `Last-Modified` —
+  so a browser had no basis to reuse anything and asked for all 198 KB again each time. Vite writes
+  content-hashed filenames (`index-BfI3AVXL.js`) precisely so they can be held forever, and that
+  hash was being thrown away.
+
+  A hashed asset under `assets/` now carries `public, max-age=31536000, immutable`; everything else,
+  `index.html` above all, carries `no-cache` — it is the file that *names* the hashed ones, so
+  pinning it would pin the release with it and a till would never learn an update shipped.
+
+  Every asset also carries a strong `ETag`, taken from the hash `rust-embed` already computes at
+  build time, so a revalidation costs nothing at run time. `If-None-Match` is answered with `304`
+  and no body. Measured against the running edge: a revalidated asset went from **175,357 bytes to
+  0**, a stale validator still returns the full body, and `*` matches as the specification requires.
+
+  Under `dev-ui` the assets come off disk with no hash and are left uncached, which is the point of
+  that feature.
+
+  **Upgrade note:** none. Compression is a separate question — it needs a new dependency, so it
+  needs its own record first.
+
+
 - **The order screen was 55px wider than a phone, and the gate that exists to catch that could not
   see it.** `main` carries `overflow-y-auto`; when overflow is set on one axis CSS computes the other
   to `auto`, so `main` was quietly a *horizontal* scroller too. Its content overflowed **inside it**,
