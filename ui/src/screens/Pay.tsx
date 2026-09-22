@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { formatMoney, money, quickCashFor } from "../lib/money";
+import { formatMoney, money, percentOf, quickCashFor } from "../lib/money";
 import {
   applyDiscount,
   cashDenominations,
@@ -27,6 +27,11 @@ const VOID_BILL = "REASON_ACTION_VOID_BILL";
 // knocking money off and not for cancelling a bill, and the edge refuses a reason published for
 // the wrong one — so a picker that offered both would offer a refusal.
 const DISCOUNT = "REASON_ACTION_DISCOUNT";
+
+// The shares of the bill the tip row offers. Three, because the row has four columns and one of
+// them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
+// makes by tapping the nearest of three.
+const TIP_PERCENTS = [5, 10, 15] as const;
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
 // and its change, an optional tip, or card for the exact amount. On settlement it shows the gapless
@@ -140,9 +145,24 @@ export function Pay() {
   };
 
   // Tip keys as a share of the bill, plus a clear. Percentages rather than fixed amounts so they
-  // scale with the check, and computed in minor units with integer arithmetic — the workspace bans
-  // floats in a money path, and rounding a tip by accident is the kind of cent nobody can explain.
-  const tipKeys = () => [5, 10, 15].map((percent) => (total() * percent) / 100);
+  // scale with the check.
+  //
+  // `(total * percent) / 100` is what this line used to say, and it is a float division wearing an
+  // integer's clothes. It was invisible for as long as every figure on the check was a round
+  // thousand: a bill of 304,733₫ makes the 5% key 15,236.65, `Money.amount_minor` is an `i64`, and
+  // the edge's deserializer refuses it — *"invalid type: floating point"*. What the cashier saw was
+  // the generic store error, on the settle, with the guest's money already on the counter. Nothing
+  // about the message said which of the four buttons they had pressed was the problem, and tapping
+  // "no tip" made it go away, which is the kind of fix that becomes folklore.
+  //
+  // `percentOf` is the whole-minor-unit answer, rounded the way the edge rounds so the two agree.
+  //
+  // It leaves a second, smaller point open: 15,237₫ is an integer and still not an amount a guest
+  // can leave, because Vietnam's smallest note is 1,000. Snapping the keys to the country's cash
+  // increment is the fix for that, and it is deliberately not here — a store that rounds its cash
+  // can never produce the fractional total this line is about, so the two cannot be proven by one
+  // fixture and are not one change.
+  const tipKeys = () => TIP_PERCENTS.map((percent) => percentOf(total(), percent));
 
   // The exact amount, plus this bill's own currency's banknotes that would cover it (roadmap E5).
   // These were VND's three notes regardless of where the store was, so a store on any other

@@ -53,8 +53,20 @@ fn demo_employee() -> EmployeeId {
     EmployeeId::new(Ulid::from_u128(2))
 }
 
-/// Three items at round prices, priced on dine-in and on the fallback both, so the takeaway screen
-/// sells the same things the floor does ([ADR-0093](../../../docs/adr/0093-takeaway.md)).
+/// Three items priced on dine-in and on the fallback both, so the takeaway screen sells the same
+/// things the floor does ([ADR-0093](../../../docs/adr/0093-takeaway.md)).
+///
+/// **One of them is deliberately not a round thousand**, and that is a gate decision rather than a
+/// menu one. Every price here used to be a multiple of 1,000; add a 10% exclusive rate to any of
+/// them, in any combination, at any quantity, and the total is a multiple of 100. Five, ten and
+/// fifteen percent of a multiple of 100 are all whole numbers, so the till's tip keys came out whole
+/// no matter what a flow bought — and the browser gate could not see a money bug that only shows on
+/// a total the arithmetic does not divide. It did not see one: the pay screen computed its tip keys
+/// with a float division, and on a bill of 304,733₫ the 5% key was 15,236.65, which the edge's own
+/// deserializer refuses. A cashier met that as a generic store error at the settle.
+///
+/// The iced tea is 39,500₫ so that one item, bought alone, produces 43,450₫ — and five percent of
+/// that is 2,172.5. A fixture whose every number divides is a fixture that proves the easy half.
 ///
 /// The tax class is [`EdgeSession::standard_tax_class`], the one the bootstrap rate table carries a
 /// rate for on every channel — an entry naming any other class would price fine and then refuse to
@@ -96,7 +108,7 @@ fn demo_menu() -> MenuBook {
     // so the flow that fires the starters must leave it alone, and the gate can see that it does.
     let catalog = MenuCatalog::new()
         .with(item(102, "Garden salad", 89_000).with_course(course(900)))
-        .with(item(103, "Iced tea", 39_000))
+        .with(item(103, "Iced tea", 39_500))
         .with(
             item(101, "Margherita", 149_000)
                 .with_modifier_groups(vec![group(700), group(701)])

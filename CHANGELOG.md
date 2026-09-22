@@ -59,6 +59,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A tip on a bill that was not a round number stopped the settle.** The pay screen worked out its
+  5/10/15% keys with `(total * percent) / 100` — a float division on a money path. On a bill of
+  304,733₫ the 5% key was 15,236.65; `Money.amount_minor` is an `i64`, and the edge's deserializer
+  refuses a fraction outright.
+
+  What the cashier met was not a tidy validation message. The keys *look* right, because the
+  formatter truncates on the way to the screen and 2,172.5 draws as "2,172₫". Nothing fails until
+  the settle, and what fails there is the generic store error — with the guest's money already on
+  the counter, and no hint that the tip button was the cause. Tapping "no tip" makes it go away,
+  which is how a bug like this becomes folklore instead of a report.
+
+  The keys are now whole minor units, rounded half away from zero, which is what `Money` does on the
+  edge — so the figure the till suggests and the figure the edge would have computed agree.
+
+  The fixture is part of the fix. Every demo price was a multiple of 1,000, and 10% exclusive tax on
+  any combination of them gives a multiple of 100, of which 5, 10 and 15 percent are all whole. The
+  browser gate could not have seen this. The demo iced tea is now 39,500₫, so one item bought alone
+  comes to 43,450₫ and the arithmetic has a half đồng in it.
+
+  Snapping the keys to a country's cash increment — 15,237₫ is whole and still not an amount a guest
+  can leave, Vietnam's smallest note being 1,000 — is a separate change, because a store that rounds
+  its cash can never produce the fractional total this one is about.
+
+  **Upgrade note:** none.
+
 - **A till that reloaded showed every occupied table as free.** The floor is the home screen, and
   `GET /api/floor` served only the published *plan* — areas, tables, stations. A device learned which
   tables had people at them from the fan-out alone, so a device that was not running when the guests
