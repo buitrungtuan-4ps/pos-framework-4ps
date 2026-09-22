@@ -231,9 +231,14 @@ const AFTER_STEP = {
 const replayed = TASKS.filter((declared) => declared.unreplayable === undefined);
 const skipped = TASKS.filter((declared) => declared.unreplayable !== undefined);
 
-/** Walks a declared flow's steps, in the order and by the means the declaration names. */
-async function walk(page, declared) {
-  for (const [index, step] of declared.steps.entries()) {
+/**
+ * Walks a declared flow's steps, in the order and by the means the declaration names.
+ *
+ * `upTo` stops after that many steps, for a test that needs the screen a flow reaches rather than
+ * the flow's own outcome. It defaults to the whole declaration, which is what the replay wants.
+ */
+async function walk(page, declared, upTo = declared.steps.length) {
+  for (const [index, step] of declared.steps.slice(0, upTo).entries()) {
     const description = `step ${index + 1} of "${declared.task}"`;
     if (step.nav !== undefined) {
       await openNavGroupFor(page, step.nav);
@@ -291,6 +296,61 @@ test("a picker whose options arrive late does not swallow the next click", async
     page.locator(`[data-outcome="${declared.outcome.mark}"]`).first(),
     "the flow reached its outcome with the cohort list served late, so no popup was left over the next control",
   ).toBeVisible();
+  await context.close();
+});
+
+// A price in a two-decimal currency is typed as the price, not as its minor units.
+//
+// [ADR-0135](../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md): `MoneyField`
+// used to edit `amount_minor` directly, so ₹261.45 was authored by typing `26145` — every decimal
+// point the operator pressed was dropped on the way in. The field now reads the exponent the
+// platform publishes.
+//
+// The unit tests in `money.test.tsx` pin the arithmetic with the exponent handed straight in. What
+// only a browser against a real cloud can show is the chain between: `Shell` mounts, reads
+// `GET /admin/countries`, and the field on the far side of four clicks knows what the rupee is. So
+// this asserts the one thing that was impossible before — that a typed decimal survives — rather
+// than re-testing the formatter.
+//
+// It stops at the field and does not save. Whether the cloud accepts a placement priced in a
+// currency other than the store's own is a separate question from whether the operator can type the
+// price, and answering it here would make a money test fail for a reason that is not about money.
+test("a price in a two-decimal currency is typed as the price", async ({ browser }) => {
+  const declared = replayed.find((task) => task.task.startsWith("Change an item's price"));
+  expect(declared, "the price-change flow is the one that reaches a money field").toBeDefined();
+
+  const { context, page } = await openConsole(browser);
+  // The first four declared clicks end on the placement editor, which is where the money is.
+  await walk(page, declared, 4);
+
+  // Scoped to the open drawer, and found by the option it carries rather than by its label, so the
+  // test depends on neither the language the console booted in nor what else is on the screen.
+  const editor = page.locator('[role="dialog"]').first();
+  await expect(editor, "the fourth click opens the placement editor").toBeVisible();
+  const currency = editor
+    .locator("select")
+    .filter({ has: page.locator('option[value="INR"]') })
+    .first();
+  await expect(
+    currency,
+    "the currency picker offers INR, which it takes from the compiled country list",
+  ).toBeVisible();
+  await currency.selectOption("INR");
+
+  const amount = editor.locator('[data-step="setChannelAmount"]').first();
+  await amount.fill("261.45");
+  // Blur, because that is when the field drops the draft and redraws from what it actually emitted.
+  // Asserting before it would only prove the input kept the characters typed into it.
+  await amount.blur();
+  await expect(
+    amount,
+    "₹261.45 was typed and the field settled on it — before ADR-0135 the decimal point was stripped and the field read 26,145",
+  ).toHaveValue("261.45");
+
+  await expect(amount, "a currency with decimals asks for a keypad that has one").toHaveAttribute(
+    "inputmode",
+    "decimal",
+  );
   await context.close();
 });
 

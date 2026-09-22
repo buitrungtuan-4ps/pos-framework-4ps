@@ -787,6 +787,12 @@ export interface Country {
   readonly code: string;
   readonly display_name: string;
   readonly currency_code: string;
+  /**
+   * How many decimal places that currency has: 0 for the đồng and the yen, 2 for the paisa and the
+   * cent (ADR-0134). Every amount the console reads and writes is an integer in the minor unit, so
+   * this is what says where the decimal point goes.
+   */
+  readonly currency_exponent: number;
   readonly default_language: string;
   readonly decimal_separator: string;
   readonly group_separator: string;

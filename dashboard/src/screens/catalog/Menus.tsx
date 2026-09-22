@@ -1,7 +1,7 @@
 // The Menus sub-screen (ADR-0082, Track F3): menus, their authoring sections, the per-channel priced
 // placements, and publish-to-store — on the F2 CRUD kit. This is the priced heart of the catalog, so
 // it also lands the two F3 additions the ADR calls for: prices are edited through the new currency-
-// aware `MoneyField` (integer minor units, locale-grouped, currency chosen from the country list, no
+// aware `MoneyField` (money typed as money, locale-grouped, currency chosen from the country list, no
 // more free-text currency), and a **bulk price editor** sets one channel's price across a section's
 // placements at once. Everything else is behaviour-preserving from the monolith: menu inheritance,
 // section sort, availability, and the publish path that compiles the menu onto the store's config.
@@ -19,7 +19,7 @@ import type {
 } from "../../api/types";
 import { SALES_CHANNELS } from "../../api/types";
 import { t } from "../../i18n";
-import { formatMoney } from "../../lib/format";
+import { formatAmount } from "../../state/money";
 import { addToRelease, describePublish, previewNode } from "../../lib/publish-copy";
 import { usePublishedNodes } from "../../lib/published";
 import { createAdminResource, failureOf } from "../../lib/resource";
@@ -509,7 +509,7 @@ export function CatalogMenus() {
       .filter((price) => price.sales_channel)
       .map(
         (price) =>
-          `${t(CHANNEL_LABEL[price.sales_channel as SalesChannel])} ${formatMoney(price.unit_price)}`,
+          `${t(CHANNEL_LABEL[price.sales_channel as SalesChannel])} ${formatAmount(price.unit_price)}`,
       );
     return parts.length > 0 ? parts.join(" · ") : t("catalog.noPrices");
   };
