@@ -204,13 +204,30 @@ pub fn router(state: AppState) -> Router {
                 )
             }),
         )
-        // The release this box is running, on every `/api/*` answer including the asset fallback's
-        // (ADR-0111). Outermost, so it also stamps a response a layer below refused.
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&state.standing),
-            stamp_edge_version,
-        ))
         .with_state(state)
+}
+
+/// Stamps the release and the lease standing onto every `/api/*` answer this application gives.
+///
+/// Applied by the caller, to the **fully merged** application, and that is not a style preference.
+/// [`Router::layer`] wraps only the routes registered at the moment it is called; a sub-router
+/// merged in afterwards is not covered. Applied inside [`router`], as it was, it reached the three
+/// pairing routes and the asset fallback and left the forty domain routes and the two activation
+/// routes bare — which is every route a till actually sells through.
+///
+/// That made both banners the header feeds read as "nothing to say". The version-drift banner
+/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
+/// banner ([ADR-0123](../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)) are both
+/// fail-silent by design: a missing header leaves the previous value, so absence is indistinguishable
+/// from agreement. A gap here is quiet rather than loud, which is why it needs saying out loud.
+///
+/// Outermost, so it also stamps a response a layer below refused — the call that just failed is
+/// exactly the one an operator is looking at when they ask what this box is running.
+pub fn stamp_version(app: Router, standing: Arc<CurrentStanding>) -> Router {
+    app.layer(axum::middleware::from_fn_with_state(
+        standing,
+        stamp_edge_version,
+    ))
 }
 
 /// Builds the domain routes over the application [`Edge`].
