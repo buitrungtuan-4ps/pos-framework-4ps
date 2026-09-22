@@ -38,6 +38,7 @@ pub mod ws;
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::{Request, State};
@@ -45,6 +46,7 @@ use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use pos_ports::event_store::EventStore;
@@ -205,6 +207,75 @@ pub fn router(state: AppState) -> Router {
             }),
         )
         .with_state(state)
+}
+
+/// How long a request may take before the edge gives up on it.
+///
+/// Generous on purpose. Nothing a till asks for is slow — the domain routes are SQLite reads and
+/// appends on the same machine — with one exception: verifying a PIN runs Argon2, which is
+/// deliberately expensive and is the one legitimate request that can take a noticeable fraction of a
+/// second on the cheap hardware a store actually buys. A budget tight enough to be interesting would
+/// have to be tight enough to refuse a sign-in on a busy box, which trades a real outage for a
+/// theoretical one.
+///
+/// So this is not a performance target. It is the line past which a request is no longer a request:
+/// a connection that declared a body and never sent it, a handler that will not return. A minute
+/// costs a genuine slow caller nothing and turns an indefinite hold into an answer and a log line.
+///
+/// # Why a minute and not thirty seconds
+///
+/// One route on this edge legitimately waits on the internet: `POST /api/activate` makes a cloud
+/// round trip inside the request, and `server::ACTIVATION_TIMEOUT` gives that trip **thirty
+/// seconds** before it fails on its own terms. A deadline set to the same figure would race it, and
+/// on a slow link the race would usually be won here — turning "activation was slow and worked" into
+/// `408`, on the one-shot step that brings a new store online, where a confusing failure costs an
+/// engineer a site visit.
+///
+/// The relationship is asserted at compile time beside that constant rather than written down here
+/// and remembered, because the two are a pair and the next person to tune either will be looking at
+/// only one of them.
+///
+/// A constant rather than a setting, because no store has a reason to differ and a knob nobody turns
+/// is a knob that goes wrong (`docs/design-principles.md`). If one ever does, it becomes a published
+/// value then.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Gives every request a deadline.
+///
+/// Applied by the caller to the **fully merged** application, for the reason [`stamp_version`] is:
+/// [`Router::layer`] wraps only what is registered when it is called, and the forty domain routes
+/// are merged afterwards. Those are the routes a till sells through, and a timeout that covered the
+/// three pairing routes and the asset fallback alone would be decoration.
+///
+/// Measured before it existed: a connection that sent `Content-Length: 40` and then nothing held a
+/// socket and a task **indefinitely** — the probe gave up after five seconds rather than the server
+/// doing so. With this, the same connection is answered `408 Request Timeout` at the budget. That is
+/// the whole of what it is for: a store's till has no business holding a connection open forever for
+/// anyone, least of all on a shop network a guest's phone can reach ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// **It does not touch the fan-out.** A `/ws` upgrade produces its `101` at once and the socket
+/// lives on outside the request this layer is timing, so a kitchen display connected all service is
+/// unaffected — asserted in `tests/request_timeout.rs` rather than reasoned about, because a layer
+/// that quietly severed every display at thirty seconds would be a far worse bug than the one this
+/// fixes.
+pub fn time_out(app: Router) -> Router {
+    time_out_for(app, REQUEST_TIMEOUT)
+}
+
+/// [`time_out`] with the budget named, for a test that cannot wait thirty seconds to watch a
+/// deadline pass.
+///
+/// Separate so the suite exercises *this* function rather than building its own layer and proving
+/// only that `tower-http` works. The shipped call is [`time_out`] and there is deliberately no way
+/// to configure the budget from outside the binary — see [`REQUEST_TIMEOUT`].
+pub fn time_out_for(app: Router, budget: Duration) -> Router {
+    // `408`, named rather than defaulted. It is what a request that outran its own deadline is —
+    // the caller took too long, not the store — and it is what a proxy or a client library knows how
+    // to retry. `TimeoutLayer::new` picks the same status and is deprecated in favour of saying so.
+    app.layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        budget,
+    ))
 }
 
 /// Stamps the release and the lease standing onto every `/api/*` answer this application gives.

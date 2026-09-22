@@ -125,6 +125,17 @@ const RETENTION_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// one-time, operator-driven action, not a hot path.
 const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// `POST /api/activate` waits on the cloud for [`ACTIVATION_TIMEOUT`] inside the request, and every
+/// request is under [`crate::http::REQUEST_TIMEOUT`]. If the outer deadline were the shorter of the
+/// two it would win the race: a slow but successful activation would be answered `408` instead of
+/// succeeding, on the one-shot step that brings a new store online.
+///
+/// Asserted rather than commented, so lowering either one fails the build rather than a site visit.
+const _: () = assert!(
+    ACTIVATION_TIMEOUT.as_secs() < crate::http::REQUEST_TIMEOUT.as_secs(),
+    "the request deadline must outlast the cloud round trip it contains"
+);
+
 /// The box's own device identity, for the events it writes with no human behind them.
 ///
 /// A relayed order came from the cloud, not from a paired till, so the honest answer to "which device
@@ -777,6 +788,11 @@ where
     // This is the last thing done to the application: a route merged below this line has no release
     // and no lease standing on its answers.
     let app = crate::http::stamp_version(app, standing);
+    // Outermost of all, and after the stamp for the reason the stamp is after everything else: a
+    // request the deadline cut off still gets an answer, and that answer should still say what this
+    // box is running. A layer added below this line would sit inside the deadline rather than
+    // covering it (see [`crate::http::time_out`]).
+    let app = crate::http::time_out(app);
 
     Ok(Composed {
         app,
