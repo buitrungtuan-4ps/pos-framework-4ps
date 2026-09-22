@@ -130,6 +130,11 @@ jobs:
 
       - uses: ./.github/actions/rust-setup
 
+      # The same retrying pnpm install the pull-request workflow uses. A registry hiccup here used
+      # to fail the job outright, and on *this* workflow that is worse than on a pull request: the
+      # run is triggered by a tag, so recovering means a human noticing and re-running a release.
+      - uses: ./.github/actions/node-setup
+
       - name: Build the operator UI
         # Built here as well as on the Linux job, rather than shared between them as an artifact.
         # The two bundles come from the same source with the same `VITE_MINIMUM_EDGE_VERSION` and
@@ -144,7 +149,6 @@ jobs:
           set -euo pipefail
           export VITE_MINIMUM_EDGE_VERSION="${RELEASE_TAG#v}"
           echo "the app requires edge ${VITE_MINIMUM_EDGE_VERSION} or later"
-          npm install --global pnpm@10
           pnpm install --frozen-lockfile
           pnpm build
 
@@ -275,6 +279,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-aarch64-linux-gnu libc6-dev-arm64-cross minisign zip
 
+      # As on the Windows job above: a retrying pnpm install, because a tagged release that dies
+      # in dependency install needs a human to notice and re-run it.
+      - uses: ./.github/actions/node-setup
+
       - name: Build the operator UI
         # A shipped edge embeds the real SolidJS bundle (rust-embed); a fresh checkout has none
         # (ui/dist is gitignored) and would embed the placeholder. Build it first so the release
@@ -291,7 +299,6 @@ jobs:
           set -euo pipefail
           export VITE_MINIMUM_EDGE_VERSION="${RELEASE_TAG#v}"
           echo "the app requires edge ${VITE_MINIMUM_EDGE_VERSION} or later"
-          npm install --global pnpm@10
           pnpm install --frozen-lockfile
           pnpm build
 
