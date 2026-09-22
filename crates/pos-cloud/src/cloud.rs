@@ -21,6 +21,10 @@ use pos_ports::{PortError, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BrandId, StoreId, TenantId};
 
+use pos_proto::events::{EventType, StoreChainAnchored};
+
+use crate::anchor::{AnchorLedger, AnchorVerdict, ConflictReport, StoreAnchor, judge};
+
 /// Who owns a store, as the registry records it
 /// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +225,13 @@ pub struct Cloud<S> {
     /// binary always sets one**: without it the event log's tenant column is whatever the box asserted,
     /// which is the hole S2 names.
     owners: Option<Arc<dyn StoreOwners>>,
+    /// The ledger [`Self::ingest`] offers each `store.chain.anchored` event to
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// `None` keeps no anchors, which is what a test with no ledger and the on-fakes example want.
+    /// The shipped binary sets one: a chain nobody anchors catches careless editing and not fraud,
+    /// which [`crate::anchor`] states at length.
+    anchors: Option<Arc<dyn AnchorLedger>>,
 }
 
 impl<S: EventStore> Cloud<S> {
@@ -234,6 +245,7 @@ impl<S: EventStore> Cloud<S> {
         Self {
             store,
             owners: None,
+            anchors: None,
         }
     }
 
@@ -248,7 +260,20 @@ impl<S: EventStore> Cloud<S> {
         Self {
             store,
             owners: Some(owners),
+            anchors: None,
         }
+    }
+
+    /// Adds the anchor ledger each ingested `store.chain.anchored` event is offered to
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// A builder step rather than an argument to the two constructors above, because every caller
+    /// that does not keep anchors — the fakes example, most tests — would otherwise have to name a
+    /// `None` it has no opinion about.
+    #[must_use]
+    pub fn with_anchor_ledger(mut self, anchors: Arc<dyn AnchorLedger>) -> Self {
+        self.anchors = Some(anchors);
+        self
     }
 
     /// The underlying store.
@@ -288,10 +313,132 @@ impl<S: EventStore> Cloud<S> {
         let mut tx = self.store.begin().await?;
         let outcome = self.store.append(&mut tx, &stamped).await?;
         tx.commit().await?;
+        self.observe_anchors(&stamped).await;
         Ok(IngestOutcome {
             appended: outcome.appended,
             duplicates: outcome.duplicates,
         })
+    }
+
+    /// Offers every `store.chain.anchored` event in a committed batch to the anchor ledger
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// # After the commit, and never able to fail it
+    ///
+    /// Two deliberate choices, and they are the same choice twice.
+    ///
+    /// **After**, because the event log is the source of truth and an anchor is an event like any
+    /// other: a store that publishes a contradicting anchor has still published it, and the record
+    /// of what it said is the evidence. Refusing the batch would delete the finding.
+    ///
+    /// **Never able to fail it**, because a ledger that cannot be written must not stop a fleet's
+    /// trading history reaching the cloud — the same reasoning
+    /// [`stamp_owners`](Self::stamp_owners) already applies to the registry, and the stronger case
+    /// here: an outage that halted ingest is exactly the cover somebody tampering would want. A
+    /// ledger failure is logged at `error` and the batch stands.
+    ///
+    /// What is refused is only the offered anchor's promotion to the store's head.
+    async fn observe_anchors(&self, events: &[EventEnvelope<RawPayload>]) {
+        let Some(ledger) = self.anchors.as_ref() else {
+            return;
+        };
+        for event in events {
+            // The declared token rather than a literal: a rename would move both together, and a
+            // literal here would go on matching nothing in silence.
+            if event.event_type.as_str() != EventType::StoreChainAnchored.as_str() {
+                continue;
+            }
+            let Ok(published) = event.data.decode::<StoreChainAnchored>() else {
+                // An event this system wrote that will not decode is a corrupt row, not a path.
+                tracing::warn!(
+                    store = %event.store_id,
+                    event_id = %event.event_id,
+                    "an anchor event did not decode; the chain head it carried was not recorded"
+                );
+                continue;
+            };
+            let offered = StoreAnchor {
+                store: event.store_id,
+                chain_seq: published.chain_seq,
+                head: published.chain_head,
+                unchained: published.unchained,
+                observed_at: event.event_time,
+            };
+            self.weigh_anchor(ledger.as_ref(), event, &offered).await;
+        }
+    }
+
+    /// Judges one offered anchor against what the ledger holds, and acts on the verdict.
+    ///
+    /// Split out so [`observe_anchors`](Self::observe_anchors) stays a loop over a batch and this
+    /// stays the decision for one anchor.
+    async fn weigh_anchor(
+        &self,
+        ledger: &dyn AnchorLedger,
+        event: &EventEnvelope<RawPayload>,
+        offered: &StoreAnchor,
+    ) {
+        let held = match ledger
+            .held_for(event.tenant_id, offered.store, offered.chain_seq)
+            .await
+        {
+            Ok(held) => held,
+            Err(error) => {
+                tracing::error!(
+                    store = %offered.store,
+                    %error,
+                    "the anchor ledger could not be read; this store's chain head was not checked"
+                );
+                return;
+            }
+        };
+        match judge(&held, offered) {
+            AnchorVerdict::Forked { held: held_head } => {
+                // Two irreconcilable claims about one log. The held record is what makes that
+                // visible, so it is not overwritten; the offered one is recorded as a conflict.
+                tracing::error!(
+                    store = %offered.store,
+                    chain_seq = offered.chain_seq,
+                    held_head = %held_head,
+                    offered_head = %offered.head,
+                    event_id = %event.event_id,
+                    "a store published a chain head that contradicts the one the cloud holds at                      that length; the anchor was refused and the contradiction recorded"
+                );
+                let report = ConflictReport {
+                    store: offered.store,
+                    chain_seq: offered.chain_seq,
+                    held_head,
+                    offered_head: offered.head.clone(),
+                    offered_event_id: event.event_id,
+                };
+                if let Err(error) = ledger.record_conflict(event.tenant_id, &report).await {
+                    tracing::error!(
+                        store = %offered.store,
+                        %error,
+                        "recording a refused anchor failed; the refusal is in this log only"
+                    );
+                }
+            }
+            AnchorVerdict::Repeat => {}
+            verdict @ (AnchorVerdict::Extends | AnchorVerdict::Backfills) => {
+                if let Err(error) = ledger.accept(event.tenant_id, offered).await {
+                    tracing::error!(
+                        store = %offered.store,
+                        chain_seq = offered.chain_seq,
+                        %error,
+                        "the anchor ledger could not be written; this chain head was not kept"
+                    );
+                    return;
+                }
+                tracing::info!(
+                    store = %offered.store,
+                    chain_seq = offered.chain_seq,
+                    unchained = offered.unchained,
+                    new_head = verdict.advances_the_head(),
+                    "recorded a store's chain head"
+                );
+            }
+        }
     }
 
     /// Rewrites each event's tenant and brand to the registry's answer for its store (ADR-0101).

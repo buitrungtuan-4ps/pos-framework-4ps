@@ -18,6 +18,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud keeps the anchors, and refuses one that contradicts what it holds**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The store half shipped a durable
+  record outside a store's reach; this is the half that reads it.
+  - Every `store.chain.anchored` event reaching the cloud — through the NATS cursor or through
+    `/internal/ingest`, because both pass the same funnel — is filed against the publishing store.
+    One head per chain length, per store, for ever: the refusal lives in the primary key on
+    `(tenant_id, store_id, chain_seq)` written `ON CONFLICT DO NOTHING`, so it still holds when the
+    layer above has a bug.
+  - **A second, different head at a length already recorded is refused** and the contradiction is
+    recorded with both heads and the event that offered one — the pair *is* the finding, so
+    overwriting either would destroy it. The cloud's own clock stamps when it was noticed; the
+    store's clock is on the anchor, and a store that is tampering with its log controls that one.
+  - **What this closes: recomputation.** A store that rewrites its history and re-derives every
+    later link arrives at a different head for a length the cloud already holds.
+  - **What it does not close: truncation.** A store cut back and then traded on publishes its next
+    anchor *above* anything the cloud holds, which from the anchors alone is honest growth. What
+    gives it away is two different events claiming one `chain.seq` — a property of the event log,
+    not of the anchors, and deliberately a separate piece of work rather than something half-done
+    here. Said plainly because a mechanism believed to catch more than it does is worse than one
+    that catches nothing.
+  - Three things that are **not** refusals, each with its own reason: an identical re-delivery (at
+    least-once ingest and reconciliation's re-push both guarantee it happens), an anchor arriving
+    late below the head after a broker gap (filed, head unmoved), and a first anchor from a store
+    the cloud has never heard from.
+  - An anchor is never rejected at ingest and a ledger outage never stops the log. The event is
+    stored either way, because what a store said is the evidence — and an outage that halted ingest
+    is exactly the cover somebody tampering would want.
+
+  **Upgrade note:** migration `0067_chain_anchors.sql` adds `chain_anchors` and
+  `chain_anchor_conflicts`, both tenant-scoped under RLS and granted `SELECT, INSERT` only — a
+  grant that allowed `UPDATE` or `DELETE` would hand back the power these tables exist to take
+  away. Applied idempotently at boot; no protocol bump and no change to any published API.
+
 - **A store publishes its chain head — the anchor**
   ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4). The half a hash chain cannot do
   alone: a chain verifies happily after its tail is cut off, and after an edit whose later links
@@ -35,9 +68,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     cannot contain its own hash. A sale landing between the read and the commit leaves it a record
     or two behind; that still extends the previous anchor and the next covers the gap.
 
-  **Still to come:** the cloud storing each anchor and refusing one that does not extend the last.
-  Until then the anchor is a durable record outside the store's reach, but nobody is comparing
-  them automatically.
+  **Since superseded in the same release:** the cloud now stores each anchor and refuses one that
+  contradicts a head it holds — see the entry above.
 
   **Upgrade note:** no protocol bump. `store.chain.anchored` is a new event type, additive; the
   snapshot carries it and nothing was renamed or removed.

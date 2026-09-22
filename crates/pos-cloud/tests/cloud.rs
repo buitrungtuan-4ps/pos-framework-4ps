@@ -20,6 +20,9 @@ use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
 use pos_cloud::alerts::{AlertKind, AlertRecord, AlertStore, AlertStoreError};
+use pos_cloud::anchor::{
+    AnchorConflict, AnchorError, AnchorLedger, ConflictReport, HeldAnchors, StoreAnchor,
+};
 use pos_cloud::audit::{
     AuditActor, AuditEntry, AuditId, AuditQuery, AuditRecorder, AuditSink, AuditStore,
     AuditStoreError, NoopAuditRecorder, TrailOrder,
@@ -110,6 +113,7 @@ use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
+use pos_proto::chain::ChainHash;
 use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
@@ -24488,4 +24492,295 @@ async fn a_release_report_shows_only_its_own_pairs() {
     // The snapshot is deliberately not on the wire: a forty-row grid carrying forty menus is both
     // enormous and, for a priced node, T2 material this read has no reason to hand out.
     assert!(pairs[0].get("node_value").is_none());
+}
+
+// --- The anchor ledger (ADR-0131 decision 4) -----------------------------------------------------
+
+/// An anchor ledger in memory, and the one place these cases can see what the cloud decided.
+///
+/// Deliberately not a spy that only counts calls: what has to be proven is *what the ledger ends up
+/// holding*, because a refusal that recorded a conflict and then overwrote the held head anyway
+/// would pass a call-counting assertion while destroying the evidence.
+#[derive(Debug, Default)]
+struct FakeAnchors {
+    /// Accepted anchors, keyed by `(store, chain_seq)` — the ledger's idempotency key.
+    accepted: Mutex<BTreeMap<(StoreId, u64), StoreAnchor>>,
+    conflicts: Mutex<Vec<ConflictReport>>,
+    /// When set, every read fails — the cloud must ingest anyway.
+    unreadable: bool,
+}
+
+impl FakeAnchors {
+    fn holding(anchors: &[StoreAnchor]) -> Self {
+        let mut accepted = BTreeMap::new();
+        for anchor in anchors {
+            accepted.insert((anchor.store, anchor.chain_seq), anchor.clone());
+        }
+        Self {
+            accepted: Mutex::new(accepted),
+            ..Self::default()
+        }
+    }
+
+    fn broken() -> Self {
+        Self {
+            unreadable: true,
+            ..Self::default()
+        }
+    }
+
+    fn heads(&self) -> Vec<(u64, String)> {
+        self.accepted
+            .lock()
+            .expect("the ledger lock")
+            .values()
+            .map(|anchor| (anchor.chain_seq, anchor.head.as_str().to_owned()))
+            .collect()
+    }
+
+    fn conflicts(&self) -> Vec<ConflictReport> {
+        self.conflicts.lock().expect("the ledger lock").clone()
+    }
+}
+
+impl AnchorLedger for FakeAnchors {
+    fn held_for(
+        &self,
+        _tenant: TenantId,
+        store: StoreId,
+        chain_seq: u64,
+    ) -> pos_ports::dynamic::BoxFuture<'_, Result<HeldAnchors, AnchorError>> {
+        if self.unreadable {
+            return Box::pin(async { Err(AnchorError::new("the ledger is down")) });
+        }
+        let accepted = self.accepted.lock().expect("the ledger lock");
+        let held = HeldAnchors {
+            head: accepted
+                .values()
+                .filter(|anchor| anchor.store == store)
+                .max_by_key(|anchor| anchor.chain_seq)
+                .cloned(),
+            at_offered_length: accepted.get(&(store, chain_seq)).cloned(),
+        };
+        Box::pin(async move { Ok(held) })
+    }
+
+    fn accept<'a>(
+        &'a self,
+        _tenant: TenantId,
+        anchor: &'a StoreAnchor,
+    ) -> pos_ports::dynamic::BoxFuture<'a, Result<(), AnchorError>> {
+        self.accepted
+            .lock()
+            .expect("the ledger lock")
+            .insert((anchor.store, anchor.chain_seq), anchor.clone());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn record_conflict<'a>(
+        &'a self,
+        _tenant: TenantId,
+        report: &'a ConflictReport,
+    ) -> pos_ports::dynamic::BoxFuture<'a, Result<(), AnchorError>> {
+        self.conflicts
+            .lock()
+            .expect("the ledger lock")
+            .push(report.clone());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn list_conflicts(
+        &self,
+        _tenant: TenantId,
+        _store: Option<StoreId>,
+        _limit: u32,
+    ) -> pos_ports::dynamic::BoxFuture<'_, Result<Vec<AnchorConflict>, AnchorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+/// An anchor event as a store publishes it at shift close.
+fn anchor_event(seed: u32, chain_seq: u64, head: &str) -> EventEnvelope<RawPayload> {
+    fixtures::envelope(
+        store_id(),
+        seed,
+        &pos_proto::events::StoreChainAnchored {
+            chain_seq,
+            chain_head: ChainHash::from_hex(head),
+            unchained: 0,
+        },
+    )
+}
+
+/// The anchor as the ledger would have recorded it, for seeding a ledger's prior state.
+fn held_anchor(chain_seq: u64, head: &str) -> StoreAnchor {
+    StoreAnchor {
+        store: store_id(),
+        chain_seq,
+        head: ChainHash::from_hex(head),
+        unchained: 0,
+        observed_at: fixtures::instant(),
+    }
+}
+
+#[tokio::test]
+async fn ingesting_an_anchor_records_the_stores_chain_head() {
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    cloud
+        .ingest(&[anchor_event(1, 42, "ab")])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(42, "ab".to_owned())],
+        "the head a store published is what the cloud now holds"
+    );
+    assert!(ledger.conflicts().is_empty());
+}
+
+#[tokio::test]
+async fn a_re_delivered_anchor_changes_nothing() {
+    // At-least-once ingest and reconciliation's re-push both guarantee this arrives twice. It must
+    // not read as a store contradicting itself.
+    let ledger = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    cloud
+        .ingest(&[anchor_event(1, 42, "ab")])
+        .await
+        .expect("ingest");
+
+    assert_eq!(ledger.heads(), vec![(42, "ab".to_owned())]);
+    assert!(
+        ledger.conflicts().is_empty(),
+        "a delivery guarantee working correctly is not a finding"
+    );
+}
+
+#[tokio::test]
+async fn an_anchor_the_cloud_missed_is_filed_without_disturbing_the_head() {
+    // A broker gap lost the anchor at 20 and delivered the one at 42; reconciliation re-pushes 20
+    // afterwards. Nothing held contradicts it.
+    let ledger = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    cloud
+        .ingest(&[anchor_event(1, 20, "cd")])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(20, "cd".to_owned()), (42, "ab".to_owned())],
+        "the late anchor is kept and the head stays where it was"
+    );
+    assert!(ledger.conflicts().is_empty());
+}
+
+#[tokio::test]
+async fn a_second_head_at_one_length_is_refused_and_the_held_one_survives() {
+    // The recomputation case ADR-0131 option 2 names, and the one
+    // `store-sqlite/tests/chain.rs::editing_and_recomputing_the_whole_chain_is_not_caught_by_the_chain_alone`
+    // asserts a bare chain misses: the store rewrote its history, re-derived every link, and now
+    // hashes its log of length 42 to something else. The cloud holds the original, and holding it
+    // is the whole point — an overwrite would erase the contradiction it exists to show.
+    let ledger = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    cloud
+        .ingest(&[anchor_event(1, 42, "ff")])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![(42, "ab".to_owned())],
+        "the cloud's record is not overwritten by the one that contradicts it"
+    );
+    let conflicts = ledger.conflicts();
+    assert_eq!(conflicts.len(), 1, "the contradiction is recorded");
+    assert_eq!(conflicts[0].chain_seq, 42);
+    assert_eq!(conflicts[0].held_head, ChainHash::from_hex("ab"));
+    assert_eq!(conflicts[0].offered_head, ChainHash::from_hex("ff"));
+    assert_eq!(
+        conflicts[0].offered_event_id,
+        fixtures::event_id(1),
+        "the finding names the event that carried it, so it can be traced to a record"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_anchor_is_still_stored_as_an_event() {
+    // The event log is the source of truth, and what a store said is the evidence. Refusing the
+    // batch would delete the finding.
+    let ledger = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    let outcome = cloud
+        .ingest(&[anchor_event(1, 42, "ff")])
+        .await
+        .expect("a refused anchor never fails the ingest");
+
+    assert_eq!(
+        outcome,
+        IngestOutcome {
+            appended: 1,
+            duplicates: 0
+        }
+    );
+    assert_eq!(read_back(cloud.store()).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_ledger_that_cannot_be_read_never_stops_the_log() {
+    // An outage that halted ingest is exactly the cover somebody tampering would want, so the
+    // failure is logged and the batch stands.
+    let ledger = Arc::new(FakeAnchors::broken());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    let outcome = cloud
+        .ingest(&[anchor_event(1, 42, "ab")])
+        .await
+        .expect("ingest");
+
+    assert_eq!(outcome.appended, 1);
+    assert!(ledger.heads().is_empty(), "nothing was recorded, honestly");
+}
+
+#[tokio::test]
+async fn a_cloud_with_no_ledger_ingests_anchors_like_any_other_event() {
+    let cloud = Cloud::new(FakeStore::new());
+    let outcome = cloud
+        .ingest(&[anchor_event(1, 42, "ab")])
+        .await
+        .expect("ingest");
+    assert_eq!(outcome.appended, 1);
+}
+
+#[tokio::test]
+async fn a_run_of_shift_closes_walks_the_head_forward() {
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(ledger.clone());
+
+    cloud
+        .ingest(&[
+            anchor_event(1, 10, "aa"),
+            anchor_event(2, 25, "bb"),
+            anchor_event(3, 61, "cc"),
+        ])
+        .await
+        .expect("ingest");
+
+    assert_eq!(
+        ledger.heads(),
+        vec![
+            (10, "aa".to_owned()),
+            (25, "bb".to_owned()),
+            (61, "cc".to_owned())
+        ]
+    );
+    assert!(ledger.conflicts().is_empty());
 }
