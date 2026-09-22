@@ -82,6 +82,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A caller that stopped sending held a till's connection indefinitely.** The edge had no request
+  deadline at all. Measured before the fix: a socket that sent a request line, declared
+  `Content-Length: 40` and then sent nothing held a connection and a task with no way back — the
+  probe gave up after five seconds rather than the server doing so. With the deadline the same
+  connection is answered `408 Request Timeout`.
+
+  Not a tidy-up. A store's edge sits on a shop network, and
+  [ADR-0111](docs/adr/0111-a-second-origin-may-address-the-edge.md) puts a second origin — a
+  guest's phone, ordering from a QR code — on the other side of it. Nothing there should be able to
+  take a till's connections away from it by doing nothing at all.
+
+  The deadline is a minute, and it is not a performance target: nothing a till asks for is slow.
+  It is the line past which a request is no longer a request. A minute rather than thirty seconds
+  because `POST /api/activate` makes a cloud round trip *inside* the request with its own
+  thirty-second budget, and a deadline set to the same figure would usually win that race on a slow
+  link — turning a slow but successful activation into a `408` on the one-shot step that brings a
+  new store online. The two constants are now bound by a compile-time assertion, so lowering either
+  fails the build rather than a site visit.
+
+  It is applied to the fully merged application, for the reason the version header is: `Router::layer`
+  covers only what is registered when it is called, and the forty domain routes are merged
+  afterwards. It does **not** touch the fan-out — a `/ws` upgrade answers `101` at once and the
+  socket lives on outside the request being timed, which is asserted rather than assumed, because a
+  layer that quietly severed every kitchen display after a minute would be a worse fault than the one
+  it fixes.
+
+  No new dependency: `tower-http` was already in the tree and gains its `timeout` feature, whose only
+  effect on the lockfile is an edge to `tokio`, which `pos-edge` already depends on directly.
+
+  **Upgrade note:** none. A client that completes its requests sees no change.
+
 - **`console-replay` blamed a control that was never broken.** The gate failed intermittently with
   `<li role="option">Airport branches</li> … intercepts pointer events` repeated 230 times against
   `[data-step="setNode"]`, and `setNode` was fine. What was open over it was the *cohort* picker from
