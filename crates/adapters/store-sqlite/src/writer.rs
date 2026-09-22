@@ -16,7 +16,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigUpdate};
-use pos_ports::event_store::{OutboxPosition, OutboxRecord};
+use pos_ports::event_store::{ChainAnchor, OutboxPosition, OutboxRecord};
 use pos_ports::subject_store::REDACTION;
 use pos_ports::{PortError, PortName};
 use pos_proto::chain::{ChainBreak, ChainHash, ChainLink, ChainStatus};
@@ -191,6 +191,11 @@ pub(crate) enum Command {
         intake: Option<IntakeWrite>,
         subjects: Vec<SubjectWrite>,
         reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// Read a store's chain head, for the anchor (ADR-0131).
+    ChainHead {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<Option<ChainAnchor>, PortError>>,
     },
     /// Walk a store's chain and report the first break, if any (ADR-0131).
     VerifyChain {
@@ -479,6 +484,9 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             } => {
                 let _ = reply.send(mask_subjects(&conn, store_id, cutoff_ms, now_ms));
             }
+            Command::ChainHead { store_id, reply } => {
+                let _ = reply.send(read_chain_anchor(&conn, store_id));
+            }
             Command::VerifyChain { store_id, reply } => {
                 let _ = reply.send(verify_chain(&conn, store_id));
             }
@@ -734,6 +742,42 @@ fn db_error(port: PortName, error: rusqlite::Error) -> PortError {
 /// A serialisation failure — an envelope or snapshot that would not round-trip.
 fn json_error(port: PortName, error: serde_json::Error) -> PortError {
     PortError::internal(port, "could not (de)serialise a stored value").with_source(error)
+}
+
+/// Reads a store's chain head for the anchor, without walking the chain.
+///
+/// Separate from [`verify_chain`] on purpose: publishing the anchor is a hot-ish path at every
+/// shift close and does not need the whole walk, and the two answer different questions — this one
+/// says *where the chain is*, the other says *whether it is sound*. Conflating them would make
+/// every anchor pay for a full verification, and would make a store with a damaged chain unable to
+/// publish the very record that proves when the damage began.
+fn read_chain_anchor(
+    conn: &Connection,
+    store_id: StoreId,
+) -> Result<Option<ChainAnchor>, PortError> {
+    let port = PortName::EventStore;
+    let unchained: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE store_id = ?1 AND seq IS NULL",
+            params![store_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|error| db_error(port, error))?;
+    let found = conn
+        .query_row(
+            "SELECT seq, hash FROM events
+             WHERE store_id = ?1 AND seq IS NOT NULL
+             ORDER BY seq DESC LIMIT 1",
+            params![store_id.to_string()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    Ok(found.map(|(seq, hash)| ChainAnchor {
+        seq: u64::try_from(seq).unwrap_or(0),
+        head: ChainHash::from_hex(&hash),
+        unchained: u64::try_from(unchained).unwrap_or(0),
+    }))
 }
 
 /// Walks a store's chain from its first chained record and reports the first break.

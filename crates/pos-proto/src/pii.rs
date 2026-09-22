@@ -37,6 +37,7 @@
 //! airtight; together with the sealed trait they make the honest mistake very hard and
 //! the deliberate one visible.
 
+use crate::chain;
 use crate::enums;
 use crate::ids;
 use crate::money::{CurrencyCode, Money, Ratio};
@@ -85,6 +86,21 @@ no_pii!(
 // explains why a free-text note stays on the local order record and never enters the
 // immutable log.
 no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
+
+// The chain hash (ADR-0131), and the argument is worth stating because "a hash" is not
+// by itself an answer: a hash of personal data is still personal data under PDPD and
+// GDPR, pseudonymised rather than anonymous.
+//
+// It is admitted here because of *what it hashes*. The preimage is an event envelope —
+// ids, money, timestamps, and a payload every field of which this very trait has already
+// proven free of personal data. A digest over inputs that carry nothing personal carries
+// nothing personal either, and the guarantee is this trait's own rather than a claim made
+// beside it.
+//
+// `String` stays absent, which is why the anchor event carries this type and not the hex
+// it renders as. A field typed `String` would be a free-text hole in the log with a
+// reassuring name on it.
+no_pii!(chain::ChainHash);
 
 // Value types.
 no_pii!(

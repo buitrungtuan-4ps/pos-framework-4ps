@@ -26,10 +26,15 @@ use std::sync::{Arc, Mutex};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
-use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+use pos_ports::event_store::{
+    AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
+};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
+use sha2::{Digest as _, Sha256};
+
+use pos_proto::chain::{ChainHash, ChainLink};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{ConfigVersionId, DeviceId, EventId, StoreId, SubjectId};
 use pos_proto::time::Timestamp;
@@ -50,6 +55,8 @@ struct StoreState {
     events: BTreeMap<StoreId, BTreeMap<EventId, EventEnvelope<RawPayload>>>,
     /// Per store, in commit order.
     outbox: BTreeMap<StoreId, Vec<OutboxRecord>>,
+    /// Each store's chain head (ADR-0131).
+    chain: BTreeMap<StoreId, ChainAnchorState>,
     /// The next position to assign, global rather than per store: positions only have to be
     /// monotone within a store, and a single counter satisfies that while being harder to get
     /// subtly wrong.
@@ -129,6 +136,42 @@ pub struct FakeTx {
     subjects: Vec<(StoreId, SubjectId, SubjectRecord)>,
 }
 
+/// A store's chain head inside the fake.
+#[derive(Debug, Clone)]
+struct ChainAnchorState {
+    seq: u64,
+    head: ChainHash,
+}
+
+impl ChainAnchorState {
+    fn empty() -> Self {
+        Self {
+            seq: 0,
+            head: ChainHash::genesis(),
+        }
+    }
+
+    fn next_link(&self) -> ChainLink {
+        if self.seq == 0 {
+            ChainLink::first()
+        } else {
+            ChainLink::following(self.seq, self.head.clone())
+        }
+    }
+}
+
+/// The same hash the real adapter computes: SHA-256 over the preimage `pos-proto` defines.
+///
+/// A serialisation failure yields the genesis hash rather than panicking — `pos-fakes` is used by
+/// tests that must not abort on an envelope they built badly, and a wrong hash shows up as a chain
+/// break, which is a legible failure rather than a crash.
+fn chain_hash(envelope: &EventEnvelope<RawPayload>, link: &ChainLink) -> ChainHash {
+    envelope.chain_preimage(link).map_or_else(
+        |_ignored| ChainHash::genesis(),
+        |preimage| ChainHash::of(Sha256::digest(preimage.as_bytes()).into()),
+    )
+}
+
 impl TxContext for FakeTx {
     async fn commit(self) -> Result<(), PortError> {
         let mut state = lock(&self.state);
@@ -152,14 +195,44 @@ impl TxContext for FakeTx {
 
         for envelope in self.events {
             let store_id = envelope.store_id;
-            let stored = state.events.entry(store_id).or_default();
-            if stored.contains_key(&envelope.event_id) {
+            if state
+                .events
+                .get(&store_id)
+                .is_some_and(|stored| stored.contains_key(&envelope.event_id))
+            {
                 // Idempotent by identifier, and the *stored* copy wins. Not compared: a byte
                 // difference at the same identifier is a sender bug a store cannot fix, and silently
                 // preferring the newer one would make the log depend on delivery order.
                 continue;
             }
-            stored.insert(envelope.event_id, envelope.clone());
+
+            // Chain it, as the real store does (ADR-0131 decision 5: the fakes are held to the
+            // contract too). A fake that answered "no chain" would let the edge's own tests pass
+            // while the anchor they are supposed to exercise never fired — which is precisely the
+            // shape of failure this whole line of work exists to stop.
+            //
+            // Only a record that actually lands takes a sequence number, so a replayed event does
+            // not leave a gap. The `continue` above is what enforces that here.
+            let head = state
+                .chain
+                .entry(store_id)
+                .or_insert_with(ChainAnchorState::empty);
+            let link = head.next_link();
+            let hash = chain_hash(&envelope, &link);
+            let envelope = EventEnvelope {
+                chain: Some(link.clone()),
+                ..envelope
+            };
+            *head = ChainAnchorState {
+                seq: link.seq,
+                head: hash,
+            };
+
+            state
+                .events
+                .entry(store_id)
+                .or_default()
+                .insert(envelope.event_id, envelope.clone());
 
             let outbox = state.outbox.entry(store_id).or_default();
             if outbox.len() >= OUTBOX_CAPACITY {
@@ -284,6 +357,18 @@ impl EventStore for FakeStore {
             .take(limit)
             .map(|(_, event)| event.clone())
             .collect())
+    }
+
+    /// This store's chain head (ADR-0131). The fake chains, so a test exercises the same shape
+    /// the real adapter produces rather than a stand-in that quietly never fires.
+    async fn chain_head(&self, store_id: StoreId) -> Result<Option<ChainAnchor>, PortError> {
+        let state = lock(&self.state);
+        Ok(state.chain.get(&store_id).map(|head| ChainAnchor {
+            seq: head.seq,
+            head: head.head.clone(),
+            // A fake starts empty, so nothing in it ever predates the chain.
+            unchained: 0,
+        }))
     }
 
     async fn contains(&self, store_id: StoreId, event_id: EventId) -> Result<bool, PortError> {

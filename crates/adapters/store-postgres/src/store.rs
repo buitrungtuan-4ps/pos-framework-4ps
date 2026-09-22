@@ -8,7 +8,9 @@ use std::num::NonZeroU32;
 use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
 use tokio_postgres::NoTls;
 
-use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
+use pos_ports::event_store::{
+    AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
+};
 use pos_ports::{PortError, PortName, Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{EventId, StoreId, TenantId};
@@ -1031,6 +1033,13 @@ impl EventStore for PostgresStore {
             events.push(serde_json::from_str(&envelope).map_err(encode)?);
         }
         Ok(events)
+    }
+
+    /// `None`: the cloud's copy of the log is not chained (ADR-0131). The chain is a property of
+    /// the *store's* own log, written by its single writer; the cloud receives events already
+    /// stamped and verifies them against the anchor rather than re-deriving a chain of its own.
+    async fn chain_head(&self, _store_id: StoreId) -> Result<Option<ChainAnchor>, PortError> {
+        Ok(None)
     }
 
     async fn contains(&self, store_id: StoreId, event_id: EventId) -> Result<bool, PortError> {

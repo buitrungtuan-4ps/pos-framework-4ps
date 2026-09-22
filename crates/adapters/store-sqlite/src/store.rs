@@ -12,6 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigStore, ConfigUpdate};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
+use pos_ports::event_store::ChainAnchor;
 use pos_ports::event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
@@ -629,6 +630,14 @@ impl EventStore for SqliteStore {
             store_id,
             after,
             limit,
+            reply,
+        })
+        .await
+    }
+
+    async fn chain_head(&self, store_id: StoreId) -> Result<Option<ChainAnchor>, PortError> {
+        self.ask(PortName::EventStore, move |reply| Command::ChainHead {
+            store_id,
             reply,
         })
         .await

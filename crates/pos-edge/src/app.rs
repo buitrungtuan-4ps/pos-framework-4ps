@@ -51,7 +51,7 @@ use pos_proto::events::{
     EventType, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
     SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
     SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
-    SecurityPermissionOverridden,
+    SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -4340,6 +4340,7 @@ impl<S: EventStore> Edge<S> {
             variance,
         };
         self.commit_and_publish(&ctx, &payload).await?;
+        self.anchor_chain(&ctx).await?;
 
         self.lock_projection().close_shift_record(shift_id);
         Ok(ShiftView {
@@ -4350,6 +4351,50 @@ impl<S: EventStore> Edge<S> {
             variance: Some(variance),
             print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
         })
+    }
+
+    /// Publishes the head of this store's hash chain
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// The anchor, and the reason the chain is worth anything against a determined hand. A chain
+    /// verifies happily after its tail has been cut off, and after an edit whose later links were
+    /// all re-derived — the algorithm is in the source, so anyone holding the file can rebuild one
+    /// that checks out. What a store cannot do is rewrite what the cloud has already received.
+    ///
+    /// Published **after** the shift's own close event, so the anchor covers it. It therefore
+    /// reports the chain as it stood before the anchor itself was written, because a record cannot
+    /// contain its own hash. A sale landing between the read and the commit leaves it a record or
+    /// two behind, which is safe: it still extends the previous anchor and the next covers the gap.
+    /// The guarantee reaches back to the **last anchor**, not to the last event, and that is the
+    /// cost of anchoring at a boundary a human attends to rather than on every write.
+    ///
+    /// A store whose adapter keeps no chain publishes nothing, which is the honest outcome rather
+    /// than an anchor over a chain that does not exist.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the head cannot be read or the event cannot be committed. A shift close that
+    /// reaches this point has already committed; a failure here is reported to the caller and the
+    /// close stands, because refusing to close a counted shift over a missing anchor would strand
+    /// an operator at the end of the night.
+    async fn anchor_chain(&self, ctx: &DecisionCtx) -> Result<(), AppError> {
+        let Some(anchor) = self
+            .store
+            .chain_head(self.identity.store_id)
+            .await
+            .map_err(AppError::Port)?
+        else {
+            return Ok(());
+        };
+        self.commit_and_publish(
+            ctx,
+            &StoreChainAnchored {
+                chain_seq: anchor.seq,
+                chain_head: anchor.head,
+                unchained: anchor.unchained,
+            },
+        )
+        .await
     }
 
     /// Rebuilds the in-memory projection from the durable event log (P5 crash recovery).
@@ -4957,7 +5002,7 @@ mod tests {
     use pos_ports::subject_store::{SubjectRecord, SubjectStore};
     use pos_ports::{Transactional, TxContext};
     use pos_proto::envelope::EventPayload;
-    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
+    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured, StoreChainAnchored};
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
         CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId,
@@ -6457,6 +6502,116 @@ mod tests {
             assert_eq!(closed.variance, Some(vnd(0)));
             assert!(closed.print_shift_report, "closing prints the shift report");
         });
+    }
+
+    /// Closing a shift publishes the chain head
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// This is the half the chain cannot do alone. A hash chain verifies happily after its tail has
+    /// been cut off, and after an edit whose later links were re-derived — the algorithm is in the
+    /// source. What a store cannot do is rewrite what the cloud has already received, and this
+    /// event is that record leaving the building.
+    #[test]
+    fn closing_a_shift_publishes_the_chain_head() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let opened = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            edge.count_shift(actor(), opened.shift_id, 500_000)
+                .await
+                .expect("counts");
+            edge.close_shift(actor(), opened.shift_id)
+                .await
+                .expect("closes");
+
+            let anchor = anchor_payload(&edge).await.expect("a shift close anchors");
+            let head = edge
+                .store
+                .chain_head(edge.identity.store_id)
+                .await
+                .expect("reads the head")
+                .expect("the store has a chain");
+
+            assert!(anchor.chain_seq > 0, "the anchor names a real position");
+            assert_eq!(
+                anchor.chain_seq,
+                head.seq - 1,
+                "the anchor reports the chain as it stood *before* it was itself written — a \
+                 record cannot contain its own hash, and claiming otherwise would be a head no \
+                 verification could ever reproduce"
+            );
+            assert_eq!(anchor.chain_head.as_str().len(), 64);
+            assert!(
+                !anchor.chain_head.is_genesis(),
+                "a real digest, not genesis"
+            );
+            assert_eq!(
+                anchor.unchained, 0,
+                "a fresh store has no unchained history"
+            );
+        });
+    }
+
+    /// Two closes produce two anchors, and the second extends the first.
+    ///
+    /// The property the cloud's refusal will be built on: an anchor that went backwards, or whose
+    /// head did not follow, is exactly the tampering this exists to catch.
+    #[test]
+    fn each_anchor_extends_the_one_before_it() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let mut seen: Vec<u64> = Vec::new();
+            for float in [500_000, 600_000] {
+                let opened = edge
+                    .open_shift(actor(), vnd(float))
+                    .await
+                    .expect("opens a shift");
+                edge.count_shift(actor(), opened.shift_id, float)
+                    .await
+                    .expect("counts");
+                edge.close_shift(actor(), opened.shift_id)
+                    .await
+                    .expect("closes");
+                seen.push(
+                    anchor_payloads(&edge)
+                        .await
+                        .last()
+                        .expect("an anchor per close")
+                        .chain_seq,
+                );
+            }
+            assert_eq!(seen.len(), 2);
+            assert!(
+                seen[1] > seen[0],
+                "the second anchor must extend the first, not restate or precede it: {seen:?}"
+            );
+        });
+    }
+
+    /// Every `store.chain.anchored` payload in this store's log, in order.
+    async fn anchor_payloads(edge: &Edge<FakeStore>) -> Vec<StoreChainAnchored> {
+        let events = edge
+            .store
+            .read(&EventQuery::first(
+                edge.identity.store_id,
+                NonZeroU32::new(500).expect("500 is not zero"),
+            ))
+            .await
+            .expect("reads the log");
+        events
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.as_str() == StoreChainAnchored::EVENT_TYPE.as_str()
+            })
+            .filter_map(|envelope| envelope.data.decode().ok())
+            .collect()
+    }
+
+    /// The single anchor in this store's log, when there is exactly one.
+    async fn anchor_payload(edge: &Edge<FakeStore>) -> Option<StoreChainAnchored> {
+        anchor_payloads(edge).await.into_iter().next()
     }
 
     #[test]

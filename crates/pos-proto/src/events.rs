@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::chain::ChainHash;
 use crate::enums::{
     PaymentMethod, PaymentOutcome, ReductionKind, SalesChannel, ShipmentStatus,
     StockLedgerEntryKind,
@@ -791,6 +792,31 @@ event_catalogue! {
         config_version_id: ConfigVersionId,
         /// Its monotonic sequence number.
         version: u64,
+    },
+    /// A store published the head of its hash chain
+    /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
+    ///
+    /// The anchor. A hash chain verifies happily after its tail has been cut off, and after an
+    /// edit whose later links were all re-derived — the algorithm is in the source, so anyone
+    /// holding the file can rebuild a chain that checks out. What a store **cannot** do is rewrite
+    /// what the cloud has already seen, and this is that record.
+    ///
+    /// Published at shift close: a reconciliation point a human already attends to, and one that
+    /// bounds how much history a store could rewrite unobserved to a single shift. It follows that
+    /// the guarantee reaches back only to the **last anchor**, not to the last event.
+    ///
+    /// The head it carries is the chain as it stood **before this event was written**, because a
+    /// record cannot contain its own hash. A sale landing between the read and the commit leaves
+    /// the anchor a record or two behind, which is safe — it still extends the previous anchor, and
+    /// the next one covers the gap.
+    StoreChainAnchored => "store.chain.anchored", version = 1 {
+        /// How many records the chain held when this was taken.
+        chain_seq: u64,
+        /// The hash of the last record.
+        chain_head: ChainHash,
+        /// How many records carry no chain because they predate it. Not a fault, and reported so
+        /// the cloud can tell a store that upgraded mid-life from one that lost its history.
+        unchained: u64,
     },
     /// A device finished activation and became able to trade.
     DeviceActivationCompleted => "device.activation.completed", version = 1 {

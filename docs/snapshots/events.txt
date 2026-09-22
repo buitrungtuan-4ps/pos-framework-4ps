@@ -217,3 +217,7 @@ security.permission.overridden	field=approver_employee_id
 security.permission.overridden	field=exceeded_by
 security.permission.overridden	field=permission_key
 security.permission.overridden	schema_version=1
+store.chain.anchored	field=chain_head
+store.chain.anchored	field=chain_seq
+store.chain.anchored	field=unchained
+store.chain.anchored	schema_version=1
