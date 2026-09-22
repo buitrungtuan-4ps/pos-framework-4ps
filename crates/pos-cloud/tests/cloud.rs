@@ -24594,10 +24594,27 @@ impl AnchorLedger for FakeAnchors {
     fn list_conflicts(
         &self,
         _tenant: TenantId,
-        _store: Option<StoreId>,
-        _limit: u32,
+        store: Option<StoreId>,
+        limit: u32,
     ) -> pos_ports::dynamic::BoxFuture<'_, Result<Vec<AnchorConflict>, AnchorError>> {
-        Box::pin(async { Ok(Vec::new()) })
+        // Real, not an empty stand-in: a fake that always answered "nothing" would let the console
+        // read's tests pass against a route that returns nothing — the exact shape of failure this
+        // whole line of work is about.
+        let listed: Vec<AnchorConflict> = self
+            .conflicts
+            .lock()
+            .expect("the ledger lock")
+            .iter()
+            .filter(|report| store.is_none_or(|only| report.store == only))
+            .take(limit as usize)
+            .enumerate()
+            .map(|(index, report)| AnchorConflict {
+                conflict_id: format!("conflict-{index}"),
+                noticed_at: fixtures::instant(),
+                report: report.clone(),
+            })
+            .collect();
+        Box::pin(async move { Ok(listed) })
     }
 }
 
@@ -25130,4 +25147,135 @@ async fn a_gap_in_the_window_is_never_filed_as_a_contradiction() {
         ledger.conflicts().is_empty(),
         "a gap is a prompt to reconcile, never a contradiction to record"
     );
+}
+
+// --- The chain-finding read (`GET /admin/chain-findings`) ----------------------------------------
+
+/// The console read over an anchor ledger, with the session guard in front of it.
+fn chain_app(admin: FakeAdmin, anchors: Arc<FakeAnchors>) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::chain_router(anchors, admin, clock()))
+}
+
+#[tokio::test]
+async fn the_chain_findings_read_lists_what_the_cloud_refused() {
+    // The whole point of the mechanism is being noticed. Until this route existed a finding reached
+    // a human only as a line in the server's log and a row nobody could read.
+    let anchors = Arc::new(FakeAnchors::holding(&[held_anchor(42, "ab")]));
+    let cloud = Cloud::new(FakeStore::new()).with_anchor_ledger(anchors.clone());
+    // A store offers a second, different head at a length the cloud already holds.
+    cloud
+        .ingest(&[anchor_event(1, 42, "ff")])
+        .await
+        .expect("ingest");
+
+    let router = chain_app(provisioned_admin(), anchors);
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/admin/chain-findings?tenant_id={tenant_ulid}"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the findings read");
+    assert_eq!(listed.status(), StatusCode::OK);
+
+    let findings = json_body(listed).await;
+    let findings = findings.as_array().expect("a findings array");
+    assert_eq!(
+        findings.len(),
+        1,
+        "the refusal the ingest recorded is listed"
+    );
+    assert_eq!(findings[0]["chain_seq"], 42);
+    assert_eq!(
+        findings[0]["held_head"], "ab",
+        "what the cloud holds, and what it was offered against it — the pair is the finding"
+    );
+    assert_eq!(findings[0]["offered_head"], "ff");
+    assert!(
+        findings[0]["offered_event_id"].is_string(),
+        "the finding traces back to a record"
+    );
+}
+
+#[tokio::test]
+async fn a_clean_fleet_reads_as_an_empty_list_rather_than_an_error() {
+    // The expected state. A screen that erred when nothing was wrong would teach an operator to
+    // ignore it.
+    let router = chain_app(provisioned_admin(), Arc::new(FakeAnchors::default()));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let listed = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/admin/chain-findings?tenant_id={tenant_ulid}"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the findings read");
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert!(
+        json_body(listed)
+            .await
+            .as_array()
+            .expect("an array")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_chain_findings_read_needs_a_session() {
+    let router = chain_app(provisioned_admin(), Arc::new(FakeAnchors::default()));
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/admin/chain-findings?tenant_id={tenant_ulid}"))
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the findings read");
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "a store's chain findings are its tenant's data, not a public read"
+    );
+}
+
+#[tokio::test]
+async fn the_chain_findings_read_refuses_a_tenant_that_is_not_a_ulid() {
+    let router = chain_app(provisioned_admin(), Arc::new(FakeAnchors::default()));
+    let cookie = admin_cookie(&router).await;
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/admin/chain-findings?tenant_id=not-a-ulid")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the findings read");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
