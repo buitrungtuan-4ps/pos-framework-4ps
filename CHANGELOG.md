@@ -106,6 +106,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A receipt is grouped the way its own country writes numbers.** The printed receipt grouped with
+  `,` and pointed with `.` for every store on earth. A Vietnamese guest's total now reads
+  `VND 97.900`, and a two-decimal figure in a comma-decimal country reads `1.234,56`
+  ([ADR-0136](docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+
+  The old behaviour was deliberate and said so — *"making a country's typography authoritative is a
+  separate decision from getting its arithmetic right, and only the second is ADR-0134's"* — and that
+  was right while no surface held the answer. The store publishes it now, so the paper uses it.
+
+  **India is unchanged**, and deliberately: `12,34,567` is three digits then pairs, `digits_per_group`
+  is a single number, and [ADR-0105](docs/adr/0105-a-country-pack-is-values.md) records that the fix
+  is a group *pattern* and its own change. An Indian receipt reads `1,234,567` after this exactly as
+  before. Japan and the reference country are unchanged too: their format *is* the old hardcoded one.
+
+  **Upgrade note:** every Vietnamese store's receipt changes, one release after the same document
+  changed for [ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) — `VND 97,900`
+  became `VND 97.900`. Two changes to one document in two releases is worse than one; the alternative
+  was holding the arithmetic fix until the typography decision was made, which ADR-0134 declined
+  because a wrong number is worse than a foreign separator. Nothing parses a receipt, but a store
+  reconciling against a scan should know the marks moved. A store receives the format when its locale
+  node is next published; until then its receipt prints as it does today.
+
 - **A store now receives how its country writes a number.** `NumberFormat` — the decimal mark, the
   group mark, and how many digits go in a group — has been compiled into every country pack since
   [ADR-0027](docs/adr/0027-country-modules.md) and read by nothing anywhere. It now rides the
