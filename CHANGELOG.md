@@ -106,6 +106,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A receipt printed raw minor units, on a document that is a tax invoice.** `format_money` in
+  `pos-edge` rendered `"{code} {amount_minor}"`, so a guest in India who paid ₹1,049.00 was handed a
+  receipt reading `INR 104900`, and a Vietnamese one read `VND 97900`. It now reads `INR 1,049.00`
+  and `VND 97,900`, using the exponent the store publishes
+  ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+
+  The old behaviour was deliberate and said so — *"the decimal place is a locale question and a
+  receipt that invented one would be wrong in half the countries this framework targets"* — and that
+  was right while nothing in the tree held the answer. Since the store publishes it, nothing is
+  invented, and what was being printed was not a safe abstention but a wrong number on the one piece
+  of paper India's Rule 46 and Japan's qualified invoice both turn into a legal document.
+
+  **The ISO code stays; the symbol does not arrive.** The till draws `99,000₫`, and matching it would
+  be better for a guest holding the paper beside the screen — but a thermal printer's own character
+  set does not reach `₫` (ADR-0102), so the total line would have to be rasterised, and a store with
+  no font package installed prints only what the printer's firmware covers. That store prints its
+  total today and would stop. The line stays ASCII.
+
+  The thousands separator is `,` rather than the store's published `number_format`, which no surface
+  reads yet — the till groups the same way. A country's typography is a separate decision from its
+  arithmetic, and only the second is ADR-0134's.
+
+  **Upgrade note:** every store's receipt changes, including Vietnam's, where `VND 97900` becomes
+  `VND 97,900`. Nothing parses a receipt — it is a printed document — but a store that reconciles
+  against a photograph or a scan of one should know the figures are now grouped and, in a
+  two-decimal currency, no longer in minor units.
+
 - **The till guessed where the decimal point goes, and guessed wrong for every currency but three.**
   `ui/src/lib/money.ts` held `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect, not the
   missing rows: it is right for the đồng and the yen — the two currencies this app started with —
