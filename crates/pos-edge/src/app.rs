@@ -3301,7 +3301,13 @@ impl<S: EventStore> Edge<S> {
             base_item: record.menu_item_id,
             modifiers: record.modifier_menu_item_ids.clone(),
             quantity: record.quantity,
-            course: record.course_id,
+            // `None`, and not the line's own course. The field says which course is *being fired*
+            // — it is what `courses_enabled` gates — not which one the line belongs to. Passing the
+            // taxonomy here made a store with courses off unable to fire a line that merely
+            // belonged to a course, and nothing gates adding one, so the food had no way to the
+            // kitchen short of a void. The station lookup below still reads the line's course,
+            // because *where* the food goes is a different question from *when* it goes.
+            course: None,
         };
         let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
 
@@ -3666,7 +3672,10 @@ impl<S: EventStore> Edge<S> {
                 base_item: record.menu_item_id,
                 modifiers: record.modifier_menu_item_ids.clone(),
                 quantity: record.quantity,
-                course: record.course_id,
+                // Firing everything is not firing by course, so `None` — the same reason
+                // `fire_line` passes it, and it costs more here: one refusal aborts the batch, so
+                // one line on a course made the whole order unfireable.
+                course: None,
             };
             let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
             let (envelope, message) = self.prepare(
@@ -4879,7 +4888,8 @@ mod tests {
     use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
-        DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId, TableId,
+        CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId,
+        TableId,
     };
     use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::MenuCatalog;
@@ -5035,6 +5045,92 @@ mod tests {
                 edge.line_state(line.order_line_id),
                 Some(OrderLineState::Fired)
             );
+        });
+    }
+
+    /// Fire-everything is not fire-by-course, and a store with courses off must still be able to
+    /// send its food to the kitchen.
+    ///
+    /// `LineCommand::Fire { course }`'s own doc says `by_course` "fires it as part of a course and
+    /// requires the `courses_enabled` capability" — it is a statement about *this firing*, not about
+    /// the line's taxonomy. Both edge paths passed the line's `course_id` instead, so on a store
+    /// with courses disabled a line that merely *belongs* to a course could not be fired at all:
+    /// `fire_line` refused it, and `fire_order` refused the whole order with it, because one
+    /// refusal aborts the batch. The food had no way to reach the kitchen short of voiding the line.
+    ///
+    /// `courses_enabled` defaults on, so this bites the store that deliberately turns it off — a
+    /// counter or retail profile, which is exactly the multi-industry case the capability exists
+    /// for. Nothing gates *adding* a line with a course, which is what makes the state reachable.
+    #[test]
+    fn a_store_with_courses_disabled_still_fires_a_line_that_belongs_to_one() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(240));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let draft = LineDraft {
+                course_id: Some(CourseId::new(Ulid::from_u128(900))),
+                ..a_line()
+            };
+            // Nothing refuses this, which is what makes the state below reachable at all.
+            let line = edge.add_line(actor(), table, draft).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_line(actor(), line.order_line_id, Some(station))
+                .await
+                .expect("a store with courses off still sends its food to the kitchen");
+            assert_eq!(fired.state, OrderLineState::Fired);
+        });
+    }
+
+    /// The same refusal on the batch path, where it costs more: one line carrying a course made the
+    /// **whole order** unfireable, because `fire_order` writes all of it or none of it.
+    #[test]
+    fn a_store_with_courses_disabled_still_fires_a_whole_order() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(241));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let plain = edge.add_line(actor(), table, a_line()).await.expect("adds");
+            edge.add_line(
+                actor(),
+                table,
+                LineDraft {
+                    course_id: Some(CourseId::new(Ulid::from_u128(900))),
+                    ..a_line()
+                },
+            )
+            .await
+            .expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_order(actor(), plain.order_id, Some(station))
+                .await
+                .expect("one line on a course does not strand the order");
+            assert_eq!(fired.len(), 2, "both lines reach the kitchen");
         });
     }
 
