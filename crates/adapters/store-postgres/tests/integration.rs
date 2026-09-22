@@ -162,6 +162,18 @@ impl EventStoreHarness for StoreHarness {
         Ok(store)
     }
 
+    fn chains(&self) -> bool {
+        // **No, and deliberately.** The cloud's log is a durable copy of chains the *stores*
+        // stamped — each envelope arrives carrying the link its store wrote, and the cloud verifies
+        // those links rather than minting its own (ADR-0132). A second chain here would be the
+        // cloud vouching for itself, which is worth nothing: the whole value of the anchor is that
+        // it is held somewhere the party being checked cannot reach.
+        //
+        // So `chain_head` answers `None`, and the suite holds this adapter to *keeping* that answer
+        // rather than inventing a head.
+        false
+    }
+
     fn store_id(&self) -> StoreId {
         StoreId::new(Ulid::from_u128(0x0ADA))
     }

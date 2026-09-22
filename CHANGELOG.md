@@ -18,6 +18,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Every store is held to the chain, by contract**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 5: *"Verification is a contract test,
+  not an adapter's private business."*). Five new obligations in
+  `pos_contract_tests::event_store`, so `store-sqlite`, `store-postgres` and the in-memory fake are
+  all held to them the way the existing twelve obligations already are.
+  - A store's first record sits at `seq` 1 and links to the genesis constant; the chain is a dense
+    counter with no gaps; only the first record chains to genesis; `chain_head` reports the length
+    and a lowercase 64-character digest that is not genesis; a replayed append advances nothing.
+  - **A fifth case for a batch that is half already-stored and half new** — the shape
+    reconciliation's re-push produces ([ADR-0040](docs/adr/0040-reconciliation.md)). An entirely
+    duplicate batch cannot catch a chain that advances on an ignored row, because nothing persists;
+    a mixed one can, because the next genuinely new record lands one position too far and leaves a
+    hole every later verification reports as a break that never happened.
+  - **Each harness now declares whether its store chains, and the declaration is itself checked** —
+    in both directions. A harness that says it chains and whose store produces no head fails, and so
+    does one that says it does not and whose store produces one. There is no default, so an adapter
+    cannot opt out of the chain obligations by saying nothing, which is the "private business" the
+    decision names.
+  - `store-postgres` declares **false**, and that is the right answer rather than a gap: the cloud's
+    log is a durable copy of chains the stores stamped, and a second chain there would be the cloud
+    vouching for itself. It is held to *keeping* that answer rather than inventing a head.
+
+  **Upgrade note:** `EventStoreHarness` gains a required `chains()` method. Any out-of-tree harness
+  must add it — deliberately required rather than defaulted, so the answer is stated where a
+  reviewer sees it.
+
 - **A human can see a chain finding** — `GET /admin/chain-findings` and a **Chain integrity** screen
   in the console ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 4,
   [ADR-0132](docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)).
