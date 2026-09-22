@@ -14937,6 +14937,77 @@ async fn publish_menu_prerequisites(
     assert_eq!(locale.status(), StatusCode::OK);
 }
 
+/// Authors a course and returns its id (ADR-0130).
+async fn create_course(
+    router: &axum::Router,
+    cookie: &str,
+    tenant: &str,
+    name: &str,
+    sort: i32,
+) -> String {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/courses",
+            &serde_json::json!({ "tenant_id": tenant, "name": name, "sort": sort }),
+            cookie,
+        ))
+        .await
+        .expect("route create course");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    json_body(created).await["course_id"]
+        .as_str()
+        .expect("a course id")
+        .to_owned()
+}
+
+/// Authors an item on `course_id`, places it on `menu_id` at a dine-in price, and returns its id.
+async fn place_item_on_course(
+    router: &axum::Router,
+    cookie: &str,
+    tenant: &str,
+    menu_id: &str,
+    (name, course_id, minor): (&str, &str, i64),
+) -> String {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/items",
+            &serde_json::json!({
+                "tenant_id": tenant,
+                "name": name,
+                "tax_class_id": ulid_text(7),
+                "course_id": course_id,
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route create item");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let item_id = json_body(created).await["menu_item_id"]
+        .as_str()
+        .expect("an item id")
+        .to_owned();
+
+    let placed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/catalog/menus/{menu_id}/placements"),
+            &serde_json::json!({
+                "menu_id": menu_id,
+                "menu_item_id": item_id,
+                "tenant_id": tenant,
+                "prices": [{ "sales_channel": "SALES_CHANNEL_DINE_IN", "unit_price": { "currency_code": "VND", "amount_minor": minor } }],
+                "available": true,
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route place item");
+    assert_eq!(placed.status(), StatusCode::CREATED);
+    item_id
+}
+
 #[tokio::test]
 async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
     let router = catalog_publish_app(
@@ -15025,6 +15096,108 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
     assert_eq!(entry["menu_item_id"], item_id);
     assert_eq!(entry["unit_price"]["amount_minor"], 150_000);
     assert_eq!(entry["display_name"], "Margherita");
+}
+
+/// The half [ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) named as
+/// missing when the course entity landed: an operator could author a course and put an item on it,
+/// and the compiled `menu` node carried neither, so a store received a price book with no courses in
+/// it and every `course_id` on the wire still pointed at nothing a till could name.
+///
+/// End to end through the admin API on purpose. The compiler's own tests prove the rules; this
+/// proves the wiring between them — `list_courses` is actually called on the publish path, and what
+/// comes out reaches the store's effective config.
+#[tokio::test]
+async fn a_published_menu_carries_the_courses_its_items_go_out_on() {
+    let router = catalog_publish_app(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let store = ulid_text(2);
+
+    // Authored dessert-first, so the published order cannot have come from insertion order.
+    let dessert = create_course(&router, &cookie, &tenant, "Dessert", 30).await;
+    let main = create_course(&router, &cookie, &tenant, "Main", 20).await;
+
+    let menu = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/menus",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Standard" }),
+            &cookie,
+        ))
+        .await
+        .expect("route create menu");
+    let menu_id = json_body(menu).await["menu_id"]
+        .as_str()
+        .expect("a menu id")
+        .to_owned();
+
+    // A pizza on the main course and a tiramisu on dessert, both priced dine-in.
+    let pizza_id = place_item_on_course(
+        &router,
+        &cookie,
+        &tenant,
+        &menu_id,
+        ("Margherita", &main, 150_000),
+    )
+    .await;
+    place_item_on_course(
+        &router,
+        &cookie,
+        &tenant,
+        &menu_id,
+        ("Tiramisu", &dessert, 80_000),
+    )
+    .await;
+
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let effective = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store}/config?tenant_id={tenant}"),
+            &cookie,
+        ))
+        .await
+        .expect("route effective config");
+    assert_eq!(effective.status(), StatusCode::OK);
+    let doc = json_body(effective).await;
+    let catalog = &doc["menu"]["channels"][0]["catalog"];
+
+    let courses = catalog["courses"].as_array().expect("the courses");
+    assert_eq!(courses.len(), 2, "the store receives both courses");
+    assert_eq!(
+        courses
+            .iter()
+            .map(|course| course["display_name"].as_str().expect("a name"))
+            .collect::<Vec<_>>(),
+        ["Main", "Dessert"],
+        "in service order, not the order they were authored"
+    );
+
+    let pizza = catalog["items"]
+        .as_array()
+        .expect("the items")
+        .iter()
+        .find(|entry| entry["menu_item_id"] == pizza_id.as_str())
+        .expect("the pizza");
+    assert_eq!(
+        pizza["course_id"], main,
+        "and each entry names the course it goes out on"
+    );
 }
 
 #[tokio::test]

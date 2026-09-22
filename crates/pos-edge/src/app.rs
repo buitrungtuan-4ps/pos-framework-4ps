@@ -4931,6 +4931,7 @@ mod tests {
             unit_price: vnd(150_000),
             tax_class_id: EdgeSession::standard_tax_class(),
             modifier_group_ids: Vec::new(),
+            course_id: None,
             available: true,
         });
         Edge::new(
