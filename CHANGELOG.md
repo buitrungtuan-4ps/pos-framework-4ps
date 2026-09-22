@@ -106,6 +106,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The till draws money the way the store's own country writes it.** `formatMoney` grouped with
+  `en-US` for every store in every country. A Vietnamese cashier now reads `1.234.567₫` — the same
+  spelling as the receipt in the guest's hand
+  ([ADR-0136](docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+
+  Grouping is written out rather than left to `toLocaleString`, which groups by the *reader's* locale
+  and can only be told a language — not a group size. It is the twin of the receipt's, down to the
+  guard against a group of zero digits.
+
+  India is unchanged for the same reason the receipt is: `12,34,567` is three digits then pairs, and
+  a single group size cannot say so.
+
+  **Upgrade note:** a Vietnamese store's till changes in the same release its receipt does — `98,000₫`
+  becomes `98.000₫` on screen and `VND 97.900` on paper. That is deliberate: the two disagreeing
+  would be worse than either changing. Japan, India and the reference country see nothing, their
+  format being the one the app already compiled in. A store's screen changes when its locale node is
+  next published.
+
 - **A receipt is grouped the way its own country writes numbers.** The printed receipt grouped with
   `,` and pointed with `.` for every store on earth. A Vietnamese guest's total now reads
   `VND 97.900`, and a two-decimal figure in a comma-decimal country reads `1.234,56`

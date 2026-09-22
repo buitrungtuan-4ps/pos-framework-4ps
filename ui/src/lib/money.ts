@@ -92,22 +92,83 @@ export function quantity(whole: number): Quantity {
   return { milli: whole * 1000 };
 }
 
+// How a country writes a number: the mark between the integer and the fraction, the mark between
+// groups of digits, and how many digits go in a group. The wire shape mirrors
+// `pos_proto::locale::NumberFormat`.
+export interface NumberFormat {
+  decimal_separator: string;
+  group_separator: string;
+  digits_per_group: number;
+}
+
+// How this store writes money: how many decimals its currency has (ADR-0134) and what marks its
+// country groups and points a figure with (ADR-0136).
+//
+// One value rather than two arguments, mirroring `MoneyStyle` in `crates/pos-edge/src/printing.rs`
+// so the screen and the paper are legibly the same decision. It also stops a caller pairing one
+// store's exponent with another store's marks.
+export interface MoneyStyle {
+  exponent: number;
+  format: NumberFormat;
+}
+
+// The marks this app uses until a store's own have synced — the common `1,234.50`, and deliberately
+// not Vietnam's, for the reason `FALLBACK_EXPONENT` is a table of named currencies rather than a
+// guess: the till boots before it knows what country it is in, and the widespread convention is the
+// one least likely to be wrong on a screen nobody has configured yet.
+//
+// `pos-proto`'s own `NumberFormat::default` is the same triple, and its test says so by name.
+export const FALLBACK_NUMBER_FORMAT: NumberFormat = {
+  decimal_separator: ".",
+  group_separator: ",",
+  digits_per_group: 3,
+};
+
+// `1234567` as `1,234,567`, or as `1.234.567` where that is how the country writes it.
+//
+// Written out rather than left to `toLocaleString`, which groups by the *reader's* locale and can
+// only be told a language — not a group size. It is the twin of `group_digits` in
+// `crates/pos-edge/src/printing.rs`, down to the zero guard: a group of no digits would loop
+// forever, and the edge refuses to apply a published format carrying one, but the guard is written
+// rather than assumed.
+//
+// India writes `12,34,567` — three digits then pairs — which a single group size cannot express, so
+// an Indian till reads `1,234,567` (ADR-0105 records the gap; ADR-0136 leaves it open).
+export function groupDigits(value: number, format: NumberFormat): string {
+  const digits = Math.trunc(Math.abs(value)).toString();
+  const size = Math.max(1, Math.trunc(format.digits_per_group));
+  let grouped = "";
+  for (let index = 0; index < digits.length; index += 1) {
+    if (index > 0 && (digits.length - index) % size === 0) {
+      grouped += format.group_separator;
+    }
+    grouped += digits[index];
+  }
+  return grouped;
+}
+
 // A display string for an amount. `₫` for VND (the symbol most staff read fastest); the ISO code
 // otherwise until the locale pack supplies a symbol.
 //
-// `exponent` is supplied rather than looked up, so this stays a pure function of its arguments and
-// the store stays the one place a published value lives — the shape every other locale fact in this
-// app has. Callers in screens use `formatAmount` from the store, which binds it; nobody has to
-// remember to pass the right number, and nobody *can* pass none.
-export function formatMoney(m: Money, exponent: number): string {
-  const digits = exponent;
+// `money` is supplied rather than looked up, so this stays a pure function of its arguments and the
+// store stays the one place a published value lives — the shape every other locale fact in this app
+// has. Callers in screens use `formatAmount` from the store, which binds it; nobody has to remember
+// to pass the right style, and nobody *can* pass none.
+//
+// The marks used to be `en-US`'s, for every store in every country, while the store's own were
+// published and read by nothing. A Vietnamese cashier now reads `1.234.567₫` — the spelling on the
+// receipt in their hand (ADR-0136).
+export function formatMoney(m: Money, money: MoneyStyle): string {
+  const digits = money.exponent;
   const negative = m.amount_minor < 0;
   const abs = Math.abs(m.amount_minor);
   const scale = 10 ** digits;
   const major = Math.trunc(abs / scale);
   const minor = abs % scale;
-  const grouped = major.toLocaleString("en-US");
-  const body = digits > 0 ? `${grouped}.${minor.toString().padStart(digits, "0")}` : grouped;
+  const grouped = groupDigits(major, money.format);
+  const point = money.format.decimal_separator;
+  const body =
+    digits > 0 ? `${grouped}${point}${minor.toString().padStart(digits, "0")}` : grouped;
   const sign = negative ? "-" : "";
   if (m.currency_code === "VND") {
     return `${sign}${body}₫`;

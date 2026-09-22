@@ -283,6 +283,20 @@ fn demo_locale() -> serde_json::Value {
         // The smallest note in circulation. Anything finer is a figure a cashier cannot settle and a
         // guest cannot hand over.
         "cash_rounding_increment": 1_000,
+        // How Vietnam writes a number: `.` between groups and `,` before a fraction — the mirror of
+        // the convention this app compiled in for every country
+        // ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+        //
+        // Published here rather than in a profile of its own because this fixture already *is* a
+        // Vietnamese store: it publishes Vietnam's cash increment and quotes in đồng, and a
+        // Vietnamese store that grouped `98,000` was the fixture being less faithful than the
+        // country it names. The browser gate's own expectations move with it, which is the proof
+        // that the screen reads the published marks rather than a compiled-in guess.
+        "number_format": {
+            "decimal_separator": ",",
+            "group_separator": ".",
+            "digits_per_group": 3,
+        },
     })
 }
 
