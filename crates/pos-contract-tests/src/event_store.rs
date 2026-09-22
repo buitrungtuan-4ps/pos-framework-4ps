@@ -12,6 +12,14 @@
 //! `store-postgres`, and the in-memory fake. That last one matters more than it looks — the
 //! domain suite runs against the fake, so if the fake and the real store disagree, every domain
 //! test is testing the wrong thing.
+//!
+//! # The chain obligations
+//!
+//! [ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 5: *"Verification is a
+//! contract test, not an adapter's private business."* The four cases at the end of this module are
+//! that. They are not conditional on an adapter's goodwill — each harness **declares** whether its
+//! store chains ([`chains`](crate::harness::EventStoreHarness::chains)), the declaration is checked
+//! against what the store actually produced, and a wrong declaration fails in either direction.
 
 use core::num::NonZeroU32;
 
@@ -48,6 +56,11 @@ macro_rules! event_store_suite {
                 acknowledges_as_a_high_water_mark,
                 reports_outbox_depth,
                 refuses_a_batch_spanning_two_stores,
+                starts_at_one_and_links_to_genesis,
+                advances_without_gaps,
+                reports_the_head_it_stamped,
+                a_replay_does_not_advance_the_chain,
+                a_partly_replayed_batch_leaves_no_gap,
             ]
         }
     };
@@ -504,6 +517,281 @@ pub async fn refuses_a_batch_spanning_two_stores<H: EventStoreHarness>(
         "a batch naming two stores must be refused, not partially applied — in the cloud \
          row-level security would refuse it anyway, and an edge store silently accepting it \
          writes another store's events into this store's log",
+    )?;
+    Ok(())
+}
+
+// --- The chain obligations (ADR-0131 decision 5) -------------------------------------------------
+
+fn chain() -> Obligation {
+    Obligation::new(PortName::EventStore, "the hash chain")
+}
+
+/// Reads a store's events back in chain order, for the cases below.
+async fn chained_records<S: EventStore>(
+    store: &S,
+    store_id: pos_proto::StoreId,
+) -> Result<Vec<pos_proto::EventEnvelope<pos_proto::RawPayload>>, CaseFailure> {
+    Ok(store.read(&EventQuery::first(store_id, page(100))).await?)
+}
+
+/// Checks the harness's [`chains`](crate::harness::EventStoreHarness::chains) declaration against
+/// what the store actually produced, and reports whether the chain cases should go on.
+///
+/// This is where the declaration stops being a claim and becomes a checked fact. Both directions
+/// fail: a store that says it chains and produces no head, and one that says it does not and
+/// produces one.
+fn declaration_holds<H: EventStoreHarness>(
+    harness: &H,
+    head: Option<&pos_ports::event_store::ChainAnchor>,
+) -> Result<bool, CaseFailure> {
+    let obligation = chain();
+    match (harness.chains(), head) {
+        (true, Some(_)) => Ok(true),
+        (false, None) => Ok(false),
+        (true, None) => {
+            obligation.require(
+                false,
+                "this harness declares its store chains, but the store reported no head after a \
+                 committed append",
+            )?;
+            Ok(false)
+        }
+        (false, Some(_)) => {
+            obligation.require(
+                false,
+                "this harness declares its store keeps no chain, but the store reported a head — \
+                 the declaration is wrong, and the chain obligations were skipped because of it",
+            )?;
+            Ok(false)
+        }
+    }
+}
+
+/// The first record a store ever writes sits at `seq` 1 and links to the genesis constant.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn starts_at_one_and_links_to_genesis<H: EventStoreHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    append_committed(&store, &fixtures::activations(store_id, 1, 1)).await?;
+
+    let head = store.chain_head(store_id).await?;
+    if !declaration_holds(harness, head.as_ref())? {
+        return Ok(());
+    }
+
+    let obligation = chain();
+    let records = chained_records(&store, store_id).await?;
+    let Some(first) = records.first() else {
+        obligation.require(false, "the appended record did not read back")?;
+        return Ok(());
+    };
+    let Some(link) = first.chain.as_ref() else {
+        obligation.require(
+            false,
+            "a chaining store must stamp every record it appends; the first carries no link",
+        )?;
+        return Ok(());
+    };
+    obligation.require_eq(&link.seq, &1, "a store's first record sits at seq 1")?;
+    obligation.require(
+        link.prev_hash.is_genesis(),
+        "a store's first record chains to the genesis constant — anything else claims a \
+         predecessor that never existed",
+    )?;
+    Ok(())
+}
+
+/// A run of appends produces a dense chain: seq 1..n with no gaps, and only the first at genesis.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn advances_without_gaps<H: EventStoreHarness>(harness: &H) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    // Two batches, because a chain that only advances within one transaction is not a chain.
+    append_committed(&store, &fixtures::activations(store_id, 1, 3)).await?;
+    append_committed(&store, &fixtures::activations(store_id, 4, 2)).await?;
+
+    let head = store.chain_head(store_id).await?;
+    if !declaration_holds(harness, head.as_ref())? {
+        return Ok(());
+    }
+
+    let obligation = chain();
+    let records = chained_records(&store, store_id).await?;
+    obligation.require_len(&records, 5, "every appended event is read back")?;
+    for (index, record) in records.iter().enumerate() {
+        let expected = index as u64 + 1;
+        let Some(link) = record.chain.as_ref() else {
+            obligation.require(false, format!("record {expected} carries no chain link"))?;
+            return Ok(());
+        };
+        obligation.require_eq(
+            &link.seq,
+            &expected,
+            "a store's chain is a dense counter — a gap is a record nobody can account for",
+        )?;
+        obligation.require_eq(
+            &link.prev_hash.is_genesis(),
+            &(expected == 1),
+            "only the first record chains to genesis; a later one doing so would hide everything \
+             before it",
+        )?;
+    }
+    Ok(())
+}
+
+/// `chain_head` reports the chain the store actually stamped, not a count of rows.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn reports_the_head_it_stamped<H: EventStoreHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    append_committed(&store, &fixtures::activations(store_id, 1, 4)).await?;
+
+    let head = store.chain_head(store_id).await?;
+    if !declaration_holds(harness, head.as_ref())? {
+        return Ok(());
+    }
+    let obligation = chain();
+    let Some(anchor) = head else {
+        obligation.require(false, "the declaration check admitted a missing head")?;
+        return Ok(());
+    };
+    obligation.require_eq(&anchor.seq, &4, "the head names the length of the chain")?;
+    obligation.require(
+        !anchor.head.is_genesis(),
+        "a store with records does not report genesis as its head",
+    )?;
+    obligation.require_eq(
+        &anchor.head.as_str().len(),
+        &64,
+        "a chain hash is 64 hexadecimal characters",
+    )?;
+    obligation.require(
+        anchor
+            .head
+            .as_str()
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()),
+        "a chain hash is lowercase hexadecimal, so two stores' heads compare as written",
+    )?;
+    Ok(())
+}
+
+/// A replayed append stores nothing, and must therefore advance nothing.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_replay_does_not_advance_the_chain<H: EventStoreHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    let events = fixtures::activations(store_id, 1, 3);
+    append_committed(&store, &events).await?;
+
+    let before = store.chain_head(store_id).await?;
+    if !declaration_holds(harness, before.as_ref())? {
+        return Ok(());
+    }
+
+    // At-least-once delivery guarantees this happens. A chain that advanced on a duplicate would
+    // report a length the log does not have, and every later verification would read as broken.
+    let replay = append_committed(&store, &events).await?;
+    let obligation = chain();
+    obligation.require_eq(&replay.appended, &0, "a replayed append stores nothing")?;
+
+    let after = store.chain_head(store_id).await?;
+    obligation.require_eq(
+        &after.map(|anchor| anchor.seq),
+        &before.map(|anchor| anchor.seq),
+        "a replay must leave the chain exactly where it was",
+    )?;
+    Ok(())
+}
+
+/// A batch that is half already-stored and half new still produces a dense chain.
+///
+/// # Why this is its own case
+///
+/// [`a_replay_does_not_advance_the_chain`] appends a batch that is *entirely* duplicate, and an
+/// implementation that advanced its chain on an ignored row can still pass it: nothing is written,
+/// so nothing persists. The damage shows only in a **mixed** batch, where a duplicate that advanced
+/// the counter pushes the next genuinely new record one position too far and leaves a hole — and
+/// every later verification reports a break that never happened. That shape is not a contrivance:
+/// it is exactly what reconciliation's re-push produces
+/// ([ADR-0040](../../../docs/adr/0040-reconciliation.md)), which offers a whole window of ids and
+/// gets back the few the cloud lacks.
+///
+/// # What this does and does not pin, on today's adapters
+///
+/// It pins the **observable** outcome — the counts and a dense chain — which is what a port
+/// contract should state. It is worth being exact about the rest: `store-sqlite` defends this
+/// twice, filtering duplicates in `append` before they ever reach the writer *and* guarding the
+/// head advance behind a row actually landing. Removing either one alone still passes, because the
+/// other holds. So this case is not a regression test for a particular guard in a particular
+/// adapter; it is the obligation an adapter with **no** such defence would fail.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_partly_replayed_batch_leaves_no_gap<H: EventStoreHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    append_committed(&store, &fixtures::activations(store_id, 1, 2)).await?;
+
+    let head = store.chain_head(store_id).await?;
+    if !declaration_holds(harness, head.as_ref())? {
+        return Ok(());
+    }
+
+    // Seeds 1 and 2 are already stored; 3 and 4 are new. This is the shape reconciliation's
+    // re-push produces, so it is the norm rather than a contrivance.
+    let outcome = append_committed(&store, &fixtures::activations(store_id, 1, 4)).await?;
+    let obligation = chain();
+    obligation.require_eq(&outcome.appended, &2, "only the two new events are stored")?;
+    obligation.require_eq(
+        &outcome.duplicates,
+        &2,
+        "the two already held are duplicates",
+    )?;
+
+    let records = chained_records(&store, store_id).await?;
+    obligation.require_len(&records, 4, "the log holds four events")?;
+    for (index, record) in records.iter().enumerate() {
+        let expected = index as u64 + 1;
+        let Some(link) = record.chain.as_ref() else {
+            obligation.require(false, format!("record {expected} carries no chain link"))?;
+            return Ok(());
+        };
+        obligation.require_eq(
+            &link.seq,
+            &expected,
+            "a duplicate that was ignored must not advance the chain, or the next new record \
+             leaves a hole nobody can account for",
+        )?;
+    }
+
+    let after = store.chain_head(store_id).await?;
+    obligation.require_eq(
+        &after.map(|anchor| anchor.seq),
+        &Some(4),
+        "the head counts the records the log actually holds",
     )?;
     Ok(())
 }
