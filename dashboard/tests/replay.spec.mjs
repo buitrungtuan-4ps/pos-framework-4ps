@@ -148,10 +148,46 @@ async function press(page, action, description, value) {
     await target.fill("150000");
     return;
   }
+  // Asked *before* the click, for two reasons. It is what the control says about itself, rather
+  // than a guess from what appeared afterwards — and a locator read is not free: `getAttribute`
+  // waits for its element, so asking after a click that navigated or re-rendered would block on an
+  // element that no longer exists until the whole test times out.
+  const opensAPicker = (await target.getAttribute("aria-haspopup")) === "listbox";
   await target.click();
   // A combobox trigger opens a listbox instead of doing the thing; choosing is the same step.
-  const options = page.locator('[role="listbox"] [role="option"]');
-  if ((await options.count()) > 0) {
+  //
+  // Gated on the trigger's own `aria-haspopup` rather than on what appeared, because what appears
+  // is a race.
+  // `ComboboxField` paints its popup the instant it is clicked and fills it when the options land:
+  // until then `shown()` is empty and the popup renders `emptyLabel` — a bare `<p>`, with no
+  // `[role="listbox"]` anywhere in it. A count taken at that moment is zero on any runner slower
+  // than the one this was written on, the helper concludes the control was not a combobox, and the
+  // popup is left open over whatever the next step means to click.
+  //
+  // That is the failure this gate has been producing: the click after it retries against
+  // `<p>Nothing matches that search</p>`, then against `<li role="option">Airport branches</li>`
+  // once the data arrives, for the whole two-minute timeout, and the run blames a control that was
+  // never broken.
+  if (opensAPicker) {
+    const options = page.locator('[role="listbox"] [role="option"]');
+    // Wait for the rows rather than counting them. A combobox with nothing to offer is a real
+    // state — a cohort with no shops in it — so this is best-effort and the branch below handles
+    // the empty case rather than failing here, where the message would be about a timeout.
+    await options
+      .first()
+      .waitFor({ state: "visible", timeout: SETTLE_MS })
+      .catch(() => {});
+    if ((await options.count()) === 0) {
+      // Nothing to choose, and a popup that must not be left covering the next control. Escape is
+      // what an operator would press, and `ComboboxField` handles it — but only from the search
+      // box, which is focused on open, so this is the same path a person takes.
+      await page.keyboard.press("Escape");
+      await page
+        .locator('[role="combobox"]')
+        .waitFor({ state: "hidden", timeout: SETTLE_MS })
+        .catch(() => {});
+      return;
+    }
     await options.first().click();
     // And then wait for it to close, which is the half this was missing.
     //
@@ -195,22 +231,27 @@ const AFTER_STEP = {
 const replayed = TASKS.filter((declared) => declared.unreplayable === undefined);
 const skipped = TASKS.filter((declared) => declared.unreplayable !== undefined);
 
+/** Walks a declared flow's steps, in the order and by the means the declaration names. */
+async function walk(page, declared) {
+  for (const [index, step] of declared.steps.entries()) {
+    const description = `step ${index + 1} of "${declared.task}"`;
+    if (step.nav !== undefined) {
+      await openNavGroupFor(page, step.nav);
+      await page.locator(`[data-nav="${step.nav}"]`).first().click();
+    } else if (step.link !== undefined) {
+      await page.locator(`[data-nav="${step.link.to}"]`).first().click();
+    } else {
+      await press(page, step.action, description, step.value);
+    }
+    await AFTER_STEP[declared.task]?.(page, index);
+  }
+}
+
 for (const declared of replayed) {
   test(declared.task, async ({ browser }) => {
     const { context, page } = await openConsole(browser);
 
-    for (const [index, step] of declared.steps.entries()) {
-      const description = `step ${index + 1} of "${declared.task}"`;
-      if (step.nav !== undefined) {
-        await openNavGroupFor(page, step.nav);
-        await page.locator(`[data-nav="${step.nav}"]`).first().click();
-      } else if (step.link !== undefined) {
-        await page.locator(`[data-nav="${step.link.to}"]`).first().click();
-      } else {
-        await press(page, step.action, description, step.value);
-      }
-      await AFTER_STEP[declared.task]?.(page, index);
-    }
+    await walk(page, declared);
 
     await expect(
       page.locator(`[data-outcome="${declared.outcome.mark}"]`).first(),
@@ -219,6 +260,39 @@ for (const declared of replayed) {
     await context.close();
   });
 }
+
+// A picker whose options arrive late does not swallow the next step's click.
+//
+// This is the failure this gate kept producing, and the reason it is a test rather than a retry.
+// `ComboboxField` paints its popup the moment the trigger is clicked and fills it when the options
+// land; until then it renders `emptyLabel` — a bare `<p>`, with no `[role="listbox"]` in it. The
+// harness counted options at that instant, got zero, concluded the control was not a picker, and
+// walked on. The popup stayed open, absolutely positioned over the rest of the form, and the *next*
+// step's click hit it instead of its own button. Playwright does not fail an intercepted click; it
+// retries, for the full test timeout, and the run blames a control that was never broken.
+//
+// The cohort picker's options come from `GET /admin/store-groups`, so delaying that response
+// reproduces on any machine what a loaded CI runner produced by itself. The delay is under the
+// harness's own settle budget, because the point is that waiting is enough — not that the flow
+// survives an outage.
+test("a picker whose options arrive late does not swallow the next click", async ({ browser }) => {
+  const declared = replayed.find((task) => task.task === "Publish one menu to a whole cohort of shops");
+  expect(declared, "the cohort publish flow is the one with a served picker in it").toBeDefined();
+
+  const { context, page } = await openConsole(browser);
+  await page.route(/\/admin\/store-groups\?/, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    await route.continue();
+  });
+
+  await walk(page, declared);
+
+  await expect(
+    page.locator(`[data-outcome="${declared.outcome.mark}"]`).first(),
+    "the flow reached its outcome with the cohort list served late, so no popup was left over the next control",
+  ).toBeVisible();
+  await context.close();
+});
 
 test("the flows this harness skips are exactly the ones that say so", () => {
   // A flow drops out of the browser gate only by declaring why, in `scripts/step-tasks.mjs`. This

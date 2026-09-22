@@ -82,6 +82,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`console-replay` blamed a control that was never broken.** The gate failed intermittently with
+  `<li role="option">Airport branches</li> … intercepts pointer events` repeated 230 times against
+  `[data-step="setNode"]`, and `setNode` was fine. What was open over it was the *cohort* picker from
+  the step before.
+
+  `ComboboxField` paints its popup the moment its trigger is clicked and fills it when the options
+  land. Until then it renders `emptyLabel` — a bare `<p>`, with no `[role="listbox"]` anywhere in it.
+  The harness counted options at that instant, got zero, concluded the control was not a picker, and
+  walked on without choosing or closing. The popup stayed open, absolutely positioned over the rest
+  of the form, and the next step's click hit it. Playwright does not fail an intercepted click; it
+  retries for the full two-minute timeout, so the run ended naming the wrong control.
+
+  `press()` now asks the trigger whether it opens a picker — `aria-haspopup="listbox"`, read before
+  the click, because a locator read waits for its element and a click that navigates would otherwise
+  block until the test timed out — and then waits for the rows rather than counting them. A picker
+  that genuinely has nothing to offer is dismissed rather than left open.
+
+  Covered by a test that reproduces it on any machine: `GET /admin/store-groups` is delayed, and the
+  cohort publish flow must still reach its outcome. With the old `press()` that test fails exactly as
+  CI did.
+
+  **Upgrade note:** none — test tooling only, no change to any shipped artifact.
+
 - **The till held every font on the box, and held a collection once per face.** Measured on a plain
   Debian box, a scan of `/usr/share/fonts` cost **139 MB of resident memory**; it now costs **83 MB**,
   and keeps 10 faces where it kept 50. The scripts the store can print are identical — the boot log's
