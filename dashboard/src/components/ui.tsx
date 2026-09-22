@@ -392,6 +392,8 @@ export function ComboboxField(props: {
   // Closing on a click elsewhere is what makes this behave like the select it replaces. Bound only
   // while open, and on `pointerdown` rather than `click` so a press that starts outside and ends on
   // the list does not select through a closing popover.
+  // Using pointerdown can interfere with Playwright click actions in test environments when
+  // microtasks/event ticks overlay.
   createEffect(() => {
     if (!open()) {
       return;
@@ -401,8 +403,14 @@ export function ComboboxField(props: {
         close();
       }
     };
-    document.addEventListener("pointerdown", onPointerDown);
-    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
+    // Delay adding the listener to avoid swallowing immediate pointer events on open
+    const timeout = setTimeout(() => {
+      document.addEventListener("pointerdown", onPointerDown);
+    }, 0);
+    onCleanup(() => {
+      clearTimeout(timeout);
+      document.removeEventListener("pointerdown", onPointerDown);
+    });
   });
 
   createEffect(() => {
