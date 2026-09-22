@@ -4,10 +4,11 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { formatMoney, money, percentOf, quickCashFor } from "../lib/money";
+import { formatMoney, money, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
   applyDiscount,
   cashDenominations,
+  cashRoundingIncrement,
   loadCheck,
   openBill,
   openBillFor,
@@ -32,6 +33,18 @@ const DISCOUNT = "REASON_ACTION_DISCOUNT";
 // them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
 // makes by tapping the nearest of three.
 const TIP_PERCENTS = [5, 10, 15] as const;
+
+// Whether a set of tip keys is still worth offering: every key positive, and every key larger than
+// the one before it.
+//
+// The guard on the cash snap below. On a bill of 8,000₫ a 1,000₫ increment turns 5/10/15% into 0,
+// 1,000 and 1,000 — a dead button and a duplicate, on a row whose buttons carry an amount and
+// nothing else, so a cashier cannot tell which is which or why one of them does nothing. The exact
+// figures are less tidy and strictly more useful, so the snap stands down rather than degrading the
+// row it was meant to improve.
+function distinctAndSpendable(keys: readonly number[]): boolean {
+  return keys.every((amount, index) => amount > (index === 0 ? 0 : (keys[index - 1] ?? 0)));
+}
 
 // The pay screen: the amount owed large, a cash pad with this currency's quick-cash denominations
 // and its change, an optional tip, or card for the exact amount. On settlement it shows the gapless
@@ -157,12 +170,25 @@ export function Pay() {
   //
   // `percentOf` is the whole-minor-unit answer, rounded the way the edge rounds so the two agree.
   //
-  // It leaves a second, smaller point open: 15,237₫ is an integer and still not an amount a guest
-  // can leave, because Vietnam's smallest note is 1,000. Snapping the keys to the country's cash
-  // increment is the fix for that, and it is deliberately not here — a store that rounds its cash
-  // can never produce the fractional total this line is about, so the two cannot be proven by one
-  // fixture and are not one change.
-  const tipKeys = () => TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+  // Whole is not yet spendable, which is the second half. 15,237₫ is an integer and still not an
+  // amount a guest can leave: Vietnam's smallest note is 1,000 đồng, India's smallest coin is the
+  // rupee. Where the store's country rounds its cash the keys round with it, so the button reads
+  // 15,000₫ — what somebody would actually put on the table — and where it does not, Japan and the
+  // United States among them, nothing is snapped and the exact share stands.
+  //
+  // The snap stands down on a small bill. Under about 20,000₫ a 1,000₫ increment swallows the gap
+  // between 5% and 15% and the row collapses onto one amount; `distinctAndSpendable` catches that
+  // and the exact figures are used instead. Better a key of 400₫ a cashier rounds in their head
+  // than three identical buttons they cannot choose between.
+  const tipKeys = () => {
+    const exact = TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+    const increment = cashRoundingIncrement();
+    if (increment === null) {
+      return exact;
+    }
+    const snapped = exact.map((amount) => roundToIncrement(amount, increment));
+    return distinctAndSpendable(snapped) ? snapped : exact;
+  };
 
   // The exact amount, plus this bill's own currency's banknotes that would cover it (roadmap E5).
   // These were VND's three notes regardless of where the store was, so a store on any other

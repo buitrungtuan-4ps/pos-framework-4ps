@@ -821,6 +821,75 @@ test("a tip on a bill that is not a round number still settles", async ({ page }
   }
 });
 
+// Where the country rounds its cash, the tip keys round with it.
+//
+// `cash_rounding_increment` has been in ADR-0105 since it was written, and no fixture ever published
+// one — so the posture had no browser gate over it at all. `POS_DEMO_PROFILE=cash-rounding`
+// publishes Vietnam's own increment, 1,000 đồng, which is the smallest note in circulation.
+//
+// The salad is 89,000₫; ten percent exclusive tax makes 97,900₫, which the edge rounds to 98,000₫.
+// Five, ten and fifteen percent of that are 4,900, 9,800 and 14,700 — whole numbers, and still three
+// amounts no guest can put on a table. Snapped they are 5,000, 10,000 and 15,000, which is what
+// somebody actually leaves.
+//
+// The amounts are asserted on the buttons rather than the arithmetic being restated: the row carries
+// the figure and nothing else, so what the button says is the whole of what the cashier has to go on.
+test("a store whose country rounds its cash offers tips a guest can hand over", async ({ page }) => {
+  const edge = await startEdge("cash-rounding");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+
+    await page.locator('[data-step="takePayment"]').click();
+    // The rounded total, so the keys below are a share of a figure that has already been rounded
+    // once — and so a check that has not landed cannot pass this test with three zeroes.
+    await expect(page.getByText("98,000₫", { exact: true })).toBeVisible();
+
+    const keys = page.locator('[data-step="setTip"]');
+    await expect(keys).toHaveText(["5,000₫", "10,000₫", "15,000₫"]);
+
+    await keys.first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a bill too small for the increment, the snap stands down.
+//
+// The other half of the rule above, and the reason it is a rule rather than a rounding call. The
+// bottled water is 9,000₫, which taxes to 9,900₫ and rounds to 10,000₫. Five, ten and fifteen
+// percent of that snap to 1,000, 1,000 and 2,000: two buttons reading the same amount on a row whose
+// buttons carry an amount and nothing else, so a cashier cannot tell which is which — and a 5% key
+// that is really 10%.
+//
+// So the till shows the exact shares instead: 500₫, 1,000₫ and 1,500₫. Less tidy, and the only set
+// of three a person can choose between.
+test("a tiny bill keeps its exact tip keys rather than collapsing them", async ({ page }) => {
+  const edge = await startEdge("cash-rounding");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    await page.locator("#menu-search").fill("water");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+    await page.locator('[data-step="onItem"]').click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("10,000₫", { exact: true })).toBeVisible();
+
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["500₫", "1,000₫", "1,500₫"]);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
 test("every flow is replayed except the ones that say why they cannot be", () => {
