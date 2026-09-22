@@ -22,11 +22,14 @@ import type {
   ReasonCodeEntry,
 } from "../api/types";
 import {
+  FALLBACK_NUMBER_FORMAT,
   fallbackExponent,
   fallbackQuickCash,
   formatMoney,
   parseWhole,
   type Money,
+  type MoneyStyle,
+  type NumberFormat,
 } from "../lib/money";
 
 export interface OrderLine {
@@ -166,6 +169,7 @@ interface StoreShape {
   // means the read has not landed, and the compiled-in fallback covers that window — unlike the
   // cash increment, where `null` is also a real published answer.
   currencyExponent: number | null;
+  numberFormat: NumberFormat | null;
   // The store's managed reason list, from `GET /api/reason-codes` (ADR-0115). Empty until the read
   // lands — and empty is never a real answer here, because the edge falls back to the framework
   // default set when nothing is published. A picker with nothing in it therefore means "the read has
@@ -224,6 +228,7 @@ const [state, setState] = createStore<StoreShape>({
   cashDenominations: null,
   cashRoundingIncrement: null,
   currencyExponent: null,
+  numberFormat: null,
   reasonCodes: [],
   bumped: {},
   shift: null,
@@ -862,11 +867,28 @@ export function currencyExponent(): number {
   return state.currencyExponent ?? fallbackExponent(storeCurrency());
 }
 
+// How this store's country writes a number (ADR-0136): the published answer once `loadLocale`
+// lands, and the widespread `1,234.50` convention until it does — the same never-blank contract
+// `cashDenominations` and `currencyExponent` keep.
+//
+// Unlike the exponent, this cannot be caught out by a falsy published value: `0 ?? x` is `0`, which
+// is how a published zero exponent beat a correct fallback, but an object is either there or it is
+// not.
+export function numberFormat(): NumberFormat {
+  return state.numberFormat ?? FALLBACK_NUMBER_FORMAT;
+}
+
+// Everything `formatMoney` needs, bound to this store — the one place the two halves are paired, so
+// no screen can draw a figure with one store's decimals and another store's marks.
+export function moneyStyle(): MoneyStyle {
+  return { exponent: currencyExponent(), format: numberFormat() };
+}
+
 // An amount as this store writes it. The screens' entry point, and the reason `formatMoney` takes
 // the exponent as an argument: binding it in one place means no screen can render a price without
 // it, and none of them has to know the number.
 export function formatAmount(m: Money): string {
-  return formatMoney(m, currencyExponent());
+  return formatMoney(m, moneyStyle());
 }
 
 // What a cashier typed, in minor units, or `null` when it is not a figure the till can send. The
@@ -885,6 +907,7 @@ export async function loadLocale(): Promise<void> {
     setState("cashDenominations", response.cash_denominations);
     setState("cashRoundingIncrement", response.cash_rounding_increment);
     setState("currencyExponent", response.currency_exponent);
+    setState("numberFormat", response.number_format);
   } catch {
     // Keep whatever is loaded; the next boot or reload tries again.
   }

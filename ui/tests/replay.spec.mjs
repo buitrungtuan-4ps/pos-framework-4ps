@@ -834,6 +834,12 @@ test("a tip on a bill that is not a round number still settles", async ({ page }
 //
 // The amounts are asserted on the buttons rather than the arithmetic being restated: the row carries
 // the figure and nothing else, so what the button says is the whole of what the cashier has to go on.
+//
+// They are grouped `98.000₫` rather than `98,000₫` because this fixture publishes Vietnam's own
+// marks ([ADR-0136](../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)) and the till
+// now reads them. That is the assertion doing double duty: the figures below are the arithmetic, and
+// their punctuation is the proof that the screen takes its typography from the store rather than
+// from a compiled-in `en-US`.
 test("a store whose country rounds its cash offers tips a guest can hand over", async ({ page }) => {
   const edge = await startEdge("cash-rounding");
   try {
@@ -845,10 +851,10 @@ test("a store whose country rounds its cash offers tips a guest can hand over", 
     await page.locator('[data-step="takePayment"]').click();
     // The rounded total, so the keys below are a share of a figure that has already been rounded
     // once — and so a check that has not landed cannot pass this test with three zeroes.
-    await expect(page.getByText("98,000₫", { exact: true })).toBeVisible();
+    await expect(page.getByText("98.000₫", { exact: true })).toBeVisible();
 
     const keys = page.locator('[data-step="setTip"]');
-    await expect(keys).toHaveText(["5,000₫", "10,000₫", "15,000₫"]);
+    await expect(keys).toHaveText(["5.000₫", "10.000₫", "15.000₫"]);
 
     await keys.first().click();
     await page.locator('[data-step="setTender"]').first().click();
@@ -867,7 +873,7 @@ test("a store whose country rounds its cash offers tips a guest can hand over", 
 // buttons carry an amount and nothing else, so a cashier cannot tell which is which — and a 5% key
 // that is really 10%.
 //
-// So the till shows the exact shares instead: 500₫, 1,000₫ and 1,500₫. Less tidy, and the only set
+// So the till shows the exact shares instead: 500₫, 1.000₫ and 1.500₫. Less tidy, and the only set
 // of three a person can choose between.
 test("a tiny bill keeps its exact tip keys rather than collapsing them", async ({ page }) => {
   const edge = await startEdge("cash-rounding");
@@ -882,9 +888,9 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
     await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
 
     await page.locator('[data-step="takePayment"]').click();
-    await expect(page.getByText("10,000₫", { exact: true })).toBeVisible();
+    await expect(page.getByText("10.000₫", { exact: true })).toBeVisible();
 
-    await expect(page.locator('[data-step="setTip"]')).toHaveText(["500₫", "1,000₫", "1,500₫"]);
+    await expect(page.locator('[data-step="setTip"]')).toHaveText(["500₫", "1.000₫", "1.500₫"]);
   } finally {
     await edge.stop();
   }

@@ -2,7 +2,7 @@
 // mirror for the P6 foundation; a generated client from the OpenAPI surface is the P7 follow-up
 // (ADR-0019), at which point this file is replaced rather than maintained by hand.
 
-import type { Money, Quantity, Ratio } from "../lib/money";
+import type { Money, NumberFormat, Quantity, Ratio } from "../lib/money";
 
 export interface TableResponse {
   table_id: string;
@@ -411,6 +411,12 @@ export interface LocaleResponse {
   cash_rounding_increment: number | null;
   /** Whether menu prices already contain their tax (ADR-0104). */
   prices_include_tax: boolean;
+  /**
+   * How this store's country writes a number: the decimal mark, the group mark, and how many digits
+   * go in a group (ADR-0136). Sent for the reason `currency_exponent` is — a till cannot work it
+   * out, and the one it used to invent was `en-US` for every store in every country.
+   */
+  number_format: NumberFormat;
 }
 
 /** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
