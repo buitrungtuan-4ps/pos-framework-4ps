@@ -77,7 +77,7 @@ pub use ids::{
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,
 };
-pub use menu::{ChannelCatalog, MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
+pub use menu::{ChannelCatalog, MenuBook, MenuCatalog, MenuCourse, MenuEntry, MenuModifierGroup};
 pub use money::{CurrencyCode, Money, MoneyError, Ratio, Rounding, div_round};
 pub use pii::NoPii;
 pub use protocol::{Hello, HelloOutcome, LeaseToken, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};

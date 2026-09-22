@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A course reaches a store** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+  The course entity landed and the compiled `menu` node did not carry it, so a store still could not
+  read a single course — the half that change named as still missing.
+  - `MenuEntry.course_id` and `MenuCatalog::courses()` / `course_for()`. The **item** declares its
+    course, the courses themselves ride once on the catalog, and a till groups an order into
+    starters, mains and desserts without a second read. Both fields are additive and
+    `#[serde(default)]`: a book that omits them loads unchanged and an edge that predates them
+    ignores them.
+  - The compiler publishes them **in service order**, ties broken by id, so a re-compile of
+    unchanged authoring stays byte-identical. An archived course is not published and an entry
+    naming one compiles with no course rather than being refused; a course nothing on a channel goes
+    out on is not published on that channel, so delivery that prices no dessert gets no empty
+    heading.
+  - **Still to come, and named rather than omitted:** nothing fires by course yet, though
+    `LineCommand::Fire { course }` and its `courses_enabled` gate have been written and tested all
+    along; and a routing rule's `course_id` is still accepted without checking an active course
+    carries it (decision 6), which needs the catalog store threaded into the floor routes.
+
 - **A course is something the catalog names** ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md)).
   A course was built end to end and the thing itself did not exist: `CourseId` is a wire id,
   `sales.order_line.added` carries one, `POST /api/tables/{id}/lines` accepts one,

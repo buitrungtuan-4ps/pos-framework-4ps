@@ -21326,9 +21326,16 @@ where
         Err(error) => return Err(catalog_error_response(&error)),
     };
 
+    // Courses are tenant-wide too (ADR-0130): the item declares which one it goes out on, and the
+    // compiler publishes only the courses this menu's channels actually serve, in service order.
+    let courses: Vec<Course> = match catalog.list_courses(tenant_id).await {
+        Ok(rows) => rows.into_iter().map(|row| row.record).collect(),
+        Err(error) => return Err(catalog_error_response(&error)),
+    };
+
     // Compile the price book. A refusal here is a configuration error the operator must fix, not a
     // store failure — which is why a batch treats it as refusing the *batch* and not one member.
-    let book = match compile_menu(&items, &menus, &placements, &groups, menu_id) {
+    let book = match compile_menu(&items, &menus, &placements, &groups, &courses, menu_id) {
         Ok(book) => book,
         Err(error) => return Err(api_error(ErrorStatus::Unprocessable, error.to_string())),
     };

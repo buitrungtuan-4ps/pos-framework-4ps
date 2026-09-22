@@ -276,6 +276,7 @@ mod tests {
             unit_price: Money::new(CurrencyCode::VND, 150_000),
             tax_class_id: class(),
             modifier_group_ids: Vec::new(),
+            course_id: None,
             available,
         }
     }

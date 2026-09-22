@@ -27,18 +27,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pos_proto::enums::SalesChannel;
-use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId};
+use pos_proto::ids::{
+    CourseId, DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId,
+};
+use pos_proto::money::Money;
 use pos_proto::text::DisplayName;
 use pos_proto::wire_enum::WireEnum;
 use pos_proto::{
     DisplayButton, DisplayCategory as ProtoDisplayCategory, DisplayPlan,
-    DisplaySubcategory as ProtoDisplaySubcategory, LayoutBook, MenuBook, MenuCatalog, MenuEntry,
-    MenuModifierGroup,
+    DisplaySubcategory as ProtoDisplaySubcategory, LayoutBook, MenuBook, MenuCatalog, MenuCourse,
+    MenuEntry, MenuModifierGroup,
 };
 
 use crate::catalog::{
-    CatalogItem, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId, MenuPlacement,
-    ModifierGroup,
+    CatalogItem, Course, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId,
+    MenuPlacement, ModifierGroup,
 };
 use crate::registry::EntityStatus;
 
@@ -144,6 +147,29 @@ pub fn would_cycle(menus: &[Menu], menu_id: MenuId, proposed_parent: MenuId) -> 
 /// The group's `display_name_translations` are empty because the authoring model has no per-locale
 /// name for a group yet; the field is carried so adding them later changes no shape.
 ///
+/// # Courses
+///
+/// [ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) carries the same
+/// shape for a second entity: the item declares its course, the courses themselves ride once on the
+/// catalog, and the till groups an order into starters, mains and desserts without a second read.
+/// **In service order**, ties broken by id — the order is the entity's whole meaning, and a caller
+/// that had to sort it again would eventually not.
+///
+/// Two things are dropped, mirroring the groups above and deliberately not inventing a third rule:
+///
+///   * an **archived** course is not published, and an entry naming one is emitted with no course
+///     rather than refused;
+///   * a course **no entry on this channel names** is not published either, so a channel's book never
+///     lists a course nothing on it goes out on.
+///
+/// The `course_id` goes wherever the course went, exactly as a group's id does, so an entry never
+/// names a course its own catalog does not carry. [`MenuCatalog::course_for`] answering `None` for a
+/// dangling id is the safety net for a partial sync, not licence to publish a book that disagrees
+/// with itself.
+///
+/// The course's `display_name_translations` are empty for the group's reason: the authoring model has
+/// no per-locale name for a course yet, and the field is carried so adding one changes no shape.
+///
 /// # Errors
 ///
 /// [`CompileError`] when a menu or a parent is missing, any menu in the chain is archived, the
@@ -153,6 +179,7 @@ pub fn compile_menu(
     menus: &[Menu],
     placements: &[MenuPlacement],
     groups: &[ModifierGroup],
+    courses: &[Course],
     root: MenuId,
 ) -> Result<MenuBook, CompileError> {
     let item_by_id: BTreeMap<MenuItemId, &CatalogItem> =
@@ -177,6 +204,14 @@ pub fn compile_menu(
                 .insert(group.modifier_group_id);
         }
     }
+
+    // Active courses only. An archived one is not published and an entry that still names it is
+    // emitted with no course — the posture an archived group already gets, rather than a third rule.
+    let course_by_id: BTreeMap<CourseId, &Course> = courses
+        .iter()
+        .filter(|course| course.status != EntityStatus::Archived)
+        .map(|course| (course.course_id, course))
+        .collect();
 
     // The chain from the requested menu up through its parents, most-specific first.
     let mut chain: Vec<MenuId> = Vec::new();
@@ -234,24 +269,13 @@ pub fn compile_menu(
             if channel == <SalesChannel as WireEnum>::UNSPECIFIED {
                 continue;
             }
-            let entry = MenuEntry {
-                menu_item_id: *item_id,
-                display_name: DisplayName::new(item.name.as_str()),
-                display_name_translations: item
-                    .name_translations
-                    .iter()
-                    .map(|(locale, translated)| {
-                        (locale.clone(), DisplayName::new(translated.as_str()))
-                    })
-                    .collect(),
-                unit_price: price.unit_price,
-                tax_class_id: item.tax_class_id,
-                available: placement.available,
-                modifier_group_ids: groups_by_item
-                    .get(item_id)
-                    .map(|attached| attached.iter().copied().collect())
-                    .unwrap_or_default(),
-            };
+            let entry = compiled_entry(
+                item,
+                price.unit_price,
+                placement.available,
+                groups_by_item.get(item_id),
+                &course_by_id,
+            );
             by_channel
                 .entry(channel.as_wire())
                 .or_insert_with(|| (channel, Vec::new()))
@@ -263,13 +287,86 @@ pub fn compile_menu(
     let mut book = MenuBook::new();
     for (_wire, (channel, mut entries)) in by_channel {
         let published = publishable_groups(&mut entries, &group_by_id);
+        let served = publishable_courses(&entries, &course_by_id);
         let mut catalog = MenuCatalog::from_items(entries);
         for group in published {
             catalog = catalog.with_modifier_group(group);
         }
+        for course in served {
+            catalog = catalog.with_course(course);
+        }
         book = book.with(channel, catalog);
     }
     Ok(book)
+}
+
+/// One channel's publishable courses, in service order, ties broken by id.
+///
+/// Only the courses this channel's entries actually name: a book that listed "Dessert" on a delivery
+/// channel that prices no dessert would put an empty heading on the till, and the till would have to
+/// learn to hide it. Takes `entries` by shared reference where [`publishable_groups`] takes them
+/// mutably, because an entry's `course_id` was already resolved against the active courses as it was
+/// built — a course cannot become unpublishable later the way a group can when its last priced member
+/// turns out to be missing.
+fn publishable_courses(
+    entries: &[MenuEntry],
+    course_by_id: &BTreeMap<CourseId, &Course>,
+) -> Vec<MenuCourse> {
+    let named: BTreeSet<CourseId> = entries.iter().filter_map(|entry| entry.course_id).collect();
+    let mut published: Vec<MenuCourse> = named
+        .iter()
+        .filter_map(|course_id| course_by_id.get(course_id).copied())
+        .map(|course| {
+            MenuCourse::new(
+                course.course_id,
+                DisplayName::new(course.name.as_str()),
+                course.sort,
+            )
+        })
+        .collect();
+    // The sequence is the point. `named` is already in id order, so sorting by `sort` alone would
+    // leave ties in id order anyway — the key is spelled out because a reader should not have to
+    // know that to trust a re-compile is byte-identical.
+    published.sort_by_key(|course| (course.sort, course.course_id));
+    published
+}
+
+/// One authoring item, priced for one channel, as the compiled book carries it.
+///
+/// Extracted from [`compile_menu`]'s emit loop because it is the one place the authoring model and
+/// the wire shape meet: every field a store reads about an item is decided here, and the loop around
+/// it is only about *which* (item, channel) pairs exist.
+///
+/// The ids it carries are resolved against what this tenant actually has — a group pinned to the item
+/// and a course the tenant still carries — so a channel's later pass has only to drop what the
+/// channel cannot serve, never to discover a reference that was never valid.
+fn compiled_entry(
+    item: &CatalogItem,
+    unit_price: Money,
+    available: bool,
+    attached: Option<&BTreeSet<ModifierGroupId>>,
+    course_by_id: &BTreeMap<CourseId, &Course>,
+) -> MenuEntry {
+    MenuEntry {
+        menu_item_id: item.menu_item_id,
+        display_name: DisplayName::new(item.name.as_str()),
+        display_name_translations: item
+            .name_translations
+            .iter()
+            .map(|(locale, translated)| (locale.clone(), DisplayName::new(translated.as_str())))
+            .collect(),
+        unit_price,
+        tax_class_id: item.tax_class_id,
+        available,
+        modifier_group_ids: attached
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default(),
+        // An archived course and a course the tenant does not carry at all are the same answer here,
+        // so the two cannot drift into different behaviour later.
+        course_id: item
+            .course_id
+            .filter(|course_id| course_by_id.contains_key(course_id)),
+    }
 }
 
 /// One channel's publishable modifier groups, with the ids of the ones it cannot offer stripped from
@@ -480,7 +577,8 @@ mod tests {
     use pos_proto::display::GridPosition;
     use pos_proto::enums::SalesChannel;
     use pos_proto::ids::{
-        DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId, TaxClassId, TenantId,
+        CourseId, DisplayCategoryId, DisplaySubcategoryId, MenuItemId, ModifierGroupId, TaxClassId,
+        TenantId,
     };
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::ulid::Ulid;
@@ -488,8 +586,8 @@ mod tests {
 
     use super::{CompileError, compile_layout_book, compile_menu, would_cycle};
     use crate::catalog::{
-        CatalogItem, ChannelPrice, DisplayCategory, DisplaySubcategory, LayoutButton, Menu, MenuId,
-        MenuPlacement, ModifierGroup,
+        CatalogItem, ChannelPrice, Course, DisplayCategory, DisplaySubcategory, LayoutButton, Menu,
+        MenuId, MenuPlacement, ModifierGroup,
     };
     use crate::registry::EntityStatus;
 
@@ -557,6 +655,29 @@ mod tests {
         }
     }
 
+    fn course_id(n: u128) -> CourseId {
+        CourseId::new(Ulid::from_u128(n))
+    }
+
+    /// A course at a position in the service sequence.
+    fn course(id: u128, name: &str, sort: i32) -> Course {
+        Course {
+            course_id: course_id(id),
+            tenant_id: tenant(),
+            name: name.to_owned(),
+            sort,
+            status: EntityStatus::Active,
+        }
+    }
+
+    /// The same item, declaring the course it goes out on.
+    fn item_on_course(id: u128, name: &str, course: u128) -> CatalogItem {
+        CatalogItem {
+            course_id: Some(course_id(course)),
+            ..item(id, name)
+        }
+    }
+
     #[test]
     fn a_flat_menu_compiles_to_per_channel_catalogs() {
         let items = [item(500, "Margherita")];
@@ -571,7 +692,8 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
 
         let dine_in = book
             .catalog_for(SalesChannel::DineIn)
@@ -613,7 +735,8 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
         let entry = book
             .catalog_for(SalesChannel::DineIn)
             .get(item_id(500))
@@ -644,7 +767,8 @@ mod tests {
             placement(11, 500, vec![price(SalesChannel::DineIn, 175_000)], true),
         ];
 
-        let book = compile_menu(&items, &menus, &placements, &[], menu_id(11)).expect("compile");
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(11)).expect("compile");
         let dine_in = book.catalog_for(SalesChannel::DineIn);
         assert_eq!(
             dine_in.get(item_id(500)).expect("overridden").unit_price,
@@ -669,7 +793,8 @@ mod tests {
             false,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
         let entry = book
             .catalog_for(SalesChannel::DineIn)
             .get(item_id(500))
@@ -694,7 +819,8 @@ mod tests {
             true,
         )];
 
-        let book = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
         assert!(
             book.catalog_for(SalesChannel::DineIn)
                 .get(item_id(500))
@@ -715,7 +841,7 @@ mod tests {
         )];
 
         assert_eq!(
-            compile_menu(&items, &menus, &placements, &[], menu_id(10)),
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)),
             Err(CompileError::UnknownItem(item_id(999)))
         );
     }
@@ -725,7 +851,7 @@ mod tests {
         let items: [CatalogItem; 0] = [];
         let menus = [menu(10, Some(11)), menu(11, Some(10))];
         assert_eq!(
-            compile_menu(&items, &menus, &[], &[], menu_id(10)),
+            compile_menu(&items, &menus, &[], &[], &[], menu_id(10)),
             Err(CompileError::InheritanceCycle(menu_id(10)))
         );
     }
@@ -734,7 +860,7 @@ mod tests {
     fn an_unknown_menu_is_rejected() {
         let items: [CatalogItem; 0] = [];
         assert_eq!(
-            compile_menu(&items, &[], &[], &[], menu_id(42)),
+            compile_menu(&items, &[], &[], &[], &[], menu_id(42)),
             Err(CompileError::UnknownMenu(menu_id(42)))
         );
     }
@@ -755,8 +881,10 @@ mod tests {
             ),
             placement(10, 500, vec![price(SalesChannel::DineIn, 3)], true),
         ];
-        let first = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
-        let second = compile_menu(&items, &menus, &placements, &[], menu_id(10)).expect("compile");
+        let first =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
+        let second =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
         assert_eq!(
             serde_json::to_string(&first).expect("serialise"),
             serde_json::to_string(&second).expect("serialise"),
@@ -815,7 +943,7 @@ mod tests {
         let groups = [group(900, "Size", 1, 1, &[600, 601], &[500, 501])];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
         let dine_in = book.catalog_for(SalesChannel::DineIn);
 
         assert_eq!(
@@ -864,7 +992,7 @@ mod tests {
         ];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
         assert_eq!(
             book.catalog_for(SalesChannel::DineIn)
                 .get(item_id(500))
@@ -882,8 +1010,8 @@ mod tests {
         let mut retired = group(900, "Size", 1, 1, &[600, 601], &[500]);
         retired.status = EntityStatus::Archived;
 
-        let book =
-            compile_menu(&items, &menus, &placements, &[retired], menu_id(10)).expect("compile");
+        let book = compile_menu(&items, &menus, &placements, &[retired], &[], menu_id(10))
+            .expect("compile");
         let dine_in = book.catalog_for(SalesChannel::DineIn);
 
         assert!(dine_in.modifier_groups().is_empty());
@@ -931,7 +1059,7 @@ mod tests {
         let groups = [group(900, "Size", 1, 1, &[600, 601], &[500])];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
 
         assert_eq!(
             book.catalog_for(SalesChannel::DineIn)
@@ -974,7 +1102,7 @@ mod tests {
         let groups = [group(900, "Size", 1, 1, &[600], &[500])];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
 
         assert_eq!(
             book.catalog_for(SalesChannel::DineIn)
@@ -1003,7 +1131,7 @@ mod tests {
         let groups = [group(900, "Size", 1, 1, &[600, 601], &[999])];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
         assert!(
             book.catalog_for(SalesChannel::DineIn)
                 .modifier_groups()
@@ -1019,7 +1147,7 @@ mod tests {
         let groups = [group(900, "Extras", 0, 2, &[999], &[500])];
 
         let book =
-            compile_menu(&items, &menus, &placements, &groups, menu_id(10)).expect("compile");
+            compile_menu(&items, &menus, &placements, &groups, &[], menu_id(10)).expect("compile");
         assert!(
             book.catalog_for(SalesChannel::DineIn)
                 .modifier_groups()
@@ -1149,7 +1277,7 @@ mod tests {
             true,
         )];
         assert_eq!(
-            compile_menu(&items, &[retired], &placements, &[], menu_id(100)),
+            compile_menu(&items, &[retired], &placements, &[], &[], menu_id(100)),
             Err(CompileError::ArchivedMenu(menu_id(100)))
         );
     }
@@ -1168,7 +1296,14 @@ mod tests {
             placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
         ];
         assert_eq!(
-            compile_menu(&items, &[parent, child], &placements, &[], menu_id(101)),
+            compile_menu(
+                &items,
+                &[parent, child],
+                &placements,
+                &[],
+                &[],
+                menu_id(101)
+            ),
             Err(CompileError::ArchivedMenu(menu_id(100)))
         );
     }
@@ -1184,8 +1319,15 @@ mod tests {
             placement(100, 1, vec![price(SalesChannel::DineIn, 100_000)], true),
             placement(101, 2, vec![price(SalesChannel::DineIn, 90_000)], true),
         ];
-        let book = compile_menu(&items, &[parent, child], &placements, &[], menu_id(101))
-            .expect("an all-active chain compiles");
+        let book = compile_menu(
+            &items,
+            &[parent, child],
+            &placements,
+            &[],
+            &[],
+            menu_id(101),
+        )
+        .expect("an all-active chain compiles");
         for id in [item_id(1), item_id(2)] {
             assert!(
                 book.catalog_for(SalesChannel::DineIn).get(id).is_some(),
@@ -1223,5 +1365,187 @@ mod tests {
         a.parent_menu_id = Some(menu_id(201));
         let menus = [menu(100, None), a, b];
         assert!(!would_cycle(&menus, menu_id(100), menu_id(200)));
+    }
+
+    /// The whole point of ADR-0130 part two: a course authored in the console reaches a store.
+    ///
+    /// Until this, `CatalogItem::course_id` was a column the compiler read past — a store received a
+    /// price book with no courses in it, so every `course_id` on the wire still pointed at nothing a
+    /// till could name.
+    #[test]
+    fn the_courses_a_menu_serves_reach_the_compiled_book_in_service_order() {
+        let items = [
+            item_on_course(500, "Margherita", 90),
+            item_on_course(501, "Tiramisu", 91),
+            item_on_course(502, "Bruschetta", 92),
+        ];
+        let menus = [menu(10, None)];
+        let placements = [
+            placement(10, 500, vec![price(SalesChannel::DineIn, 150_000)], true),
+            placement(10, 501, vec![price(SalesChannel::DineIn, 80_000)], true),
+            placement(10, 502, vec![price(SalesChannel::DineIn, 60_000)], true),
+        ];
+        // Authored out of sequence on purpose: dessert created first, starter last.
+        let courses = [
+            course(91, "Dessert", 30),
+            course(90, "Main", 20),
+            course(92, "Starter", 10),
+        ];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &courses, menu_id(10)).expect("compile");
+        let catalog = book.catalog_for(SalesChannel::DineIn);
+
+        let served: Vec<&str> = catalog
+            .courses()
+            .iter()
+            .map(|course| course.display_name.as_str())
+            .collect();
+        assert_eq!(
+            served,
+            ["Starter", "Main", "Dessert"],
+            "the book lists courses in service order, not in the order they were authored"
+        );
+        assert_eq!(
+            catalog
+                .course_for(item_id(500))
+                .expect("the pizza is on a course")
+                .display_name
+                .as_str(),
+            "Main",
+            "and an item resolves to the course it declares"
+        );
+    }
+
+    /// Two courses a store considers interchangeable may share a position — the schema says so — and
+    /// the tie has to break somewhere stable, or a re-compile of unchanged authoring reorders the
+    /// till's headings and republishes a book that means the same thing.
+    #[test]
+    fn courses_at_the_same_position_break_the_tie_by_id() {
+        let items = [
+            item_on_course(500, "Margherita", 91),
+            item_on_course(501, "Calzone", 90),
+        ];
+        let menus = [menu(10, None)];
+        let placements = [
+            placement(10, 500, vec![price(SalesChannel::DineIn, 150_000)], true),
+            placement(10, 501, vec![price(SalesChannel::DineIn, 160_000)], true),
+        ];
+        let courses = [course(91, "Baked", 20), course(90, "Grilled", 20)];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &courses, menu_id(10)).expect("compile");
+        let served: Vec<&str> = book
+            .catalog_for(SalesChannel::DineIn)
+            .courses()
+            .iter()
+            .map(|course| course.display_name.as_str())
+            .collect();
+        assert_eq!(
+            served,
+            ["Grilled", "Baked"],
+            "equal sort falls back to the id, so the order is the same on every re-compile"
+        );
+    }
+
+    /// An archived course is not published, and the item that still names it is emitted **without a
+    /// course** rather than refused — the posture an archived modifier group already gets, and the
+    /// one a store needs: a pizza does not stop being sellable because somebody retired a heading.
+    #[test]
+    fn an_archived_course_is_not_published_and_its_items_still_sell() {
+        let items = [item_on_course(500, "Margherita", 90)];
+        let menus = [menu(10, None)];
+        let placements = [placement(
+            10,
+            500,
+            vec![price(SalesChannel::DineIn, 150_000)],
+            true,
+        )];
+        let retired = Course {
+            status: EntityStatus::Archived,
+            ..course(90, "Main", 20)
+        };
+
+        let book = compile_menu(&items, &menus, &placements, &[], &[retired], menu_id(10))
+            .expect("compile");
+        let catalog = book.catalog_for(SalesChannel::DineIn);
+
+        assert!(
+            catalog.courses().is_empty(),
+            "the archived course is dropped"
+        );
+        let entry = catalog.get(item_id(500)).expect("still on the menu");
+        assert!(entry.available, "and the item is still for sale");
+        assert_eq!(
+            entry.course_id, None,
+            "the id goes wherever the course went, so no entry names a course the book does not carry"
+        );
+    }
+
+    /// A course nothing on this channel goes out on is not published on it. Delivery that prices no
+    /// dessert should not put an empty "Dessert" heading on the till and leave the till to learn to
+    /// hide it — the same per-channel reasoning that drops a modifier group with no priced member.
+    #[test]
+    fn a_channel_publishes_only_the_courses_it_actually_serves() {
+        let items = [
+            item_on_course(500, "Margherita", 90),
+            item_on_course(501, "Tiramisu", 91),
+        ];
+        let menus = [menu(10, None)];
+        let placements = [
+            placement(
+                10,
+                500,
+                vec![
+                    price(SalesChannel::DineIn, 150_000),
+                    price(SalesChannel::Delivery, 170_000),
+                ],
+                true,
+            ),
+            // Dessert is dine-in only.
+            placement(10, 501, vec![price(SalesChannel::DineIn, 80_000)], true),
+        ];
+        let courses = [course(90, "Main", 20), course(91, "Dessert", 30)];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &courses, menu_id(10)).expect("compile");
+
+        assert_eq!(book.catalog_for(SalesChannel::DineIn).courses().len(), 2);
+        let delivery: Vec<&str> = book
+            .catalog_for(SalesChannel::Delivery)
+            .courses()
+            .iter()
+            .map(|course| course.display_name.as_str())
+            .collect();
+        assert_eq!(
+            delivery,
+            ["Main"],
+            "delivery prices no dessert, so its book does not carry the heading"
+        );
+    }
+
+    /// A course the authoring model does not carry at all — deleted, or never synced — is treated
+    /// exactly as an archived one, so the two cannot diverge into different behaviour later.
+    #[test]
+    fn an_item_naming_a_course_the_tenant_does_not_carry_compiles_without_one() {
+        let items = [item_on_course(500, "Margherita", 90)];
+        let menus = [menu(10, None)];
+        let placements = [placement(
+            10,
+            500,
+            vec![price(SalesChannel::DineIn, 150_000)],
+            true,
+        )];
+
+        let book =
+            compile_menu(&items, &menus, &placements, &[], &[], menu_id(10)).expect("compile");
+        let catalog = book.catalog_for(SalesChannel::DineIn);
+        assert!(catalog.courses().is_empty());
+        assert_eq!(catalog.get(item_id(500)).expect("priced").course_id, None);
+        assert_eq!(
+            catalog.course_for(item_id(500)),
+            None,
+            "and resolving one answers None rather than refusing the read"
+        );
     }
 }

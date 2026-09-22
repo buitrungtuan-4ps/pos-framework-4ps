@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
-use crate::ids::{MenuItemId, ModifierGroupId, TaxClassId};
+use crate::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
 use crate::money::Money;
 use crate::text::DisplayName;
 use crate::wire_enum::Open;
@@ -75,6 +75,23 @@ pub struct MenuEntry {
     /// behaves exactly as it did before the field existed.
     #[serde(default)]
     pub modifier_group_ids: Vec<ModifierGroupId>,
+    /// The course this item goes out on, or `None` for an item on no course
+    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    ///
+    /// **The item declares it, not the line.** A pizza is a main; making a server say so on every tap
+    /// would be a tap per dish for a fact the catalog already knows. The compiled form of the
+    /// authoring column the cloud carries, so a till can group an order into starters, mains and
+    /// desserts without a second read.
+    ///
+    /// An id, not a name and not a position: the course itself lives once on [`MenuCatalog`], for the
+    /// reason [`modifier_group_ids`](Self::modifier_group_ids) is ids too. Resolve it with
+    /// [`MenuCatalog::course_for`].
+    ///
+    /// `None` is every item in every store that has authored no course, which is what the field
+    /// defaults to. Additive and `#[serde(default)]`: an edge that predates it ignores it, and a book
+    /// that omits it loads unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub course_id: Option<CourseId>,
     /// Whether the item can be sold right now. An item present but 86'd (out of stock, or an operator
     /// has paused it) is refused rather than promised. Absent in the document means available: an
     /// item on the menu is sellable unless something says otherwise.
@@ -103,6 +120,7 @@ impl MenuEntry {
             unit_price,
             tax_class_id,
             modifier_group_ids: Vec::new(),
+            course_id: None,
             available: true,
         }
     }
@@ -111,6 +129,13 @@ impl MenuEntry {
     #[must_use]
     pub fn with_modifier_groups(mut self, group_ids: Vec<ModifierGroupId>) -> Self {
         self.modifier_group_ids = group_ids;
+        self
+    }
+
+    /// The same entry on a course (ADR-0130).
+    #[must_use]
+    pub const fn with_course(mut self, course_id: CourseId) -> Self {
+        self.course_id = Some(course_id);
         self
     }
 
@@ -136,6 +161,68 @@ impl MenuEntry {
     pub fn localized_name(&self, language: &str) -> &DisplayName {
         self.display_name_translations
             .get(language)
+            .unwrap_or(&self.display_name)
+    }
+}
+
+/// A course as the compiled book carries it: a named point in the service sequence
+/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+///
+/// On the catalog rather than repeated inside each entry, exactly as [`MenuModifierGroup`] is and for
+/// the same reason: one "Main" pinned to forty dishes would be forty copies of the same name and
+/// position, and forty chances for them to disagree after a partial sync. The entry names its course
+/// by id ([`MenuEntry::course_id`]), so nothing ever scans.
+///
+/// The compiled view of the cloud's `Course`, and deliberately smaller: no `tenant_id`, no `etag`, no
+/// `status`. An archived course is simply not published — the same relationship [`MenuModifierGroup`]
+/// has to the group it compiles from, applied to a second entity rather than invented again.
+///
+/// **The `sort` is the point.** "Starter before main before dessert" is the entire meaning of the
+/// grouping; a set of names with no order is a taxonomy, not a service sequence. The cloud emits
+/// these already sorted, ties broken by id, so a reader may take the order as given.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MenuCourse {
+    /// The course's identifier, which a [`MenuEntry`] names.
+    pub course_id: CourseId,
+    /// The name to show ("Starter", "Main"), and the fallback for a locale the map below omits.
+    pub display_name: DisplayName,
+    /// The name in each locale the course is translated into, exactly as a [`MenuEntry`] and a
+    /// [`MenuModifierGroup`] carry theirs ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    #[serde(default)]
+    pub display_name_translations: BTreeMap<String, DisplayName>,
+    /// Where it falls in the service sequence, ascending.
+    ///
+    /// Carried as well as pre-sorted, because a screen that filters the list — a station showing only
+    /// the courses it cooks — still needs to know the gaps, and rebuilding an order from position in
+    /// a filtered list is how "main" ends up before "starter" on one screen and not another.
+    pub sort: i32,
+}
+
+impl MenuCourse {
+    /// A course at a position in the sequence.
+    #[must_use]
+    pub fn new(course_id: CourseId, display_name: DisplayName, sort: i32) -> Self {
+        Self {
+            course_id,
+            display_name,
+            display_name_translations: BTreeMap::new(),
+            sort,
+        }
+    }
+
+    /// The same course with its per-locale names set (ADR-0074).
+    #[must_use]
+    pub fn with_name_translations(mut self, translations: BTreeMap<String, DisplayName>) -> Self {
+        self.display_name_translations = translations;
+        self
+    }
+
+    /// The course's name in `locale`, falling back to [`display_name`](Self::display_name).
+    #[must_use]
+    pub fn localized_name(&self, locale: &str) -> &DisplayName {
+        self.display_name_translations
+            .get(locale)
             .unwrap_or(&self.display_name)
     }
 }
@@ -228,6 +315,13 @@ pub struct MenuCatalog {
     /// loads unchanged and an edge that predates the field ignores it.
     #[serde(default)]
     modifier_groups: Vec<MenuModifierGroup>,
+    /// The courses any of these items go out on, in service order (ADR-0130).
+    ///
+    /// Beside the modifier groups and for the same reasons: once on the catalog rather than repeated
+    /// per entry, and additive with `#[serde(default)]`, so a book that omits it loads unchanged and
+    /// an edge that predates the field ignores it. Already sorted by the compiler, ties broken by id.
+    #[serde(default)]
+    courses: Vec<MenuCourse>,
 }
 
 impl MenuCatalog {
@@ -238,20 +332,22 @@ impl MenuCatalog {
         Self {
             items: Vec::new(),
             modifier_groups: Vec::new(),
+            courses: Vec::new(),
         }
     }
 
-    /// A catalog from its rows, carrying no modifier groups.
+    /// A catalog from its rows, carrying no modifier groups and no courses.
     ///
     /// The items are the catalog's reason to exist, so this is the constructor a test reaches for; a
-    /// catalog that also carries groups is built by adding them. Deliberately **not** used to
-    /// rebuild an existing catalog — see [`localized`](Self::localized), which has to carry every
+    /// catalog that also carries groups or courses is built by adding them. Deliberately **not** used
+    /// to rebuild an existing catalog — see [`localized`](Self::localized), which has to carry every
     /// other field across and once did not.
     #[must_use]
     pub const fn from_items(items: Vec<MenuEntry>) -> Self {
         Self {
             items,
             modifier_groups: Vec::new(),
+            courses: Vec::new(),
         }
     }
 
@@ -298,6 +394,34 @@ impl MenuCatalog {
                     .find(|group| group.modifier_group_id == *id)
             })
             .collect()
+    }
+
+    /// Adds a course, for building a catalog in code or a test.
+    #[must_use]
+    pub fn with_course(mut self, course: MenuCourse) -> Self {
+        self.courses.push(course);
+        self
+    }
+
+    /// Every course this catalog carries, **in service order** — the cloud emits them sorted, ties
+    /// broken by id, so a caller may take the order as given rather than sorting it again.
+    #[must_use]
+    pub fn courses(&self) -> &[MenuCourse] {
+        &self.courses
+    }
+
+    /// The course an item goes out on, or `None` for an item on no course.
+    ///
+    /// A course an entry names but the catalog does not carry answers `None` rather than refusing —
+    /// the posture [`groups_for`](Self::groups_for) already takes, and for the same reason: a partial
+    /// publish is a real state, and a till that dropped a pizza because its course arrived late would
+    /// stop selling over a word on a ticket.
+    #[must_use]
+    pub fn course_for(&self, menu_item_id: MenuItemId) -> Option<&MenuCourse> {
+        let course_id = self.get(menu_item_id)?.course_id?;
+        self.courses
+            .iter()
+            .find(|course| course.course_id == course_id)
     }
 
     /// Every entry.
@@ -358,6 +482,15 @@ impl MenuCatalog {
                 .map(|group| {
                     let mut localized = group.clone();
                     localized.display_name = group.localized_name(language).clone();
+                    localized
+                })
+                .collect(),
+            courses: self
+                .courses
+                .iter()
+                .map(|course| {
+                    let mut localized = course.clone();
+                    localized.display_name = course.localized_name(language).clone();
                     localized
                 })
                 .collect(),
@@ -475,9 +608,9 @@ impl MenuBook {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
+    use super::{MenuBook, MenuCatalog, MenuCourse, MenuEntry, MenuModifierGroup};
     use crate::enums::SalesChannel;
-    use crate::ids::{MenuItemId, ModifierGroupId, TaxClassId};
+    use crate::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
     use crate::money::{CurrencyCode, Money};
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
@@ -956,6 +1089,136 @@ mod tests {
                 .as_str(),
             "Extra toppings",
             "a group with no translation for the locale keeps its default name"
+        );
+    }
+
+    fn course_id(n: u128) -> CourseId {
+        CourseId::new(Ulid::from_u128(n))
+    }
+
+    /// "Main", third in the sequence.
+    fn main_course() -> MenuCourse {
+        MenuCourse::new(course_id(900), DisplayName::new("Main"), 20)
+    }
+
+    /// The whole reason a course rides on the catalog rather than on the line: an entry names one,
+    /// and the catalog resolves it to a name and a position.
+    #[test]
+    fn an_entry_names_its_course_and_the_catalog_resolves_it() {
+        let catalog = MenuCatalog::new()
+            .with(margherita().with_course(course_id(900)))
+            .with_course(main_course());
+
+        let resolved = catalog.course_for(item(500)).expect("the pizza is a main");
+        assert_eq!(resolved.display_name.as_str(), "Main");
+        assert_eq!(resolved.sort, 20);
+        assert_eq!(catalog.courses().len(), 1);
+    }
+
+    /// The forgiving posture `groups_for` takes, applied to the second entity that needs it: a
+    /// partial publish is a real state, and a till that dropped a pizza because its course arrived
+    /// late would stop selling over a word on a ticket.
+    #[test]
+    fn a_course_the_catalog_does_not_carry_resolves_to_none_rather_than_refusing() {
+        let catalog = MenuCatalog::new().with(margherita().with_course(course_id(999)));
+        assert_eq!(catalog.course_for(item(500)), None);
+        assert_eq!(
+            catalog.course_for(item(404)),
+            None,
+            "and an item the catalog does not carry at all is the same answer, not a different one"
+        );
+        assert!(
+            catalog.get(item(500)).expect("still on the menu").available,
+            "the item is still for sale"
+        );
+    }
+
+    /// An item on no course is the state every store is in until somebody authors one.
+    #[test]
+    fn an_item_on_no_course_resolves_to_none_and_does_not_carry_the_field_on_the_wire() {
+        let catalog = MenuCatalog::new()
+            .with(margherita())
+            .with_course(main_course());
+        assert_eq!(catalog.course_for(item(500)), None);
+
+        // The entry's own JSON, not the catalog's: the `MenuCourse` beside it carries a `course_id`
+        // of its own, which is a different field and would make a whole-document search say nothing.
+        let json = serde_json::to_string(&margherita()).expect("serialise");
+        assert!(
+            !json.contains("course_id"),
+            "an entry on no course does not carry the field on the wire"
+        );
+        assert!(
+            serde_json::to_string(&margherita().with_course(course_id(900)))
+                .expect("serialise")
+                .contains("course_id"),
+            "and one on a course does"
+        );
+    }
+
+    #[test]
+    fn courses_round_trip_through_json() {
+        let catalog = MenuCatalog::new()
+            .with(margherita().with_course(course_id(900)))
+            .with_course(main_course().with_name_translations(BTreeMap::from([(
+                "vi".to_owned(),
+                DisplayName::new("Món chính"),
+            )])));
+
+        let json = serde_json::to_string(&catalog).expect("serialise");
+        assert_eq!(
+            serde_json::from_str::<MenuCatalog>(&json).expect("deserialise"),
+            catalog
+        );
+    }
+
+    /// The additive claim, checked rather than asserted in a comment: a book written before courses
+    /// existed still loads, and its items are on no course.
+    #[test]
+    fn a_book_that_predates_courses_still_loads() {
+        let older = r#"{"items":[{"menu_item_id":"00000000000000000000000FE4","display_name":"Margherita","unit_price":{"currency_code":"VND","amount_minor":150000},"tax_class_id":"00000000000000000000000001","available":true}]}"#;
+        let catalog: MenuCatalog =
+            serde_json::from_str(older).expect("a book without the field still loads");
+        assert_eq!(catalog.items().len(), 1);
+        assert!(catalog.courses().is_empty());
+        assert_eq!(catalog.course_for(item(500)), None);
+    }
+
+    /// Localizing must carry the courses across, and resolve their names in the same pass — the
+    /// mistake `from_items` already made once with the modifier groups, and would have made again.
+    #[test]
+    fn localizing_a_catalog_keeps_and_resolves_its_courses() {
+        let catalog = MenuCatalog::new()
+            .with(margherita().with_course(course_id(900)))
+            .with_course(main_course().with_name_translations(BTreeMap::from([(
+                "vi".to_owned(),
+                DisplayName::new("Món chính"),
+            )])))
+            .with_course(MenuCourse::new(
+                course_id(901),
+                DisplayName::new("Dessert"),
+                30,
+            ));
+
+        let vietnamese = catalog.localized("vi");
+        assert_eq!(vietnamese.courses().len(), 2, "both courses come across");
+        assert_eq!(
+            vietnamese
+                .course_for(item(500))
+                .expect("the pizza")
+                .display_name
+                .as_str(),
+            "Món chính",
+        );
+        assert_eq!(
+            vietnamese
+                .courses()
+                .get(1)
+                .expect("the dessert")
+                .display_name
+                .as_str(),
+            "Dessert",
+            "a course with no translation for the locale keeps its default name"
         );
     }
 }
