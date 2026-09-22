@@ -7402,6 +7402,34 @@ struct ConfigLocaleState<Cfg, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// How many decimal places each currency the platform has a pack for has
+    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)), computed
+    /// once from the compiled registry at start-up — the same shape `CountryState` holds its views
+    /// in, and for the same reason: the registry does not change while the process runs.
+    exponents: Arc<CurrencyExponents>,
+}
+
+/// How many decimal places a currency has, by currency.
+///
+/// Keyed on the **currency** rather than the country because the exponent is a property of the
+/// currency — the cent is two places wherever the dollar is spent — and a store's currency is chosen
+/// on the settings form independently of the country it sits in. Keying on the country would give a
+/// Vietnamese store trading in dollars the đồng's zero.
+type CurrencyExponents = std::collections::BTreeMap<CurrencyCode, u8>;
+
+/// Builds that map from the compiled country modules.
+///
+/// Two packs naming one currency must agree about it, so the first wins and the order is the
+/// registry's — deterministic rather than merely unspecified.
+fn currency_exponents(registry: &CountryRegistry) -> CurrencyExponents {
+    let mut exponents = CurrencyExponents::new();
+    for module in registry.modules() {
+        let pack = module.locale_pack();
+        exponents
+            .entry(pack.currency_code)
+            .or_insert(pack.currency_exponent);
+    }
+    exponents
 }
 
 /// A super-admin sets a store's locale settings: the `(tenant, store)` and the currency, IANA
@@ -7466,6 +7494,7 @@ struct PublishLocaleRequest {
 /// [`ConsolePermission::PublishConfig`]. The edge applies the node to its session's currency, timezone,
 /// and cutoff.
 pub fn config_locale_router<Cfg, A, C>(
+    registry: &CountryRegistry,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -7486,6 +7515,7 @@ where
             admin,
             clock,
             audit,
+            exponents: Arc::new(currency_exponents(registry)),
         })
 }
 
@@ -7547,7 +7577,10 @@ fn checked_denominations(request: &PublishLocaleRequest) -> Result<Vec<i64>, Res
     clippy::result_large_err,
     reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
 )]
-fn checked_locale_node(request: &PublishLocaleRequest) -> Result<serde_json::Value, Response> {
+fn checked_locale_node(
+    request: &PublishLocaleRequest,
+    exponents: &CurrencyExponents,
+) -> Result<serde_json::Value, Response> {
     // Checked first because it is the field this route did not use to have: a caller built against
     // the older shape must be told *that*, rather than being led through the fields it did send.
     let Ok(country) = CountryCode::parse(&request.country_code) else {
@@ -7559,13 +7592,13 @@ fn checked_locale_node(request: &PublishLocaleRequest) -> Result<serde_json::Val
             &[("country_code", "INVALID_FORMAT")],
         ));
     };
-    if CurrencyCode::parse(&request.currency_code).is_err() {
+    let Ok(currency) = CurrencyCode::parse(&request.currency_code) else {
         return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
             "currency_code is not a 3-letter code",
             &[("currency_code", "INVALID_FORMAT")],
         ));
-    }
+    };
     if StoreTimeZone::from_iana_name(&request.timezone).is_err() {
         return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
@@ -7594,6 +7627,29 @@ fn checked_locale_node(request: &PublishLocaleRequest) -> Result<serde_json::Val
         "cash_rounding_increment": request.cash_rounding_increment,
         "cash_denominations": denominations,
     });
+    // How many decimals the store's currency has (ADR-0134), which that record says rides this node
+    // — and did not. Without it the edge keeps the đồng-shaped zero its bootstrap starts with, and
+    // an Indian store draws 26145 paise as `INR 26,145` on the till and prints `INR 26145` on a tax
+    // invoice. The front ends each carry a fallback table for the window before a store syncs, and
+    // neither one fires: `GET /api/locale` serves the session's zero as though it were an answer,
+    // and `0 ?? fallback` is `0`. A published zero beats a correct guess, which is why this is the
+    // cloud's to say rather than theirs to infer.
+    //
+    // Not a field on the request: an operator choosing their own exponent could state that the
+    // rupee has three decimals, and ADR-0134 makes the country pack the authority precisely so
+    // nobody has to.
+    //
+    // Omitted for a currency no pack names, which is the "absent leaves what the session has" case
+    // `PublishedLocale` was deliberately built with — saying nothing rather than publishing a guess.
+    // Unreachable from the console, whose currency picker is filled from this same country list.
+    if let Some(exponent) = exponents.get(&currency)
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "currency_exponent".to_owned(),
+            serde_json::Value::from(*exponent),
+        );
+    }
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
     if let Some(language) = request
@@ -7643,7 +7699,7 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let locale_value = match checked_locale_node(&request) {
+    let locale_value = match checked_locale_node(&request, &state.exponents) {
         Ok(node) => node,
         Err(refusal) => return refusal,
     };
@@ -28130,6 +28186,72 @@ mod client_ip_tests {
         // deployment or its trusted proxy wrote — never a value further left that a client chose.
         let map = headers(&[("x-forwarded-for", "10.0.0.7")]);
         assert_eq!(client_ip(&map, TWO_PROXIES), Some("10.0.0.7"));
+    }
+}
+
+#[cfg(test)]
+mod locale_node_tests {
+    //! What a store's `locale` node actually carries
+    //! ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    //!
+    //! Covered here rather than through the route because `checked_locale_node` *is* what the route
+    //! validates: the handler around it holds a permission check, two ULID parses and a config-tree
+    //! write, none of which can tell you whether the node an edge receives is complete.
+    use super::{PublishLocaleRequest, checked_locale_node, currency_exponents};
+    use crate::countries;
+    use serde_json::Value;
+
+    /// A publish as the console sends one, for a store trading in `currency`.
+    fn request(country: &str, currency: &str) -> PublishLocaleRequest {
+        PublishLocaleRequest {
+            tenant_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned(),
+            store_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".to_owned(),
+            country_code: country.to_owned(),
+            currency_code: currency.to_owned(),
+            timezone: "Asia/Kolkata".to_owned(),
+            cutoff_hour: 4,
+            display_language: None,
+            prices_include_tax: true,
+            cash_rounding_increment: Some(100),
+            cash_denominations: vec![10_000, 20_000],
+        }
+    }
+
+    #[test]
+    fn the_node_tells_the_store_how_many_decimals_its_currency_has() {
+        // ADR-0134: "It rides the `locale` config node to the store and is served on
+        // `GET /api/locale`." Without it the edge keeps its bootstrap zero, `GET /api/locale`
+        // serves that zero as though it were published, and the till's `?? fallbackExponent(...)`
+        // never fires because `0` is not nullish. An Indian store then draws 26145 paise as
+        // `INR 26,145` and prints `INR 26145` on a tax invoice — the two defects #416 and #417
+        // were merged to fix.
+        let node = checked_locale_node(
+            &request("IN", "INR"),
+            &currency_exponents(&countries::registry()),
+        )
+        .expect("a valid publish");
+        assert_eq!(
+            node.get("currency_exponent").and_then(Value::as_u64),
+            Some(2),
+            "the rupee has two decimal places and the node has to say so: {node}"
+        );
+    }
+
+    #[test]
+    fn a_zero_decimal_currency_says_zero_rather_than_saying_nothing() {
+        // The đồng's exponent really is zero, and that has to be *published* rather than left to
+        // the edge's bootstrap to coincide with. The two are indistinguishable on a Vietnamese
+        // store, which is exactly why the rupee case above is the one that catches this.
+        let node = checked_locale_node(
+            &request("VN", "VND"),
+            &currency_exponents(&countries::registry()),
+        )
+        .expect("a valid publish");
+        assert_eq!(
+            node.get("currency_exponent").and_then(Value::as_u64),
+            Some(0),
+            "the node must state the đồng's zero, not omit it: {node}"
+        );
     }
 }
 

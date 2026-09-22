@@ -927,6 +927,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Locale publish (ADR-0074, Track M4): a store's currency, timezone, and business-date cutoff
         // as the `locale` config node the edge applies (killing the hardcoded UTC/04:00 bootstrap).
         .merge(http::config_locale_router(
+            // The country packs, for the currency exponent the node carries (ADR-0134).
+            &countries::registry(),
             store.config_trees(),
             store.admin(),
             SystemClock,

@@ -13331,6 +13331,7 @@ fn locale_publish_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::
         FakeWebhooks::default(),
     );
     http::router(app).merge(http::config_locale_router(
+        &pos_cloud::countries::registry(),
         config_trees,
         admin,
         clock(),
@@ -13437,6 +13438,53 @@ async fn a_store_profile_publish_writes_the_node_and_checks_the_registration_sha
         .await
         .expect("route the unknown country");
     assert_eq!(unknown_country.status(), StatusCode::OK);
+}
+
+/// The node an edge actually receives says how many decimals the store's currency has
+/// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+///
+/// Through the route rather than through `checked_locale_node`, because the value comes from the
+/// compiled country registry the *router* is handed: a builder unit test passes just as happily
+/// against a state wired with an empty map, and the wiring is half of what was missing.
+///
+/// The rupee is the case worth writing. Vietnam's exponent is zero and so is the edge session's
+/// bootstrap, so a VND store cannot tell a published answer from an absent one — which is why the
+/// gap survived two releases of work that depended on it.
+#[tokio::test]
+async fn a_locale_publish_tells_the_store_how_many_decimals_its_currency_has() {
+    let config_trees = FakeConfigTrees::default();
+    let router = locale_publish_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/locale",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "country_code": "IN",
+                "currency_code": "INR",
+                "timezone": "Asia/Kolkata",
+                "cutoff_hour": 4,
+                "prices_include_tax": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route locale publish");
+    assert_eq!(published.status(), StatusCode::OK);
+
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(
+        state.record.layers[2]["locale"]["currency_exponent"], 2,
+        "without this the edge keeps its bootstrap zero, `GET /api/locale` serves that zero as an \
+         answer, and an Indian store prints `INR 26145` on a tax invoice"
+    );
 }
 
 #[tokio::test]
@@ -14887,6 +14935,7 @@ fn catalog_publish_app(
             Arc::new(NoopAuditRecorder),
         ))
         .merge(http::config_locale_router(
+            &pos_cloud::countries::registry(),
             config_trees.clone(),
             admin.clone(),
             clock(),
