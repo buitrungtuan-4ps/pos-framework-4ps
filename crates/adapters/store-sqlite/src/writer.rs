@@ -848,7 +848,9 @@ fn verify_chain(conn: &Connection, store_id: StoreId) -> Result<ChainStatus, Por
             seq,
             prev_hash: ChainHash::from_hex(&prev_hash),
         };
-        let recomputed = chain_hash(&stored, &link).map_err(|error| json_error(port, error))?;
+        let recomputed = stored
+            .chain_hash(&link, |bytes| Sha256::digest(bytes).into())
+            .map_err(|error| json_error(port, error))?;
         if recomputed.as_str() != stored_hash {
             return Ok(ChainStatus::Broken {
                 at_seq: seq,
@@ -922,19 +924,6 @@ fn chain_head(tx: &rusqlite::Transaction<'_>, store_id: StoreId) -> Result<Chain
     })
 }
 
-/// The hash of one record at one position: SHA-256 over the preimage `pos-proto` defines.
-///
-/// The digest lives here and the preimage lives in `pos_proto::chain`, which is the split that
-/// keeps one definition of *what* is hashed without putting `sha2` into the backbone — see that
-/// module for the reasoning.
-fn chain_hash(
-    envelope: &EventEnvelope<RawPayload>,
-    link: &ChainLink,
-) -> Result<ChainHash, serde_json::Error> {
-    let preimage = envelope.chain_preimage(link)?;
-    Ok(ChainHash::of(Sha256::digest(preimage.as_bytes()).into()))
-}
-
 /// Writes a batch of events and their outbox rows, chaining each as it goes (ADR-0131).
 ///
 /// Separate from [`commit`] because it is the one part of a commit that carries state across its
@@ -960,7 +949,11 @@ fn write_events(
         // Stamp, then serialize: the stored JSON and the outbox copy both carry the link, so the
         // cloud verifies the same bytes this store wrote rather than taking its word for them.
         let link = head.next_link();
-        let hash = chain_hash(envelope, &link).map_err(|error| json_error(port, error))?;
+        // The sequence is `pos-proto`'s (ADR-0133); the digest is this tier's, because the
+        // backbone does not link one.
+        let hash = envelope
+            .chain_hash(&link, |bytes| Sha256::digest(bytes).into())
+            .map_err(|error| json_error(port, error))?;
         let stamped = EventEnvelope {
             chain: Some(link.clone()),
             ..envelope.clone()
