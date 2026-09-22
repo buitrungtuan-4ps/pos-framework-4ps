@@ -945,8 +945,8 @@ mod tests {
 
     use super::session_from_config;
     use pos_proto::SalesChannel;
-    use pos_proto::ids::{MenuItemId, TaxClassId};
-    use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
+    use pos_proto::ids::{MenuItemId, ModifierGroupId, TaxClassId};
+    use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
@@ -1666,6 +1666,67 @@ mod tests {
                 .as_str(),
             "Margherita",
         );
+    }
+
+    /// Setting a display language must not turn ADR-0127 off.
+    ///
+    /// The localization above rebuilt the catalog from its items alone, so a store that published a
+    /// `locale` node got a `menu` node with **no modifier groups on it**. Every item the guest has to
+    /// be asked about — what size, which base, which sauce — arrived at the till attaching nothing,
+    /// and the till sold it without asking. The sibling test above could not see it: it asserts on
+    /// names, and the names were right.
+    ///
+    /// Vietnamese is not an edge case here. It is the language the fleet trades in.
+    #[test]
+    fn the_store_language_does_not_cost_the_menu_its_modifier_groups() {
+        let base = EdgeSession::bootstrap();
+        let group_id = ModifierGroupId::new(Ulid::from_u128(700));
+        let catalog = MenuCatalog::new()
+            .with(
+                MenuEntry::new(
+                    item(),
+                    DisplayName::new("Margherita"),
+                    Money::new(CurrencyCode::VND, 99_000),
+                    TaxClassId::new(Ulid::from_u128(1)),
+                )
+                .with_modifier_groups(vec![group_id]),
+            )
+            .with_modifier_group(MenuModifierGroup {
+                modifier_group_id: group_id,
+                display_name: DisplayName::new("Size"),
+                display_name_translations: std::collections::BTreeMap::from([(
+                    "vi".to_owned(),
+                    DisplayName::new("Cỡ"),
+                )]),
+                min_select: 1,
+                max_select: 1,
+                member_menu_item_ids: vec![MenuItemId::new(Ulid::from_u128(801))],
+            });
+        let book = MenuBook::new().with(base.sales_channel, catalog);
+        let document = serde_json::json!({
+            "menu": serde_json::to_value(&book).expect("serialize"),
+            "locale": { "display_language": "vi" },
+        });
+
+        let session = session_from_config(&base, &document);
+        assert_eq!(
+            session.menu.modifier_groups().len(),
+            1,
+            "a store that set its display language still gets the groups the cloud published"
+        );
+        let attached = session.menu.groups_for(item());
+        assert_eq!(
+            attached.len(),
+            1,
+            "and the item still attaches its group, so the till still asks"
+        );
+        let size = attached.first().expect("the size group");
+        assert_eq!(
+            size.display_name.as_str(),
+            "Cỡ",
+            "the group's own name is resolved by the same pass as the item's"
+        );
+        assert!(size.required(), "and its rule survives the round trip");
     }
 
     /// A `fleet_update` node rolling out 1.4.0 to the fleet ring at 40 %, plus a `device_ota` node

@@ -238,6 +238,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Setting a store's display language no longer empties its menu of modifier groups.**
+  `MenuCatalog::localized` ([ADR-0074](docs/adr/0074-localization-and-tax.md)) rebuilt the catalog
+  from its items alone, so a store that published a `locale` node received a `menu` node carrying
+  **no modifier groups at all**. Every item a guest has to be asked about — what size, which base,
+  which sauce ([ADR-0127](docs/adr/0127-modifier-groups-reach-the-edge.md)) — reached the till
+  attaching nothing, and the till sold it without asking; `GET /api/menu` returned an empty
+  `modifier_groups` list for the same reason. A whole ADR's worth of behaviour was switched off by
+  choosing a language, which for this fleet is every store. The catalog now carries everything it
+  holds across, and resolves the groups' own names in the same pass rather than leaving a menu half
+  in Vietnamese and half in English.
+
 - **The running check ignored discounts.** `check_totals` read the *order*, which knows nothing
   about a reduction, so a till would have quoted a guest full price while the settle charged the
   discounted one. It goes through the bill when there is one now, and `GET /api/tables/{id}/check`
