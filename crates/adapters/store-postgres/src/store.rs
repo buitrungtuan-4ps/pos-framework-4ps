@@ -246,6 +246,11 @@ const MIGRATION_0065: &str = include_str!("../migrations/0065_role_discount_ceil
 /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 const MIGRATION_0066: &str = include_str!("../migrations/0066_catalog_courses.sql");
 
+/// The chain heads a store publishes, and the contradictions among them
+/// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4). The primary key on
+/// `(tenant_id, store_id, chain_seq)` is the refusal: one head per chain length, for ever.
+const MIGRATION_0067: &str = include_str!("../migrations/0067_chain_anchors.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -569,6 +574,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0066)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0067)
+            .await
             .map_err(unavailable)
     }
 
@@ -663,6 +672,14 @@ impl PostgresStore {
     #[must_use]
     pub fn reconcile(&self) -> crate::reconcile::PostgresReconcile {
         crate::reconcile::PostgresReconcile::new(self.pool.clone())
+    }
+
+    /// The chain-anchor ledger over this pool ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `AnchorLedger` seam over it.
+    #[must_use]
+    pub fn chain_anchors(&self) -> crate::anchors::PostgresAnchors {
+        crate::anchors::PostgresAnchors::new(self.pool.clone())
     }
 
     /// The OTA release registry over this pool ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), roadmap-v3 slice R2).
