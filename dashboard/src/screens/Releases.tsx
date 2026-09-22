@@ -30,7 +30,7 @@
 // outcomes. No customer or employee identifier passes through this screen.
 
 import { useSearchParams } from "@solidjs/router";
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type {
@@ -189,6 +189,17 @@ export function Releases() {
   // The report the screen is showing. The deliverable, not the button.
   const [report, setReport] = createSignal<ReleaseReport | null>(null);
 
+  // Pre-index stores and groups into maps using createMemo for O(1) lookups instead of O(N) linear scans.
+  const storeMap = createMemo(() => new Map(stores().map((row) => [row.store_id, row])));
+  const groupMap = createMemo(() => new Map(groups().map((row) => [row.group_id, row])));
+
+  const storeName = (id: string) => storeMap().get(id)?.name ?? id;
+  const groupName = (id: string) => groupMap().get(id)?.name ?? id;
+  const nodeLabel = (key: string) => {
+    const known = RELEASE_NODES.find((node) => node.key === key);
+    return known ? t(known.label) : key;
+  };
+
   /**
    * What is still coming, soonest first — the calendar half of this screen (L2).
    *
@@ -197,31 +208,43 @@ export function Releases() {
    * is the same reason the table prints "04:00, each shop's own clock". Drafts are in, because a
    * release nobody has timed is exactly the one an operator forgets.
    */
-  const upcoming = () =>
+  const upcoming = createMemo(() =>
     (rows() ?? [])
       .filter((row) => row.status !== "applied" && row.status !== "partial")
       .slice()
-      .sort((left, right) => momentOf(left).localeCompare(momentOf(right)));
+      .sort((left, right) => momentOf(left).localeCompare(momentOf(right))),
+  );
 
-  const storeName = (id: string) => stores().find((row) => row.store_id === id)?.name ?? id;
-  const groupName = (id: string) => groups().find((row) => row.group_id === id)?.name ?? id;
-  const nodeLabel = (key: string) => {
-    const known = RELEASE_NODES.find((node) => node.key === key);
-    return known ? t(known.label) : key;
-  };
-
-  const storeOptions = () =>
+  const storeOptions = createMemo(() =>
     stores()
       .filter((row) => row.status === "active")
-      .map((row) => ({ value: row.store_id, label: row.name, keywords: [row.store_id] }));
+      .map((row) => ({ value: row.store_id, label: row.name, keywords: [row.store_id] })),
+  );
 
-  const groupOptions = () =>
+  const groupOptions = createMemo(() =>
     groups()
       .filter((row) => row.status === "active")
-      .map((row) => ({ value: row.group_id, label: row.name, keywords: [row.group_id] }));
+      .map((row) => ({ value: row.group_id, label: row.name, keywords: [row.group_id] })),
+  );
 
-  const nodeOptions = () =>
-    RELEASE_NODES.map((node) => ({ value: node.key, label: t(node.label) }));
+  const nodeOptions = createMemo(() =>
+    RELEASE_NODES.map((node) => ({ value: node.key, label: t(node.label) })),
+  );
+
+  // Single-pass O(P) stats calculation for report pairs instead of 3 separate O(P) filter passes.
+  const pairStats = createMemo(() => {
+    const rep = report();
+    if (!rep) return { applied: 0, pending: 0, cancelled: 0 };
+    let applied = 0;
+    let pending = 0;
+    let cancelled = 0;
+    for (const pair of rep.pairs) {
+      if (pair.status === "applied") applied++;
+      else if (pair.status === "pending") pending++;
+      else if (pair.status === "cancelled") cancelled++;
+    }
+    return { applied, pending, cancelled };
+  });
 
   const openDraft = () => {
     setName("");
@@ -492,15 +515,9 @@ export function Releases() {
               <p class="text-sm text-ink">
                 {t("releases.reportSummary", {
                   pairs: String(shown().pairs.length),
-                  applied: String(
-                    shown().pairs.filter((pair) => pair.status === "applied").length,
-                  ),
-                  pending: String(
-                    shown().pairs.filter((pair) => pair.status === "pending").length,
-                  ),
-                  cancelled: String(
-                    shown().pairs.filter((pair) => pair.status === "cancelled").length,
-                  ),
+                  applied: String(pairStats().applied),
+                  pending: String(pairStats().pending),
+                  cancelled: String(pairStats().cancelled),
                 })}
               </p>
               <Show
