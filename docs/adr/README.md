@@ -142,5 +142,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0133](0133-the-backbone-defines-what-is-hashed-not-how.md) | `sha2` stays out of the backbone allow-list; `pos-proto` owns the preimage-digest-wrap sequence and takes the digest as an argument | Accepted |
 | [0134](0134-a-currency-says-how-many-decimals-it-has.md) | A currency says how many decimals it has, and a missing answer is not zero: the exponent is a published country value, not a three-row table in the front end | Accepted |
 | [0135](0135-the-console-reads-money-the-way-the-till-does.md) | The console reads and writes money the way the till does: the same published exponent, on the surface where prices are authored | Accepted |
+| [0136](0136-a-store-publishes-how-it-writes-numbers.md) | A store publishes how it writes numbers, and each surface knows whose reading it serves: the till and the paper draw the store's, the console's reports draw the reader's | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
