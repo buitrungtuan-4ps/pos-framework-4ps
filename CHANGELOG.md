@@ -36,6 +36,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The order screen was 55px wider than a phone, and the gate that exists to catch that could not
+  see it.** `main` carries `overflow-y-auto`; when overflow is set on one axis CSS computes the other
+  to `auto`, so `main` was quietly a *horizontal* scroller too. Its content overflowed **inside it**,
+  the document stayed exactly the viewport's width, and `the till fits a phone` — which asked only
+  whether `documentElement` scrolled sideways — passed throughout.
+
+  What an operator got: 55px of the order screen unreachable, with no scrollbar and no affordance
+  saying so, and one ordinary tap on a menu item auto-scrolling the container to `scrollLeft: 39`,
+  cutting `← Floor`, `Garden salad`, `Seat`, `Subtotal` and `Tax` off the left edge.
+
+  The cause was `min-width: auto`, which is the default for a grid or flex item and stops it
+  shrinking below its content's min-content width: the bill column sat at 413px inside a 358px
+  content box, and the sticky action bar's `-mx-4` added 32 more. Fixed with `min-w-0` on the two
+  grid items and on the line's name column — three attributes, no layout redesign.
+
+  The gate now also fails a container that is cut off horizontally **without having asked to be**,
+  and names it: the element, the hidden pixel count, and the widest thing sticking out. A container
+  that opts in with `overflow-x-auto` is left alone, because the placed floor plan is a room an
+  operator pans around on purpose, and a `sr-only` box is skipped because a 1px box whose content
+  always overflows is the pattern working.
+
+  **Upgrade note:** none — presentation only, no protocol, schema or permission change.
+
+
 - **Forty-two of the edge's forty-five `/api/*` routes answered without naming their release or
   their lease standing.** `stamp_edge_version` was applied with `Router::layer` as the last
   operation of `http::router`, and `serve` merges `domain_router` and `activation_router` *after*
