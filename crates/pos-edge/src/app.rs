@@ -2167,6 +2167,9 @@ impl<S: EventStore> Edge<S> {
             device_id,
             employee_id: None,
             shift_id: None,
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         };
         let published = serde_json::to_value(payload).unwrap_or(serde_json::Value::Null);
@@ -4834,6 +4837,9 @@ impl<S: EventStore> Edge<S> {
             device_id,
             employee_id: None,
             shift_id: self.current_shift_id(),
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         };
         Ok((
@@ -4891,6 +4897,9 @@ impl<S: EventStore> Edge<S> {
             device_id: ctx.actor.device_id,
             employee_id: Some(ctx.actor.employee_id),
             shift_id: self.current_shift_id(),
+            // Unstamped here. The chain is assigned at append, inside the transaction,
+            // because that is the only place the previous head is known (ADR-0131).
+            chain: None,
             data,
         })
     }

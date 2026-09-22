@@ -18,6 +18,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The event log chains at the edge** ([ADR-0131](docs/adr/0131-a-chained-event-log.md)).
+  The table was append-only by convention and by nothing else — three columns with no link between
+  rows, in a SQLite file on a PC in a shop. An `UPDATE` to an amount left `PRAGMA integrity_check`
+  reporting `ok`.
+  - Every event now carries `seq` and `prev_hash` on its envelope, assigned in the writer thread
+    inside the commit transaction — the only place the previous head is known. The stored row and
+    the outbox copy both carry the link, so the cloud verifies the same bytes the store wrote.
+  - `SqliteStore::verify_chain` walks the chain with no internet and names the first break:
+    a record edited after it was written, one removed from the middle, or one re-linked.
+  - **Two tampers a chain cannot catch alone, and both have a test that asserts it finds nothing:**
+    cutting off the tail leaves what survives perfectly linked, and an attacker who edits a record
+    and re-derives every later link produces a chain that verifies. Those are closed by the cloud
+    anchor, which is the next change — until then this is tamper-**evident**, never tamper-proof.
+  - A break is reported, never fatal. A till that refused to sell because yesterday's log is
+    damaged would turn a record-keeping fault into a closed shop.
+  - Rows written before migration `0013` stay unchained and are counted separately, not blamed.
+    Nothing backfills them: a chain over history nobody can vouch for is the false confidence the
+    record rejects a bare chain for.
+
+  **Upgrade note:** no protocol bump — both envelope fields are additive and an older reader
+  ignores them. A store's chain begins at its first event after the migration; everything earlier
+  verifies as *unchained*.
+
 - **[ADR-0131](docs/adr/0131-a-chained-event-log.md) — the event log chains, and the cloud holds the anchor.**
   The record only, no behaviour yet. `docs/architecture.md` called the log append-only; that described
   the code, not the data. The table is three columns with nothing linking one row to the next, and it

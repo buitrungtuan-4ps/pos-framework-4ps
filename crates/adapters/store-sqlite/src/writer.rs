@@ -12,12 +12,14 @@
 use core::num::NonZeroU32;
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use sha2::{Digest as _, Sha256};
 use tokio::sync::{mpsc, oneshot};
 
 use pos_ports::config_store::{ConfigSnapshot, ConfigUpdate};
 use pos_ports::event_store::{OutboxPosition, OutboxRecord};
 use pos_ports::subject_store::REDACTION;
 use pos_ports::{PortError, PortName};
+use pos_proto::chain::{ChainBreak, ChainHash, ChainLink, ChainStatus};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, EventId, OrderId, StoreId};
 use pos_proto::time::BusinessDate;
@@ -189,6 +191,11 @@ pub(crate) enum Command {
         intake: Option<IntakeWrite>,
         subjects: Vec<SubjectWrite>,
         reply: oneshot::Sender<Result<(), PortError>>,
+    },
+    /// Walk a store's chain and report the first break, if any (ADR-0131).
+    VerifyChain {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<ChainStatus, PortError>>,
     },
     /// Read a store's events, ascending by `event_id`, after an optional cursor.
     Read {
@@ -472,6 +479,9 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
             } => {
                 let _ = reply.send(mask_subjects(&conn, store_id, cutoff_ms, now_ms));
             }
+            Command::VerifyChain { store_id, reply } => {
+                let _ = reply.send(verify_chain(&conn, store_id));
+            }
             Command::Read {
                 store_id,
                 after,
@@ -726,33 +736,222 @@ fn json_error(port: PortName, error: serde_json::Error) -> PortError {
     PortError::internal(port, "could not (de)serialise a stored value").with_source(error)
 }
 
-fn commit(
-    conn: &mut Connection,
+/// Walks a store's chain from its first chained record and reports the first break.
+///
+/// Reads by `seq`, not by `event_id` ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)
+/// decision 6): a walk ordered by ULID would re-link itself the moment two transactions
+/// interleaved, and report a break that never happened.
+///
+/// Rows written before the migration have no `seq` and are skipped, not counted as broken —
+/// `unchained` reports how many, so a store that upgraded mid-life can tell "history I cannot
+/// vouch for" from "history somebody edited".
+fn verify_chain(conn: &Connection, store_id: StoreId) -> Result<ChainStatus, PortError> {
+    let port = PortName::EventStore;
+    let unchained: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM events WHERE store_id = ?1 AND seq IS NULL",
+            params![store_id.to_string()],
+            |row| row.get(0),
+        )
+        .map_err(|error| db_error(port, error))?;
+
+    let mut statement = conn
+        .prepare(
+            "SELECT seq, prev_hash, hash, envelope FROM events
+             WHERE store_id = ?1 AND seq IS NOT NULL
+             ORDER BY seq",
+        )
+        .map_err(|error| db_error(port, error))?;
+    let mut rows = statement
+        .query(params![store_id.to_string()])
+        .map_err(|error| db_error(port, error))?;
+
+    // Anchored on the first chained row rather than on one, because a store that upgraded
+    // mid-life starts its chain wherever its first post-migration event landed. Deleting from
+    // the *head* is still caught: the first chained row must link to genesis, and a later row
+    // promoted into its place carries the hash of the record that used to precede it.
+    let mut expected_seq: Option<u64> = None;
+    let mut previous = ChainHash::genesis();
+    let mut checked: u64 = 0;
+    while let Some(row) = rows.next().map_err(|error| db_error(port, error))? {
+        let seq = u64::try_from(row.get::<_, i64>(0).map_err(|e| db_error(port, e))?).unwrap_or(0);
+        let prev_hash: String = row.get(1).map_err(|error| db_error(port, error))?;
+        let stored_hash: String = row.get(2).map_err(|error| db_error(port, error))?;
+        let envelope_json: String = row.get(3).map_err(|error| db_error(port, error))?;
+
+        let expected = expected_seq.map_or(seq, |previous_seq| previous_seq.saturating_add(1));
+        expected_seq = Some(expected);
+        if seq != expected {
+            // A gap. A record was removed from the middle of the log, so the counter and the
+            // stored position no longer agree.
+            return Ok(ChainStatus::Broken {
+                at_seq: expected,
+                reason: ChainBreak::MissingRecord,
+            });
+        }
+        if prev_hash != previous.as_str() {
+            return Ok(ChainStatus::Broken {
+                at_seq: seq,
+                reason: ChainBreak::LinkMismatch,
+            });
+        }
+
+        // Recompute from the stored bytes. This is what catches an edit: the row still links to
+        // its neighbour, but its content no longer hashes to the hash beside it.
+        let stored: EventEnvelope<RawPayload> =
+            serde_json::from_str(&envelope_json).map_err(|error| json_error(port, error))?;
+        let link = ChainLink {
+            seq,
+            prev_hash: ChainHash::from_hex(&prev_hash),
+        };
+        let recomputed = chain_hash(&stored, &link).map_err(|error| json_error(port, error))?;
+        if recomputed.as_str() != stored_hash {
+            return Ok(ChainStatus::Broken {
+                at_seq: seq,
+                reason: ChainBreak::ContentEdited,
+            });
+        }
+
+        previous = ChainHash::from_hex(&stored_hash);
+        checked = checked.saturating_add(1);
+    }
+
+    Ok(ChainStatus::Intact {
+        checked,
+        unchained: u64::try_from(unchained).unwrap_or(0),
+        head: if checked == 0 { None } else { Some(previous) },
+    })
+}
+
+/// A store's chain head: the sequence and hash of its most recent chained record.
+///
+/// `empty` is a store with no chained records at all — a fresh install, or one whose whole log
+/// predates the migration. Its next link is the genesis link, which is what `ChainLink::first`
+/// means (ADR-0131).
+#[derive(Debug, Clone)]
+struct ChainHead {
+    seq: u64,
+    hash: ChainHash,
+}
+
+impl ChainHead {
+    fn empty() -> Self {
+        Self {
+            seq: 0,
+            hash: ChainHash::genesis(),
+        }
+    }
+
+    /// The link the next record takes.
+    fn next_link(&self) -> ChainLink {
+        if self.seq == 0 {
+            ChainLink::first()
+        } else {
+            ChainLink::following(self.seq, self.hash.clone())
+        }
+    }
+}
+
+/// Reads a store's chain head inside the commit transaction.
+///
+/// `seq IS NOT NULL` skips the rows written before the migration: they are unchained, not broken,
+/// so a store upgrading mid-life starts its chain at the next event it writes rather than pretending
+/// to vouch for history nobody can.
+fn chain_head(tx: &rusqlite::Transaction<'_>, store_id: StoreId) -> Result<ChainHead, PortError> {
+    let port = PortName::EventStore;
+    let found = tx
+        .query_row(
+            "SELECT seq, hash FROM events
+             WHERE store_id = ?1 AND seq IS NOT NULL
+             ORDER BY seq DESC LIMIT 1",
+            params![store_id.to_string()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    Ok(match found {
+        Some((seq, hash)) => ChainHead {
+            seq: u64::try_from(seq).unwrap_or(0),
+            hash: ChainHash::from_hex(&hash),
+        },
+        None => ChainHead::empty(),
+    })
+}
+
+/// The hash of one record at one position: SHA-256 over the preimage `pos-proto` defines.
+///
+/// The digest lives here and the preimage lives in `pos_proto::chain`, which is the split that
+/// keeps one definition of *what* is hashed without putting `sha2` into the backbone — see that
+/// module for the reasoning.
+fn chain_hash(
+    envelope: &EventEnvelope<RawPayload>,
+    link: &ChainLink,
+) -> Result<ChainHash, serde_json::Error> {
+    let preimage = envelope.chain_preimage(link)?;
+    Ok(ChainHash::of(Sha256::digest(preimage.as_bytes()).into()))
+}
+
+/// Writes a batch of events and their outbox rows, chaining each as it goes (ADR-0131).
+///
+/// Separate from [`commit`] because it is the one part of a commit that carries state across its
+/// iterations — the chain head — and reading a transaction that mixes that with four unrelated
+/// writes is how the head ends up advanced in the wrong branch.
+fn write_events(
+    tx: &rusqlite::Transaction<'_>,
     events: &[EventEnvelope<RawPayload>],
-    config: Option<ConfigUpdate>,
-    intake: Option<IntakeWrite>,
-    subjects: &[SubjectWrite],
 ) -> Result<(), PortError> {
     let port = PortName::EventStore;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| db_error(port, error))?;
+    // The chain head, read once per commit rather than once per event (ADR-0131). This is the
+    // single-writer thread, so nothing can advance the head between reading it here and writing
+    // below — which is the property ADR-0015's design already provided and this now relies on.
+    let mut head = match events.first() {
+        Some(first) => chain_head(tx, first.store_id)?,
+        None => ChainHead::empty(),
+    };
 
     for envelope in events {
         let store_id = envelope.store_id.to_string();
         let event_id = envelope.event_id.to_string();
-        let json = serde_json::to_string(envelope).map_err(|error| json_error(port, error))?;
+
+        // Stamp, then serialize: the stored JSON and the outbox copy both carry the link, so the
+        // cloud verifies the same bytes this store wrote rather than taking its word for them.
+        let link = head.next_link();
+        let hash = chain_hash(envelope, &link).map_err(|error| json_error(port, error))?;
+        let stamped = EventEnvelope {
+            chain: Some(link.clone()),
+            ..envelope.clone()
+        };
+        let json = serde_json::to_string(&stamped).map_err(|error| json_error(port, error))?;
 
         // INSERT OR IGNORE is the idempotency: a stored event_id keeps its row, the incoming copy is
         // discarded without a byte comparison (ADR-0026 §5). Only a genuinely new row gets an outbox
         // entry, so a replay never re-queues an event.
         let inserted = tx
             .execute(
-                "INSERT OR IGNORE INTO events (store_id, event_id, envelope) VALUES (?1, ?2, ?3)",
-                params![store_id, event_id, json],
+                "INSERT OR IGNORE INTO events (store_id, event_id, envelope, seq, prev_hash, hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    store_id,
+                    event_id,
+                    json,
+                    // SQLite stores a signed 64-bit integer, and `seq` counts events in one
+                    // store's life: the saturating conversion is unreachable in practice and is
+                    // here rather than an `expect` because a store must not stop trading over it.
+                    i64::try_from(link.seq).unwrap_or(i64::MAX),
+                    link.prev_hash.as_str(),
+                    hash.as_str()
+                ],
             )
             .map_err(|error| db_error(port, error))?;
         if inserted > 0 {
+            // Only a row that actually landed advances the chain. A duplicate that was ignored
+            // must not, or the next event would leave a gap in `seq` and every later verification
+            // would report a break that never happened.
+            head = ChainHead {
+                seq: link.seq,
+                hash,
+            };
+
             let depth: i64 = tx
                 .query_row(
                     "SELECT COUNT(*) FROM outbox WHERE store_id = ?1",
@@ -774,6 +973,22 @@ fn commit(
             .map_err(|error| db_error(port, error))?;
         }
     }
+    Ok(())
+}
+
+fn commit(
+    conn: &mut Connection,
+    events: &[EventEnvelope<RawPayload>],
+    config: Option<ConfigUpdate>,
+    intake: Option<IntakeWrite>,
+    subjects: &[SubjectWrite],
+) -> Result<(), PortError> {
+    let port = PortName::EventStore;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error(port, error))?;
+
+    write_events(&tx, events)?;
 
     if let Some(update) = config {
         let snapshot = match update {

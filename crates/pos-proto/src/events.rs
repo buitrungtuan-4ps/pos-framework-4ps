@@ -916,6 +916,7 @@ mod tests {
             device_id: DeviceId::new(Ulid::from_parts(1, 4)),
             employee_id: None,
             shift_id: None,
+            chain: None,
             data,
         }
     }

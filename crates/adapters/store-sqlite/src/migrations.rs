@@ -32,6 +32,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         12,
         include_str!("../migrations/0012_applied_revocations.sql"),
     ),
+    (13, include_str!("../migrations/0013_event_chain.sql")),
 ];
 
 /// Applies every migration the database has not yet seen.
