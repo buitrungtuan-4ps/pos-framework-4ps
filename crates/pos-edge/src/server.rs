@@ -1297,8 +1297,17 @@ fn load_fonts(config: &EdgeConfig) -> Option<pos_render::TextRenderer> {
         .map(|script| script.script)
         .collect();
     // The one line an operator needs to see to know whether tonight's tickets will print.
+    //
+    // `skipped` and `held_bytes` are here because the library no longer keeps everything it finds:
+    // a face covering nothing an earlier face does could never have been chosen, and a ceiling
+    // refuses the rest (`pos_render::font`). That is invisible from the outside, and a store whose
+    // `C:\Windows\Fonts` really does need the sixty-fifth face has to be able to see it — so the
+    // number sits beside the coverage it would show up in, rather than in a debug line nobody
+    // reads.
     tracing::info!(
         faces = library.len(),
+        skipped = library.skipped(),
+        held_bytes = library.bytes_held(),
         can_print = ?printable,
         cannot_print = ?missing,
         "printing fonts loaded"
