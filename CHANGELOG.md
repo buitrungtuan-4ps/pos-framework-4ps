@@ -340,6 +340,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`console-replay` could hang for two minutes on a listbox that was still open.**
+  The harness's `press()` chose an option from a combobox and returned immediately. The listbox is
+  painted over the rest of the form, so while it was still on screen it intercepted pointer events
+  for the next step's button — and Playwright does not fail an intercepted click, it retries it,
+  for the whole test timeout. A run ended with `<li role="option">Airport branches</li> …
+  intercepts pointer events` repeated 230 times, blaming the control it was trying to reach rather
+  than the one covering it. It now waits for the listbox to close, which is the half it was
+  missing.
+
 - **A station routing rule could name a course that did not exist**
   ([ADR-0130](docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6, the last gap on
   that record). `POST /admin/kitchen/routing` accepted a `course_id` after checking only that it did
