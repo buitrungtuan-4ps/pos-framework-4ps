@@ -106,6 +106,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The till guessed where the decimal point goes, and guessed wrong for every currency but three.**
+  `ui/src/lib/money.ts` held `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect, not the
+  missing rows: it is right for the đồng and the yen — the two currencies this app started with —
+  and silently wrong for the rupee, whose country pack has shipped since ADR-0105.
+
+  On a store denominated in INR, ₹261.45 drew as `INR 26,145`. The **input** path was out by a
+  hundred in the other direction: `parseWhole` multiplies by `10 ** digits`, so a cashier typing a
+  ₹150,000 discount sent ₹1,500. That one is not cosmetic — it is a different amount of money.
+
+  The till now uses the exponent the store published on `GET /api/locale`
+  ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)). The table is deleted as
+  the authority and kept only as the never-blank fallback for the window before the read lands, the
+  same contract `fallbackQuickCash` keeps.
+
+  `formatMoney` and `parseWhole` now **take** the exponent rather than looking one up, so they stay
+  pure and the store stays the one place a published value lives. Screens call `formatAmount` and
+  `parseAmount`, which bind it — no screen can render or parse a price without the exponent, and
+  none of them has to know the number.
+
+  **Upgrade note:** none. A store on VND or JPY sees exactly what it saw; a store on a
+  two-decimal currency stops being wrong.
+
 - **A caller that stopped sending held a till's connection indefinitely.** The edge had no request
   deadline at all. Measured before the fix: a socket that sent a request line, declared
   `Content-Length: 40` and then sent nothing held a connection and a task with no way back — the

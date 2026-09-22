@@ -4,7 +4,7 @@ import { ApiError, api } from "../api/client";
 import type { RejectReason, WaitingOrder } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
-import { formatMoney } from "../lib/money";
+import { formatAmount } from "../state/store";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
 // (ADR-0116).
@@ -98,12 +98,12 @@ export function Confirm() {
                       <li>
                         <span>{line.display_name}</span>
                         <span>{`×${String(line.quantity.milli / 1000)}`}</span>
-                        <span>{formatMoney(line.line_total)}</span>
+                        <span>{formatAmount(line.line_total)}</span>
                       </li>
                     )}
                   </For>
                 </ul>
-                <p class="card-total">{formatMoney(order.total)}</p>
+                <p class="card-total">{formatAmount(order.total)}</p>
                 <div class="row">
                   <button
                     type="button"

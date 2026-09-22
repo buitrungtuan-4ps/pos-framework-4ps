@@ -890,6 +890,45 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
   }
 });
 
+// The till draws money with the exponent the store published, not one it guessed.
+//
+// `ui/src/lib/money.ts` used to hold `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect: it is
+// right for the đồng and the yen — the two currencies this app started with — and silently wrong for
+// the rupee, whose country pack has shipped since ADR-0105. ₹261.45 drew as `INR 26,145`, and the
+// *input* path was out by a hundred the other way, so a cashier's typed discount sent a different
+// amount of money than the one they meant.
+//
+// The exponent now arrives on `GET /api/locale`. This intercepts that one response and changes that
+// one field, because the demo store is VND and VND's published exponent and the old table's guess
+// agree by construction — which is exactly why the bug survived every run of this gate. Two decimals
+// on the đồng is not a real store; it is the smallest change that makes "the till used the published
+// value" observable at all.
+test("the till draws money with the exponent the store published", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, currency_exponent: 2 } });
+    });
+
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    await page.locator('[data-step="takePayment"]').click();
+
+    // The salad is 89,000 plus ten percent, so the check is 97,900 minor units. Read with the
+    // store's published exponent of two that is 979.00; read with the old table's guess for the
+    // đồng it is 97,900. The symbol still comes from the amount's own currency code, which this
+    // does not touch.
+    await expect(page.getByText("979.00₫", { exact: true })).toBeVisible();
+    await expect(page.getByText("97,900₫", { exact: true })).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
 test("every flow is replayed except the ones that say why they cannot be", () => {

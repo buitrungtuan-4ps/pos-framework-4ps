@@ -21,7 +21,13 @@ import type {
   PaymentRequest,
   ReasonCodeEntry,
 } from "../api/types";
-import { fallbackQuickCash, type Money } from "../lib/money";
+import {
+  fallbackExponent,
+  fallbackQuickCash,
+  formatMoney,
+  parseWhole,
+  type Money,
+} from "../lib/money";
 
 export interface OrderLine {
   orderLineId: string;
@@ -156,6 +162,10 @@ interface StoreShape {
   // because the till does the same thing either way: it rounds nothing, which is the answer that
   // cannot be wrong.
   cashRoundingIncrement: number | null;
+  // How many decimal places this store's currency has, from `GET /api/locale` (ADR-0134). `null`
+  // means the read has not landed, and the compiled-in fallback covers that window — unlike the
+  // cash increment, where `null` is also a real published answer.
+  currencyExponent: number | null;
   // The store's managed reason list, from `GET /api/reason-codes` (ADR-0115). Empty until the read
   // lands — and empty is never a real answer here, because the edge falls back to the framework
   // default set when nothing is published. A picker with nothing in it therefore means "the read has
@@ -213,6 +223,7 @@ const [state, setState] = createStore<StoreShape>({
   acceptedTender: null,
   cashDenominations: null,
   cashRoundingIncrement: null,
+  currencyExponent: null,
   reasonCodes: [],
   bumped: {},
   shift: null,
@@ -844,6 +855,27 @@ export function cashRoundingIncrement(): number | null {
   return state.cashRoundingIncrement;
 }
 
+// How many decimal places this store's currency has (ADR-0134): the published answer once
+// `loadLocale` lands, and the compiled-in one for that currency until it does — the same
+// never-blank contract `cashDenominations` keeps.
+export function currencyExponent(): number {
+  return state.currencyExponent ?? fallbackExponent(storeCurrency());
+}
+
+// An amount as this store writes it. The screens' entry point, and the reason `formatMoney` takes
+// the exponent as an argument: binding it in one place means no screen can render a price without
+// it, and none of them has to know the number.
+export function formatAmount(m: Money): string {
+  return formatMoney(m, currencyExponent());
+}
+
+// What a cashier typed, in minor units, or `null` when it is not a figure the till can send. The
+// twin of `formatAmount`, and the half that matters most: this is the *input* path, where a wrong
+// exponent does not merely look wrong — it sends a different amount of money.
+export function parseAmount(text: string): number | null {
+  return parseWhole(text, currencyExponent());
+}
+
 // Reads the store's money settings from the edge (ADR-0105). Forgiving in the same way `loadMenu`
 // is: a failed read leaves the previous keys in place, so a blip does not strand a cashier with one
 // button mid-service.
@@ -852,6 +884,7 @@ export async function loadLocale(): Promise<void> {
     const response = await api.locale();
     setState("cashDenominations", response.cash_denominations);
     setState("cashRoundingIncrement", response.cash_rounding_increment);
+    setState("currencyExponent", response.currency_exponent);
   } catch {
     // Keep whatever is loaded; the next boot or reload tries again.
   }

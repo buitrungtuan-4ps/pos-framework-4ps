@@ -398,6 +398,13 @@ export interface BillResponse {
  */
 export interface LocaleResponse {
   currency_code: string;
+  /**
+   * How many decimal places that currency has: 0 for the đồng and the yen, 2 for the paisa and the
+   * cent (ADR-0134). Every amount on the wire is an integer in the minor unit, so this is what says
+   * where the decimal point goes — and what the till used to guess from a table with no row for the
+   * rupee.
+   */
+  currency_exponent: number;
   /** Notes a guest hands over, ascending, in minor units. Empty means the exact amount only. */
   cash_denominations: number[];
   /** What the total rounds to in cash, in minor units, or `null` for no rounding. */

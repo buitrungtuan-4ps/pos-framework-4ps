@@ -16,9 +16,29 @@ export interface Quantity {
   milli: number;
 }
 
-// Minor-unit digits per currency. Vietnam v1 is VND (none); the cloud config pack supplies the rest
-// in P7, so this is the one place a new currency's scale is added.
-const MINOR_DIGITS: Record<string, number> = { VND: 0, JPY: 0, USD: 2 };
+// How many decimal places a currency has, for the window before the store's own answer syncs
+// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+//
+// This was the authority, and that was the bug. It read `MINOR_DIGITS[code] ?? 0`, and the `?? 0`
+// was right for the đồng and the yen — the two currencies this app started with — and silently
+// wrong for the rupee, whose pack has shipped since ADR-0105. ₹261.45 drew as `INR 26,145`, and
+// `parseWhole` put a cashier's typed discount out by a hundred in the other direction.
+//
+// The store's exponent now arrives on `GET /api/locale` beside its currency, and this is only the
+// never-blank fallback, the same contract `fallbackQuickCash` and `DEFAULT_FLOOR` keep. It is
+// consulted for exactly one currency in practice: before the locale read lands, `storeCurrency()`
+// is `DEFAULT_CURRENCY`, and a store that *has* synced published the exponent in the same node as
+// the currency — so the two are never out of step after boot.
+//
+// A currency in neither the published node nor this table gets `0`. That is the arithmetic-neutral
+// answer rather than a claim, and it is unreachable from a synced store: the node that names an
+// unknown currency names its exponent too.
+const FALLBACK_EXPONENT: Record<string, number> = { VND: 0, JPY: 0, INR: 2, USD: 2 };
+
+// The compiled-in exponent for a currency, for the window before the store's own has synced.
+export function fallbackExponent(currencyCode: string): number {
+  return FALLBACK_EXPONENT[currencyCode] ?? 0;
+}
 
 export function money(currencyCode: string, amountMinor: number): Money {
   return { currency_code: currencyCode, amount_minor: amountMinor };
@@ -74,8 +94,13 @@ export function quantity(whole: number): Quantity {
 
 // A display string for an amount. `₫` for VND (the symbol most staff read fastest); the ISO code
 // otherwise until the locale pack supplies a symbol.
-export function formatMoney(m: Money): string {
-  const digits = MINOR_DIGITS[m.currency_code] ?? 0;
+//
+// `exponent` is supplied rather than looked up, so this stays a pure function of its arguments and
+// the store stays the one place a published value lives — the shape every other locale fact in this
+// app has. Callers in screens use `formatAmount` from the store, which binds it; nobody has to
+// remember to pass the right number, and nobody *can* pass none.
+export function formatMoney(m: Money, exponent: number): string {
+  const digits = exponent;
   const negative = m.amount_minor < 0;
   const abs = Math.abs(m.amount_minor);
   const scale = 10 ** digits;
@@ -143,11 +168,10 @@ export function quickCashFor(
 
 // Parse a whole-đồng figure a cashier typed into minor units. Digits only; anything else is `null`
 // so the caller can refuse it rather than settle a wrong amount.
-export function parseWhole(text: string, currencyCode: string): number | null {
+export function parseWhole(text: string, exponent: number): number | null {
   const cleaned = text.replace(/[\s,._]/g, "");
   if (cleaned === "" || !/^\d+$/.test(cleaned)) {
     return null;
   }
-  const digits = MINOR_DIGITS[currencyCode] ?? 0;
-  return Number(cleaned) * 10 ** digits;
+  return Number(cleaned) * 10 ** exponent;
 }

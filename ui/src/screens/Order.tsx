@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { formatMoney, formatQuantity } from "../lib/money";
+import { formatQuantity } from "../lib/money";
 import { matches } from "../lib/search";
 import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
@@ -29,6 +29,7 @@ import {
   unsentCoursesForTable,
   voidLine,
   type OrderLine,
+  formatAmount,
 } from "../state/store";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
@@ -266,7 +267,7 @@ export function Order() {
     >
       <span>{caption}</span>
       <span class="tabular-nums text-ink-muted">
-        {item.available ? formatMoney(item.unit_price) : t("order.unavailable")}
+        {item.available ? formatAmount(item.unit_price) : t("order.unavailable")}
       </span>
     </button>
   );
@@ -401,7 +402,7 @@ export function Order() {
                   </span>
                 </Show>
                 <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) }}>
-                  {formatMoney(line.lineTotal)}
+                  {formatAmount(line.lineTotal)}
                 </span>
                 {/* A line waiting to be sent says so and nothing more: the Send button below acts on
                     every one of them at once, so a control per row would be one tap out of six
@@ -562,7 +563,7 @@ export function Order() {
                                 <Show when={member().unit_price.amount_minor > 0}>
                                   <span class="tabular-nums text-ink-muted">
                                     {"+ "}
-                                    {formatMoney(member().unit_price)}
+                                    {formatAmount(member().unit_price)}
                                   </span>
                                 </Show>
                               </button>
@@ -644,16 +645,16 @@ export function Order() {
               <>
                 <div class="flex justify-between text-sm text-ink-muted">
                   <span>{t("order.subtotal")}</span>
-                  <span class="tabular-nums">{formatMoney(totals().subtotal)}</span>
+                  <span class="tabular-nums">{formatAmount(totals().subtotal)}</span>
                 </div>
                 <div class="flex justify-between text-sm text-ink-muted">
                   <span>{t("order.tax")}</span>
-                  <span class="tabular-nums">{formatMoney(totals().tax_total)}</span>
+                  <span class="tabular-nums">{formatAmount(totals().tax_total)}</span>
                 </div>
                 <div class="mt-1 flex items-baseline justify-between">
                   <span class="text-sm font-semibold">{t("order.total")}</span>
                   <span class="text-2xl font-semibold tabular-nums">
-                    {formatMoney(totals().total_due)}
+                    {formatAmount(totals().total_due)}
                   </span>
                 </div>
               </>

@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError } from "../api/client";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { formatMoney, money, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
+import { money, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
   applyDiscount,
   cashDenominations,
@@ -17,6 +17,7 @@ import {
   tenderAccepted,
   tipsEnabled,
   voidBill,
+  formatAmount,
 } from "../state/store";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
@@ -389,7 +390,7 @@ export function Pay() {
                       <span>{t("pay.discount_applied")}</span>
                       <span class="tabular-nums">
                         {"− "}
-                        {formatMoney(totals().discount_total)}
+                        {formatAmount(totals().discount_total)}
                       </span>
                     </p>
                   </Show>
@@ -398,12 +399,12 @@ export function Pay() {
                       <span>{t("pay.comp_applied")}</span>
                       <span class="tabular-nums">
                         {"− "}
-                        {formatMoney(totals().comp_total)}
+                        {formatAmount(totals().comp_total)}
                       </span>
                     </p>
                   </Show>
                   <p class="text-2xl font-semibold tabular-nums">
-                    {formatMoney(totals().total_due)}
+                    {formatAmount(totals().total_due)}
                   </p>
                 </>
               )}
@@ -437,7 +438,7 @@ export function Pay() {
                       data-step="setTip"
                       onClick={() => setTip(amount)}
                     >
-                      {formatMoney(money(currency(), amount))}
+                      {formatAmount(money(currency(), amount))}
                     </button>
                   )}
                 </For>
@@ -490,13 +491,13 @@ export function Pay() {
                     data-step="setTender"
                     onClick={() => setTender(amount)}
                   >
-                    {amount === total() ? t("pay.exact") : formatMoney(money(currency(), amount))}
+                    {amount === total() ? t("pay.exact") : formatAmount(money(currency(), amount))}
                   </button>
                 )}
               </For>
             </div>
             <p class="mt-2 text-sm text-ink-muted">
-              {t("pay.change")}: <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
+              {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
             </p>
             </Show>
 
@@ -692,7 +693,7 @@ export function Pay() {
               {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
             </p>
             <p class="mt-1 text-ink-muted">
-              {t("pay.change")}: <span class="tabular-nums">{formatMoney(money(currency(), change()))}</span>
+              {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
             </p>
             <Show when={bill().print_receipt}>
               <p
