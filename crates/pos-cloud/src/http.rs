@@ -105,7 +105,7 @@ use pos_proto::ids::{
 use pos_proto::inventory::{
     PublishedIngredient, PublishedRecipe, PublishedRecipeLine, PublishedSupplier,
 };
-use pos_proto::locale::{CountryCode, TaxComponent, TaxRate};
+use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
 use pos_proto::money::CurrencyCode;
 use pos_proto::origins::PublishedOrigins;
 use pos_proto::reason_codes::{
@@ -7425,6 +7425,13 @@ struct PackedFacts {
     /// How long each country's pack says a store keeps a personal record, in days
     /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
     retention_days: std::collections::BTreeMap<CountryCode, u16>,
+    /// How each country writes a number — its decimal mark, its group mark, and how many digits go
+    /// in a group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+    ///
+    /// Keyed on the country, like the retention period: what marks a figure carries is a convention
+    /// of the place, not of the money. Vietnam writes `1.234.567,50` whether the amount is in đồng
+    /// or in dollars.
+    number_formats: std::collections::BTreeMap<CountryCode, NumberFormat>,
 }
 
 /// Builds those from the compiled country modules.
@@ -7443,6 +7450,9 @@ fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
         facts
             .retention_days
             .insert(module.country_code(), pack.default_retention_days);
+        facts
+            .number_formats
+            .insert(module.country_code(), pack.number_format.clone());
     }
     facts
 }
@@ -7686,6 +7696,26 @@ fn checked_locale_node(
             "default_retention_days".to_owned(),
             serde_json::Value::from(*days),
         );
+    }
+    // How the country writes a number
+    // ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). Compiled into
+    // every pack since ADR-0027 and, until now, read by nothing anywhere: the till grouped `en-US`,
+    // the receipt grouped with a comma, and Vietnam's own `1.234.567,50` appeared on neither.
+    //
+    // This release carries it to the store and no surface draws with it yet. The receipt and the
+    // till follow separately, because each changes a figure a person is looking at and the receipt's
+    // is a tax document.
+    //
+    // Serialised from the pack's own type, so the shape the edge parses and the shape the cloud
+    // sends cannot drift apart into two spellings of the same three fields.
+    if let Ok(format) = facts
+        .number_formats
+        .get(&country)
+        .ok_or(())
+        .and_then(|format| serde_json::to_value(format).map_err(|_| ()))
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert("number_format".to_owned(), format);
     }
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
@@ -28291,6 +28321,29 @@ mod locale_node_tests {
         );
     }
 
+    #[test]
+    fn the_node_tells_the_store_how_its_country_writes_a_number() {
+        // ADR-0136. Vietnam is the case worth asserting: it is the only shipped pack whose format
+        // differs from the compiled default, so it is the only one where a store receiving nothing
+        // and a store receiving the right thing look different.
+        let node =
+            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
+        let format = node.get("number_format").expect("the node names a format");
+        assert_eq!(
+            format.get("decimal_separator").and_then(Value::as_str),
+            Some(",")
+        );
+        assert_eq!(
+            format.get("group_separator").and_then(Value::as_str),
+            Some(".")
+        );
+        assert_eq!(
+            format.get("digits_per_group").and_then(Value::as_u64),
+            Some(3)
+        );
+    }
+
     /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
     ///
     /// Written out rather than derived, because the two sides sit in different crates with nothing
@@ -28304,9 +28357,17 @@ mod locale_node_tests {
     /// the edge never reads is a payload nobody consumes. Neither shows up as a failure anywhere
     /// else.
     ///
-    /// It cannot force the list to grow when a field is added to the edge — nothing can, across a
-    /// crate boundary — but it does fail the moment this side changes, which is the half that
-    /// publishes.
+    /// **What it does not do**, because the list is written here rather than read from the edge: it
+    /// cannot tell whether `PublishedLocale` really parses these. Adding a name to the list is what
+    /// makes this pass, so the list is a checklist with teeth on the *node*, not a cross-crate
+    /// check. No crate depends on both, and adding a dependency to make a test possible is the
+    /// wrong trade.
+    ///
+    /// Its sibling closes the other half: `every_field_a_locale_node_carries_reaches_the_session`
+    /// in `crates/pos-edge/src/config_client.rs` asserts each of these keys actually moves a session
+    /// field. Between them, each side is checked against real behaviour rather than against nothing.
+    /// What neither catches is a field added to both lists and to neither implementation, which is
+    /// what the per-field tests above are for.
     #[test]
     fn the_node_carries_what_the_edge_reads_and_nothing_unclaimed() {
         // `crates/pos-edge/src/config_client.rs`, `struct PublishedLocale`.
@@ -28319,6 +28380,7 @@ mod locale_node_tests {
             "cash_rounding_increment",
             "cash_denominations",
             "default_retention_days",
+            "number_format",
         ];
         // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
         // against a store's region (ADR-0114); `display_language` is applied when the menu book is

@@ -106,6 +106,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store now receives how its country writes a number.** `NumberFormat` — the decimal mark, the
+  group mark, and how many digits go in a group — has been compiled into every country pack since
+  [ADR-0027](docs/adr/0027-country-modules.md) and read by nothing anywhere. It now rides the
+  `locale` config node and is served on `GET /api/locale`
+  ([ADR-0136](docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+
+  **Nothing changes on screen or on paper in this release.** The till still groups `en-US` and the
+  receipt still groups with a comma; each is its own change, because each alters a figure a person
+  is looking at and the receipt's is a tax document. This carries the value so those can read it —
+  the same order [ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) was rolled out
+  in.
+
+  It is keyed on the **country**, like the retention period and unlike the currency exponent: what
+  marks a figure carries is a convention of the place, not of the money. Vietnam writes
+  `1.234.567,50` whether the amount is in đồng or in dollars.
+
+  A published format the edge cannot use — a separator that is empty or two characters, a group of
+  zero digits — costs the format and not the whole node. The edge parses the separators as strings
+  and narrows them afterwards, for the reason it parses the currency as a string and narrows it to a
+  `CurrencyCode`: a value `serde` rejects takes the *entire* locale node down with it, and a store
+  that lost its currency and its timezone over a bad separator would be a far worse outcome than one
+  that kept the format it had.
+
+  **Upgrade note:** none. No surface reads the value yet, so no store's display changes. A store
+  receives it when its locale node is next published.
+
 - **A store's retention period never reached the store either, and now a test says which fields do.**
   The edge has read `default_retention_days` from its `locale` node since
   [ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md) gave the store its own retention sweep. The

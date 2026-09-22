@@ -64,7 +64,7 @@ use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
-use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable};
 use pos_proto::menu::MenuCatalog;
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
@@ -345,6 +345,14 @@ pub struct EdgeSession {
     /// Defaults to a year, the same figure `LocalePack::default` carries, so a store that has synced
     /// no locale still forgets.
     pub retention_days: u16,
+    /// How this store writes a number: its decimal mark, its group mark, and how many digits go in a
+    /// group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+    ///
+    /// A convention of the place rather than of the money, which is why it arrives with the country
+    /// and not with the currency: Vietnam writes `1.234.567,50` whether the figure is in đồng or in
+    /// dollars. The till and the printed receipt each drew their own answer before this — `en-US` on
+    /// the screen, a comma on the paper — so a Vietnamese store's own convention appeared nowhere.
+    pub number_format: NumberFormat,
     /// The notes a guest hands over, ascending, in minor units — the till's quick-cash keys.
     ///
     /// Empty means "offer the exact amount only", which is the honest answer for a store whose
@@ -552,6 +560,10 @@ impl EdgeSession {
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
+            // The common convention — `1,234.5` — and not Vietnam's, deliberately: the bootstrap is
+            // what an unsynced box of unknown country uses, and `pos-proto`'s own default test says
+            // the same. A store that syncs a locale node replaces it.
+            number_format: NumberFormat::default(),
             menu: MenuCatalog::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
