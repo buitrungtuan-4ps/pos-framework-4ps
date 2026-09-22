@@ -30,8 +30,8 @@ use std::collections::BTreeMap;
 
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{AreaId, EmployeeId, MenuItemId, ModifierGroupId, TableId};
-use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
+use pos_proto::ids::{AreaId, CourseId, EmployeeId, MenuItemId, ModifierGroupId, TableId};
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuCourse, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -87,10 +87,21 @@ fn demo_menu() -> MenuBook {
     // *first* item on the grid, and it wants a line rather than a conversation — so the item that
     // asks a question is not the one a flow reaches by accident. The flow that does want it types
     // the name first, which the menu search made possible and which costs no tap.
+    let course = |id: u128| CourseId::new(Ulid::from_u128(id));
+    // Starter, main, dessert — the sequence the grouping exists for (ADR-0130). The salad is a
+    // starter and the pizza a main, so the order screen has two courses to offer and firing one of
+    // them leaves the other waiting; a fixture where everything shared a course would let a
+    // fire-by-course that ignored the filter pass. The iced tea is on **no** course deliberately: a
+    // drink goes when it is poured, and a line on no course is what most lines in most stores are —
+    // so the flow that fires the starters must leave it alone, and the gate can see that it does.
     let catalog = MenuCatalog::new()
-        .with(item(102, "Garden salad", 89_000))
+        .with(item(102, "Garden salad", 89_000).with_course(course(900)))
         .with(item(103, "Iced tea", 39_000))
-        .with(item(101, "Margherita", 149_000).with_modifier_groups(vec![group(700), group(701)]))
+        .with(
+            item(101, "Margherita", 149_000)
+                .with_modifier_groups(vec![group(700), group(701)])
+                .with_course(course(901)),
+        )
         // One item with tone marks on it, and it is not decoration. The order screen's menu search
         // folds diacritics so that `dac` reaches this — nobody switches input mode mid-service — and
         // a fixture whose every item was ASCII would leave that fold with no gate over it, the same
@@ -122,7 +133,16 @@ fn demo_menu() -> MenuBook {
             min_select: 0,
             max_select: 1,
             member_menu_item_ids: vec![menu_item(210)],
-        });
+        })
+        // Out of sequence on purpose, and with a gap between the positions: the compiler emits these
+        // sorted and the till must render them in the order given, so a fixture authored in service
+        // order would let a till that re-sorted — or one that ignored `sort` entirely — pass.
+        .with_course(MenuCourse::new(course(901), DisplayName::new("Mains"), 20))
+        .with_course(MenuCourse::new(
+            course(900),
+            DisplayName::new("Starters"),
+            10,
+        ));
     MenuBook::new()
         .with(SalesChannel::DineIn, catalog.clone())
         .with_fallback(catalog)

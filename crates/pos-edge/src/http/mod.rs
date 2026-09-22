@@ -303,6 +303,12 @@ where
         // And the whole order in one tap. Firing line by line cost an operator one tap per line and
         // left half an order with the kitchen when one of them failed; this commits them together.
         .route("/api/orders/{id}/fire", post(lines::fire_order::<S>))
+        // And one course of it, which is what `courses_enabled` gates (ADR-0130). The narrowing of
+        // the act above, not a different one: same transaction boundary, same routing, same gate.
+        .route(
+            "/api/orders/{id}/fire/{course_id}",
+            post(lines::fire_course::<S>),
+        )
         // The staff-confirmation queue (ADR-0116). A guest's tabled QR order cannot be fired until
         // one of these two decisions lands, which is the guardrail ADR-0012 promised.
         .route("/api/orders/awaiting-confirmation", get(qr::awaiting::<S>))

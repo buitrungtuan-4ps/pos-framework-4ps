@@ -85,6 +85,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-fired" },
   },
   {
+    task: "Fire one course to the kitchen",
+    budget: 2,
+    note: "\"Starters away\" — the send button narrowed to one course (ADR-0130). One tap, like sending the whole order, because it is the same act on a smaller set and a server saying it out loud does not first say which table twice. The row is drawn only for courses that still have food waiting, in the store's published service order, so the tap count does not grow with the menu. A store with courses off draws no row at all and this flow is simply absent there — which is the point of declaring it: put the course picker behind a menu, or make it ask which course in a dialog, and this goes to three and the gate says so.",
+    steps: [{ route: "/table/:id", action: "fireCourse" }],
+    outcome: { route: "/table/:id", mark: "line-fired" },
+  },
+  {
     task: "Settle a dine-in table in cash",
     budget: 3,
     note: "Pay from the order screen, choose the note tendered, take the cash. Three taps, at the ceiling for a money path — this is the flow to defend hardest.",

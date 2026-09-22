@@ -215,6 +215,11 @@ export const api = {
   // the kitchen when one of them failed.
   fireOrder: (orderId: string, fire: FireRequest) =>
     request<LineResponse[]>("POST", `/api/orders/${orderId}/fire`, fire),
+  // "Starters away" — the same act narrowed to one course (ADR-0130). A separate route rather than
+  // a field on the body, because one of the two is gated and burying that in an optional field
+  // would make whether the store needs `courses_enabled` depend on what was in the JSON.
+  fireCourse: (orderId: string, courseId: string, fire: FireRequest) =>
+    request<LineResponse[]>("POST", `/api/orders/${orderId}/fire/${courseId}`, fire),
   bumpTicket: (bump: BumpRequest) =>
     request<BumpResponse>("POST", "/api/kds/bump", bump),
 

@@ -1170,6 +1170,12 @@ pub struct LiveOrderLine {
     /// A server assigns seats so that the food can be put in front of the right person; a till that
     /// reloaded lost every one of them and showed a table's worth of anonymous lines.
     pub seat: Option<u16>,
+    /// The course the line goes out on, or `None` for a line on none (ADR-0130).
+    ///
+    /// The third field to ride here for the header's reason, and the one that would have been the
+    /// third to go missing: a till that reloaded mid-service would show every line uncoursed, so the
+    /// course controls would offer to send starters that the screen no longer knew were starters.
+    pub course_id: Option<CourseId>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -3540,6 +3546,7 @@ impl<S: EventStore> Edge<S> {
                         bumped: projection.bumped_lines.contains(&order_line_id),
                         modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
                         seat: record.seat,
+                        course_id: record.course_id,
                     })
                     .collect(),
             })
@@ -3644,8 +3651,60 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
         station_id: Option<StationId>,
     ) -> Result<Vec<LineView>, AppError> {
+        self.fire_unsent(actor, order_id, station_id, None).await
+    }
+
+    /// Sends every unsent line **on one course** to the kitchen, in one transaction (ADR-0130).
+    ///
+    /// The other half of the same operator act: "starters away" rather than "send the order". It is
+    /// [`Self::fire_order`] narrowed to one course, and deliberately the same routine — a second
+    /// copy would be a second place for the transaction boundary, the routing and the staff gate to
+    /// drift, and those are exactly the properties that must not differ between the two.
+    ///
+    /// **This is what the `courses_enabled` capability gates.** `LineCommand::Fire { course }` means
+    /// the line is being fired as part of a course, and until now nothing filled it — the gate had a
+    /// domain test and no production caller. A store with courses off is refused here, before the
+    /// empty-list shortcut below, so asking is refused rather than quietly answered with "nothing to
+    /// do" on an order whose starters are all still waiting.
+    ///
+    /// A course with nothing unsent on it returns an empty list, for [`Self::fire_order`]'s reason:
+    /// two devices sending the starters is an ordinary race and the second one finding the work done
+    /// is the right outcome. An order that never had a line on that course is answered the same way,
+    /// because telling the two apart would need the catalog and would turn a race into a refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::CapabilityDisabled`](pos_core::error::DomainError::CapabilityDisabled) when
+    /// the store has courses off, plus everything [`Self::fire_order`] can return.
+    pub async fn fire_course(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        course_id: CourseId,
+        station_id: Option<StationId>,
+    ) -> Result<Vec<LineView>, AppError> {
+        self.fire_unsent(actor, order_id, station_id, Some(course_id))
+            .await
+    }
+
+    /// The one routine both fire paths are: every unsent line on an order, or every unsent line on
+    /// one of its courses, committed together or not at all.
+    async fn fire_unsent(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        station_id: Option<StationId>,
+        course: Option<CourseId>,
+    ) -> Result<Vec<LineView>, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let session = self.session();
+
+        // Before the empty-list shortcut, so a store with courses off is told it cannot fire by
+        // course rather than told there is nothing to fire. `decide_line` would refuse it too, but
+        // only once a line got that far, and an empty course never would.
+        if course.is_some() {
+            ctx.require_capability(Capability::Courses)?;
+        }
 
         // Asked once, for the order. A guest's tabled QR order that nobody has confirmed cannot
         // reach the kitchen, and doing this per line would ask the same question six times.
@@ -3655,7 +3714,10 @@ impl<S: EventStore> Edge<S> {
             StaffStanding::Fireable => {}
         }
 
-        let unfired = self.lock_projection().unfired_lines_for_order(order_id);
+        let mut unfired = self.lock_projection().unfired_lines_for_order(order_id);
+        if let Some(course) = course {
+            unfired.retain(|(_, record)| record.course_id == Some(course));
+        }
         if unfired.is_empty() {
             return Ok(Vec::new());
         }
@@ -3672,10 +3734,11 @@ impl<S: EventStore> Edge<S> {
                 base_item: record.menu_item_id,
                 modifiers: record.modifier_menu_item_ids.clone(),
                 quantity: record.quantity,
-                // Firing everything is not firing by course, so `None` — the same reason
-                // `fire_line` passes it, and it costs more here: one refusal aborts the batch, so
-                // one line on a course made the whole order unfireable.
-                course: None,
+                // The course being fired, not the one the line belongs to: `None` from
+                // `fire_order`, because firing everything is not firing by course, and it costs
+                // more here than on the single-line path — one refusal aborts the batch, so one
+                // line on a course would make the whole order unfireable.
+                course,
             };
             let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
             let (envelope, message) = self.prepare(
@@ -4969,6 +5032,18 @@ mod tests {
         }
     }
 
+    fn course(n: u128) -> CourseId {
+        CourseId::new(Ulid::from_u128(n))
+    }
+
+    /// The same line, declaring the course it goes out on.
+    fn on_course(n: u128) -> LineDraft {
+        LineDraft {
+            course_id: Some(course(n)),
+            ..a_line()
+        }
+    }
+
     #[test]
     fn seating_a_table_opens_it() {
         pos_fakes::executor::run_ready(async {
@@ -5044,6 +5119,210 @@ mod tests {
             assert_eq!(
                 edge.line_state(line.order_line_id),
                 Some(OrderLineState::Fired)
+            );
+        });
+    }
+
+    /// Fire by course: the starters go, the mains stay, and both happen in one transaction.
+    ///
+    /// The whole point of ADR-0130. `LineCommand::Fire { course }` and its `courses_enabled` gate
+    /// have been written and tested in the domain since before there was a course to name, and
+    /// nothing filled the field — this is the caller that does.
+    #[test]
+    fn firing_a_course_sends_that_course_and_leaves_the_rest() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(250));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+
+            let starter = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+            let main = edge
+                .add_line(actor(), table, on_course(901))
+                .await
+                .expect("adds");
+            // An item on no course at all, which a fire-by-course must not sweep up.
+            let uncoursed = edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_course(actor(), starter.order_id, course(900), Some(station))
+                .await
+                .expect("starters away");
+
+            assert_eq!(fired.len(), 1, "only the line on that course is sent");
+            assert_eq!(
+                edge.line_state(starter.order_line_id),
+                Some(OrderLineState::Fired)
+            );
+            assert_eq!(
+                edge.line_state(main.order_line_id),
+                Some(OrderLineState::Added),
+                "the main is still waiting"
+            );
+            assert_eq!(
+                edge.line_state(uncoursed.order_line_id),
+                Some(OrderLineState::Added),
+                "and an item on no course is not swept up by a course fire"
+            );
+        });
+    }
+
+    /// A course with nothing left unsent is an ordinary race, not a refusal — the rule
+    /// `fire_order` already sets for a whole order, applied to the narrowing of it.
+    #[test]
+    fn firing_a_course_twice_is_answered_rather_than_refused() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(251));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let first = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await
+                .expect("starters away");
+            assert_eq!(first.len(), 1);
+
+            let second = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await
+                .expect("the second device finds the work done");
+            assert!(
+                second.is_empty(),
+                "a course with nothing unsent answers with an empty list"
+            );
+
+            let none_such = edge
+                .fire_course(actor(), line.order_id, course(999), Some(station))
+                .await
+                .expect("a course this order never had is the same answer");
+            assert!(none_such.is_empty());
+        });
+    }
+
+    /// The gate, at last with a caller. A store that fires everything at once has no starters to
+    /// send, and asking is refused rather than answered "nothing to do" — which on an order whose
+    /// starters are all still waiting would be a lie.
+    #[test]
+    fn a_store_with_courses_disabled_refuses_to_fire_by_course() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(252));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+
+            // A station is named explicitly so the capability is the *only* thing that can refuse
+            // this: the bootstrap session publishes no routing plan, and without a fallback station
+            // the call fails as `UnroutableLine` instead, which would let this pass for the wrong
+            // reason.
+            let station = StationId::new(Ulid::from_u128(9));
+            let refused = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(super::AppError::Domain(
+                        pos_core::error::DomainError::CapabilityDisabled {
+                            capability: "courses_enabled"
+                        }
+                    ))
+                ),
+                "asking is refused, not answered empty: got {refused:?}"
+            );
+            assert_eq!(
+                edge.line_state(line.order_line_id),
+                Some(OrderLineState::Added),
+                "and nothing was sent"
+            );
+        });
+    }
+
+    /// The refusal comes before the empty-list shortcut. A course the order has no unsent lines on
+    /// would return `Ok(vec![])` if the gate were only `decide_line`'s, because no line would ever
+    /// reach it — so a store with courses off would be told "nothing to do" rather than "you cannot
+    /// do this", and the control would look like it worked.
+    #[test]
+    fn the_courses_gate_is_checked_before_there_is_anything_to_fire() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                capabilities: CapabilityContext::NONE.with(Capability::Tables),
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(253));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            // On no course, so a course fire matches nothing and the shortcut would fire first.
+            let line = edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let refused = edge
+                .fire_course(actor(), line.order_id, course(900), Some(station))
+                .await;
+            assert!(
+                matches!(
+                    refused,
+                    Err(super::AppError::Domain(
+                        pos_core::error::DomainError::CapabilityDisabled { .. }
+                    ))
+                ),
+                "an empty course on a courses-off store is still a refusal: got {refused:?}"
+            );
+        });
+    }
+
+    /// Fire-everything still sends everything, courses or not. The narrowing must not have narrowed
+    /// the thing it was extracted from.
+    #[test]
+    fn firing_the_order_still_sends_every_line_whatever_course_it_is_on() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(254));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let first = edge
+                .add_line(actor(), table, on_course(900))
+                .await
+                .expect("adds");
+            edge.add_line(actor(), table, on_course(901))
+                .await
+                .expect("adds");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let station = StationId::new(Ulid::from_u128(9));
+            let fired = edge
+                .fire_order(actor(), first.order_id, Some(station))
+                .await
+                .expect("send the order");
+            assert_eq!(
+                fired.len(),
+                3,
+                "two courses and an uncoursed line, all sent"
             );
         });
     }
