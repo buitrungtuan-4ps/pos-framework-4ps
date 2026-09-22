@@ -16,6 +16,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tagged release no longer dies in `npm install`.** The earlier fix said "the four copies are
+  now one local composite action" — it covered the four in `pr.yml` and left the **two in
+  `release.yml` untouched**, because `AGENTS.md` §8 forbids an agent modifying a release workflow
+  without being asked. Both now use the same retrying `node-setup` action.
+
+  It matters more here than on a pull request. A pull-request job that dies in dependency install
+  is re-run by whoever is already watching it; a release job is triggered by a **tag**, so the
+  recovery path is a human noticing that a cut release produced no artifacts and re-running the
+  workflow by hand. The `windows` leg builds the binary the PowerShell installer asks for, so a
+  registry hiccup there is a release with nothing for Windows to install.
+
+  **Upgrade note:** none — CI only, no change to any shipped artifact.
+
 ### Added
 
 - **Every store is held to the chain, by contract**
