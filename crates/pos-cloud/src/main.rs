@@ -660,6 +660,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+            // The catalog, for one question a floor write has to ask it: does this course exist?
+            // A routing rule matching on a course used to be accepted without it (ADR-0130
+            // decision 6), published, honoured, and matched nothing for ever.
+            store.catalog(),
         ))
         // Floor & kitchen publish (ADR-0072 slice 4): compile the store's areas/tables + stations/
         // routing into the `floor`/`stations` config nodes and version them through the config tree,

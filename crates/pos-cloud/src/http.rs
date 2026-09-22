@@ -8316,11 +8316,18 @@ where
 /// The collaborators the floor/kitchen CRUD routes need: the master-data store, plus the
 /// admin/clock/audit every write carries.
 #[derive(Clone)]
-struct FloorState<F, A, C> {
+struct FloorState<F, A, C, Cat> {
     floor: F,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// The tenant's catalog, for the one thing a floor write has to ask it: does this course exist?
+    ///
+    /// A routing rule matching on a course was accepted after checking only that it did not also
+    /// name an item, because there was nowhere to look ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)
+    /// decision 6). Now there is, and the rule is refused at the write the way the menu graph's
+    /// cycle is — a rule that can never match is a rule an operator will never find out about.
+    catalog: Cat,
 }
 
 /// The (tenant, store) a floor/kitchen list is scoped to — a floor is per-store, so both are required.
@@ -8468,50 +8475,58 @@ fn parse_optional_ulid<T>(value: Option<&str>, wrap: impl Fn(Ulid) -> T) -> Resu
 /// Reads are behind [`ConsolePermission::Read`]; every write is behind [`ConsolePermission::ManageFloor`]
 /// (Owner/Admin) and is audited. The tenant is named the admin-is-global way (a `?tenant_id=` /
 /// `?store_id=` query on reads, the request body on writes). None of this data is PII.
-pub fn floor_router<F, A, C>(floor: F, admin: A, clock: C, audit: Arc<dyn AuditRecorder>) -> Router
+pub fn floor_router<F, A, C, Cat>(
+    floor: F,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+    catalog: Cat,
+) -> Router
 where
     F: AreaStore + TableStore + StationStore + RoutingRuleStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/admin/floor/areas",
-            get(admin_list_areas::<F, A, C>).post(admin_create_area::<F, A, C>),
+            get(admin_list_areas::<F, A, C, Cat>).post(admin_create_area::<F, A, C, Cat>),
         )
         .route(
             "/admin/floor/areas/{area_id}",
-            get(admin_get_area::<F, A, C>).patch(admin_update_area::<F, A, C>),
+            get(admin_get_area::<F, A, C, Cat>).patch(admin_update_area::<F, A, C, Cat>),
         )
         .route(
             "/admin/floor/tables",
-            get(admin_list_tables::<F, A, C>).post(admin_create_table::<F, A, C>),
+            get(admin_list_tables::<F, A, C, Cat>).post(admin_create_table::<F, A, C, Cat>),
         )
         .route(
             "/admin/floor/tables/{table_id}",
-            get(admin_get_table::<F, A, C>).patch(admin_update_table::<F, A, C>),
+            get(admin_get_table::<F, A, C, Cat>).patch(admin_update_table::<F, A, C, Cat>),
         )
         .route(
             "/admin/kitchen/stations",
-            get(admin_list_stations::<F, A, C>).post(admin_create_station::<F, A, C>),
+            get(admin_list_stations::<F, A, C, Cat>).post(admin_create_station::<F, A, C, Cat>),
         )
         .route(
             "/admin/kitchen/stations/{station_id}",
-            get(admin_get_station::<F, A, C>).patch(admin_update_station::<F, A, C>),
+            get(admin_get_station::<F, A, C, Cat>).patch(admin_update_station::<F, A, C, Cat>),
         )
         .route(
             "/admin/kitchen/routing",
-            get(admin_list_routing::<F, A, C>).post(admin_create_routing::<F, A, C>),
+            get(admin_list_routing::<F, A, C, Cat>).post(admin_create_routing::<F, A, C, Cat>),
         )
         .route(
             "/admin/kitchen/routing/{rule_id}",
-            delete(admin_remove_routing::<F, A, C>),
+            delete(admin_remove_routing::<F, A, C, Cat>),
         )
         .with_state(FloorState {
             floor,
             admin,
             clock,
             audit,
+            catalog,
         })
 }
 
@@ -8538,8 +8553,8 @@ fn floor_tenant_store(query: &FloorListQuery) -> Result<(TenantId, StoreId), Res
     Ok((TenantId::new(tenant), StoreId::new(store)))
 }
 
-async fn admin_list_areas<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_list_areas<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Query(query): Query<FloorListQuery>,
 ) -> Response
@@ -8547,6 +8562,7 @@ where
     F: AreaStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -8568,8 +8584,8 @@ where
     }
 }
 
-async fn admin_get_area<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_get_area<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(area_id): Path<String>,
     Query(query): Query<FloorTenantQuery>,
@@ -8578,6 +8594,7 @@ where
     F: AreaStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -8604,8 +8621,8 @@ where
     }
 }
 
-async fn admin_create_area<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_create_area<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Json(request): Json<CreateAreaRequest>,
 ) -> Response
@@ -8613,6 +8630,7 @@ where
     F: AreaStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -8682,8 +8700,8 @@ where
     }
 }
 
-async fn admin_update_area<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_update_area<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(area_id): Path<String>,
     Json(request): Json<UpdateAreaRequest>,
@@ -8692,6 +8710,7 @@ where
     F: AreaStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -8756,8 +8775,8 @@ where
     }
 }
 
-async fn admin_list_tables<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_list_tables<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Query(query): Query<FloorListQuery>,
 ) -> Response
@@ -8765,6 +8784,7 @@ where
     F: TableStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -8786,8 +8806,8 @@ where
     }
 }
 
-async fn admin_get_table<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_get_table<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(table_id): Path<String>,
     Query(query): Query<FloorTenantQuery>,
@@ -8796,6 +8816,7 @@ where
     F: TableStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -8822,8 +8843,8 @@ where
     }
 }
 
-async fn admin_create_table<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_create_table<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Json(request): Json<CreateTableRequest>,
 ) -> Response
@@ -8831,6 +8852,7 @@ where
     F: TableStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -8910,8 +8932,8 @@ where
     }
 }
 
-async fn admin_update_table<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_update_table<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(table_id): Path<String>,
     Json(request): Json<UpdateTableRequest>,
@@ -8920,6 +8942,7 @@ where
     F: TableStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -8996,8 +9019,8 @@ where
     }
 }
 
-async fn admin_list_stations<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_list_stations<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Query(query): Query<FloorListQuery>,
 ) -> Response
@@ -9005,6 +9028,7 @@ where
     F: StationStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -9026,8 +9050,8 @@ where
     }
 }
 
-async fn admin_get_station<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_get_station<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(station_id): Path<String>,
     Query(query): Query<FloorTenantQuery>,
@@ -9036,6 +9060,7 @@ where
     F: StationStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -9062,8 +9087,8 @@ where
     }
 }
 
-async fn admin_create_station<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_create_station<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Json(request): Json<CreateStationRequest>,
 ) -> Response
@@ -9071,6 +9096,7 @@ where
     F: StationStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9148,8 +9174,8 @@ where
     }
 }
 
-async fn admin_update_station<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_update_station<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(station_id): Path<String>,
     Json(request): Json<UpdateStationRequest>,
@@ -9158,6 +9184,7 @@ where
     F: StationStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9232,8 +9259,8 @@ where
     }
 }
 
-async fn admin_list_routing<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_list_routing<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Query(query): Query<FloorListQuery>,
 ) -> Response
@@ -9241,6 +9268,7 @@ where
     F: RoutingRuleStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     if let Err(denied) = require_permission(
         &state.admin,
@@ -9262,8 +9290,8 @@ where
     }
 }
 
-async fn admin_create_routing<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_create_routing<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Json(request): Json<CreateRoutingRuleRequest>,
 ) -> Response
@@ -9271,6 +9299,7 @@ where
     F: RoutingRuleStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
@@ -9313,6 +9342,32 @@ where
                 ("course_id", "MUTUALLY_EXCLUSIVE"),
             ],
         );
+    }
+    // And the course it matches on must be one the tenant actually carries, and still carries
+    // ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+    //
+    // Refused at the write rather than at publish, the way the menu graph's cycle is (`would_cycle`)
+    // and for the same reason: a rule that can never match is a rule an operator will never find out
+    // about. It publishes, the store honours it, and it routes nothing — for ever, silently, because
+    // no line can carry that id either.
+    //
+    // **Archived counts as gone.** The compiler does not publish an archived course, so a rule
+    // naming one would be exactly as dead as a rule naming an id that never existed; the two are one
+    // answer here so they cannot drift into different behaviour later.
+    if let Some(course_id) = course_id {
+        let carried = match state.catalog.list_courses(tenant_id).await {
+            Ok(rows) => rows.into_iter().any(|row| {
+                row.record.course_id == course_id && row.record.status != EntityStatus::Archived
+            }),
+            Err(error) => return catalog_error_response(&error),
+        };
+        if !carried {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a routing rule must match a course this tenant carries",
+                &[("course_id", "NOT_FOUND")],
+            );
+        }
     }
     let Some(rule_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoutingRuleId::new)
@@ -9359,8 +9414,8 @@ where
     }
 }
 
-async fn admin_remove_routing<F, A, C>(
-    State(state): State<FloorState<F, A, C>>,
+async fn admin_remove_routing<F, A, C, Cat>(
+    State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
     Path(rule_id): Path<String>,
     Query(query): Query<FloorTenantQuery>,
@@ -9369,6 +9424,7 @@ where
     F: RoutingRuleStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Cat: CatalogStore + Clone + Send + Sync + 'static,
 {
     let context = match require_permission(
         &state.admin,
