@@ -55,6 +55,7 @@ use pos_ports::{PortError, PortName};
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::floor::StationPlan;
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StationId, StoreId};
+use pos_proto::locale::NumberFormat;
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
 use pos_proto::store_profile::StoreProfile;
@@ -145,9 +146,37 @@ fn centred(line: impl Into<String>, emphasised: bool) -> PrintBlock {
 }
 
 /// A `label            amount` line, which is how every figure on a receipt is read.
-fn amount_line(label: &str, amount: Money, exponent: u8) -> PrintBlock {
+/// How this store writes money on paper: how many decimals its currency has
+/// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)) and what marks
+/// its country groups and points a figure with
+/// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
+///
+/// One value rather than two arguments, because the exponent alone was already threaded through four
+/// functions here and a second parallel parameter beside it at every call would be the third
+/// occurrence AGENTS.md §2 says to extract on. It also stops a caller pairing a store's exponent with
+/// another store's marks, which two positional arguments of different types invite.
+#[derive(Debug, Clone)]
+pub struct MoneyStyle {
+    /// How many decimal places the currency has.
+    pub exponent: u8,
+    /// The marks the store's country writes numbers with.
+    pub format: NumberFormat,
+}
+
+impl MoneyStyle {
+    /// The style a store's live session is publishing.
+    #[must_use]
+    pub fn of(session: &EdgeSession) -> Self {
+        Self {
+            exponent: session.currency_exponent,
+            format: session.number_format.clone(),
+        }
+    }
+}
+
+fn amount_line(label: &str, amount: Money, money: &MoneyStyle) -> PrintBlock {
     PrintBlock::Text {
-        line: format!("{label}  {}", format_money(amount, exponent)),
+        line: format!("{label}  {}", format_money(amount, money)),
         style: TextStyle::default(),
     }
 }
@@ -202,7 +231,7 @@ fn percent(basis_points: u32) -> String {
 #[must_use]
 pub fn receipt_document(
     profile: &StoreProfile,
-    currency_exponent: u8,
+    money: &MoneyStyle,
     receipt_number: u64,
     lines: &[ReceiptLine],
     totals: &BillTotals,
@@ -260,47 +289,35 @@ pub fn receipt_document(
             &format!(
                 "  {} x {}",
                 format_quantity(line.quantity),
-                format_money(line.unit_price, currency_exponent)
+                format_money(line.unit_price, money)
             ),
             line.line_total,
-            currency_exponent,
+            money,
         ));
     }
 
     // What was charged. `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the
     // column adds up on paper in both postures — which is what makes the document check out when
     // somebody totals it by hand.
-    blocks.push(amount_line("Subtotal", totals.subtotal, currency_exponent));
+    blocks.push(amount_line("Subtotal", totals.subtotal, money));
     if !totals.discount_total.is_zero() {
-        blocks.push(amount_line(
-            "Discount",
-            totals.discount_total,
-            currency_exponent,
-        ));
+        blocks.push(amount_line("Discount", totals.discount_total, money));
     }
     if !totals.comp_total.is_zero() {
-        blocks.push(amount_line("Comps", totals.comp_total, currency_exponent));
+        blocks.push(amount_line("Comps", totals.comp_total, money));
     }
     if !totals.service_charge.is_zero() {
-        blocks.push(amount_line(
-            "Service charge",
-            totals.service_charge,
-            currency_exponent,
-        ));
+        blocks.push(amount_line("Service charge", totals.service_charge, money));
     }
     for line in &totals.tax_lines {
-        blocks.extend(tax_block(line, currency_exponent));
+        blocks.extend(tax_block(line, money));
     }
     if !totals.rounding_adjustment.is_zero() {
-        blocks.push(amount_line(
-            "Rounding",
-            totals.rounding_adjustment,
-            currency_exponent,
-        ));
+        blocks.push(amount_line("Rounding", totals.rounding_adjustment, money));
     }
 
     blocks.push(PrintBlock::Text {
-        line: format_money(totals.total_due, currency_exponent),
+        line: format_money(totals.total_due, money),
         style: TextStyle {
             emphasised: true,
             double_size: true,
@@ -442,24 +459,31 @@ pub fn short_reference(id: &str) -> String {
 /// So the line stays ASCII: the figure is corrected, and the one thing a receipt must always carry
 /// keeps working on a box nobody has finished installing.
 ///
-/// The thousands separator is `,` rather than the store's published `number_format`, which no
-/// surface reads yet — the till groups with `en-US` too. Making a country's typography authoritative
-/// is a separate decision from getting its arithmetic right, and only the second is ADR-0134's.
-fn format_money(amount: Money, exponent: u8) -> String {
+/// The marks are the store's own, published on its `locale` node
+/// ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)). This used to
+/// group with `,` and point with `.` for every store on earth, and said so: *"making a country's
+/// typography authoritative is a separate decision from getting its arithmetic right."* It was, it
+/// has since been made, and a Vietnamese guest's receipt now reads `VND 97.900` rather than a
+/// spelling nobody in the country writes.
+fn format_money(amount: Money, money: &MoneyStyle) -> String {
     let negative = amount.amount_minor < 0;
     let absolute = amount.amount_minor.unsigned_abs();
     // Integer the whole way, like every other figure in this crate: `10_u128.pow` rather than a
     // float, and a remainder rather than a fractional part.
-    let scale = 10_u128.pow(u32::from(exponent));
+    let scale = 10_u128.pow(u32::from(money.exponent));
     let major = u128::from(absolute) / scale;
     let minor = u128::from(absolute) % scale;
     let sign = if negative { "-" } else { "" };
-    let grouped = group_thousands(major);
-    if exponent == 0 {
+    let grouped = group_digits(major, &money.format);
+    if money.exponent == 0 {
         return format!("{} {sign}{grouped}", amount.currency_code);
     }
-    let digits = usize::from(exponent);
-    format!("{} {sign}{grouped}.{minor:0digits$}", amount.currency_code)
+    let digits = usize::from(money.exponent);
+    let point = money.format.decimal_separator;
+    format!(
+        "{} {sign}{grouped}{point}{minor:0digits$}",
+        amount.currency_code
+    )
 }
 
 /// One tax rate's line, and the components it is made of beneath it.
@@ -469,11 +493,11 @@ fn format_money(amount: Money, exponent: u8) -> String {
 /// explain. They are allocated out of the *rounded* tax, so they sum to it exactly
 /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)) — which is the property
 /// that makes the block printable at all, rather than three figures that nearly add up.
-fn tax_block(line: &pos_core::billing::TaxLine, exponent: u8) -> Vec<PrintBlock> {
+fn tax_block(line: &pos_core::billing::TaxLine, money: &MoneyStyle) -> Vec<PrintBlock> {
     let mut blocks = vec![amount_line(
         &format!("Tax {}", percent(line.rate_basis_points)),
         line.tax,
-        exponent,
+        money,
     )];
     blocks.extend(line.components.iter().map(|component| {
         amount_line(
@@ -483,23 +507,33 @@ fn tax_block(line: &pos_core::billing::TaxLine, exponent: u8) -> Vec<PrintBlock>
                 percent(component.rate_basis_points)
             ),
             component.tax,
-            exponent,
+            money,
         )
     }));
     blocks
 }
 
-/// `1234567` as `1,234,567`.
+/// `1234567` as `1,234,567`, or as `1.234.567` where that is how the country writes it.
 ///
-/// Written out rather than taken from a formatting crate, because this is three lines and the
+/// Written out rather than taken from a formatting crate, because this is a handful of lines and the
 /// alternative is a dependency on a receipt path — and because `pos-edge` has no allocator pressure
 /// here: a receipt has a few dozen figures on it.
-fn group_thousands(value: u128) -> String {
+///
+/// `digits_per_group` is a single number, so this groups uniformly. India writes `12,34,567` —
+/// three digits then pairs — which no single number can express;
+/// [ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md) records that gap and
+/// [ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md) deliberately leaves
+/// it open, so an Indian receipt reads `1,234,567` after this change exactly as it did before.
+///
+/// A group size of zero would loop forever here; it cannot arrive, because the edge refuses to apply
+/// a published format carrying one, but the guard is written rather than assumed.
+fn group_digits(value: u128, format: &NumberFormat) -> String {
     let digits = value.to_string();
-    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    let size = usize::from(format.digits_per_group.max(1));
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / size);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            grouped.push(',');
+        if index > 0 && (digits.len() - index).is_multiple_of(size) {
+            grouped.push(format.group_separator);
         }
         grouped.push(digit);
     }
@@ -928,7 +962,7 @@ impl Printers {
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
         let document = receipt_document(
             &session.profile,
-            session.currency_exponent,
+            &MoneyStyle::of(session),
             receipt_number,
             lines,
             totals,
@@ -1136,9 +1170,9 @@ impl Printers {
 mod tests {
     use super::TcpTransports;
     use super::{
-        ASSUMED_DOTS_PER_LINE, AgentLane, PrintOutcome, Printers, TicketLine, TransportFactory,
-        assumed_capabilities, connection_of, receipt_document, receipt_printer, short_reference,
-        station_printer, ticket_document, ticket_line,
+        ASSUMED_DOTS_PER_LINE, AgentLane, MoneyStyle, PrintOutcome, Printers, TicketLine,
+        TransportFactory, assumed_capabilities, connection_of, receipt_document, receipt_printer,
+        short_reference, station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine};
     use pos_core::billing::BillTotals;
@@ -1148,6 +1182,7 @@ mod tests {
     use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
     use pos_proto::floor::{KitchenStation, StationPlan};
     use pos_proto::ids::{DeviceId, MenuItemId, StationId};
+    use pos_proto::locale::NumberFormat;
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
     use pos_proto::quantity::Quantity;
@@ -1159,6 +1194,18 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     /// A settled bill's totals, for the receipt tests: one 10 % tax line and nothing else.
+    /// The money style a test store writes with: `exponent` decimals and the common marks.
+    ///
+    /// The marks are `NumberFormat::default()` — `1,234.50` — for every fixture but the Vietnamese
+    /// one below, which states its own. That keeps each existing expectation meaning what it meant
+    /// before ADR-0136, so a test that changed is a test whose *country* changed.
+    fn style(exponent: u8) -> MoneyStyle {
+        MoneyStyle {
+            exponent,
+            format: NumberFormat::default(),
+        }
+    }
+
     fn totals_of(total: Money) -> BillTotals {
         let zero = Money::zero(total.currency_code);
         BillTotals {
@@ -1632,7 +1679,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             7,
             &lines,
             &totals_of(vnd(347_000)),
@@ -1664,7 +1711,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             8,
             &lines,
             &totals_of(jpy(2_000)),
@@ -1685,7 +1732,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             7,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
@@ -1711,7 +1758,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
@@ -1758,7 +1805,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             11,
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
@@ -1784,7 +1831,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             12,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
@@ -1848,7 +1895,7 @@ mod tests {
         // The rounding line is the other half of why the exponent is not the same fact as the
         // increment: the invoice still rounds to the whole rupee, which is what `-1.00` is, while
         // the figures it rounds are quoted in paise.
-        let document = receipt_document(&profile, 2, 9, &[], &totals, None);
+        let document = receipt_document(&profile, &style(2), 9, &[], &totals, None);
         assert_eq!(
             lines_of(&document),
             vec![
@@ -1866,6 +1913,71 @@ mod tests {
     }
 
     #[test]
+    fn a_vietnamese_receipt_is_grouped_the_way_vietnam_writes_a_number() {
+        // ADR-0136. The figures were already right after ADR-0134 — the đồng has no subunit, so the
+        // arithmetic was never the problem here — but they were *spelled* `VND 1,234,567`, which is
+        // not how anyone in the country writes a number. The store's own pack says `.` groups and
+        // `,` points, and now the paper says it too.
+        let profile = StoreProfile {
+            legal_name: "Pizza 4P's Bến Thành".to_owned(),
+            ..StoreProfile::default()
+        };
+        let vietnam = MoneyStyle {
+            // The đồng has no subunit, so nothing here exercises the decimal mark. The mark is still
+            // published and still differs from the default, which is why the two-decimal case below
+            // exists: a store on a fractional currency in a comma-decimal country is where getting
+            // only the group separator right would still print a figure nobody writes.
+            exponent: 0,
+            format: NumberFormat {
+                decimal_separator: ',',
+                group_separator: '.',
+                digits_per_group: 3,
+            },
+        };
+        let document = receipt_document(
+            &profile,
+            &vietnam,
+            5,
+            &[],
+            &totals_of(Money::new(CurrencyCode::VND, 1_234_567)),
+            None,
+        );
+        assert!(
+            lines_of(&document).contains(&"VND 1.234.567"),
+            "the total is grouped the way the store's country writes numbers: {:?}",
+            lines_of(&document)
+        );
+    }
+
+    #[test]
+    fn both_marks_are_the_store_s_own_where_the_currency_has_a_fraction() {
+        // The case a group-separator-only fix would still get wrong: two decimals *and* a country
+        // that points with a comma. `1.234,56` is one figure; `1.234.56` and `1,234,56` are both
+        // nonsense, and each is what you get from honouring one mark and not the other.
+        let style = MoneyStyle {
+            exponent: 2,
+            format: NumberFormat {
+                decimal_separator: ',',
+                group_separator: '.',
+                digits_per_group: 3,
+            },
+        };
+        let document = receipt_document(
+            &StoreProfile::default(),
+            &style,
+            6,
+            &[],
+            &totals_of(Money::new(CurrencyCode::USD, 123_456)),
+            None,
+        );
+        assert!(
+            lines_of(&document).contains(&"USD 1.234,56"),
+            "both marks come from the store: {:?}",
+            lines_of(&document)
+        );
+    }
+
+    #[test]
     fn a_registration_label_with_no_number_prints_no_line() {
         // A label alone reads as a number somebody forgot to type, which on a tax invoice is worse
         // than a shorter receipt.
@@ -1877,7 +1989,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
-            0,
+            &style(0),
             3,
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
