@@ -40,6 +40,14 @@ export interface OrderLine {
   // — so a line read "Margherita" whether the server picked 25cm or 30cm, on the order screen and on
   // the kitchen board alike. The price was right and the caption said nothing.
   modifierMenuItemIds: string[];
+  // When the line went to the kitchen, as the edge recorded it. Absent while it is still on the pad.
+  //
+  // The edge takes it from the firing event's own envelope, so a kitchen board that reloads
+  // mid-service still counts from when the food was ordered rather than from its own start-up. A
+  // *live* fire arriving on the fan-out carries no time — the fan-out sends only a type and a
+  // payload — so the fold below stamps this device's clock, which is right to within the latency of
+  // the message that just arrived; the next read of `/api/orders/live` replaces it with the edge's.
+  firedTime?: string;
   // The course this line goes out on, when the store runs courses (ADR-0130). Absent means the line
   // is on no course, which is every line on a store that has authored none — and a fire-by-course
   // never sweeps one up.
@@ -388,7 +396,20 @@ export function fold(event: ServerEvent): void {
     case "sales.order_line.fired": {
       const lineId = str(payload, "order_line_id");
       if (lineId !== null && state.lines[lineId] !== undefined) {
-        setState("lines", lineId, "state", "ORDER_LINE_STATE_FIRED");
+        setState(
+          produce((draft) => {
+            const line = draft.lines[lineId];
+            if (line === undefined) {
+              return;
+            }
+            line.state = "ORDER_LINE_STATE_FIRED";
+            // The fan-out carries a type and a payload and no envelope, so there is no edge time to
+            // read here. This device's clock is right to within the latency of the message that
+            // just arrived, and the next `/api/orders/live` read replaces it with the edge's — which
+            // is the value a board that reloads will count from.
+            line.firedTime = new Date().toISOString();
+          }),
+        );
       }
       break;
     }
@@ -542,6 +563,9 @@ export interface KitchenLine {
   orderId: string;
   name: string;
   tableLabel: string;
+  // When the kitchen was asked for it, so the board can say how long it has been waiting. Absent
+  // only for a line fired by an edge too old to send the field.
+  firedTime?: string;
   // What was chosen, already in words. A board showing only "Margherita" cannot tell a 25cm from a
   // 30cm, which is the whole reason the edge captures them and the ticket printer prints them.
   modifiers: string[];
@@ -566,6 +590,7 @@ export function firedLines(): KitchenLine[] {
       name: line.name,
       tableLabel: tableLabel(state.orderTable[line.orderId] ?? ""),
       modifiers: modifierNames(line),
+      firedTime: line.firedTime,
     }));
 }
 
@@ -885,6 +910,9 @@ export async function loadLiveOrders(): Promise<void> {
             // `?? undefined` because the wire omits it rather than sending null, and an absent
             // course is a line on none — the state every line is in until a store authors one.
             courseId: line.course_id ?? undefined,
+            // `?? undefined` for an edge that predates the field as much as for a line not yet
+            // fired: both mean the board has no age to show, and it draws the same row either way.
+            firedTime: line.fired_time ?? undefined,
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;

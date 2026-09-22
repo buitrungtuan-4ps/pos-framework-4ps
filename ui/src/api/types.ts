@@ -59,6 +59,9 @@ export interface LiveLine {
   // Whether a station marked it prepared. Orthogonal to `state`, and what stops a kitchen display
   // re-showing a ticket that was already bumped.
   bumped: boolean;
+  // When the line went to the kitchen, RFC 3339. Omitted while it is still on the pad, and by an
+  // edge older than the field.
+  fired_time?: string;
   // What was chosen for the line (ADR-0127), as ids. Optional on the type because an edge built
   // before the field sends none, and a till upgraded ahead of its store must not read `undefined`
   // as a crash.

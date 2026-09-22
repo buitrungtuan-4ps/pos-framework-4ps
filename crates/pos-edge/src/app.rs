@@ -1157,6 +1157,8 @@ pub struct LiveOrderLine {
     /// Whether a station has marked it prepared (`kitchen.ticket.bumped`). Orthogonal to `state`,
     /// and the reason a kitchen display coming online does not re-show tickets already made.
     pub bumped: bool,
+    /// When the line went to the kitchen, or `None` while it is still on the pad.
+    pub fired_time: Option<Timestamp>,
     /// What was chosen for the line (ADR-0127). Ids; the caller names them from its own price book,
     /// because an order screen and a kitchen board want today's spelling.
     ///
@@ -1264,6 +1266,13 @@ struct LineRecord {
     tax_class_id: TaxClassId,
     /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
     modifier_menu_item_ids: Vec<MenuItemId>,
+    /// When the line went to the kitchen, or `None` while it is still on the pad.
+    ///
+    /// Taken from the *envelope* of `sales.order_line.fired` rather than read off a clock here, so
+    /// it survives a rebuild: a kitchen screen that reloads mid-service is exactly the screen that
+    /// most needs to know a ticket has been waiting eleven minutes, and one that started counting
+    /// from its own start-up would report every ticket as new.
+    fired_time: Option<Timestamp>,
 }
 
 impl From<SalesOrderLineAdded> for LineRecord {
@@ -1284,6 +1293,9 @@ impl From<SalesOrderLineAdded> for LineRecord {
             line_total: event.line_total,
             tax_class_id: event.tax_class_id,
             modifier_menu_item_ids: event.modifier_menu_item_ids,
+            // An added line has not been fired, so there is no time to record yet. The fold on
+            // `sales.order_line.fired` fills it from that event's own envelope.
+            fired_time: None,
         }
     }
 }
@@ -1622,6 +1634,36 @@ impl Projection {
         if let Some(record) = self.lines.get_mut(&line_id) {
             record.state = state;
         }
+    }
+
+    /// Records when a line went to the kitchen, beside the state change that sent it.
+    ///
+    /// Its own method rather than a second argument to [`Self::set_line_state`], because a void and
+    /// a hold move a line's state and have no fire time to record — and because **every** path that
+    /// fires has to call both. There are three: the single-line fire, the batch fire behind
+    /// "send to kitchen", and the fold that rebuilds a projection from the log. A fourth that set
+    /// the state and forgot the time would give a screen a ticket it could not age, which is the
+    /// shape of the bug this pair replaced.
+    ///
+    /// The value is `SalesOrderLineFired::fire_time` — the domain's own field, minted once per
+    /// command — so the live write and the replay of that same command agree by construction rather
+    /// than by two clocks happening to match.
+    fn set_fired_time(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+        if let Some(record) = self.lines.get_mut(&line_id) {
+            record.fired_time = Some(fired_time);
+        }
+    }
+
+    /// Both halves of a fire, for the replay.
+    ///
+    /// The two live paths set the state from the decision they just took, so they call
+    /// [`Self::set_line_state`] and [`Self::set_fired_time`] in turn. The fold has no decision — the
+    /// event *is* the fire — so it says so in one call, which also keeps [`Self::fold`] inside the
+    /// hundred lines clippy allows it. That limit is worth keeping: the fold is one match over every
+    /// event type this edge knows, and it earns its length one arm at a time.
+    fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+        self.set_line_state(line_id, OrderLineState::Fired);
+        self.set_fired_time(line_id, fired_time);
     }
 
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
@@ -3331,6 +3373,9 @@ impl<S: EventStore> Edge<S> {
         {
             let mut projection = self.lock_projection();
             projection.set_line_state(order_line_id, decision.next_state);
+            // The same `ctx.now` the event carries, so a board reading the projection and a board
+            // rebuilt from the log show the same age.
+            projection.set_fired_time(order_line_id, ctx.now);
             // §8: stock leaves at fire, not at payment. Folded here rather than discarded — see
             // `Projection::stock` for what this figure is and is not yet.
             projection.consume(&decision.stock_movements);
@@ -3547,6 +3592,7 @@ impl<S: EventStore> Edge<S> {
                         line_total: record.line_total,
                         state: record.state,
                         bumped: projection.bumped_lines.contains(&order_line_id),
+                        fired_time: record.fired_time,
                         modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
                         seat: record.seat,
                         course_id: record.course_id,
@@ -3767,6 +3813,9 @@ impl<S: EventStore> Edge<S> {
             let mut projection = self.lock_projection();
             for (order_line_id, record, station_id, decision) in applied {
                 projection.set_line_state(order_line_id, decision.next_state);
+                // Per line, as the single-line path does, and from the same `ctx.now` those lines'
+                // events carry: one "send to kitchen" fires its lines together, so they age together.
+                projection.set_fired_time(order_line_id, ctx.now);
                 // §8: stock leaves at fire, not at payment — per line, as the single-line path does.
                 projection.consume(&decision.stock_movements);
                 views.push(LineView {
@@ -4593,7 +4642,7 @@ impl<S: EventStore> Edge<S> {
             EventType::SalesOrderLineFired => {
                 let event: SalesOrderLineFired =
                     envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_line_state(event.order_line_id, OrderLineState::Fired);
+                projection.fold_fired(event.order_line_id, event.fire_time);
             }
             EventType::SalesOrderLineUpdated => {
                 let event: SalesOrderLineUpdated =
