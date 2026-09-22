@@ -106,6 +106,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store's retention period never reached the store either, and now a test says which fields do.**
+  The edge has read `default_retention_days` from its `locale` node since
+  [ADR-0107](docs/adr/0107-the-buyer-is-a-subject.md) gave the store its own retention sweep. The
+  node never carried it, so every store swept on the edge's own bootstrap figure rather than on its
+  country's.
+
+  **Nothing was being kept too long.** Every country pack, `LocalePack::default` and the edge
+  bootstrap all say 365 days, so no store's period was wrong, and the sweep itself has been running
+  on schedule throughout. What the gap would have cost is the next change: each pack's figure is
+  marked *"a default, not a determination"*, and the first time a country's real period was set,
+  every store would have gone on forgetting at 365 while the publish looked applied.
+
+  It comes from the country pack rather than from the settings form, for the reason the exponent
+  does — a retention period answers to a privacy notice, and a form field invites a number that
+  suits the shop rather than the law. It is keyed on the **country**, where the exponent is keyed on
+  the currency: retention is a fact about a jurisdiction, and the currency a shop takes payment in
+  is not one.
+
+  The node now also has a test asserting it carries exactly what the edge reads, in **both**
+  directions — a field the edge parses and the cloud never sends is a feature that does nothing, and
+  a field the cloud sends and nothing reads is a payload nobody consumes. Both had happened, and
+  neither showed up as a failure anywhere else.
+
+  **Upgrade note:** none. The published figure matches what every store was already using, so no
+  store's retention behaviour changes on this release. As with the exponent, a store receives the
+  value when its locale node is next published.
+
 - **The currency's exponent was never actually published, so both fixes that depend on it were
   inert.** [ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md) says the exponent
   *"rides the `locale` config node to the store and is served on `GET /api/locale`"*. It did not: the

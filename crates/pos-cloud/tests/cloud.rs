@@ -13485,6 +13485,11 @@ async fn a_locale_publish_tells_the_store_how_many_decimals_its_currency_has() {
         "without this the edge keeps its bootstrap zero, `GET /api/locale` serves that zero as an \
          answer, and an Indian store prints `INR 26145` on a tax invoice"
     );
+    assert_eq!(
+        state.record.layers[2]["locale"]["default_retention_days"], 365,
+        "the store's retention period travels on the same node and from the same registry \
+         (ADR-0107), so the wiring that carries one carries both"
+    );
 }
 
 #[tokio::test]
