@@ -299,6 +299,13 @@ pub struct EdgeSession {
     pub display_language: Option<String>,
     /// The store's currency.
     pub currency: CurrencyCode,
+    /// How many decimal places that currency has
+    /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    ///
+    /// Beside `currency` because it is the same fact: an `amount_minor` means nothing without it.
+    /// Published by the country pack and applied from the `locale` node, like every other value
+    /// here — the till and the receipt both read it rather than each keeping a table.
+    pub currency_exponent: u8,
     /// The store's timezone, for business-date derivation (ADR-0014).
     pub timezone: StoreTimeZone,
     /// The hour the trading day rolls over.
@@ -526,6 +533,10 @@ impl EdgeSession {
             granted: Permission::ALL.iter().copied().collect(),
             capabilities: CapabilityContext::full_service(),
             currency: CurrencyCode::VND,
+            // Zero, because the bootstrap currency is the đồng and the đồng has no subunit. A
+            // *named* fallback for a named currency, not a default standing in for an unknown one:
+            // a store that syncs a locale node replaces both together.
+            currency_exponent: 0,
             timezone: StoreTimeZone::utc(),
             cutoff: CutoffHour::new(4).expect("4 is a valid cut-off hour"),
             connectivity: Connectivity::Offline,

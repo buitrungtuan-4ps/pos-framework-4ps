@@ -456,6 +456,23 @@ pub struct LocalePack {
     pub country_code: CountryCode,
     /// The currency its law denominates in.
     pub currency_code: CurrencyCode,
+    /// How many decimal places that currency has: `0` for the đồng and the yen, `2` for the paisa
+    /// and the cent ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    ///
+    /// Money is an integer in the minor unit and floating point is banned at every layer
+    /// (`docs/naming-and-api.md` §4), so this is the one fact that turns that integer back into
+    /// something a person reads — and the one fact nothing in this tree used to hold. It was a
+    /// three-row table in the front end ending in `?? 0`, which is right for the đồng and the yen
+    /// and silently wrong for the rupee: ₹261.45 drew as `INR 26,145`, a cashier typing a discount
+    /// was out by a hundred, and the receipt printed raw paise.
+    ///
+    /// **Required, not defaulted.** A default here would be the same defect one layer down: a
+    /// country that forgot to say would be given a zero that is indistinguishable from a real
+    /// answer. Required means a pack that omits it does not compile, which is a stronger gate than
+    /// any check and needs no check at all. The *wire* copy is optional, because a cloud that
+    /// predates the field must still publish a locale node an edge can apply — a different
+    /// obligation, in a different type.
+    pub currency_exponent: u8,
     /// The default tax rate table. Overridable per store by `store.tax.tax_class_rates`.
     pub tax_rate_table: TaxRateTable,
     /// How numbers are written.
@@ -750,6 +767,7 @@ mod tests {
                 digits_per_group: 3,
             },
             default_language: TranslationKey::new("vi"),
+            currency_exponent: 0,
             default_retention_days: 365,
             prices_include_tax: false,
             cash_rounding_increment: Some(1_000),

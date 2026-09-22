@@ -34,6 +34,13 @@ use crate::app::Edge;
 pub(crate) struct LocaleResponse {
     /// The currency every figure on this till is denominated in.
     currency_code: String,
+    /// How many decimal places that currency has: `0` for the đồng and the yen, `2` for the paisa
+    /// and the cent ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+    ///
+    /// Sent because a till cannot work it out. Every figure it draws and every figure a cashier
+    /// types is an integer in the minor unit, and without this the screen has to guess where the
+    /// decimal point goes — which it did, from a three-row table that had no row for the rupee.
+    currency_exponent: u8,
     /// The notes a guest hands over, ascending, in minor units. Empty means the exact amount only.
     cash_denominations: Vec<i64>,
     /// What the grand total is rounded to in cash, in minor units, or `null` for no rounding.
@@ -57,6 +64,7 @@ where
         StatusCode::OK,
         Json(LocaleResponse {
             currency_code: session.currency.as_str().to_owned(),
+            currency_exponent: session.currency_exponent,
             cash_denominations: session.cash_denominations.clone(),
             cash_rounding_increment: session.cash_rounding_increment,
             prices_include_tax: session.prices_include_tax,

@@ -62,6 +62,10 @@ impl CountryModule for Zz {
         LocalePack {
             country_code: CountryCode::ZZ,
             currency_code: CurrencyCode::USD,
+            // A hundred cents to the dollar (ADR-0134). Stated here rather than defaulted for the
+            // reason every other value in this reference pack is: a module copied from this one
+            // should start out having answered the question, not having inherited an answer.
+            currency_exponent: 2,
             // Every channel stated explicitly, including the ones that share a rate. A real country
             // must do the same, because `TaxRateTable::rate_for` returns `None` for a missing row and
             // never falls back to zero — an item nobody classified charging no tax is a bug found by

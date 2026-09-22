@@ -299,6 +299,7 @@ mod tests {
             LocalePack {
                 country_code: self.0,
                 currency_code: CurrencyCode::VND,
+                currency_exponent: 0,
                 tax_rate_table: TaxRateTable::new(),
                 number_format: NumberFormat::default(),
                 default_language: TranslationKey::new("en"),

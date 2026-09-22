@@ -55,6 +55,9 @@ impl CountryModule for Vietnam {
         LocalePack {
             country_code: CountryCode::VN,
             currency_code: CurrencyCode::VND,
+            // The đồng has no subunit anyone uses: `amount_minor` *is* a whole đồng, so a price
+            // never carries a decimal point (ADR-0134).
+            currency_exponent: 0,
             tax_rate_table: rate_table(),
             // 1.234.567,89 — the group separator is the full stop and the decimal is the comma,
             // which is the opposite of the default and the reason this field exists.
