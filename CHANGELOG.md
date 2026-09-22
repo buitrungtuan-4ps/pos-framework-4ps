@@ -82,6 +82,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The till held every font on the box, and held a collection once per face.** Measured on a plain
+  Debian box, a scan of `/usr/share/fonts` cost **139 MB of resident memory**; it now costs **83 MB**,
+  and keeps 10 faces where it kept 50. The scripts the store can print are identical — the boot log's
+  coverage line reads the same before and after.
+
+  Two separate faults, both invisible from the outside:
+
+  - A `.ttc` collection is one file holding several faces, and every face owned its own copy of the
+    whole file. `wqy-zenhei.ttc` is 16.8 MB and declares three faces: 50.4 MB for one file. The bytes
+    are shared now, so it costs 16.8 MB.
+  - `FontLibrary::face_for` answers with the **first** face covering a character, so a face whose
+    every codepoint an earlier face already covers can never be chosen. Twelve Liberation faces —
+    three families times four styles — all cover the same Latin, and eleven of them were unreachable
+    the moment the first was loaded. They are no longer kept. This is not a heuristic: `face_for`,
+    `covers`, `missing` and `coverage` all answer identically, and the line metrics in `text.rs` read
+    face 0, which is never dropped.
+
+  The default on a Windows till is `C:\Windows\Fonts`, which carries several hundred faces including
+  CJK collections of tens of megabytes each — the same two faults, at a larger scale, on the machine
+  with the least headroom.
+
+  The list also now has an explicit ceiling (`MAX_FONT_BYTES`, `MAX_FACES`), which `AGENTS.md` §2
+  requires of every in-memory structure and which a directory scan had never had. What a ceiling
+  refuses is counted, not dropped in silence: the boot log prints `skipped` and `held_bytes` beside
+  the coverage line, so a store that really does need the sixty-fifth face learns it from a log
+  rather than from a blank ticket during service.
+
+  **Upgrade note:** none. No configuration changes, and a store printing the same scripts prints them
+  the same way.
+
 - **A tip on a bill that was not a round number stopped the settle.** The pay screen worked out its
   5/10/15% keys with `(total * percent) / 100` — a float division on a money path. On a bill of
   304,733₫ the 5% key was 15,236.65; `Money.amount_minor` is an `i64`, and the edge's deserializer

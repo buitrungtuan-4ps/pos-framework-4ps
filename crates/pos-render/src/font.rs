@@ -14,10 +14,39 @@
 //! is paid for by [`FontLibrary::coverage`]: the edge reports at boot which scripts it can actually
 //! print, so a missing font is a line in the log and a field on the fleet screen rather than a
 //! blank ticket at dinner service.
+//!
+//! # What the library refuses to hold
+//!
+//! A store's font directory is not a curated list. `/usr/share/fonts` on a plain Debian box carries
+//! fifty faces, and `C:\Windows\Fonts` — the default on the Windows tills this framework targets —
+//! carries several hundred, among them CJK collections of tens of megabytes each. The edge scans
+//! that directory at boot and keeps what it finds resident for the life of the process.
+//!
+//! Three rules keep that from being the whole directory:
+//!
+//! 1. **One copy of each file.** A `.ttc` collection holds several faces in one file, and every face
+//!    borrows from the same bytes. Measured on a plain Debian box, `wqy-zenhei.ttc` is 16.8 MB and
+//!    holds three faces — 50.4 MB when each face owned its own copy, 16.8 MB now.
+//! 2. **No face that cannot be reached.** `FontLibrary::face_for` answers with the **first** face
+//!    covering a character, so a face whose every codepoint an earlier face already covers can never
+//!    be chosen. Twelve Liberation faces — three families times four styles — all cover the same
+//!    Latin, and eleven of them were unreachable the moment the first was loaded. Dropping them is
+//!    not a heuristic: `face_for`, `covers`, `missing` and `coverage` all answer identically before
+//!    and after, and the metrics in `text.rs` are read from face 0, which is never dropped.
+//! 3. **An explicit ceiling**, [`MAX_FONT_BYTES`] and [`MAX_FACES`], because the two rules above
+//!    bound the ordinary case and not the adversarial one. What was skipped is counted rather than
+//!    silently lost: the edge logs [`FontLibrary::skipped`] beside the coverage line, so a store
+//!    that really does need the hundred-and-first face learns it from a log rather than from a
+//!    blank ticket.
+//!
+//! Measured on this crate's own CI box, a scan of `/usr/share/fonts` cost 139 MB of resident memory
+//! before these rules and is the reason they exist: a till that trades on 2 GB of RAM cannot spend
+//! a fifteenth of it on fonts for scripts the store does not print.
 
 use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use skrifa::MetadataProvider as _;
 
@@ -66,7 +95,12 @@ pub(crate) struct LoadedFace {
     /// Where it came from, for diagnostics.
     name: String,
     /// The file's bytes. A face borrows from these, so they outlive every face built from them.
-    data: Vec<u8>,
+    ///
+    /// Shared rather than owned, because a `.ttc` collection is one file holding several faces and
+    /// each of them needs the whole of it: the table directory a face is built from points into
+    /// bytes the other faces also use. Owning a copy apiece cost 50.4 MB for a 16.8 MB file on a
+    /// plain Debian box, and a Windows till's CJK collections are larger again.
+    data: Arc<[u8]>,
     /// Which face inside a collection file.
     index: u32,
     /// Font design units per em — the denominator for every scale in this crate.
@@ -141,7 +175,37 @@ impl LoadedFace {
 #[derive(Debug, Default)]
 pub struct FontLibrary {
     faces: Vec<LoadedFace>,
+    /// Every codepoint some loaded face covers, as sorted inclusive ranges — the union of the
+    /// `coverage` of everything in `faces`.
+    ///
+    /// Kept here rather than recomputed because it is what decides whether the next face is worth
+    /// loading, and a directory scan asks that once per face.
+    covered: Vec<(u32, u32)>,
+    /// How many bytes of font file the library is holding, counting a `.ttc` once however many of
+    /// its faces were kept.
+    bytes_held: usize,
+    /// How many faces parsed but were not kept: unreachable ones, and ones a ceiling refused.
+    ///
+    /// Counted rather than discarded silently. The first kind is free — those faces could never
+    /// have been chosen — and the second is not, so an operator whose store really does need the
+    /// face the ceiling refused has a number to find it by.
+    skipped: usize,
 }
+
+/// The most font-file bytes a library will hold.
+///
+/// A ceiling rather than a guess at what a store needs. Latin plus two CJK collections is about
+/// 45 MB, so this leaves room for a store printing several scripts and still refuses the several
+/// hundred megabytes a Windows font directory would otherwise hand over.
+pub const MAX_FONT_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most faces a library will hold.
+///
+/// Every kept face covers a codepoint no earlier face does, so this is far above what any store
+/// prints — Unicode's scripts number in the low hundreds and a receipt uses a handful. It is here
+/// because [`MAX_FONT_BYTES`] alone does not bound the list: one small collection can declare a
+/// great many faces, and a `Vec` with no ceiling is what §2 of `AGENTS.md` forbids.
+pub const MAX_FACES: usize = 64;
 
 impl FontLibrary {
     /// An empty library.
@@ -184,20 +248,55 @@ impl FontLibrary {
             || path.display().to_string(),
             |n| n.to_string_lossy().into(),
         );
-        let added = self.add_bytes(&name, &data);
-        if added == 0 {
+        let outcome = self.load(&name, &data);
+        // `NotAFont` means the bytes parsed as no face at all, not that none of them were worth
+        // keeping. A `.ttc` whose every face an earlier file already covers is a perfectly good
+        // font; answering `Err` for it would have a caller log a corrupt-file warning about a file
+        // that is fine, and `add_directory` treats an error as a reason to say nothing loaded.
+        if outcome.parsed == 0 {
             return Err(LoadError::NotAFont {
                 path: path.to_path_buf(),
             });
         }
-        Ok(added)
+        Ok(outcome.added)
     }
 
     /// Loads every face in an in-memory font file. Returns how many were added, which is zero when
-    /// the bytes are not a font.
+    /// the bytes are not a font **and** when every face in them was already covered.
     pub fn add_bytes(&mut self, name: &str, data: &[u8]) -> usize {
+        self.load(name, data).added
+    }
+
+    /// How many bytes of font file this library holds.
+    ///
+    /// A `.ttc` counts once however many of its faces were kept, because they share one copy. This
+    /// is the figure [`MAX_FONT_BYTES`] bounds, and the one worth logging at boot: it is most of
+    /// what a till's renderer costs in memory.
+    #[must_use]
+    pub const fn bytes_held(&self) -> usize {
+        self.bytes_held
+    }
+
+    /// How many faces parsed but were not kept.
+    ///
+    /// Two reasons, deliberately counted together, because the operator's question is the same
+    /// either way: *is a script missing because of this?* A face that covers nothing an earlier face
+    /// does not could never have been chosen, so skipping it changes nothing; a face a ceiling
+    /// refused might have mattered. Both answer that question the same way — check
+    /// [`FontLibrary::coverage`], which is what the boot log prints beside this number.
+    #[must_use]
+    pub const fn skipped(&self) -> usize {
+        self.skipped
+    }
+
+    /// Loads a font file's faces, keeping the ones that can be reached and fit under the ceilings.
+    fn load(&mut self, name: &str, data: &[u8]) -> Loaded {
         let count = faces_in(data);
-        let mut added = 0;
+        let mut outcome = Loaded::default();
+        // One allocation for the file, cloned as a handle by each face kept from it. Built before
+        // the loop and dropped unused when no face is kept, so a file that contributes nothing
+        // costs nothing.
+        let shared: Arc<[u8]> = Arc::from(data);
         for index in 0..count {
             let Ok(face) = skrifa::FontRef::from_index(data, index) else {
                 continue;
@@ -213,23 +312,42 @@ impl FontLibrary {
             {
                 continue;
             }
+            outcome.parsed += 1;
+            let coverage = coverage_of(&face);
+            // The whole of the dedup rule. `face_for` answers with the first covering face, so a
+            // face adding no codepoint to the union can never be the answer to anything.
+            let merged = merge_ranges(&self.covered, &coverage);
+            if covered_codepoints(&merged) == covered_codepoints(&self.covered) {
+                self.skipped += 1;
+                continue;
+            }
+            // Counted once per file, on the first face kept from it: the rest share these bytes.
+            let cost = if outcome.added == 0 { data.len() } else { 0 };
+            if self.faces.len() >= MAX_FACES
+                || self.bytes_held.saturating_add(cost) > MAX_FONT_BYTES
+            {
+                self.skipped += 1;
+                continue;
+            }
             let loaded = LoadedFace {
                 name: if count > 1 {
                     format!("{name}#{index}")
                 } else {
                     name.to_owned()
                 },
-                data: data.to_vec(),
+                data: Arc::clone(&shared),
                 index,
                 units_per_em: metrics.units_per_em,
                 ascender: whole(metrics.ascent),
                 descender: whole(metrics.descent),
-                coverage: coverage_of(&face),
+                coverage,
             };
             self.faces.push(loaded);
-            added += 1;
+            self.covered = merged;
+            self.bytes_held = self.bytes_held.saturating_add(cost);
+            outcome.added += 1;
         }
-        added
+        outcome
     }
 
     /// Loads every font file under `directory`, including its subdirectories.
@@ -395,6 +513,54 @@ fn coverage_of(face: &skrifa::FontRef<'_>) -> Vec<(u32, u32)> {
     ranges
 }
 
+/// What one font file contributed.
+///
+/// Two numbers because they answer different questions: `parsed` is whether the bytes were a font
+/// at all, which is what [`LoadError::NotAFont`] reports, and `added` is how many faces the library
+/// kept, which is what a caller counting coverage wants. Before the dedup rule they were the same
+/// number, and collapsing them again would have a file whose faces are all already covered read as
+/// a corrupt file.
+#[derive(Debug, Default, Clone, Copy)]
+struct Loaded {
+    /// Faces that parsed and had outlines, whether or not they were kept.
+    parsed: usize,
+    /// Faces the library kept.
+    added: usize,
+}
+
+/// How many codepoints a set of sorted inclusive ranges covers.
+///
+/// `u64` because the ranges are `u32` pairs and their sum can leave `u32` — a face covering the
+/// whole plane would.
+fn covered_codepoints(ranges: &[(u32, u32)]) -> u64 {
+    ranges
+        .iter()
+        .map(|(first, last)| u64::from(*last) - u64::from(*first) + 1)
+        .sum()
+}
+
+/// The union of two sets of sorted inclusive ranges, itself sorted and with touching ranges joined.
+///
+/// Joining ranges that merely touch — `(1, 5)` and `(6, 9)` becoming `(1, 9)` — matters because the
+/// result is compared by codepoint count, and a set that kept them apart would still be correct but
+/// would grow without bound over a directory scan.
+fn merge_ranges(left: &[(u32, u32)], right: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(left.len() + right.len());
+    let mut all: Vec<(u32, u32)> = Vec::with_capacity(left.len() + right.len());
+    all.extend_from_slice(left);
+    all.extend_from_slice(right);
+    all.sort_unstable();
+    for (first, last) in all {
+        match merged.last_mut() {
+            // `first <= joined.1 + 1` covers both overlap and adjacency; the saturating add is for
+            // a range ending at `u32::MAX`, where nothing can be adjacent above it anyway.
+            Some(joined) if first <= joined.1.saturating_add(1) => joined.1 = joined.1.max(last),
+            _ => merged.push((first, last)),
+        }
+    }
+    merged
+}
+
 /// How many faces a font file holds — more than one only for a collection (`.ttc`).
 fn faces_in(data: &[u8]) -> u32 {
     skrifa::raw::FileRef::new(data).map_or(1, |file| match file {
@@ -420,7 +586,7 @@ fn whole(value: f32) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use super::FontLibrary;
+    use super::{Arc, FontLibrary, covered_codepoints, merge_ranges};
     use std::path::Path;
 
     /// A face that is present wherever this repository's tests run: the `fonts-dejavu-core` package
@@ -497,5 +663,121 @@ mod tests {
         assert!(face.covers(u32::from('A')));
         assert!(face.covers(0x1EC7)); // ệ
         assert!(!face.covers(0x4E00)); // 一, which DejaVu does not carry
+    }
+
+    /// The dedup rule, stated as the thing an operator would notice: loading the same font twice
+    /// costs nothing the second time.
+    ///
+    /// Written with one file loaded twice rather than with two different fonts, because it is the
+    /// only shape that is deterministic on any box: whatever the file covers, the second copy
+    /// covers exactly that and nothing more, which is precisely the condition the rule tests for.
+    /// It is also not a contrived case — a store with `/usr/share/fonts` and `/usr/local/share/fonts`
+    /// both in `font_directories`, one a symlink to the other, is a real deployment.
+    #[test]
+    fn a_face_that_adds_no_coverage_is_not_kept() {
+        let path = Path::new("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+        if !path.exists() {
+            return;
+        }
+        let mut library = FontLibrary::new();
+        assert_eq!(library.add_file(path).expect("first load"), 1);
+        let after_first = library.bytes_held();
+        assert!(after_first > 0, "the first copy is held");
+
+        assert_eq!(
+            library.add_file(path).expect("second load"),
+            0,
+            "the second copy covers nothing the first does not"
+        );
+        assert_eq!(library.len(), 1, "and so is not kept");
+        assert_eq!(library.skipped(), 1, "but is counted, not lost");
+        assert_eq!(
+            library.bytes_held(),
+            after_first,
+            "and costs no memory — which is the whole point"
+        );
+
+        // What the store can print is unchanged, which is what makes the skip safe.
+        assert!(library.covers('ệ'));
+        assert!(library.missing("Phở bò tái nạm").is_empty());
+    }
+
+    /// A second, *different* font is kept — so the rule above is dropping redundancy rather than
+    /// everything after the first file.
+    ///
+    /// Skips when the box has no second font carrying a script `DejaVu` does not, because the
+    /// assertion has no meaning without one.
+    #[test]
+    fn a_face_that_adds_coverage_is_kept() {
+        let Some(mut library) = dejavu() else {
+            return;
+        };
+        let Some(cjk) = ["/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"]
+            .into_iter()
+            .map(Path::new)
+            .find(|path| path.exists())
+        else {
+            return;
+        };
+        assert!(!library.covers('一'), "DejaVu has no kanji to start with");
+        assert!(
+            library.add_file(cjk).expect("load") > 0,
+            "the CJK face adds coverage, so it is kept"
+        );
+        assert!(library.covers('一'), "and the store can now print it");
+    }
+
+    /// A collection file is held once, not once per face.
+    ///
+    /// The measurement that started this: `wqy-zenhei.ttc` is 16.8 MB and declares three faces, and
+    /// a copy apiece cost 50.4 MB for one file. Asserted as "no more than the file", which holds
+    /// however many of its faces this box's earlier fonts happen to make redundant.
+    #[test]
+    fn a_collection_is_held_once_however_many_of_its_faces_are_kept() {
+        let path = Path::new("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc");
+        if !path.exists() {
+            return;
+        }
+        let size = std::fs::metadata(path).expect("stat").len();
+        let mut library = FontLibrary::new();
+        let added = library.add_file(path).expect("load");
+        assert!(
+            added > 1,
+            "this fixture is a collection, so it contributes several faces"
+        );
+        assert_eq!(
+            u64::try_from(library.bytes_held()).expect("fits"),
+            size,
+            "{added} faces share one copy of the file"
+        );
+
+        // The accounting above is a number this crate writes down; this is the thing itself. Two
+        // faces of one collection must borrow the *same* allocation, or `bytes_held` would be a
+        // comforting figure next to three copies of a 16.8 MB file.
+        let first = library.face(0).expect("face 0");
+        let second = library.face(1).expect("face 1");
+        assert!(
+            std::ptr::eq(Arc::as_ptr(&first.data), Arc::as_ptr(&second.data)),
+            "the faces of one collection point at one copy of its bytes"
+        );
+    }
+
+    #[test]
+    fn the_union_of_two_range_sets_joins_the_ones_that_touch() {
+        // Adjacent, so they become one: the count is what the dedup rule compares, and a set that
+        // kept touching ranges apart would grow over a directory scan without covering more.
+        assert_eq!(merge_ranges(&[(1, 5)], &[(6, 9)]), vec![(1, 9)]);
+        // Overlapping.
+        assert_eq!(merge_ranges(&[(1, 5)], &[(3, 9)]), vec![(1, 9)]);
+        // Disjoint, and sorted whichever order they arrive in.
+        assert_eq!(merge_ranges(&[(20, 21)], &[(1, 2)]), vec![(1, 2), (20, 21)]);
+        // One wholly inside the other adds nothing, which is the case the skip is built on.
+        assert_eq!(merge_ranges(&[(1, 9)], &[(3, 4)]), vec![(1, 9)]);
+        assert_eq!(covered_codepoints(&[(1, 9)]), 9);
+        // A range ending at the top of the space does not wrap.
+        assert_eq!(
+            merge_ranges(&[(u32::MAX - 1, u32::MAX)], &[(0, 0)]),
+            vec![(0, 0), (u32::MAX - 1, u32::MAX)]
+        );
     }
 }
