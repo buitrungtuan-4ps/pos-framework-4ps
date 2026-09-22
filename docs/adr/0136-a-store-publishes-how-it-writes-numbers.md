@@ -108,3 +108,52 @@ own.
 - **Dates are not addressed and are in worse shape.** Three console screens call `toLocaleString()`
   with no locale at all while their neighbours pass `locale()`, and no surface has a timezone story.
   That is a different decision with a different answer and it is not this record's.
+
+## Amendment 1 — a menu belongs to a tenant, so the console draws with the reader's marks (2026-09-22)
+
+**What was wrong.** The decision above splits the console by what the operator is doing, and names
+Menus as the authoring case: *"a figure being **authored** for one store — a price in Menus, a
+cash-rounding increment in store settings — follows the **store**, because that field is a preview of
+the till and the paper."*
+
+Menus is not that. A menu belongs to a **tenant**: `listMenus(tenant_id)` is the read, `catalog` is
+`scope: "tenant"` in the console's screen table, and a menu is published to a store *and* to a whole
+cohort of shops. One menu reaches stores in several countries, so there is no "the store" whose marks
+its prices could preview. A price authored for Bến Thành, Tokyo and Bengaluru at once cannot be shown
+in three typographies, and picking one of the three would be a claim rather than a preview.
+
+That also removes the ground the decision stood on. Option 2 — the reader's locale everywhere — was
+rejected because it *"makes the Menus editor show you something other than what you are making."* It
+does not, because what you are making is not denominated in any one country's marks. The objection
+was true of a screen that does not exist.
+
+This was written without checking the console's screen scopes first. The record was wrong for two
+hours and no code was built on it, which is the only reason this is an amendment rather than a
+migration.
+
+**What changes.** The console draws with the **reader's locale**, except where a figure is a setting
+belonging to **one store** — which today means the cash-rounding increment on store settings, a
+store-scoped screen editing that store's own published value.
+
+- **Menus** draws with the reader's locale. No single country owns a tenant's menu.
+- **StoreHub** and **Reports** keep the reader's locale, exactly as decided above. Nothing in that
+  half was affected: their argument is that a regional manager reading Bến Thành, then Tokyo, then
+  Bengaluru wants one column spelled one way, and it still holds.
+- **The receipt and the till are untouched.** Both are read in the country whose paper they produce,
+  both already draw with the store's marks, and neither depended on this split.
+
+**What this costs.** The result is close to the option the record rejected, and saying so is the
+point of an amendment rather than a quiet rewrite: the console is simpler than ADR-0136 planned, and
+the one place a store's own marks appear in it is the field that edits that store's own settings.
+
+**And it needs no code.** The console already draws every figure with the reader's locale —
+`separators()` in `dashboard/src/lib/format.ts` reads `locale()`, and every money surface goes
+through it: `formatAmount` on StoreHub, Reports and Menus, and `MoneyField`, which Menus alone uses.
+The one exception this amendment carves out turns out not to be a money figure at all: store
+settings edits the cash-rounding increment as a plain text field holding the raw minor-unit integer,
+beside the denominations it holds as a comma-joined list, so there is no formatting to change.
+
+So ADR-0136's four surfaces are three. The receipt and the till each needed a change and got one;
+the console needed a **decision**, and the decision is that what it already does is right. That is
+worth writing down precisely because the alternative — a fourth pull request that touches nothing —
+would have looked like the plan being followed.
