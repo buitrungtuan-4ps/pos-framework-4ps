@@ -22,7 +22,8 @@ export const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
 };
 
 /** A blank per-channel price sheet: every channel maps to `null` (not priced). Amounts are integer
- *  minor units (what `MoneyField` edits and `amount_minor` stores). */
+ *  minor units — what `amount_minor` stores, and what `MoneyField` emits from a figure the operator
+ *  typed as money ([ADR-0135](../../../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)). */
 export const emptyPriceSheet = (): Record<SalesChannel, number | null> =>
   Object.fromEntries(SALES_CHANNELS.map((channel) => [channel, null])) as Record<
     SalesChannel,

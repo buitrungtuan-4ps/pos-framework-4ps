@@ -37,6 +37,10 @@ vi.mock("../src/api/client", () => ({
     logout: () => Promise.resolve(),
     listTenants: () => listTenants(),
     listStores: (tenant: string) => listStores(tenant),
+    // The Shell reads the country list on mount for the currency exponents (ADR-0135). Nothing in
+    // this file asserts on money; it is here so the frame mounts, and empty so the nav tests do not
+    // depend on a currency table.
+    listCountries: () => Promise.resolve([]),
   },
   ApiError: class ApiError extends Error {},
 }));

@@ -1,6 +1,8 @@
-// Small presentation helpers. Locale-aware integer formatting for the rollup counts; the app carries
-// no money display today (the daily rollup is event counts, not revenue), so there is no currency
-// formatter here yet — it arrives with the sales rollup that reports totals.
+// Small presentation helpers: locale-aware counts, relative ages, and money read as money rather
+// than as the integer it travels as ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md),
+// [ADR-0135](../../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)). Nothing here
+// reaches the network or holds state: the exponent a money figure needs arrives as an argument, and
+// `state/money.ts` is the one place that binds it to a currency.
 
 import { locale } from "../i18n";
 import type { Money } from "../api/types";
@@ -32,14 +34,101 @@ export function formatRelativeAge(seconds: number): string {
 }
 
 /**
- * An integer `Money` value, grouped for the active locale with its currency code appended (e.g.
- * `150,000 VND`). `amount_minor` is the currency's smallest unit; for VND (v1) that is a whole đồng,
- * so the grouped integer is the price the operator reads. Currencies with a fractional minor unit are
- * shown in minor units — the same units the price is authored in — since the exponent is a locale-pack
- * property this presentation layer does not carry.
+ * The marks the reader's locale writes numbers with: what groups the thousands, and what separates
+ * the fraction. Read from `Intl` rather than listed here, so a locale added to the console gets the
+ * right pair without anyone remembering a table.
+ *
+ * Both halves matter, and they are *swapped* between the two locales this console ships: English
+ * writes `1,234.5`, Vietnamese writes `1.234,5`. A parser that assumed the English pair would read a
+ * Vietnamese operator's `1.234` as one and a bit.
+ *
+ * This is the reader's locale, not the store's published `number_format`, which nothing reads yet —
+ * ADR-0135 leaves typography to its own record. What matters here is only that the two directions
+ * agree: whatever `formatMinor` draws, `parseMoney` reads back.
  */
-export function formatMoney(money: Money): string {
-  return `${new Intl.NumberFormat(locale()).format(money.amount_minor)} ${money.currency_code}`;
+function separators(): { group: string; decimal: string } {
+  const parts = new Intl.NumberFormat(locale()).formatToParts(1234.5);
+  return {
+    group: parts.find((part) => part.type === "group")?.value ?? ",",
+    decimal: parts.find((part) => part.type === "decimal")?.value ?? ".",
+  };
+}
+
+/**
+ * An integer amount in a currency's smallest unit, read as money, with no currency code attached
+ * (e.g. `150,000`, `1,049.00`). `exponent` is how many decimal places that currency has.
+ *
+ * Bare of the code because a form field shows the code as its own adornment and must not repeat it
+ * inside the input; `formatMoney` is the one that appends it.
+ *
+ * Integer arithmetic on the way out, as everywhere money is handled: the fraction is a remainder,
+ * never a float. Padded to the currency's width, so `1,049.5` — which is not a price anyone wrote —
+ * cannot appear where `1,049.50` is meant.
+ */
+export function formatMinor(amountMinor: number, exponent: number): string {
+  const negative = amountMinor < 0;
+  const absolute = Math.abs(amountMinor);
+  const scale = 10 ** exponent;
+  const major = Math.trunc(absolute / scale);
+  const minor = absolute % scale;
+  const grouped = new Intl.NumberFormat(locale()).format(major);
+  const sign = negative ? "-" : "";
+  if (exponent === 0) {
+    return `${sign}${grouped}`;
+  }
+  return `${sign}${grouped}${separators().decimal}${String(minor).padStart(exponent, "0")}`;
+}
+
+/**
+ * An integer `Money` value read as money, with its currency code appended (e.g. `150,000 VND`,
+ * `1,049.00 INR`).
+ *
+ * This used to format `amount_minor` directly and said why: *"the exponent is a locale-pack property
+ * this presentation layer does not carry."* It carries one now (ADR-0135) — and what it printed in
+ * the meantime was not an abstention but a wrong figure: a store on INR read ₹261.45 of net revenue
+ * as `26,145 INR`, on the headline card the business is judged from.
+ *
+ * `exponent` is an argument rather than a lookup, so this stays a pure function of its inputs and
+ * the state module stays the one place a fetched value lives — the same split the till made in
+ * ADR-0134. Screens call `formatAmount` from `state/money.ts`, which binds the exponent for the
+ * amount's own currency; nobody has to remember to pass the right number, and nobody can pass none.
+ */
+export function formatMoney(money: Money, exponent: number): string {
+  return `${formatMinor(money.amount_minor, exponent)} ${money.currency_code}`;
+}
+
+/**
+ * A figure an operator typed, in minor units, or `null` when it is not one the console can send.
+ *
+ * The inverse of `formatMinor`, and the direction that matters more: a wrong exponent when *reading*
+ * merely looks wrong, while a wrong exponent when *writing* authors a different price.
+ *
+ * Whitespace and the locale's grouping mark are noise and are dropped — an operator who pastes back
+ * the `150,000` the field drew means 150000. What is left must be digits and at most one decimal
+ * mark; anything else is refused rather than salvaged, because salvaging a price is how `2,615`
+ * becomes a price nobody typed.
+ *
+ * More decimals than the currency has is refused for the same reason. Rounding `261.456` to `261.46`
+ * would be a silent decision about somebody's menu.
+ */
+export function parseMoney(text: string, exponent: number): number | null {
+  const { group, decimal } = separators();
+  // `split`/`join` rather than a regex: the separators are literal characters handed over by `Intl`,
+  // and compiling them into a pattern would need escaping in exchange for nothing.
+  const bare = text.replace(/\s/g, "").split(group).join("");
+  const [major = "", fraction = "", ...extra] = bare.split(decimal).join(".").split(".");
+  if (extra.length > 0 || !/^\d*$/.test(major) || !/^\d*$/.test(fraction)) {
+    return null;
+  }
+  if (major === "" && fraction === "") {
+    return null;
+  }
+  if (fraction.length > exponent) {
+    return null;
+  }
+  const scaled = `${major === "" ? "0" : major}${fraction.padEnd(exponent, "0")}`;
+  const value = Number(scaled);
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 /**

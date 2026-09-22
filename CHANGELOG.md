@@ -133,6 +133,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   against a photograph or a scan of one should know the figures are now grouped and, in a
   two-decimal currency, no longer in minor units.
 
+- **The console read revenue in paise, and had prices typed the same way.** `formatMoney` in the
+  dashboard formatted `amount_minor` directly, so a store on INR saw ₹261.45 of net revenue as
+  `26,145 INR` — on the Store hub's headline card and on every row of the sales rollup. `MoneyField`
+  edited the same integer, so that price was authored by typing `26145`. Both now read the
+  `currency_exponent` the platform publishes on `GET /admin/countries`
+  ([ADR-0135](docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)), which is what the
+  till and the printed receipt already do
+  ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
+
+  The two halves could not ship apart. The Menus screen shows a price and edits it on one screen, so
+  fixing the display alone would have put `261.45` next to a field reading `26145`.
+
+  The console holds a currency → exponent **map** where the till holds a single value: a till serves
+  one store in one currency, and a console spans every country the platform has a pack for.
+
+  The field refuses a figure it cannot read rather than salvaging the digits it liked — the old one
+  stripped every non-digit, so a mistyped `2,6.1.5` was published as a price of 2,615 without a word
+  — and it refuses more decimals than the currency has rather than rounding somebody's menu.
+
+  Grouping is still the reader's browser locale, not the store's published `number_format`, which no
+  surface reads yet. A country's typography is a separate decision from its arithmetic, and only the
+  second is ADR-0135's.
+
+  **Upgrade note:** nothing stored changes — `amount_minor` is the wire and database form either way,
+  and a price authored before this release is the same integer after it. What changes is what an
+  operator **types**: in a two-decimal country, a price of ₹261.45 is now entered as `261.45` where
+  it was entered as `26145`. Vietnam and Japan see no difference, in either direction: their
+  exponent is zero.
+
 - **The till guessed where the decimal point goes, and guessed wrong for every currency but three.**
   `ui/src/lib/money.ts` held `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect, not the
   missing rows: it is right for the đồng and the yen — the two currencies this app started with —

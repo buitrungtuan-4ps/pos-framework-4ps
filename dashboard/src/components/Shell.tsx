@@ -13,6 +13,7 @@ import { t } from "../i18n";
 import { groupOpen, holdsCurrent, loadOpened, type Opened, rememberOpened } from "../lib/nav-groups";
 import { contextReady, type Scope } from "../lib/scoped";
 import { APP_VERSION } from "../lib/version";
+import { rememberCurrencies } from "../state/money";
 import {
   actingAdmin,
   setActingAdmin,
@@ -103,6 +104,18 @@ export function Shell(props: ParentProps) {
       .whoami()
       .then(setActingAdmin)
       .catch(() => setActingAdmin(null));
+    // How many decimals each currency has, for every screen that draws or edits money
+    // ([ADR-0135](../../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)). Here
+    // rather than per screen because the reports, the hub headline and the menu price editor all
+    // need it and none of them owns it.
+    //
+    // A failure is swallowed for the reason whoami's is: the compiled-in fallbacks in
+    // `state/money.ts` cover every currency this build ships a pack for, so a console that could
+    // not make this read still draws money correctly. Blocking the frame on it would be worse.
+    void api
+      .listCountries()
+      .then(rememberCurrencies)
+      .catch(() => undefined);
   });
 
   const logout = async () => {

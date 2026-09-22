@@ -15,7 +15,8 @@ import {
   splitProps,
 } from "solid-js";
 
-import { locale } from "../i18n";
+import { formatMinor, parseMoney } from "../lib/format";
+import { exponentFor } from "../state/money";
 
 /** A titled panel. `title` is already-translated text; `actions` sits on the header's right. */
 export function Card(props: ParentProps<{ title: string; actions?: JSX.Element }>) {
@@ -709,12 +710,21 @@ export function MultiComboboxField(props: {
 }
 
 /**
- * A money input (ADR-0082) that edits an integer amount in a currency's smallest unit — the exact
- * `amount_minor` it stores — grouping the digits for the active locale as the operator types and
- * showing the (separately chosen) currency code as a static adornment. Only digits are accepted; an
- * empty field emits `null` (not priced). It carries no currency conversion or fractional handling —
- * VND (v1) has no minor part, and other currencies are authored in their minor units, the same
- * convention `formatMoney` reads back.
+ * A money input (ADR-0082) that reads and writes money the way the till does
+ * ([ADR-0135](../../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)): the
+ * operator types `261.45`, the field emits the `26145` that `amount_minor` stores. It groups for the
+ * active locale as they type and shows the (separately chosen) currency code as a static adornment.
+ * An empty field emits `null` — not priced.
+ *
+ * It used to edit the integer directly, and said why: *"VND (v1) has no minor part, and other
+ * currencies are authored in their minor units."* That was the ADR-0082 convention, contingent on a
+ * read of the store's currency that did not exist yet. It does now, so a price in a two-decimal
+ * country is typed as the price rather than as its paise, and the figure beside the field agrees
+ * with what the field holds. Vietnam and Japan see no change: their exponent is zero.
+ *
+ * The exponent is resolved from the currency rather than passed in, so no call site can pair a
+ * field with the wrong one; a currency the country list has not named falls back to the compiled-in
+ * table in `state/money.ts`.
  */
 export function MoneyField(props: {
   label: string;
@@ -729,8 +739,23 @@ export function MoneyField(props: {
    */
   "data-step"?: string;
 }) {
-  const grouped = () =>
-    props.value === null ? "" : new Intl.NumberFormat(locale()).format(props.value);
+  const exponent = () => exponentFor(props.currencyCode);
+  // What the operator is part-way through typing, and `null` when they are not typing.
+  //
+  // Without it a decimal currency cannot be typed at all. The input is controlled from `value`, so
+  // every keystroke round-trips through the parent: typing the `.` of `261.45` would emit 26100,
+  // redraw the field as `261.00`, and put the caret past the `45` the operator had not typed yet.
+  // The draft is what is shown while the field has focus; dropping it on blur is what guarantees the
+  // field always settles on the canonical rendering of what was actually stored, never on a
+  // half-typed string that outlived the typing.
+  const [draft, setDraft] = createSignal<string | null>(null);
+  const shown = () => {
+    const typing = draft();
+    if (typing !== null) {
+      return typing;
+    }
+    return props.value === null ? "" : formatMinor(props.value, exponent());
+  };
   return (
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
@@ -738,13 +763,21 @@ export function MoneyField(props: {
         <input
           data-step={props["data-step"]}
           class="min-h-touch w-full rounded-token border border-line bg-surface-raised px-3 text-base text-ink"
-          inputmode="numeric"
+          // A phone keypad with no decimal key cannot type a decimal price, and one with a decimal
+          // key is a wasted column in a country that has no minor unit.
+          inputmode={exponent() > 0 ? "decimal" : "numeric"}
           placeholder={props.placeholder}
-          value={grouped()}
+          value={shown()}
           onInput={(event) => {
-            const digits = event.currentTarget.value.replace(/\D/g, "");
-            props.onChange(digits === "" ? null : Number(digits));
+            const typed = event.currentTarget.value;
+            setDraft(typed);
+            // A figure this cannot read is `null` — the same thing an empty field is — rather than a
+            // salvaged one. Dropping the characters it did not like is how `2,615` gets published as
+            // a price nobody typed, and on blur the field redraws from `value`, so a refusal is
+            // visible rather than silent.
+            props.onChange(typed.trim() === "" ? null : parseMoney(typed, exponent()));
           }}
+          onBlur={() => setDraft(null)}
         />
         <span class="shrink-0 text-sm text-ink-muted">{props.currencyCode}</span>
       </div>

@@ -34,7 +34,7 @@ import { createSignal, Show, type JSXElement } from "solid-js";
 import { api } from "../api/client";
 import type { Alert, DailyRevenue, DailyRollup, FleetStore } from "../api/types";
 import { t } from "../i18n";
-import { formatCount, formatMoney, formatRelativeAge } from "../lib/format";
+import { formatCount, formatRelativeAge } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { apiMessage } from "../lib/errors";
 import {
@@ -45,6 +45,7 @@ import {
 } from "../lib/posture";
 import { staleNodes, usePublishedNodes } from "../lib/published";
 import { contextReady, onScopedContext, RequireContext } from "../lib/scoped";
+import { formatAmount } from "../state/money";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { screenHref, type ScreenId } from "../state/screens";
 import { GetStarted } from "../components/GetStarted";
@@ -393,7 +394,7 @@ export function StoreHub() {
                 const day = days.at(-1);
                 return {
                   headline: day
-                    ? formatMoney({ amount_minor: day.net, currency_code: day.currency_code })
+                    ? formatAmount({ amount_minor: day.net, currency_code: day.currency_code })
                     : t("hub.money.none"),
                   support: day
                     ? t("hub.money.onDate", {

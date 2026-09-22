@@ -9,9 +9,10 @@ import { createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import type { DailyRevenue, DailyRollup, Store, XzReport } from "../api/types";
 import { t } from "../i18n";
-import { formatCount, formatMoney } from "../lib/format";
+import { formatCount } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { onScopedContext, RequireContext } from "../lib/scoped";
+import { formatAmount } from "../state/money";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { DateField, DateRange, Toolbar } from "../components/kit";
@@ -23,9 +24,9 @@ function canReadRevenue(): boolean {
   return role === "owner" || role === "admin";
 }
 
-/** A minor-unit amount in a currency, formatted for the active locale (reuses the Money formatter). */
+/** A minor-unit amount in a currency, read as money for the active locale (ADR-0135). */
 function money(minor: number, currency: string): string {
-  return formatMoney({ amount_minor: minor, currency_code: currency || "" });
+  return formatAmount({ amount_minor: minor, currency_code: currency || "" });
 }
 
 /** A minimal, theme-aware inline-SVG bar chart. The data table beside it carries the real values, so

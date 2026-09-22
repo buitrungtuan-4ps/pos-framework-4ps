@@ -143,8 +143,9 @@ metrics.
 Present: ICU runtime with typed keys, en+vi at 100% parity with idiomatic Vietnamese, language
 switcher, en-fallback floor, CI string-extraction lint, Vietnamese glyph coverage. Missing: locale
 persistence/detection (resets to en) · endonym labels ("Tiếng Việt") and localized `<title>` ·
-locale-pack-aware money (fractional currencies render in minor units; currency is free text; prices
-typed as raw minor integers) · any date/timezone handling · dynamic translation-grid locales (en/vi
+locale-pack-aware *typography* (money reads the published `currency_exponent` since ADR-0135, but
+grouping is still the reader's browser locale rather than the store's published `number_format`) ·
+any date/timezone handling · dynamic translation-grid locales (en/vi
 hardcoded — ja/ko invisible) · country modules/locale packs surfaced in the cloud (the Rust framework
 exists; pos_cloud builds no CountryRegistry) · tax-rate table editor · per-locale item/menu names ·
 translated names flowing into the compiled MenuBook · CSV import/export + completion % for the grid ·
