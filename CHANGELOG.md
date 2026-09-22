@@ -30,6 +30,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   registry hiccup there is a release with nothing for Windows to install.
 
   **Upgrade note:** none — CI only, no change to any shipped artifact.
+### Changed
+
+- **`sha2` stays out of the backbone; `pos-proto` owns the whole hashing sequence instead**
+  ([ADR-0133](docs/adr/0133-the-backbone-defines-what-is-hashed-not-how.md)).
+  [ADR-0131](docs/adr/0131-a-chained-event-log.md) split the chain's *preimage* (in `pos-proto`)
+  from its *digest* (in each tier that links `sha2`), and left consolidating them to a later record.
+  Four copies of `ChainHash::of(Sha256::digest(preimage.as_bytes()).into())` had accumulated, which
+  is past the third-occurrence rule.
+  - **Measured before deciding.** Adding `sha2` to `tools/backbone-allowlist.toml` costs thirteen
+    crates with default features — including `getrandom`, `rand_core` and `libc` — or eight with
+    `default-features = false`. One of those eight is `cpufeatures`, whose entire job is reading the
+    host, and which pulls `libc` on `aarch64`. The backbone's forbid-pass exists so a reader can say
+    *these three crates touch nothing about the machine*; that would have made the sentence false,
+    and `deps-rule` resolves for the host it runs on, so CI on x86_64 would not have seen the ARM64
+    difference.
+  - **So the dependency is inverted instead.** `EventEnvelope::chain_hash(&self, link, digest)`
+    builds the preimage, applies the caller's digest and wraps the result. Each tier passes
+    `|bytes| Sha256::digest(bytes).into()` — one line naming the function it already links. The four
+    private helpers are gone, the sequence has one definition, and `pos-proto` gains no dependency.
+  - **Byte-identical**, checked against the old expression rather than assumed: the same envelope
+    and link hash to the same digest before and after.
+
+  **Upgrade note:** none. No stored hash changes, so a store's existing chain still verifies.
 
 ### Added
 

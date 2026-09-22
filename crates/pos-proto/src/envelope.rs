@@ -37,7 +37,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::chain::{ChainLink, preimage};
+use crate::chain::{ChainHash, ChainLink, preimage};
 use crate::ids::{BrandId, DeviceId, EmployeeId, EventId, ShiftId, StoreId, TenantId};
 use crate::time::{BusinessDate, Timestamp};
 
@@ -171,6 +171,40 @@ impl<D: Serialize> EventEnvelope<D> {
             object.remove("chain");
         }
         Ok(preimage(link, &serde_json::to_string(&body)?))
+    }
+
+    /// This record's chain hash at `link`: the caller's `digest` over the preimage above.
+    ///
+    /// # Why the digest is an argument
+    ///
+    /// [ADR-0133](../../../docs/adr/0133-the-backbone-defines-what-is-hashed-not-how.md). This crate
+    /// owns *what* is hashed and the shape of the answer; it does not own the hash function, because
+    /// `sha2` in the backbone costs eight crates — nine on `aarch64`, where `cpufeatures` pulls
+    /// `libc` — and one of them reads the host, which is the thing these three crates are checked
+    /// for not doing.
+    ///
+    /// What the argument buys is that the **sequence** has one definition. Before this, three
+    /// adapters each wrote *build the preimage, digest it, wrap it*, and a fourth wrote it again in
+    /// a test; a difference between any two of them would have been a chain break nobody could
+    /// account for. Now they each write the one line naming the digest they already link:
+    ///
+    /// ```ignore
+    /// let hash = envelope.chain_hash(&link, |bytes| Sha256::digest(bytes).into())?;
+    /// ```
+    ///
+    /// Nothing here stops a caller passing a digest that returns a constant. The contract suite is
+    /// what catches that ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 5): a
+    /// store whose hashes do not chain fails its obligations.
+    ///
+    /// # Errors
+    ///
+    /// As [`chain_preimage`](Self::chain_preimage) — the payload failed to serialize.
+    pub fn chain_hash(
+        &self,
+        link: &ChainLink,
+        digest: impl FnOnce(&[u8]) -> [u8; 32],
+    ) -> Result<ChainHash, serde_json::Error> {
+        Ok(ChainHash::of(digest(self.chain_preimage(link)?.as_bytes())))
     }
 }
 

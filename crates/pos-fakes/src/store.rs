@@ -166,10 +166,9 @@ impl ChainAnchorState {
 /// tests that must not abort on an envelope they built badly, and a wrong hash shows up as a chain
 /// break, which is a legible failure rather than a crash.
 fn chain_hash(envelope: &EventEnvelope<RawPayload>, link: &ChainLink) -> ChainHash {
-    envelope.chain_preimage(link).map_or_else(
-        |_ignored| ChainHash::genesis(),
-        |preimage| ChainHash::of(Sha256::digest(preimage.as_bytes()).into()),
-    )
+    envelope
+        .chain_hash(link, |bytes| Sha256::digest(bytes).into())
+        .unwrap_or_else(|_ignored| ChainHash::genesis())
 }
 
 impl TxContext for FakeTx {

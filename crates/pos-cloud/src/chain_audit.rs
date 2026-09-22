@@ -234,8 +234,9 @@ impl ChainAudit {
 /// of the third that `docs/design-principles.md` says to extract on. What must not drift is the
 /// *preimage*, and that has one definition.
 fn record_hash(event: &EventEnvelope<RawPayload>, link: &ChainLink) -> Option<ChainHash> {
-    let preimage = event.chain_preimage(link).ok()?;
-    Some(ChainHash::of(Sha256::digest(preimage.as_bytes()).into()))
+    event
+        .chain_hash(link, |bytes| Sha256::digest(bytes).into())
+        .ok()
 }
 
 /// The findings an audit accumulates, capped without losing the count.

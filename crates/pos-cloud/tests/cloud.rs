@@ -24835,8 +24835,9 @@ impl ChainWindow for FakeWindow {
 
 /// The hash of one record, the way the edge computes it.
 fn record_hash(event: &EventEnvelope<RawPayload>, link: &ChainLink) -> ChainHash {
-    let preimage = event.chain_preimage(link).expect("a fixture record hashes");
-    ChainHash::of(Sha256::digest(preimage.as_bytes()).into())
+    event
+        .chain_hash(link, |bytes| Sha256::digest(bytes).into())
+        .expect("a fixture record hashes")
 }
 
 /// A correctly chained run of `count` records, exactly as an edge writes them.
