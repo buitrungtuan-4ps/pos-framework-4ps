@@ -668,6 +668,82 @@ test("a table-service store still lands on the floor", async ({ page }) => {
 });
 
 // Not a flow: the guard on the list above. A task that stops being replayable has to say so in the
+// A kitchen board says how long a ticket has been waiting, and says it louder once it is late.
+//
+// The board had no clock at all: every ticket looked the same whether it was fired ten seconds ago
+// or twenty minutes ago, so a cook picking the next one had nothing to pick *by*. That is the one
+// question the board exists to answer.
+//
+// Driven with Playwright's clock rather than by waiting, because the interesting case is ten minutes
+// in and a gate that takes ten minutes is a gate somebody turns off. The clock is installed before
+// the page loads so the till's own `Date.now()` moves with it.
+//
+// Asserts the number as well as the state. The colour is the glance and the number is the fact, and
+// a board that went red without saying how long would be conveying a state by hue alone — which is
+// what `tokens.css` says the state colours exist to avoid.
+test("the kitchen board counts how long a ticket has waited, and marks it late", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await navigateTo(page, "/kds");
+
+    const waited = page.locator('[data-outcome="ticket-waited"]').first();
+    await expect(waited).toHaveText("0:00");
+    await expect(page.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+
+    // Ninety seconds in: counting, still on time.
+    await page.clock.fastForward(90_000);
+    await expect(waited).toHaveText("1:30");
+    await expect(page.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="ticket-late"]')).toHaveCount(0);
+
+    // Past ten minutes: the board says so, and still says the number.
+    await page.clock.fastForward(9 * 60 * 1000);
+    await expect(waited).toHaveText("10:30");
+    await expect(page.locator('[data-outcome="ticket-late"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="ticket-waiting"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// And the age survives a reload, which is the whole reason the edge records it.
+//
+// This is the assertion the backend change exists for. A board could have counted from the moment
+// *it* first saw a ticket, and that works right up until the screen reloads — a crashed tab, a shift
+// change, a second board brought online — at which point every ticket in the kitchen reads as brand
+// new and the cook is told the opposite of the truth. `sales.order_line.fired` carries the time in
+// its envelope, the projection keeps it, `/api/orders/live` returns it, so a board that has just
+// started still counts from when the food was ordered.
+//
+// No fake clock here on purpose: the point is what the *edge* said, and a frozen page clock would
+// be measuring against a time this test invented.
+test("a kitchen board that reloads still knows when the food was ordered", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-outcome="ticket-waited"]').first()).toBeVisible();
+
+    // Everything the board held in memory is gone.
+    await page.reload();
+    await expect(page.locator('[data-outcome="ticket-waited"]').first()).toBeVisible();
+    // Still a real elapsed reading rather than a blank: the time came back from the edge.
+    await expect(page.locator('[data-outcome="ticket-waited"]').first()).toHaveText(/^\d+:\d{2}$/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
 test("every flow is replayed except the ones that say why they cannot be", () => {

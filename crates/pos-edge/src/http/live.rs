@@ -30,6 +30,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
+use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
 
@@ -47,6 +48,15 @@ struct LiveLineResponse {
     /// Whether a station has marked it prepared. Orthogonal to `state`: a fired line is still fired
     /// once it is made, and this is what stops a kitchen display re-showing a ticket it has bumped.
     bumped: bool,
+    /// When the line went to the kitchen. Absent while it is still on the pad, and omitted from the
+    /// wire when absent, the way every other optional field on this route is.
+    ///
+    /// The one number a kitchen board is for: which of eight tickets has been waiting longest. Taken
+    /// from the firing event's envelope rather than from any clock a screen owns, so a board that
+    /// reloads mid-service still counts from when the food was actually ordered — and two boards
+    /// side by side agree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fired_time: Option<Timestamp>,
     /// The modifiers chosen for the line (ADR-0127), as ids — the caller names them from the price
     /// book it already holds. Always present, empty for a line that carries none, so a reader never
     /// has to tell "no modifiers" apart from "an older edge that did not say".
@@ -106,6 +116,7 @@ where
                     line_total: line.line_total,
                     state: line.state.as_wire().to_owned(),
                     bumped: line.bumped,
+                    fired_time: line.fired_time,
                     modifier_menu_item_ids: line
                         .modifier_menu_item_ids
                         .iter()

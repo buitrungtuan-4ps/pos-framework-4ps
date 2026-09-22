@@ -18,6 +18,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The kitchen board says how long each ticket has been waiting, and marks the late ones.** Every
+  fired line now carries its age, counting up once a second, and a ticket past ten minutes takes a
+  `danger` border and reads its time in `danger` ink.
+
+  The board had no clock at all: a ticket fired ten seconds ago and one fired twenty minutes ago
+  looked identical, so a cook choosing the next one had nothing to choose *by* — which is the one
+  question a kitchen board exists to answer.
+
+  The number is always shown, not just the colour. A red card says "late" only to somebody who knows
+  the convention and can see red; `11:48` says it to everybody. Two tiers rather than the usual
+  three, because a middle tier would have meant borrowing `--color-awaiting` — a *table-state*
+  token — and `tokens.css` keeps those semantic precisely so a state is never carried by hue alone.
+
+  `sales.order_line.fired` has carried `fire_time` since the event was written; the projection now
+  keeps it and `GET /api/orders/live` returns it as `fired_time`. Taking it from the event rather
+  than from a clock on the screen is what makes a board that reloads mid-service — a crashed tab, a
+  shift change, a second board brought online — still count from when the food was ordered instead
+  of reporting every ticket in the kitchen as brand new.
+
+  **Upgrade note:** none. `fired_time` is additive and omitted for a line still on the pad, so an
+  older app ignores it and an older edge simply sends no time, which the board draws as no age.
+
+
 - **`pnpm screens` photographs every till screen at three device sizes.** A walk that boots the same
   `examples/minimal-edge` the step gate drives, signs in as the demo employee, takes the store
   through 17 states and captures each one at a Windows POS size, a 10" Android tablet size and a
