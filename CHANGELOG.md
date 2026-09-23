@@ -16,6 +16,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **The order screen's menu search folds each string once, not once per comparison.** `matches` ran
+  `fold` on both sides *inside* the scan, so every keystroke re-normalized the query once per menu
+  item and re-normalized every caption — a couple of hundred items, each with the price book's name
+  and whatever the console wrote on its button, so roughly 450 NFD passes and four regex replaces
+  each, per letter typed, on the cheapest till in the estate. None of it changed between keystrokes.
+  `matches` now compares strings that are already folded; the order screen folds its captions in the
+  memo it already rebuilds per menu-and-layout, and the query in a memo of its own. One fold per
+  keystroke, and the captions folded when the menu changes.
+  - Deduplicating the captions on the **folded** form rather than the raw one is a small second
+    saving and the more correct rule: two buttons whose captions differ only in case or tone marks
+    are one string to search, and keeping both scanned the same text twice.
+  - **Upgrade note:** none. `fold` is unchanged, so what matches what is unchanged — the till's
+    replay suite, including `dac` reaching *Bánh mì đặc biệt*, passes untouched.
+
 ### Added
 
 - **A country states how many decimals its currency has.** `LocalePack` gains `currency_exponent`,

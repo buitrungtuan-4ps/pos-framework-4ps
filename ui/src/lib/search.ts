@@ -34,20 +34,25 @@ export function fold(text: string): string {
 }
 
 /**
- * Whether any of `captions` contains `query`, both folded.
+ * Whether any of `captions` contains `needle`. Every string here is **already folded** — the caller
+ * runs both sides through [`fold`] first.
  *
  * Several captions per item rather than one, because an item has more than one name an operator
  * might reach for: the price book's, and whatever the console wrote on the button for it
- * (ADR-0066). Searching only the first would fail the operator who knows the item by what the grid
- * calls it.
+ * (ADR-0066). Either should find it.
  *
- * An empty query matches nothing rather than everything — the caller decides what an empty box
+ * Folded in, not folded here, because of where this is called from: once per menu item, on every
+ * keystroke. Folding inside would normalize the same query on every item of the scan and re-fold
+ * two hundred captions that have not changed since the menu loaded — a few hundred NFD passes per
+ * letter typed, on the cheapest till in the estate. The caller has both a memo for the captions and
+ * a memo for the needle, so each string is folded when it changes rather than when it is compared.
+ *
+ * An empty needle matches nothing rather than everything — the caller decides what an empty box
  * means, and for this screen it means "show the grid", not "show every item as a result".
  */
-export function matches(query: string, captions: readonly string[]): boolean {
-  const needle = fold(query.trim());
+export function matches(needle: string, captions: readonly string[]): boolean {
   if (needle === "") {
     return false;
   }
-  return captions.some((caption) => fold(caption).includes(needle));
+  return captions.some((caption) => caption.includes(needle));
 }

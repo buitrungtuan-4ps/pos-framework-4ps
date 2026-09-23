@@ -1,3 +1,9 @@
+## 2026-09-23 - Fold Both Sides in the Caller's Memos, Not Inside the Comparison
+
+**Learning:** `matches(query, captions)` folded both sides inside the per-item scan, so a keystroke cost ~450 NFD passes over strings that had not changed. The fix is not to cache inside `fold` — a module-level last-input/last-output pair makes a pure string helper stateful and only ever saves the *query*, because the captions differ from each other on every call. It is to move both folds to where a memo already exists: captions fold when the menu changes, the query folds once per keystroke, and the comparison receives strings that are already folded. One fold per keystroke instead of one per item, with no state added anywhere.
+
+**Action:** When a helper is called once per item of a scan, look for the memo that already brackets the scan and hoist the invariant work into it, rather than caching inside the helper. And prefer one folded array to a raw/folded pair: two parallel arguments that must agree are a way for them to disagree.
+
 ## 2026-09-17 - Ordering createMemo Declarations to Prevent TDZ Errors in SolidJS
 
 **Learning:** In SolidJS, `createMemo` evaluates immediately upon component initialization. Defining `createMemo` accessors above the signal/resource getters they reference (e.g. `countries()`) causes a Temporal Dead Zone error (`ReferenceError: Cannot access ... before initialization`) when mounted. Placing `createMemo` declarations below their dependent accessor definitions prevents TDZ runtime failures while maintaining cached performance benefits.
