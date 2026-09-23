@@ -19,6 +19,10 @@ Sizing numbers, load limits, and what happens when things break.
 | LAN clients | 3–30, WebSocket fan-out under 50 ms |
 | QR ordering load | **none** — guests hit the cloud; the store only receives the resulting order |
 
+**The edge's hot paths have budgets, and `just bench` measures them.** At 30,000 settled orders of history with 40 tables open, in a release build: `GET /api/orders/live` p95 under 20 ms, adding a line p95 under 5 ms, and adding a line while another device reads the live orders in a loop p95 under 10 ms (`crates/pos-edge/tests/perf_budget.rs`, ignored by `just test` because a timing assertion in a debug build measures the runner). Measured on a 4-vCPU container over SQLite: 1.05 ms, 0.42 ms and 0.84 ms. Before the projection indexed its orders the same run gave ~65 ms for the read and ~61 ms for the contended add — the store got slower with every order it had ever sold. **Still open:** the projection holds every order since install (nothing is evicted), so memory and the startup replay still grow with age; a snapshot and eviction need their own record.
+
+**Disk per event depends on the page size the file was created with.** An event row is just over the ~1,000 bytes a 4 KiB page keeps locally for the `WITHOUT ROWID` log, so a store whose file was created at 4 KiB spends about 4.7 KB of disk per event; a file created at 8 KiB — every store opened from this release on — about 1.2 KB. The retention figure in the table above assumes the latter. An existing store keeps its page size until its file is rebuilt (`VACUUM`), which is an operational step, not a migration.
+
 ## 2. Cloud resources at three scales (QR ordering included)
 
 | | **A** 300 stores · 200 bills · 30% QR | **B** 1,000 stores · 500 bills · 50% QR | **C** 400 small stores · 80 bills · 20% QR |

@@ -1202,6 +1202,9 @@ pub struct LiveOrderLine {
     /// third to go missing: a till that reloaded mid-service would show every line uncoursed, so the
     /// course controls would offer to send starters that the screen no longer knew were starters.
     pub course_id: Option<CourseId>,
+    /// The station it was fired to, `None` while it is still on the pad — what lets a kitchen
+    /// board show one station its own tickets and bump them to the right place.
+    pub station_id: Option<StationId>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -1243,6 +1246,16 @@ pub struct ShiftView {
     pub variance: Option<Money>,
     /// Whether closing asked for the shift report to print, for the caller to run after commit.
     pub print_shift_report: bool,
+}
+
+/// One live order as [`Edge::live_orders`] copies it out of the projection, before the lock is
+/// released and the view is assembled.
+struct LiveSnapshot {
+    order_id: OrderId,
+    table_id: Option<TableId>,
+    bill_id: Option<BillId>,
+    /// Each line with its id and whether a station has bumped it.
+    lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
 
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
@@ -1297,6 +1310,10 @@ struct LineRecord {
     /// most needs to know a ticket has been waiting eleven minutes, and one that started counting
     /// from its own start-up would report every ticket as new.
     fired_time: Option<Timestamp>,
+    /// The station the line was fired to, or `None` while it is still on the pad — from the same
+    /// event as [`Self::fired_time`], so a kitchen board that reloads still shows each station only
+    /// its own tickets.
+    station_id: Option<StationId>,
 }
 
 impl From<SalesOrderLineAdded> for LineRecord {
@@ -1320,6 +1337,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             // An added line has not been fired, so there is no time to record yet. The fold on
             // `sales.order_line.fired` fills it from that event's own envelope.
             fired_time: None,
+            station_id: None,
         }
     }
 }
@@ -1507,6 +1525,26 @@ struct Projection {
     /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
     /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.
     bumped_lines: HashSet<OrderLineId>,
+    /// Each order's lines, in id order: the index every order-scoped read walks.
+    ///
+    /// Until it existed those reads filtered `lines` — every line the store had sold since it was
+    /// installed — so a store got slower with age, and did it holding the lock every sale takes. At
+    /// thirty thousand settled orders `GET /api/orders/live` took ~60 ms and an add-line from a
+    /// second device waited behind it for as long (finding F2). Written only by
+    /// [`Self::add_line`]; a line never changes order, so nothing else has to keep it in step.
+    ///
+    /// Id order rather than insertion order because every reader sorted by id — the bill's rounding
+    /// residual and the receipt's row order depend on it — and the two differ after a restart whose
+    /// clock stepped back.
+    order_lines: HashMap<OrderId, Vec<OrderLineId>>,
+    /// The orders still owing money — [`Self::open_orders`]'s rule, held exactly rather than
+    /// recomputed by a scan: at least one line, and no bill or a bill that has not settled.
+    ///
+    /// Recomputed for one order by [`Self::refresh_live`] whenever an input to that rule changes —
+    /// a line added, a bill opened, a bill's state moved — and never simply inserted on the first
+    /// line and removed on settle: a split points `order_bills` at its last part, so an order can
+    /// leave the set and come back.
+    live: BTreeSet<OrderId>,
 }
 
 impl Projection {
@@ -1623,7 +1661,53 @@ impl Projection {
     }
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
-        self.lines.insert(line_id, record);
+        let order_id = record.order_id;
+        // Indexed only when the line is new: a rebuild can run over a projection that already holds
+        // it, and a second copy of an id would sell the line twice on the bill.
+        if self.lines.insert(line_id, record).is_none() {
+            let ids = self.order_lines.entry(order_id).or_default();
+            if let Err(at) = ids.binary_search(&line_id) {
+                ids.insert(at, line_id);
+            }
+        }
+        self.refresh_live(order_id);
+    }
+
+    /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
+    fn refresh_live(&mut self, order_id: OrderId) {
+        let has_lines = self
+            .order_lines
+            .get(&order_id)
+            .is_some_and(|ids| !ids.is_empty());
+        let settled = self
+            .order_bills
+            .get(&order_id)
+            .and_then(|bill_id| self.bills.get(bill_id))
+            .is_some_and(|bill| bill.state == BillState::Settled);
+        if has_lines && !settled {
+            self.live.insert(order_id);
+        } else {
+            self.live.remove(&order_id);
+        }
+    }
+
+    /// The ids of an order's lines, in id order, from the index.
+    fn line_ids_for_order(&self, order_id: OrderId) -> &[OrderLineId] {
+        self.order_lines.get(&order_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// An order's lines that satisfy `keep`, each with its id, in id order.
+    fn lines_where(
+        &self,
+        order_id: OrderId,
+        keep: impl Fn(&LineRecord) -> bool,
+    ) -> Vec<(OrderLineId, LineRecord)> {
+        self.line_ids_for_order(order_id)
+            .iter()
+            .filter_map(|id| self.lines.get(id).map(|record| (*id, record)))
+            .filter(|(_, record)| keep(record))
+            .map(|(id, record)| (id, record.clone()))
+            .collect()
     }
 
     fn line(&self, line_id: OrderLineId) -> Option<LineRecord> {
@@ -1672,9 +1756,15 @@ impl Projection {
     /// The value is `SalesOrderLineFired::fire_time` — the domain's own field, minted once per
     /// command — so the live write and the replay of that same command agree by construction rather
     /// than by two clocks happening to match.
-    fn set_fired_time(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+    fn set_fired_time(
+        &mut self,
+        line_id: OrderLineId,
+        fired_time: Timestamp,
+        station_id: StationId,
+    ) {
         if let Some(record) = self.lines.get_mut(&line_id) {
             record.fired_time = Some(fired_time);
+            record.station_id = Some(station_id);
         }
     }
 
@@ -1685,9 +1775,9 @@ impl Projection {
     /// event *is* the fire — so it says so in one call, which also keeps [`Self::fold`] inside the
     /// hundred lines clippy allows it. That limit is worth keeping: the fold is one match over every
     /// event type this edge knows, and it earns its length one arm at a time.
-    fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+    fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp, station_id: StationId) {
         self.set_line_state(line_id, OrderLineState::Fired);
-        self.set_fired_time(line_id, fired_time);
+        self.set_fired_time(line_id, fired_time, station_id);
     }
 
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
@@ -1718,20 +1808,15 @@ impl Projection {
     /// screen rebuilding after a restart has no other way to learn one: the ids reach a device on
     /// the fan-out, and a device that was not running when the line was added never saw it.
     fn identified_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
-        let mut lines: Vec<(OrderLineId, LineRecord)> = self
-            .lines
-            .iter()
-            .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, record)| (*id, record.clone()))
-            .collect();
-        lines.sort_by_key(|(id, _)| *id);
-        lines
+        self.lines_where(order_id, |_| true)
     }
 
     /// Records a bill and indexes it by the order it bills.
     fn open_bill_record(&mut self, bill_id: BillId, record: BillRecord) {
-        self.order_bills.insert(record.order_id, bill_id);
+        let order_id = record.order_id;
+        self.order_bills.insert(order_id, bill_id);
         self.bills.insert(bill_id, record);
+        self.refresh_live(order_id);
     }
 
     /// The bill already open on an order, if any.
@@ -1775,20 +1860,11 @@ impl Projection {
     /// "Still owing" is [`Self::open_counter_orders`]'s rule, which this one now supplies: no bill,
     /// or a bill that has not settled. A settled order is finished and drops out, which is what
     /// bounds this list — it is the store's live trading, not a log.
+    ///
+    /// Read from [`Self::live`], which holds exactly this rule, rather than by scanning every line
+    /// the store has ever sold (F2).
     fn open_orders(&self) -> Vec<OrderId> {
-        let mut orders: Vec<OrderId> = self
-            .lines
-            .values()
-            .map(|record| record.order_id)
-            .filter(|order_id| {
-                self.bill_for_order(*order_id)
-                    .and_then(|bill_id| self.bill(bill_id))
-                    .is_none_or(|bill| bill.state != BillState::Settled)
-            })
-            .collect();
-        orders.sort_unstable();
-        orders.dedup();
-        orders
+        self.live.iter().copied().collect()
     }
 
     /// The lines on an order that have not been sent yet, each with the id it is sent by, in id
@@ -1798,16 +1874,7 @@ impl Projection {
     /// because "unfired" is a projection fact: [`OrderLineState::Added`] is the only state a fire is
     /// legal from, and the decision refuses the rest anyway.
     fn unfired_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
-        let mut lines: Vec<(OrderLineId, LineRecord)> = self
-            .lines
-            .iter()
-            .filter(|(_, record)| {
-                record.order_id == order_id && record.state == OrderLineState::Added
-            })
-            .map(|(id, record)| (*id, record.clone()))
-            .collect();
-        lines.sort_by_key(|(id, _)| *id);
-        lines
+        self.lines_where(order_id, |record| record.state == OrderLineState::Added)
     }
 
     /// Applies a new quantity and extended total to a line the order still holds.
@@ -1837,16 +1904,25 @@ impl Projection {
     /// is the order the merge semantics fix (ADR-0029) and a partition has to be comparable against
     /// something stable.
     fn sold_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
-        let mut ids: Vec<OrderLineId> = self
-            .lines
+        self.line_ids_for_order(order_id)
             .iter()
-            .filter(|(_, record)| {
-                record.order_id == order_id && record.state != OrderLineState::Voided
+            .copied()
+            .filter(|id| {
+                self.lines
+                    .get(id)
+                    .is_some_and(|record| record.state != OrderLineState::Voided)
             })
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort_unstable();
-        ids
+            .collect()
+    }
+
+    /// The lines a bill covers: the ones it names, or — for a bill that names none, opened before
+    /// ADR-0128 recorded them — every unvoided line on its order, which is what such a bill meant.
+    fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
+        if bill.order_line_ids.is_empty() {
+            self.sold_line_ids(bill.order_id)
+        } else {
+            bill.order_line_ids.clone()
+        }
     }
 
     /// Records a reduction against a bill. Additive, because two discounts on one bill are two
@@ -1876,9 +1952,12 @@ impl Projection {
     }
 
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
-        if let Some(record) = self.bills.get_mut(&bill_id) {
-            record.state = state;
-        }
+        let Some(record) = self.bills.get_mut(&bill_id) else {
+            return;
+        };
+        record.state = state;
+        let order_id = record.order_id;
+        self.refresh_live(order_id);
     }
 
     /// Replaces what a bill covers — the target of a merge, taking the absorbed bills' lines.
@@ -2451,15 +2530,7 @@ impl<S: EventStore> Edge<S> {
     /// A ULID sorts by mint time, so this is the order the lines were added in.
     #[must_use]
     pub fn order_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
-        let projection = self.lock_projection();
-        let mut ids: Vec<OrderLineId> = projection
-            .lines
-            .iter()
-            .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort_unstable();
-        ids
+        self.lock_projection().line_ids_for_order(order_id).to_vec()
     }
 
     /// The lines and table of one waiting order, for the confirmation screen (ADR-0116).
@@ -3089,10 +3160,14 @@ impl<S: EventStore> Edge<S> {
         self.commit_and_publish(&ctx, &event).await?;
 
         {
+            // Resolved through the guard already held. `Edge::covered_lines` takes the lock itself,
+            // and calling it here re-locked a `std::sync::Mutex` on the thread holding it: for a
+            // bill that names no lines — every bill opened before ADR-0128 recorded them — that is
+            // a deadlock, and with the projection locked every till on the store hangs with it.
             let mut projection = self.lock_projection();
-            let mut lines = self.covered_lines(&target);
+            let mut lines = projection.covered_lines(&target);
             for (absorbed_id, record, next_state) in folded {
-                lines.extend(self.covered_lines(&record));
+                lines.extend(projection.covered_lines(&record));
                 projection.set_bill_state(absorbed_id, next_state);
             }
             lines.sort_unstable();
@@ -3109,11 +3184,7 @@ impl<S: EventStore> Edge<S> {
     /// because two readers disagreeing about what a bill covers is two different answers to what a
     /// guest owes.
     fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
-        if bill.order_line_ids.is_empty() {
-            self.lock_projection().sold_line_ids(bill.order_id)
-        } else {
-            bill.order_line_ids.clone()
-        }
+        self.lock_projection().covered_lines(bill)
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -3437,7 +3508,7 @@ impl<S: EventStore> Edge<S> {
             projection.set_line_state(order_line_id, decision.next_state);
             // The same `ctx.now` the event carries, so a board reading the projection and a board
             // rebuilt from the log show the same age.
-            projection.set_fired_time(order_line_id, ctx.now);
+            projection.set_fired_time(order_line_id, ctx.now, station_id);
             // §8: stock leaves at fire, not at payment. Folded here rather than discarded — see
             // `Projection::stock` for what this figure is and is not yet.
             projection.consume(&decision.stock_movements);
@@ -3633,18 +3704,39 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub fn live_orders(&self) -> Vec<LiveOrderView> {
         let session = self.session();
-        let projection = self.lock_projection();
-        projection
-            .open_orders()
+        // Copied out under one guard, so the answer is one consistent moment across every order,
+        // and assembled after it is released: the menu lookups and the allocation are the slow part,
+        // and every sale waits on this lock (F2).
+        let snapshot: Vec<LiveSnapshot> = {
+            let projection = self.lock_projection();
+            projection
+                .open_orders()
+                .into_iter()
+                .map(|order_id| LiveSnapshot {
+                    order_id,
+                    table_id: projection.table_for_order(order_id),
+                    bill_id: projection.bill_for_order(order_id),
+                    lines: projection
+                        .identified_lines_for_order(order_id)
+                        .into_iter()
+                        .map(|(id, record)| {
+                            let bumped = projection.bumped_lines.contains(&id);
+                            (id, record, bumped)
+                        })
+                        .collect(),
+                })
+                .collect()
+        };
+        snapshot
             .into_iter()
-            .map(|order_id| LiveOrderView {
-                order_id,
-                table_id: projection.table_for_order(order_id),
-                bill_id: projection.bill_for_order(order_id),
-                lines: projection
-                    .identified_lines_for_order(order_id)
+            .map(|order| LiveOrderView {
+                order_id: order.order_id,
+                table_id: order.table_id,
+                bill_id: order.bill_id,
+                lines: order
+                    .lines
                     .into_iter()
-                    .map(|(order_line_id, record)| LiveOrderLine {
+                    .map(|(order_line_id, record, bumped)| LiveOrderLine {
                         order_line_id,
                         display_name: session.menu.get(record.menu_item_id).map_or_else(
                             || DisplayName::new(record.menu_item_id.to_string()),
@@ -3653,11 +3745,12 @@ impl<S: EventStore> Edge<S> {
                         quantity: record.quantity,
                         line_total: record.line_total,
                         state: record.state,
-                        bumped: projection.bumped_lines.contains(&order_line_id),
+                        bumped,
                         fired_time: record.fired_time,
-                        modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
+                        modifier_menu_item_ids: record.modifier_menu_item_ids,
                         seat: record.seat,
                         course_id: record.course_id,
+                        station_id: record.station_id,
                     })
                     .collect(),
             })
@@ -3877,7 +3970,7 @@ impl<S: EventStore> Edge<S> {
                 projection.set_line_state(order_line_id, decision.next_state);
                 // Per line, as the single-line path does, and from the same `ctx.now` those lines'
                 // events carry: one "send to kitchen" fires its lines together, so they age together.
-                projection.set_fired_time(order_line_id, ctx.now);
+                projection.set_fired_time(order_line_id, ctx.now, station_id);
                 // §8: stock leaves at fire, not at payment — per line, as the single-line path does.
                 projection.consume(&decision.stock_movements);
                 views.push(LineView {
@@ -4724,7 +4817,7 @@ impl<S: EventStore> Edge<S> {
             EventType::SalesOrderLineFired => {
                 let event: SalesOrderLineFired =
                     envelope.data.decode().map_err(AppError::Encode)?;
-                projection.fold_fired(event.order_line_id, event.fire_time);
+                projection.fold_fired(event.order_line_id, event.fire_time, event.station_id);
             }
             EventType::SalesOrderLineUpdated => {
                 let event: SalesOrderLineUpdated =
@@ -6869,5 +6962,238 @@ mod tests {
                 .await
                 .expect("opens the next shift");
         });
+    }
+
+    // ---- the order index (F2) ---------------------------------------------------------------
+
+    /// What the index replaced: every line the store holds, filtered to one order, in id order.
+    fn lines_by_scan(projection: &super::Projection, order_id: OrderId) -> Vec<super::OrderLineId> {
+        let mut ids: Vec<super::OrderLineId> = projection
+            .lines
+            .iter()
+            .filter(|(_, record)| record.order_id == order_id)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// What the live set replaced: every order with a line and no settled bill, by a full scan.
+    fn open_orders_by_scan(projection: &super::Projection) -> Vec<OrderId> {
+        let mut orders: Vec<OrderId> = projection
+            .lines
+            .values()
+            .map(|record| record.order_id)
+            .filter(|order_id| {
+                projection
+                    .bill_for_order(*order_id)
+                    .and_then(|bill_id| projection.bill(bill_id))
+                    .is_none_or(|bill| bill.state != BillState::Settled)
+            })
+            .collect();
+        orders.sort_unstable();
+        orders.dedup();
+        orders
+    }
+
+    /// The index and the live set agree with the scans they replaced.
+    fn assert_index_agrees(edge: &Edge<FakeStore>, step: &str) {
+        let projection = edge.lock_projection();
+        assert_eq!(
+            projection.open_orders(),
+            open_orders_by_scan(&projection),
+            "live orders after {step}"
+        );
+        let mut every_order: Vec<OrderId> = projection
+            .lines
+            .values()
+            .map(|record| record.order_id)
+            .collect();
+        every_order.sort_unstable();
+        every_order.dedup();
+        for order_id in every_order {
+            let indexed: Vec<super::OrderLineId> = projection
+                .identified_lines_for_order(order_id)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            assert_eq!(
+                indexed,
+                lines_by_scan(&projection, order_id),
+                "lines after {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_order_index_agrees_with_a_scan_through_a_whole_service() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let (a, b) = (
+                TableId::new(Ulid::from_u128(401)),
+                TableId::new(Ulid::from_u128(402)),
+            );
+
+            edge.seat_table(actor(), a, None).await.expect("seats a");
+            let mut on_a = Vec::new();
+            for _ in 0..4 {
+                on_a.push(
+                    edge.add_line(actor(), a, a_line())
+                        .await
+                        .expect("adds")
+                        .order_line_id,
+                );
+            }
+            assert_index_agrees(&edge, "four lines on a");
+
+            edge.seat_table(actor(), b, None).await.expect("seats b");
+            edge.add_line(actor(), b, a_line())
+                .await
+                .expect("adds to b");
+            assert_index_agrees(&edge, "a second table");
+
+            let bill = edge.open_bill(actor(), a).await.expect("opens a's bill");
+            assert_index_agrees(&edge, "a bill opened");
+
+            let parts = edge
+                .split_bill(
+                    actor(),
+                    bill.bill_id,
+                    vec![vec![on_a[0], on_a[1]], vec![on_a[2], on_a[3]]],
+                )
+                .await
+                .expect("splits");
+            assert_index_agrees(&edge, "a split");
+
+            edge.merge_bills(actor(), parts[0], vec![parts[1]])
+                .await
+                .expect("merges back");
+            assert_index_agrees(&edge, "a merge");
+
+            edge.settle_bill(actor(), parts[0], vec![cash(660_000)], None)
+                .await
+                .expect("settles a");
+            // Agreement, not a count: after a split and a merge `order_bills` points at the
+            // absorbed part, so the scan this replaced also kept the order on the live list. That
+            // is a separate defect, and this index reproduces the rule rather than changing it.
+            assert_index_agrees(&edge, "a settle");
+
+            edge.clean_table(actor(), a).await.expect("cleans a");
+            edge.seat_table(actor(), a, None).await.expect("re-seats a");
+            edge.add_line(actor(), a, a_line())
+                .await
+                .expect("a new order on a");
+            assert_index_agrees(&edge, "a re-seat");
+        });
+    }
+
+    #[test]
+    fn a_settled_history_does_not_grow_the_live_set() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(410));
+            for _ in 0..50 {
+                edge.seat_table(actor(), table, None).await.expect("seats");
+                edge.add_line(actor(), table, a_line()).await.expect("adds");
+                let bill = edge.open_bill(actor(), table).await.expect("bills");
+                edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
+                    .await
+                    .expect("settles");
+                edge.clean_table(actor(), table).await.expect("cleans");
+            }
+            edge.seat_table(actor(), table, None)
+                .await
+                .expect("seats the live one");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let projection = edge.lock_projection();
+            assert_eq!(
+                projection.live.len(),
+                1,
+                "fifty settled orders and one live one"
+            );
+            assert_eq!(
+                projection.order_lines.len(),
+                51,
+                "every order is still indexed"
+            );
+        });
+    }
+
+    #[test]
+    fn a_projection_rebuilt_twice_sells_each_line_once() {
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            let live = Edge::new(
+                store.clone(),
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(420));
+            live.seat_table(actor(), table, None).await.expect("seats");
+            for _ in 0..3 {
+                live.add_line(actor(), table, a_line()).await.expect("adds");
+            }
+
+            let restarted = Edge::new(
+                store,
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            restarted.rebuild().await.expect("rebuilds");
+            restarted.rebuild().await.expect("rebuilds again");
+
+            assert_eq!(restarted.live_orders(), live.live_orders());
+            assert_eq!(
+                restarted
+                    .live_orders()
+                    .first()
+                    .map(|order| order.lines.len()),
+                Some(3),
+                "no line is indexed twice"
+            );
+        });
+    }
+
+    /// A merge into a bill that names no lines — every bill opened before ADR-0128 recorded them —
+    /// used to re-lock the projection on the thread already holding it, and hang the store.
+    #[test]
+    fn merging_into_a_bill_that_names_no_lines_does_not_hang_the_store() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            pos_fakes::executor::run_ready(async {
+                let edge = edge();
+                let table = TableId::new(Ulid::from_u128(430));
+                edge.seat_table(actor(), table, None).await.expect("seats");
+                let mut lines = Vec::new();
+                for _ in 0..2 {
+                    lines.push(
+                        edge.add_line(actor(), table, a_line())
+                            .await
+                            .expect("adds")
+                            .order_line_id,
+                    );
+                }
+                let bill = edge.open_bill(actor(), table).await.expect("bills");
+                let parts = edge
+                    .split_bill(actor(), bill.bill_id, vec![vec![lines[0]], vec![lines[1]]])
+                    .await
+                    .expect("splits");
+                // The shape a pre-ADR-0128 bill rebuilds to: no lines named.
+                if let Some(record) = edge.lock_projection().bills.get_mut(&parts[0]) {
+                    record.order_line_ids.clear();
+                }
+                let merged = edge.merge_bills(actor(), parts[0], vec![parts[1]]).await;
+                let _ = done.send(merged.is_ok());
+            });
+        });
+        let merged = finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the merge returned rather than deadlocking on the projection lock");
+        assert!(merged, "the merge succeeds");
     }
 }

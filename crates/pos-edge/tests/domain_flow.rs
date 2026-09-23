@@ -657,3 +657,47 @@ async fn the_status_bar_reads_the_outbox_and_the_cloud_link() {
     assert_eq!(sync["cloud_link"], "CLOUD_LINK_UNSPECIFIED");
     assert!(sync.get("last_sync_time").is_none());
 }
+
+#[tokio::test]
+async fn a_fired_line_tells_a_reloaded_board_which_station_it_went_to() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(702));
+    let station = StationId::new(Ulid::from_u128(9));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (_, line) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let line_id = line["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+
+    // Still on the pad: no station yet, and the field is omitted rather than null.
+    let (_, live) = send(app.clone(), &token, "GET", "/api/orders/live", None).await;
+    assert!(live[0]["lines"][0].get("station_id").is_none());
+
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/lines/{line_id}/fire"),
+        Some(json!({ "station_id": station })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, live) = send(app, &token, "GET", "/api/orders/live", None).await;
+    assert_eq!(live[0]["lines"][0]["station_id"], json!(station));
+}

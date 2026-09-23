@@ -787,6 +787,9 @@ where
     // activation router and would otherwise be the one deployment that answers without a version.
     // This is the last thing done to the application: a route merged below this line has no release
     // and no lease standing on its answers.
+    // Compressed inside the stamp, so the stamp's headers ride a compressed answer unchanged
+    // (ADR-0138). A client that did not ask for gzip is served exactly what it was before.
+    let app = crate::http::compress(app);
     let app = crate::http::stamp_version(app, standing);
     // Outermost of all, and after the stamp for the reason the stamp is after everything else: a
     // request the deadline cut off still gets an answer, and that answer should still say what this

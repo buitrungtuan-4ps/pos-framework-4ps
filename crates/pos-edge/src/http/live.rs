@@ -74,6 +74,11 @@ struct LiveLineResponse {
     /// added here to stop, one field over.
     #[serde(skip_serializing_if = "Option::is_none")]
     course_id: Option<String>,
+    /// The station the line was fired to, absent while it is still on the pad. Omitted when absent,
+    /// for the reason `seat` is. What a kitchen board filters on, so a bar screen that reloads shows
+    /// the bar's tickets and not the grill's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    station_id: Option<String>,
 }
 
 /// One open order.
@@ -124,6 +129,7 @@ where
                         .collect(),
                     seat: line.seat,
                     course_id: line.course_id.map(|id| id.to_string()),
+                    station_id: line.station_id.map(|id| id.to_string()),
                 })
                 .collect(),
         })

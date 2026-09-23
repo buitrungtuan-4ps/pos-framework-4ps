@@ -16,6 +16,59 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Fixed
+
+- **The store no longer gets slower with every order it has ever sold** (finding F2). The edge's
+  in-memory projection answered every order-scoped read — the live orders a device reads on each
+  reload, wake and `resync`, the lines of an order, what a bill covers — by scanning every line
+  since the store was installed, holding the lock every sale takes. At 30,000 settled orders
+  `GET /api/orders/live` took ~65 ms (p95) and an add-line from a second device waited behind it
+  for ~61 ms. The projection now keeps each order's lines in an index and the owing orders in a
+  set maintained exactly, and assembles the live-orders answer after releasing the lock: 1.05 ms
+  and 0.84 ms on the same history over SQLite. Nothing is evicted yet, so memory and the startup
+  replay still grow with age; that needs its own record.
+- **Merging into a bill that names no lines no longer hangs the whole store.** `merge_bills`
+  re-locked the projection on the thread already holding it whenever a bill covered "every
+  unvoided line" (every bill opened before ADR-0128), which deadlocked the lock every request
+  takes. It now resolves those lines through the guard it holds; a regression test runs the merge
+  on its own thread with a timeout.
+- **The kitchen board shows counter orders, and drops a ticket when its order settles.** It
+  derived "still open" from the table map, which holds no counter order and keeps a table's old
+  order until the table is seated again — so a takeaway the kitchen had to cook never appeared,
+  and a settled table's unbumped lines lingered.
+
+### Changed
+
+- **The kitchen board draws tickets, oldest first, and can be one station's board.** One card per
+  order, station and course — what a cook makes together — aged from its oldest line, bumped with
+  one tap to the station it was fired to, and showing the quantity. Lines now carry the station
+  they were fired to (the fan-out already did; `GET /api/orders/live` now does too, as
+  `station_id`), so a store with several stations gets station tabs and `/kds?station=<id>`. Cards
+  are keyed by ticket and read their lines from the store, so a change redraws one card instead of
+  the whole board (a bump on a 600-line board rebuilt ~18,000 DOM nodes). The pass groups by order,
+  so two counter orders are no longer merged under one empty label.
+- **The edge gzips its answers** ([ADR-0138](docs/adr/0138-the-edge-compresses-what-it-sends.md)):
+  `/api/*` and the embedded assets above 1 KB, for a client that sends `Accept-Encoding: gzip`, never
+  `/ws`. A large store's boot reads drop from ~490 KB to ~30 KB. Adds `async-compression` and two
+  codec crates through `tower-http`'s `compression-gzip`; `flate2` was already in the tree.
+- **The till works on a phone.** The status bar folds its destinations and settings behind a Menu
+  button below tablet width (they took four rows, a third of the screen); an order line wraps its
+  controls under the item name instead of squeezing it a word per line; a placed floor reflows into
+  two columns rather than panning a room two and a half tables wide.
+- **The order screen shows one menu category at a time** when the console arranged more than one,
+  picked from a row of tabs (a large store's 17 categories and 386 items were one column 23,000 px
+  tall). Search is unchanged.
+- **A new store's database is created with 8 KiB pages.** An event row is just over what a 4 KiB
+  page keeps locally for the `WITHOUT ROWID` log, so nearly every event took an overflow page of its
+  own: ~4.7 KB of disk per event at 4 KiB, ~1.2 KB at 8 KiB. And migration `0014` indexes the
+  unchained rows, which the chain anchor (every shift close) and the startup walk counted by reading
+  the whole log. **Upgrade note:** migration `0014_unchained_events_index` is additive (one partial
+  index) and rollback-safe. An existing store keeps the page size its file was created with until
+  the file is rebuilt with `VACUUM`, which is an operational step, not a migration.
+- **`just bench`** runs the edge's performance budgets (`crates/pos-edge/tests/perf_budget.rs`) at a
+  large history in a release build — live orders p95 < 20 ms, add-line p95 < 5 ms, add-line under
+  concurrent reads p95 < 10 ms at 30,000 settled orders. Ignored by `just test`.
+
 ### Changed
 
 - **A deep outbox no longer stops a store from selling**
