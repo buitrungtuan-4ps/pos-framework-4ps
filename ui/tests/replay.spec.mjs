@@ -956,6 +956,16 @@ test("a cashier with no keyboard can enter a float on the keypad", async ({ page
     await signIn(page, edge);
     await navigateTo(page, "/shift");
 
+    // The label names the store's own currency rather than a word compiled into the catalogue.
+    //
+    // It read "Opening float (đồng)" in both catalogues until now, which is not an example but a
+    // claim about what the field holds: a Japanese cashier counting yen was told to count đồng.
+    //
+    // What this pins is that the label is *derived* — the word is gone and `storeCurrency()` is what
+    // fills the gap. It does not prove the six-market behaviour, because every demo store trades in
+    // đồng and there is no fixture in another currency to read it on.
+    await expect(page.getByText("Opening float (VND)")).toBeVisible();
+
     const keypad = page.locator('[data-step="floatKeypad"]');
     for (const digit of ["1", "0", "0", "0", "0", "0"]) {
       await keypad.getByRole("button", { name: digit, exact: true }).click();

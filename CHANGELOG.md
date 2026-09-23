@@ -130,6 +130,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The shift screen asked every country to count đồng.** `"Opening float (đồng)"` and
+  `"Counted cash (đồng)"` were in both catalogues, so a Japanese cashier counting yen and an Indian
+  one counting rupees were both told what unit to use, and told the wrong one. The labels now name
+  the store's own currency.
+
+  Not an example but a claim: the parenthetical states what the field holds. It is the same
+  v1-Vietnam assumption that produced `?? 0` in the till, raw minor units on the receipt and
+  `en-US` grouping everywhere — frozen into a string this time rather than into arithmetic.
+
+  **The console's mentions of VND are deliberately left alone.** `"e.g. VND"` and
+  `"for example VND"` illustrate a format rather than claim a denomination, and
+  `storeSettings.cashRoundingHint` already shows the better shape by naming two countries — *"1000
+  for Vietnam, 100 for India's rupee"*. That is a separate and much smaller change.
+
+  **Upgrade note:** none. A Vietnamese store's label reads `Opening float (VND)` where it read
+  `Opening float (đồng)`; the figure it holds is unchanged.
+
+
 - **The till draws money the way the store's own country writes it.** `formatMoney` grouped with
   `en-US` for every store in every country. A Vietnamese cashier now reads `1.234.567₫` — the same
   spelling as the receipt in the guest's hand
