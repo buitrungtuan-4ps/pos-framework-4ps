@@ -5,7 +5,7 @@ import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
-import { matches } from "../lib/search";
+import { fold, matches } from "../lib/search";
 import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
   addItem,
@@ -182,14 +182,20 @@ export function Order() {
   // Built once per menu-and-layout rather than per keystroke: the two gates this screen already
   // carries for that (`menuItemMap`, `arranged`) exist because a linear scan per render is what this
   // grid costs, and a scan per *letter typed* would be worse than either.
+  //
+  // Folded here rather than at the comparison, so a caption is normalized when the menu changes
+  // instead of once per item per keystroke. Deduplicated on the folded form too: two buttons whose
+  // captions differ only in case or tone marks are one string to search, and keeping both would
+  // scan the same text twice.
   const captions = createMemo(() => {
     const byItem = new Map<string, string[]>(
-      state.menu.map((item) => [item.menu_item_id, [item.display_name]]),
+      state.menu.map((item) => [item.menu_item_id, [fold(item.display_name)]]),
     );
     const record = (button: LayoutButton) => {
       const known = byItem.get(button.menu_item_id);
-      if (known !== undefined && !known.includes(button.label)) {
-        known.push(button.label);
+      const folded = fold(button.label);
+      if (known !== undefined && !known.includes(folded)) {
+        known.push(folded);
       }
     };
     for (const category of state.layout) {
@@ -204,10 +210,14 @@ export function Order() {
   // The matches, in the price book's own order. Drawn with `display_name` and not the caption that
   // matched: a button's caption is shorthand that means something inside its category and nothing
   // outside it, and a flat result list is outside it.
+  //
+  // The needle is its own memo for the same reason the captions are: folded once per keystroke
+  // rather than once per item scanned.
+  const needle = createMemo(() => fold(query().trim()));
   const results = createMemo(() =>
     searching()
       ? state.menu.filter((item) =>
-          matches(query(), captions().get(item.menu_item_id) ?? [item.display_name]),
+          matches(needle(), captions().get(item.menu_item_id) ?? [fold(item.display_name)]),
         )
       : [],
   );
