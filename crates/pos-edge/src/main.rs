@@ -31,6 +31,7 @@ use pos_edge::{
     ArchiveKey, Edge, EdgeConfig, EdgeError, EdgeSession, ServeOutcome, StoreIdentity, serve_until,
     shutdown_signal, telemetry,
 };
+use pos_proto::chain::ChainStatus;
 use pos_proto::ids::StoreId;
 use store_sqlite::SqliteStore;
 
@@ -131,6 +132,8 @@ where
     // same *store*: the dispatch that enqueues a ticket and the route the agent claims it from are
     // two halves of one table.
     let print_queue = store.clone();
+    // …and the one that answers "is this log still the log I wrote", below.
+    let chain = store.clone();
     let edge = Arc::new(
         Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
             .map_err(EdgeError::Entropy)?,
@@ -139,6 +142,46 @@ where
     // Replay the durable log into the projection before serving, so a restart resumes exactly where
     // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
     edge.rebuild().await.map_err(EdgeError::Rebuild)?;
+
+    // The store verifies its own chain at startup, with no internet
+    // ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 3, for
+    // [ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)'s reason: a shop that
+    // cannot reach the cloud must still be able to detect its own corruption). Until now the chain
+    // was computed on every append, stored, and published at shift close — and never walked by
+    // anything but its own tests.
+    //
+    // Spawned rather than awaited, which is the decision's own instruction: *"A break is reported
+    // and does not stop the store trading — a till that refuses to sell because yesterday's log is
+    // damaged turns a record-keeping fault into a closed shop, which is the worse failure."* So the
+    // till opens on time and the walk runs beside it. The walk is chunked, so it shares the single
+    // writer thread with the day's first sales instead of holding it for the length of the log.
+    //
+    // Logged, not raised: a break here is evidence for a person, and the cloud has its own
+    // detection in the anchor (decision 4, which catches the two cases a local chain cannot).
+    let store_id = config.store_id;
+    tokio::spawn(async move {
+        match chain.verify_chain(store_id).await {
+            Ok(ChainStatus::Intact {
+                checked, unchained, ..
+            }) => {
+                tracing::info!(%store_id, checked, unchained, "the event chain verified");
+            }
+            Ok(ChainStatus::Broken { at_seq, reason }) => {
+                // Deliberately loud, and deliberately not fatal. The figure an operator needs is
+                // the position: it says how much of the log is above suspicion.
+                tracing::error!(
+                    %store_id,
+                    at_seq,
+                    ?reason,
+                    "the event chain is broken — this store's log has been altered or damaged; \
+                     trading continues and the cloud anchor is the second line"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(%store_id, %error, "the event chain could not be verified");
+            }
+        }
+    });
 
     serve_until(
         config,

@@ -99,6 +99,111 @@ impl Fixture {
     fn reopen(&self) -> SqliteStore {
         SqliteStore::open(&self.path).expect("reopen")
     }
+
+    /// A store with `count` chained records, for the cases that must cross a chunk boundary.
+    ///
+    /// Batched rather than one transaction per event: the point is a log longer than
+    /// `CHAIN_CHUNK`, and writing a couple of thousand single-event transactions to prove it
+    /// would make the case slow enough that someone would eventually delete it.
+    fn long(count: u128) -> (Self, SqliteStore) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("store.db");
+        let store = SqliteStore::open(&path).expect("open");
+        block_on(async {
+            let mut next = 1_u128;
+            while next <= count {
+                let upto = (next + 250).min(count + 1);
+                let batch: Vec<_> = (next..upto).map(|seed| envelope(seed, 500_000)).collect();
+                let mut tx = store.begin().await.expect("begin");
+                store.append(&mut tx, &batch).await.expect("append");
+                tx.commit().await.expect("commit");
+                next = upto;
+            }
+        });
+        (Self { _dir: dir, path }, store)
+    }
+}
+
+/// The walk is split into bounded chunks so it cannot hold the single writer thread for the length
+/// of the log (ADR-0015), and the three cases below are the ones that split can get wrong. All of
+/// them need a log longer than one chunk, which every other case in this file is deliberately too
+/// small to produce.
+///
+/// `CHAIN_CHUNK` is 1,000, so 1,500 records means two chunks with the boundary at 1,000 — and the
+/// interesting record is the first one of the second chunk, `seq = 1001`, which is the one whose
+/// `prev_hash` has to be carried across.
+const LONGER_THAN_A_CHUNK: u128 = 1_500;
+
+#[test]
+fn a_log_longer_than_one_chunk_still_verifies_whole() {
+    // A false break at the boundary would show up here: the second chunk starts mid-chain, and a
+    // walk that restarted from genesis instead of from the previous chunk's hash would report a
+    // `LinkMismatch` on a log nobody has touched.
+    let (_fixture, store) = Fixture::long(LONGER_THAN_A_CHUNK);
+    match verify(&store) {
+        ChainStatus::Intact { checked, .. } => assert_eq!(
+            checked,
+            u64::try_from(LONGER_THAN_A_CHUNK).expect("count fits"),
+            "every record across both chunks is counted exactly once"
+        ),
+        other @ ChainStatus::Broken { .. } => {
+            panic!("a log longer than a chunk must still verify: {other:?}")
+        }
+    }
+}
+
+#[test]
+fn an_edit_on_the_first_record_of_the_second_chunk_is_caught() {
+    // The case the carry exists for. If `ChainCursor` dropped the hash at the boundary, the first
+    // record of the second chunk would be checked against genesis — or against nothing — and an
+    // edit here would pass. It is the one record in the log a chunking mistake hides.
+    let (fixture, _store) = Fixture::long(LONGER_THAN_A_CHUNK);
+    tamper(
+        &fixture.path,
+        "UPDATE events SET envelope = replace(envelope, '500000', '9500000') WHERE seq = 1001",
+    );
+    match verify(&fixture.reopen()) {
+        ChainStatus::Broken { at_seq, reason } => {
+            assert_eq!(
+                at_seq, 1001,
+                "the break is named at the record that was edited"
+            );
+            assert_eq!(reason, ChainBreak::ContentEdited);
+        }
+        other @ ChainStatus::Intact { .. } => {
+            panic!("an edit on the first record of the second chunk must be caught: {other:?}")
+        }
+    }
+}
+
+#[test]
+fn a_record_deleted_at_the_start_of_the_second_chunk_is_named_as_a_gap() {
+    // The other half of the carry: the `seq` anchor.
+    //
+    // It has to be `seq = 1001` and not 1000. Deleting 1000 is caught *inside* the first chunk —
+    // the walk reaches 1001 while still counting, sees the position jump, and reports the gap
+    // before any boundary is crossed. That version of this test passed with the anchor
+    // deliberately broken, which is to say it was not testing the boundary at all.
+    //
+    // Deleting 1001 puts the gap exactly at the seam: the first chunk ends cleanly on 1000, and
+    // the second opens on 1002. A chunk that restarted its gap check would take 1002 as "the
+    // first record I have seen", find no gap, and then report the wrong fault at the wrong
+    // position — `LinkMismatch` at 1002 rather than `MissingRecord` at 1001. Both fields are
+    // asserted for that reason.
+    let (fixture, _store) = Fixture::long(LONGER_THAN_A_CHUNK);
+    tamper(&fixture.path, "DELETE FROM events WHERE seq = 1001");
+    match verify(&fixture.reopen()) {
+        ChainStatus::Broken { at_seq, reason } => {
+            assert_eq!(
+                at_seq, 1001,
+                "the gap is named at the position that went missing"
+            );
+            assert_eq!(reason, ChainBreak::MissingRecord);
+        }
+        other @ ChainStatus::Intact { .. } => {
+            panic!("a record deleted at the chunk boundary must be caught: {other:?}")
+        }
+    }
 }
 
 #[test]
