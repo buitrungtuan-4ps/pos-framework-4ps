@@ -7,3 +7,8 @@
 
 **Learning:** Breadcrumb trails implemented as un-ordered elements without structured list items (`<ol>` / `<li>`) or `aria-current="page"` fail to communicate structural parent-child navigation hierarchy and current page location to screen reader users.
 **Action:** Wrap breadcrumb items in semantic `<ol>` / `<li>` lists inside `<nav aria-label="...">` and mark the final item representing the active screen with `aria-current="page"`.
+
+## 2026-08-18 - Top-bar Context Switcher Dialog Accessibility & Autofocus
+
+**Learning:** Header popover dialogs like org/store switchers need explicit WAI-ARIA roles (`aria-haspopup="dialog"`, `role="dialog"`, `aria-label`) so screen readers properly announce the overlay. Additionally, auto-focusing the search input on open using SolidJS `queueMicrotask(() => inputRef?.focus())` enables immediate keyboard-driven search without extra tab navigation.
+**Action:** When creating dropdown overlays with search inputs, pair `role="dialog"` accessibility tags with microtask-deferred input autofocus.

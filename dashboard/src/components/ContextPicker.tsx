@@ -43,6 +43,13 @@ export function ContextPicker() {
   const [newTenant, setNewTenant] = createSignal("");
   const [tenantSearch, setTenantSearch] = createSignal("");
   const [storeSearch, setStoreSearch] = createSignal("");
+  let tenantSearchInput: HTMLInputElement | undefined;
+
+  createEffect(() => {
+    if (open()) {
+      queueMicrotask(() => tenantSearchInput?.focus());
+    }
+  });
 
   const loadTenants = async () => {
     setFailed(false);
@@ -192,6 +199,7 @@ export function ContextPicker() {
       <button
         type="button"
         aria-label={t("context.change")}
+        aria-haspopup="dialog"
         aria-expanded={open()}
         onClick={toggle}
         class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
@@ -204,7 +212,11 @@ export function ContextPicker() {
       </button>
 
       <Show when={open()}>
-        <div class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay">
+        <div
+          role="dialog"
+          aria-label={t("context.change")}
+          class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay"
+        >
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("context.workingIn")}</span>
             <Button variant="secondary" onClick={() => setOpen(false)}>
@@ -234,6 +246,7 @@ export function ContextPicker() {
                   }
                 >
                   <input
+                    ref={tenantSearchInput}
                     type="text"
                     aria-label={t("context.search")}
                     placeholder={t("context.search")}
