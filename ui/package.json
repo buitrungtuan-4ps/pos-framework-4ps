@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@solidjs/router": "^1.0.0",
-    "intl-messageformat": "^11.2.15",
+    "intl-messageformat": "^12.1.1",
     "solid-js": "^1.9.5"
   },
   "devDependencies": {

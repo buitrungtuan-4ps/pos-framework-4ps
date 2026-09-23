@@ -18,6 +18,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **`intl-messageformat` moves to v12** in both `ui/` and `dashboard/`. A major version of the
+  library that formats every user-visible string in the product is not a bump to take on a green
+  tick, so it was checked rather than assumed: formatjs releases its whole monorepo in lockstep, and
+  v12.0.0's notes record one dependency update (`@formatjs/icu-messageformat-parser` to 3.5.19) and
+  no breaking change to this package. The repo uses only `new IntlMessageFormat(message, locale)`
+  and `.format(args)`, both unchanged.
+  - Verified end to end rather than by changelog alone: both build gates including `i18n:lint` and
+    `i18n:parity` (195 keys on the till, 1,860 on the console, `vi` matching `en` exactly), the
+    console's 299 unit tests, the till's 37 replay flows against a real edge, and the console's 9
+    replay flows against a real PostgreSQL. The replay suites are the ones that matter here —
+    they render actual English and Vietnamese messages with interpolation, which a type-check
+    cannot.
+  - **Upgrade note:** none.
+
+
 - **A store now verifies its own event chain at startup**
   ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 3). The chain has been computed on
   every append, stored, and published to the cloud at shift close since it was built — and never
