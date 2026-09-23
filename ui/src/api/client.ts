@@ -32,11 +32,13 @@ import type {
   OpenShiftRequest,
   PairAccepted,
   PairingState,
+  PrinterEntry,
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
   SyncResponse,
   TableResponse,
+  TestPrintResponse,
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
@@ -296,6 +298,10 @@ export const api = {
   currentShift: () => request<ShiftResponse | null>("GET", "/api/shifts/current"),
   // The cloud link and the outbox, for the status bar (ADR-0137).
   sync: () => request<SyncResponse>("GET", "/api/sync"),
+  // The printers the store published, and a manager's test page on one.
+  printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
+  testPrinter: (deviceId: string) =>
+    request<TestPrintResponse>("POST", `/api/printers/${deviceId}/test`),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>

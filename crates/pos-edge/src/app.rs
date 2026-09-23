@@ -5196,6 +5196,13 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// A fresh id for a print job no event stands behind — a manager's test page. Other jobs take
+    /// the id of the event that caused them, which is what makes a retried print idempotent.
+    #[must_use]
+    pub fn print_job_id(&self) -> pos_proto::ids::EventId {
+        pos_proto::ids::EventId::new(self.next_ulid())
+    }
+
     fn next_ulid(&self) -> Ulid {
         self.ids
             .lock()

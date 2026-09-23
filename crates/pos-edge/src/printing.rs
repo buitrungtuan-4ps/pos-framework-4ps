@@ -145,6 +145,54 @@ fn centred(line: impl Into<String>, emphasised: bool) -> PrintBlock {
     }
 }
 
+/// The page a manager prints to check a printer is wired, from the Devices screen.
+///
+/// Says which printer it is, where the edge reached it and when, so the paper in a technician's hand
+/// identifies itself — a shop with three printers learns which one is which by printing. The last
+/// line answers the next question, whether the printer will print Vietnamese: a sample drawn by the
+/// rasteriser when this box has fonts (ADR-0102), or an ASCII line saying it has none. Never a
+/// Vietnamese line the box cannot draw — that refuses the whole page, and a wired printer would look
+/// broken.
+#[must_use]
+pub fn test_page_document(
+    profile: &StoreProfile,
+    device: &PublishedDevice,
+    printed_at: &str,
+    can_rasterise: bool,
+) -> PrintDocument {
+    let mut blocks = Vec::new();
+    if let Some(name) = profile.display_name() {
+        blocks.push(centred(name, true));
+    }
+    blocks.push(centred("Printer test", true));
+    for line in [
+        format!("Printer: {}", device.name.as_str()),
+        format!("Address: {}", device.address),
+        format!("Printed: {printed_at}"),
+        if can_rasterise {
+            "Tiếng Việt: Phở bò · Bánh mì · Cà phê sữa đá".to_owned()
+        } else {
+            "Vietnamese text: no fonts on this store PC, so it will not print".to_owned()
+        },
+    ] {
+        blocks.push(PrintBlock::Text {
+            line,
+            style: TextStyle::default(),
+        });
+    }
+    PrintDocument { blocks }
+}
+
+/// The published printers, in publication order — what the Devices screen lists and can test.
+#[must_use]
+pub fn published_printers(devices: &PublishedDevices) -> Vec<&PublishedDevice> {
+    devices
+        .devices()
+        .iter()
+        .filter(|device| is_printer(device))
+        .collect()
+}
+
 /// A `label            amount` line, which is how every figure on a receipt is read.
 /// How this store writes money on paper: how many decimals its currency has
 /// ([ADR-0134](../../../docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)) and what marks
@@ -1005,6 +1053,39 @@ impl Printers {
                 job_id,
                 store_id,
                 station_id: Some(station),
+                document,
+            },
+        )
+        .await
+    }
+
+    /// Prints [`test_page_document`] on the printer `device_id`, through the same dispatch a receipt
+    /// takes — direct or through its agent (ADR-0112) — so a page that prints proves the path a
+    /// receipt will take.
+    ///
+    /// [`PrintOutcome::NoPrinter`] for an id this store has not published as a printer.
+    pub async fn print_test_page(
+        &self,
+        session: &EdgeSession,
+        store_id: StoreId,
+        job_id: EventId,
+        device_id: DeviceId,
+        printed_at: &str,
+    ) -> PrintOutcome {
+        let Some(device) = published_printers(&session.devices)
+            .into_iter()
+            .find(|device| device.device_id == device_id)
+        else {
+            return PrintOutcome::NoPrinter;
+        };
+        let document =
+            test_page_document(&session.profile, device, printed_at, self.can_rasterise());
+        self.dispatch(
+            device,
+            PrintJob {
+                job_id,
+                store_id,
+                station_id: device.station_id,
                 document,
             },
         )

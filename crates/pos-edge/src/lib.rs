@@ -70,6 +70,7 @@ pub mod queue;
 pub mod receipt;
 pub mod relay_client;
 pub mod server;
+pub mod setup;
 pub mod sntp;
 pub mod state;
 pub mod sync_status;

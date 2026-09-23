@@ -103,4 +103,13 @@ pub enum EdgeError {
     /// target is a match arm every caller has to guess at.
     #[error("the Windows service handshake failed: {0}")]
     Service(String),
+
+    /// A `pos-edge install` run could not be completed — the store or cloud could not be worked out,
+    /// administrator rights were refused, or the embedded installer script failed
+    /// ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)).
+    ///
+    /// A `String` for the reason [`Self::Archive`] is one: a technician at a shop PC needs one
+    /// sentence they can act on.
+    #[error("{0}")]
+    Install(String),
 }

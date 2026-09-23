@@ -554,3 +554,16 @@ export interface ActivateAccepted {
 export interface ActivationStanding {
   activated: boolean;
 }
+
+/** One printer the store published, from `GET /api/printers`. */
+export interface PrinterEntry {
+  device_id: string;
+  name: string;
+  /** The station it serves; absent for the receipt printer. */
+  station_id?: string;
+}
+
+/** What came of a test page — the same tokens a receipt's print reports. */
+export interface TestPrintResponse {
+  print: string;
+}

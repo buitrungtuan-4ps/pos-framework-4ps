@@ -44,7 +44,7 @@ use crate::installer::SystemdInstaller;
 use crate::lease_state::LeaseAuthority;
 use crate::lease_state::{LeaseWatch, StoreLease};
 use crate::order_in::EdgeOrderIn;
-use crate::ota_client::{BootStanding, OtaClient, RestartIntent};
+use crate::ota_client::{BootStanding, OtaClient, RestartIntent, RestartRequest};
 use crate::ota_state::OtaStateAuthority;
 use crate::pairing::{ANNOUNCE_TARGET, Minter, Pairing, hosted_pairing_url, pairing_url};
 use crate::queue::QueueNumberAuthority;
@@ -372,6 +372,7 @@ where
         print_agents,
         print_queue,
         &shutdown_rx,
+        Some(Arc::new(restart.clone())),
     )
     .await?;
 
@@ -583,6 +584,13 @@ impl FarewellBeat {
 /// [`EdgeError::Config`] if the configuration would misbehave, [`EdgeError::Country`] if the
 /// compiled-in country modules disagree, or [`EdgeError::DeviceRegistry`] if the pairing or sign-in
 /// table could not be read.
+///
+/// `restart` is the handle a successful activation asks for its restart through (ADR-0140); a test
+/// that composes passes `None`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "composition reads top to bottom in the order a store comes up; splitting it would               scatter that order across helpers that each need most of its locals"
+)]
 pub async fn compose<S, Q, L, P, J>(
     config: EdgeConfig,
     edge: Arc<Edge<S>>,
@@ -591,6 +599,7 @@ pub async fn compose<S, Q, L, P, J>(
     print_agents: P,
     print_queue: J,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+    restart: Option<Arc<dyn RestartRequest>>,
 ) -> Result<Composed, EdgeError>
 where
     S: EventStore
@@ -772,6 +781,7 @@ where
             &revocations,
             backup,
             shutdown_rx,
+            restart,
         )
         .await;
         app = surface.app;
@@ -875,6 +885,7 @@ async fn compose_cloud_surface<S, Q, L, P>(
     revocations: &Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+    restart: Option<Arc<dyn RestartRequest>>,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -916,6 +927,7 @@ where
         Arc::clone(&vault),
         Some(Arc::clone(&lease_watch)),
         origins,
+        restart,
     ));
 
     // Boot gate: start the cloud loops only once the box holds a device credential (ADR-0086). Reading
