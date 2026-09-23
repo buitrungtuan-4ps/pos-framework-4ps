@@ -57,6 +57,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`/setup` says why an activation failed, in the operator's language.** The activation routes
+  answered with a bare English sentence and no `pos-error-reason` token, so the first screen a
+  technician meets showed "the activation service is unavailable" to a Vietnamese shop. Every
+  refusal now carries a token — `ACTIVATION_REFUSED` (whatever the cloud's reason, so a refused code
+  still reveals nothing), `ACTIVATION_CODE_MALFORMED`, `ALREADY_ACTIVATED`, `ACTIVATION_WRONG_STATE`,
+  `ACTIVATION_UNAVAILABLE` — and the till translates each with a next step.
 - **A store that boots before its internet does ships its sales once the line comes back.** The
   edge's event-stream link failed its connect when the broker was unreachable at boot — the normal
   case after a power cut, when the PC comes up before the router — and the edge then started no

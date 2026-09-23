@@ -45,6 +45,12 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   TAX_RATE_NOT_CONFIGURED: "error.tax_rate_not_configured",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
+  // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.
+  ACTIVATION_REFUSED: "error.activation_refused",
+  ACTIVATION_CODE_MALFORMED: "error.activation_code_malformed",
+  ALREADY_ACTIVATED: "error.already_activated",
+  ACTIVATION_WRONG_STATE: "error.activation_wrong_state",
+  ACTIVATION_UNAVAILABLE: "error.activation_unavailable",
 };
 
 // The sentence for anything a command threw: a translated refusal, the edge's own words for a

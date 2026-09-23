@@ -40,10 +40,18 @@ fn granted_device() -> DeviceId {
 /// both parses and is the one the cloud recognises.
 struct StubCloud {
     accepts: String,
+    /// Whether the cloud is unreachable — every exchange fails as `unavailable`.
+    down: bool,
 }
 
 impl CloudSync for StubCloud {
     async fn activate(&self, activation_code: &str) -> Result<ActivationGrant, PortError> {
+        if self.down {
+            return Err(PortError::unavailable(
+                PortName::CloudSync,
+                "the stub cloud is unreachable",
+            ));
+        }
         if activation_code == self.accepts {
             Ok(ActivationGrant {
                 device_id: granted_device(),
@@ -122,6 +130,7 @@ fn harness_with_origins(
     let vault = Arc::new(FakeKeyVault::new());
     let cloud = Arc::new(StubCloud {
         accepts: code.to_owned(),
+        down: false,
     });
     let origins = Arc::new(pos_edge::origins::Origins::new());
     origins
@@ -366,6 +375,7 @@ async fn activating_forgets_a_lease_generation_inherited_from_a_copied_disk() {
         Arc::clone(&edge),
         Arc::new(StubCloud {
             accepts: code.clone(),
+            down: false,
         }),
         Arc::clone(&vault),
         Some(Arc::clone(&lease)),
@@ -427,6 +437,7 @@ async fn a_successful_activation_restarts_the_box_so_its_cloud_loops_start() {
         Arc::clone(&edge),
         Arc::new(StubCloud {
             accepts: code.clone(),
+            down: false,
         }),
         Arc::new(FakeKeyVault::new()),
         None,
@@ -452,4 +463,86 @@ async fn a_successful_activation_restarts_the_box_so_its_cloud_loops_start() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+}
+
+/// One activation request, answered with its status and the reason token it carries.
+async fn reason_of(router: Router, body: &str) -> (StatusCode, Option<String>) {
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/activate")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_owned()))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    let reason = response
+        .headers()
+        .get("pos-error-reason")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    (response.status(), reason)
+}
+
+/// Every refusal on `/api/activate` names a token (ADR-0137), so `/setup` — the first screen a
+/// technician meets — says what went wrong in the operator's language instead of showing the edge's
+/// English sentence. And a refused code still reveals nothing: whatever the cloud's reason, the token
+/// is the one `ACTIVATION_REFUSED`.
+#[tokio::test]
+async fn every_activation_refusal_names_a_token_the_till_can_translate() {
+    let accepted = valid_code();
+    let other = ActivationCode::from_entropy([9; PAYLOAD_LEN])
+        .as_str()
+        .to_owned();
+
+    let (router, _vault, _edge) = harness(&accepted);
+    let (status, reason) = reason_of(router.clone(), &format!("{{\"code\":\"{other}\"}}")).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::FORBIDDEN, Some("ACTIVATION_REFUSED"))
+    );
+    let (status, reason) = reason_of(router.clone(), "{\"code\":\"not-a-code\"}").await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::BAD_REQUEST, Some("ACTIVATION_CODE_MALFORMED"))
+    );
+    let (first, _) = reason_of(router.clone(), &format!("{{\"code\":\"{accepted}\"}}")).await;
+    assert_eq!(first, StatusCode::OK);
+    let (status, reason) = reason_of(router, &format!("{{\"code\":\"{accepted}\"}}")).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("ALREADY_ACTIVATED"))
+    );
+
+    // And a cloud that cannot be reached — the case a technician at a shop with no internet meets.
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3))),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("edge composes"),
+    );
+    let down = activation_router(
+        edge,
+        Arc::new(StubCloud {
+            accepts: accepted.clone(),
+            down: true,
+        }),
+        Arc::new(FakeKeyVault::new()),
+        None,
+        &Arc::new(pos_edge::origins::Origins::new()),
+        None,
+    );
+    let (status, reason) = reason_of(down, &format!("{{\"code\":\"{accepted}\"}}")).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("ACTIVATION_UNAVAILABLE")
+        )
+    );
 }

@@ -31,7 +31,7 @@ use std::sync::Arc;
 use axum::Json;
 use axum::Router;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,7 @@ use pos_ports::{PortError, Secret};
 use pos_proto::ErrorStatus;
 
 use crate::app::Edge;
+use crate::http::ERROR_REASON_HEADER;
 use crate::lease_state::LeaseWatch;
 use crate::ota_client::RestartRequest;
 
@@ -180,7 +181,11 @@ where
     // A malformed code never named a real one, so refuse it locally: a plain client error, and a
     // saved round-trip. `parse` normalises casing and spacing exactly as the cloud does.
     if ActivationCode::parse(&request.code).is_err() {
-        return (StatusCode::BAD_REQUEST, "the activation code is malformed").into_response();
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "ACTIVATION_CODE_MALFORMED",
+            "the activation code is malformed",
+        );
     }
 
     // Idempotency and no double-spend: a box that already holds a credential is activated. Re-running
@@ -188,7 +193,11 @@ where
     // repeat into a `403`.
     match state.vault.load(SecretName::DeviceCredential).await {
         Ok(Some(_already)) => {
-            return (StatusCode::CONFLICT, "this device is already activated").into_response();
+            return refused(
+                StatusCode::CONFLICT,
+                "ALREADY_ACTIVATED",
+                "this device is already activated",
+            );
         }
         Ok(None) => {}
         Err(error) => return activation_error(&error),
@@ -292,13 +301,38 @@ fn activation_error(error: &PortError) -> Response {
         ErrorStatus::Internal | ErrorStatus::Unspecified => StatusCode::INTERNAL_SERVER_ERROR,
     };
     // The message is generic on purpose: a refused code must not reveal whether it was spent,
-    // revoked, or never real.
-    let body = match status {
-        StatusCode::FORBIDDEN => "activation refused",
-        StatusCode::BAD_REQUEST => "the activation code is malformed",
-        StatusCode::CONFLICT => "the device is in the wrong state for activation",
-        StatusCode::SERVICE_UNAVAILABLE => "the activation service is unavailable",
-        _ => "activation failed",
+    // revoked, or never real — and neither may its token, which is why every flavour of "no" from
+    // the cloud is the one `ACTIVATION_REFUSED`.
+    let (reason, body) = match status {
+        StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED | StatusCode::NOT_FOUND => {
+            ("ACTIVATION_REFUSED", "activation refused")
+        }
+        StatusCode::BAD_REQUEST => (
+            "ACTIVATION_CODE_MALFORMED",
+            "the activation code is malformed",
+        ),
+        StatusCode::CONFLICT => (
+            "ACTIVATION_WRONG_STATE",
+            "the device is in the wrong state for activation",
+        ),
+        StatusCode::SERVICE_UNAVAILABLE => (
+            "ACTIVATION_UNAVAILABLE",
+            "the activation service is unavailable",
+        ),
+        _ => ("INTERNAL", "activation failed"),
     };
-    (status, body).into_response()
+    refused(status, reason, body)
+}
+
+/// A refusal the till can put in the operator's language: the status, the stable reason token the
+/// rest of `/api` carries ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)),
+/// and the English sentence a log reads. Without the token, `/setup` could only show that sentence
+/// — English, on the one screen a technician meets before anything else works.
+fn refused(status: StatusCode, reason: &'static str, body: &'static str) -> Response {
+    (
+        status,
+        [(ERROR_REASON_HEADER, HeaderValue::from_static(reason))],
+        body,
+    )
+        .into_response()
 }
