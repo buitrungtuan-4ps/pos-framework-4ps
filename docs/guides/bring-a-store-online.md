@@ -151,22 +151,31 @@ script taking the store's values as parameters.
 ### One file, double-clicked (Windows)
 
 The binary carries that same script ([ADR-0140](../adr/0140-a-store-pc-installs-itself-from-one-file.md)).
-Rename the release's `pos-edge.exe` to name its store and cloud —
+The console hands it out already named for its store and cloud
+([ADR-0141](../adr/0141-the-console-hands-out-the-installer-by-name.md)): the Stores screen's **Move
+to a new box** drawer and the last step of the new-store wizard both offer **Download the setup
+file**. It starts from the version the store's rollout targets, or you type the version your stores
+run. The link appears once the cloud holds a Windows build of that version; if it does not, fetch the
+release on the OTA screen first. The file is the release's own `pos-edge.exe`, byte for byte, named
 
 ```
 pos-edge-setup_<cloud host>_<store ULID>.exe        e.g. pos-edge-setup_pos.example.vn_01J9ZQ3M6V4Q1ZB2Y7H8K5N0PX.exe
 pos-edge-setup_<cloud host>@<port>_<store ULID>.exe for a cloud on a port other than 443
 ```
 
-— copy it onto the machine and double-click it. It asks for administrator rights (the UAC prompt),
-runs the script with those values in a window that stays open, and opens this box's **`/setup`** page
-when the service is up, for Step 3. Or, from an administrator prompt with any file name:
+— which is also how to name a release binary by hand when there is no console to hand. Copy it onto
+the machine and double-click it. It asks for administrator rights (the UAC prompt), then **asks for the
+store key** in a window that stays open: paste the key the drawer or the wizard issued, or press
+Enter to skip. It runs the script with those values, and opens this box's **`/setup`** page when the
+service is up, for Step 3. Or, from an administrator prompt with any file name:
 `pos-edge.exe install --store <ULID> --cloud https://<cloud host>`.
 
-This path carries **no store key** — the key is a secret and does not go in a file name — so the store
-sells, pairs and activates, and config sync and the order relay refuse until a key is installed, as the
-script does without `-SyncKey`. Windows SmartScreen warns on the unsigned file, as it does for the
-binary today.
+The key is a secret, so it is never in the file or its name. Pasted at the prompt, it goes only into
+the service's own registry key, exactly where `-SyncKey` puts it. Skipped, the store still sells,
+pairs and activates, and config sync and the order relay refuse until a key is installed. The console
+will not offer the file when it was opened over plain http at a network address, because the file
+tells the store to dial the cloud over `https`. Windows SmartScreen warns on the unsigned file, as it
+does for the binary today.
 
 ### By hand (a host you manage yourself)
 

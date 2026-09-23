@@ -15,9 +15,11 @@
 //! The console hands out the edge binary renamed `pos-edge-setup_<cloud host>_<store ULID>.exe`.
 //! Double-clicking a file with that name installs rather than serves: the name says which store the
 //! machine is and which cloud it dials, which is everything `config.toml` needs, and neither is a
-//! secret — the credential arrives later, through activation at `/setup`, which the installer opens
-//! when it is done. The bytes are the release's own, so the minisign signature still verifies; data
-//! appended to the file would have broken that.
+//! secret — the device credential arrives later, through activation at `/setup`, which the installer
+//! opens when it is done, and the store's sync key is pasted into the installer's own window
+//! ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)). The bytes
+//! are the release's own, so the minisign signature still verifies; data appended to the file would
+//! have broken that.
 //!
 //! A browser saving a second copy calls it `… (1).exe`; that suffix is tolerated. A cloud on a port
 //! other than 443 is written `host@port`. A cloud at `localhost` or a loopback address is dialled
@@ -128,8 +130,10 @@ pub fn from_arguments(arguments: &[String]) -> Result<InstallTarget, InstallInpu
 
 /// The parameters the embedded `PowerShell` installer is run with.
 ///
-/// `-OpenSetup` makes it open the activation screen when the service is up, which is the next step
-/// and the only one left for the technician.
+/// `-AskSyncKey` makes it ask, in its own window, for the store key the file name deliberately does
+/// not carry ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)), so a
+/// technician pastes it there rather than on a command line. `-OpenSetup` makes it open the
+/// activation screen when the service is up, which is the next step and the only one left.
 #[must_use]
 pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = [
@@ -153,6 +157,7 @@ pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget)
     // The script writes this into config.toml as given; `Url` adds a trailing slash to a bare
     // origin, which the edge's own URL handling does not want doubled.
     arguments.push(target.cloud_url.as_str().trim_end_matches('/').into());
+    arguments.push("-AskSyncKey".into());
     arguments.push("-OpenSetup".into());
     arguments
 }
@@ -447,6 +452,7 @@ mod tests {
             Some("C:\\Downloads\\setup.exe")
         );
         assert!(arguments.iter().any(|argument| argument == "-OpenSetup"));
+        assert!(arguments.iter().any(|argument| argument == "-AskSyncKey"));
         assert!(arguments.iter().any(|argument| argument == "-NoExit"));
     }
 }

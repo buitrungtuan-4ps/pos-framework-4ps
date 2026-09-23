@@ -44,6 +44,10 @@
     Open this box's activation screen in the browser when the service is up. The one-file
     installer (pos-edge install, ADR-0140) passes it; a remote shell has no browser to open.
 
+.PARAMETER AskSyncKey
+    With no -SyncKey, ask for the store key in this window instead of installing without one.
+    The one-file installer passes it (ADR-0141); a script run unattended must not stop to ask.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 `
         -Binary .\pos-edge.exe -StoreId 01J... -CloudUrl https://cloud.example.com
@@ -64,6 +68,8 @@ param(
     [string] $BindPort = '8787',
 
     [switch] $OpenSetup,
+
+    [switch] $AskSyncKey,
 
     [string] $Root = 'C:\ProgramData\pos-edge'
 )
@@ -223,6 +229,14 @@ $environment = @(
     "POS_EDGE_PAIRING_FILE=$pairingPath",
     'RUST_LOG=info'
 )
+# The one-file installer's name carries the store and the cloud but never the key (ADR-0141),
+# so it asks for the key here: pasted into this elevated window, it goes only into the service's
+# registry key below — never onto the network, and never into shell history.
+if (-not $SyncKey -and $AskSyncKey) {
+    $entered = Read-Host -Prompt 'Paste the store key from the console, or press Enter to skip' -AsSecureString
+    $SyncKey = [System.Net.NetworkCredential]::new('', $entered).Password.Trim()
+}
+
 # The scoped store key (read_config + relay_orders). The keyring is the better home for it
 # (ADR-0086) and this is the headless bring-up override, exactly as POS_EDGE_SYNC_KEY is on
 # Linux. Without one the store still trades; config sync and the order relay refuse.

@@ -33,6 +33,7 @@ import {
 import type { InstallerValues } from "../installers.d.mts";
 import { downloadFile } from "../lib/handoff";
 import { apiMessage } from "../lib/errors";
+import { SetupFile } from "../components/SetupFile";
 
 // Scopes offered for the store's key, each mapped to a static i18n key (a template-literal key would
 // not be a MessageKey and would defeat the type check).
@@ -491,6 +492,18 @@ export function NewStore() {
                   </Button>
                 </div>
               </div>
+
+              {/* The Windows setup file (ADR-0141): the release's own executable, named so a
+                  double-click installs this store — the shortest way a Windows till comes up. */}
+              <Show when={created()}>
+                {(store) => (
+                  <SetupFile
+                    tenantId={tenantId()}
+                    storeId={store().store_id}
+                    hasKey={issued() !== null}
+                  />
+                )}
+              </Show>
 
               {/* The same handoff for a Windows store (R4, issue #182). Windows used to get the two
                   files and a README, so the install was five sc.exe lines typed by hand — and the

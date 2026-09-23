@@ -20731,6 +20731,174 @@ async fn a_malformed_upload_is_refused_naming_the_field() {
     }
 }
 
+/// The Windows build the one-file installer is served from — the target the release workflow builds.
+const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Asks for a store's one-file installer.
+fn installer_request(release: &str, query: &str, cookie: &str) -> Request<Body> {
+    get_with_cookie(
+        &format!("/admin/ota/releases/{release}/installer?{query}"),
+        cookie,
+    )
+}
+
+/// The console's download: a hosted Windows release, byte for byte, under the name the edge reads as
+/// "install this store, dialling this cloud" (ADR-0140, ADR-0141). The bytes are untouched — that is
+/// what keeps their signature verifying — so the store and the cloud travel only in the name.
+#[tokio::test]
+async fn a_hosted_windows_release_downloads_as_the_stores_installer() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let binary = b"the windows pos-edge".to_vec();
+    let uploaded = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            WINDOWS_TARGET,
+            binary.clone(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+    // No `arch`: the Windows build is the default, because it is the only kind of installer.
+    let served = router
+        .oneshot(installer_request(
+            "1.5.0",
+            &format!("store_id={}&cloud=Cloud.Example.com:8443", store_id()),
+            &cookie,
+        ))
+        .await
+        .expect("route the download");
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(
+        served
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok()),
+        Some(
+            format!(
+                "attachment; filename=\"pos-edge-setup_cloud.example.com@8443_{}.exe\"",
+                store_id()
+            )
+            .as_str()
+        )
+    );
+    let downloaded = axum::body::to_bytes(served.into_body(), usize::MAX)
+        .await
+        .expect("read the body");
+    assert_eq!(downloaded.as_ref(), binary.as_slice());
+}
+
+/// Every refusal names its field, and each is one a person at the console can act on: a store id
+/// that is not one, a cloud address the edge could not read back out of a file name, and a Linux
+/// build — which installs with the generated script instead.
+#[tokio::test]
+async fn an_installer_request_is_refused_naming_the_field() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let store = store_id();
+
+    for (release, query, field) in [
+        (
+            "1.5.0!",
+            format!("store_id={store}&cloud=pos.example.vn"),
+            "release",
+        ),
+        ("1.5.0", "cloud=pos.example.vn".to_owned(), "store_id"),
+        (
+            "1.5.0",
+            "store_id=nope&cloud=pos.example.vn".to_owned(),
+            "store_id",
+        ),
+        ("1.5.0", format!("store_id={store}"), "cloud"),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos_example.vn"),
+            "cloud",
+        ),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos.example.vn:0"),
+            "cloud",
+        ),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos.example.vn&arch={TEST_TARGET}"),
+            "arch",
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(installer_request(release, &query, &cookie))
+            .await
+            .expect("route the request");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{release} {query}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "{release} {query} names {field}"
+        );
+    }
+}
+
+/// A release the cloud holds only for Linux has no installer: a `404` that says what to do, rather
+/// than a file that would never have run.
+#[tokio::test]
+async fn a_release_not_hosted_for_windows_has_no_installer() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let uploaded = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"the linux pos-edge".to_vec(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+    let missing = router
+        .oneshot(installer_request(
+            "1.5.0",
+            &format!("store_id={}&cloud=pos.example.vn", store_id()),
+            &cookie,
+        ))
+        .await
+        .expect("route the request");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let body = json_body(missing).await;
+    assert_eq!(body["error"]["details"][0]["field"], "release");
+}
+
+/// Reading what the cloud hosts is a console read, and a signed-out request is not one.
+#[tokio::test]
+async fn an_installer_needs_a_console_session() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let refused = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/ota/releases/1.5.0/installer?store_id={}&cloud=pos.example.vn",
+                    store_id()
+                ))
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the request");
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// Re-running a release step is not an error, and changing a release's bytes is: a version a ring has
 /// already installed has to keep meaning the same thing.
 #[tokio::test]
