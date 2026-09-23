@@ -31,6 +31,6 @@ pub use snapshot::{integrity_check, snapshot_to};
 pub use store::SqliteStore;
 pub use tx::SqliteTx;
 pub use writer::{
-    ClaimedPrintJob, OUTBOX_CAPACITY, PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding,
-    PrintEnqueue, QueuedPrintJob,
+    ClaimedPrintJob, PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding, PrintEnqueue,
+    QueuedPrintJob,
 };

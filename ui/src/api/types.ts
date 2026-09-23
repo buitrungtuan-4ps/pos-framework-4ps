@@ -417,6 +417,27 @@ export interface LocaleResponse {
    * out, and the one it used to invent was `en-US` for every store in every country.
    */
   number_format: NumberFormat;
+  /**
+   * The store's display language (a BCP 47 tag), absent when it has set none. A device that has
+   * never picked a language starts in this one rather than in English.
+   */
+  display_language?: string;
+}
+
+/**
+ * The cloud link and the outbox, from `GET /api/sync` (ADR-0137). What the status bar needs to say
+ * "Offline — selling normally" and how many events are waiting. No level refuses a sale.
+ */
+export interface SyncResponse {
+  outbox_depth: number;
+  outbox_planned_depth: number;
+  outbox_level:
+    | "OUTBOX_LEVEL_NORMAL"
+    | "OUTBOX_LEVEL_ELEVATED"
+    | "OUTBOX_LEVEL_HIGH"
+    | "OUTBOX_LEVEL_BEYOND";
+  cloud_link: "CLOUD_LINK_UNSPECIFIED" | "CLOUD_LINK_ONLINE" | "CLOUD_LINK_OFFLINE";
+  last_sync_time?: string;
 }
 
 /** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */

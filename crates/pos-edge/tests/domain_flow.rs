@@ -157,6 +157,31 @@ async fn send(
     (status, json)
 }
 
+/// [`send`], keeping the `pos-error-reason` header a refusal carries (ADR-0137).
+async fn send_for_reason(
+    app: Router,
+    token: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Option<String>) {
+    let body = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(body)
+        .expect("request builds");
+    let response = app.oneshot(request).await.expect("router responds");
+    let reason = response
+        .headers()
+        .get("pos-error-reason")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    (response.status(), reason)
+}
+
 fn vnd(minor: i64) -> Money {
     Money::new(CurrencyCode::VND, minor)
 }
@@ -526,4 +551,109 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     assert_eq!(closed["expected_amount"], json!(vnd(500_000)));
     assert_eq!(closed["variance"], json!(vnd(0)));
     assert_eq!(closed["print_shift_report"], true);
+}
+
+#[tokio::test]
+async fn the_open_shift_is_readable_by_a_device_that_reloads() {
+    let (app, token) = app().await;
+
+    // Nothing open is the ordinary morning state, and it is an answer, not an error.
+    let (status, none) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(none, Value::Null);
+
+    let (_, opened) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    let shift_id = opened["shift_id"].as_str().expect("a shift id").to_owned();
+
+    // A reload reads the shift another request opened: same id, same state, and blind.
+    let (status, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(current["shift_id"], shift_id.as_str());
+    assert_eq!(current["state"], "SHIFT_STATE_OPEN");
+    assert!(
+        current.get("expected_amount").is_none(),
+        "the read is blind"
+    );
+
+    let (_, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/count"),
+        Some(json!({ "counted_minor": 480_000 })),
+    )
+    .await;
+    let (_, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(current["state"], "SHIFT_STATE_COUNTED");
+    assert_eq!(current["counted_amount"], json!(vnd(480_000)));
+    assert!(
+        current.get("expected_amount").is_none() && current.get("variance").is_none(),
+        "a counted shift is still blind until it closes"
+    );
+
+    let (_, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
+    let (_, after) = send(app, &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(after, Value::Null, "a closed shift is not the current one");
+}
+
+#[tokio::test]
+async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
+    let (app, token) = app().await;
+    let open = || Some(json!({ "opening_float": vnd(500_000) }));
+
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", "/api/shifts", open()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reason, None, "a success carries no reason");
+
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", "/api/shifts", open()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("SHIFT_ALREADY_OPEN"));
+
+    // A path segment that is not a ULID is the caller's mistake, and says so the same way.
+    let (status, reason) =
+        send_for_reason(app, &token, "POST", "/api/shifts/not-a-ulid/close", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(reason.as_deref(), Some("INVALID_ARGUMENT"));
+}
+
+#[tokio::test]
+async fn the_status_bar_reads_the_outbox_and_the_cloud_link() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(701));
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, sync) = send(app, &token, "GET", "/api/sync", None).await;
+    assert_eq!(status, StatusCode::OK);
+    // This store has no cloud, so every event it committed is still waiting — and that is a
+    // warning at most, never a refusal (ADR-0137).
+    assert!(sync["outbox_depth"].as_u64().expect("a depth") >= 1);
+    assert_eq!(sync["outbox_planned_depth"], 100_000);
+    assert_eq!(sync["outbox_level"], "OUTBOX_LEVEL_NORMAL");
+    // Nothing has tried to reach a cloud, which is not the same as having failed to.
+    assert_eq!(sync["cloud_link"], "CLOUD_LINK_UNSPECIFIED");
+    assert!(sync.get("last_sync_time").is_none());
 }

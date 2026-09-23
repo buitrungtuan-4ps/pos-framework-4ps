@@ -77,6 +77,22 @@ where
     respond(edge.open_shift(actor, request.opening_float).await)
 }
 
+/// `GET /api/shifts/current` — the shift trading now, or `null` when none is open.
+///
+/// Until this read existed a shift lived in the browser that opened it: a reload, a second till or a
+/// tablet that restarted mid-shift offered to *open* one, the edge refused because one was open, and
+/// nothing could count or close it. `null` rather than `404` because no open shift is the ordinary
+/// state before the first open of the day, not a missing resource.
+///
+/// Blind like the count: the expectation and the variance are never in this answer, only in the
+/// close's.
+pub(crate) async fn current<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    Json(edge.current_shift().map(ShiftResponse::from)).into_response()
+}
+
 /// `POST /api/shifts/{id}/count` — enter the blind count.
 pub(crate) async fn count<S>(
     State(edge): State<Arc<Edge<S>>>,

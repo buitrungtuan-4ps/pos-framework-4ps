@@ -42,12 +42,6 @@ use pos_proto::time::Timestamp;
 use crate::infra::FakeDeviceRegistry;
 use crate::lock;
 
-/// How many undelivered events a fake store holds before pushing back.
-///
-/// A real number rather than unbounded, because back-pressure is not testable against a queue that
-/// cannot fill. High enough that no ordinary case reaches it.
-pub const OUTBOX_CAPACITY: usize = 10_000;
-
 /// Everything the store has committed.
 #[derive(Debug, Default)]
 struct StoreState {
@@ -233,13 +227,8 @@ impl TxContext for FakeTx {
                 .or_default()
                 .insert(envelope.event_id, envelope.clone());
 
-            let outbox = state.outbox.entry(store_id).or_default();
-            if outbox.len() >= OUTBOX_CAPACITY {
-                return Err(PortError::resource_exhausted(
-                    PortName::EventStore,
-                    "the outbox is at capacity",
-                ));
-            }
+            // No depth check, as in the real store: a deep outbox is a store that has been offline
+            // for a while, and it keeps selling (ADR-0137).
             state.next_position = state.next_position.saturating_add(1);
             let position = OutboxPosition::new(state.next_position);
             state

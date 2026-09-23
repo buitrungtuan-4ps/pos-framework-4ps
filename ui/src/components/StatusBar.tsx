@@ -1,9 +1,35 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { A } from "@solidjs/router";
 
-import { api } from "../api/client";
+import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
-import { kdsEnabled, state, tablesEnabled } from "../state/store";
+import { kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
+
+// How often the bar asks the edge about the cloud (ADR-0137). The edge caches the depth for five
+// seconds, so a floor of tablets polling at this rate costs it one count per window between them.
+const SYNC_POLL_MS = 15_000;
+
+// What the bar says about the cloud, or null when there is nothing worth a word: a connected store
+// with a shallow outbox, or an edge that has not answered yet. "Offline" only when the drain has
+// actually failed to reach the cloud — a demo with no cloud at all is not offline, it is unconnected,
+// and it says so only once its backlog is deep enough to matter.
+function cloudNotice(): { key: MessageKey; tone: "muted" | "warn" | "danger" } | null {
+  const sync = state.sync;
+  if (sync === null) {
+    return null;
+  }
+  switch (sync.outbox_level) {
+    case "OUTBOX_LEVEL_HIGH":
+    case "OUTBOX_LEVEL_BEYOND":
+      return { key: "status.outbox_high", tone: "danger" };
+    case "OUTBOX_LEVEL_ELEVATED":
+      return { key: "status.outbox_elevated", tone: "warn" };
+    default:
+      return sync.cloud_link === "CLOUD_LINK_OFFLINE"
+        ? { key: "status.cloud_offline", tone: "muted" }
+        : null;
+  }
+}
 
 // Every destination, and what the store has to do for it to be one.
 //
@@ -30,9 +56,10 @@ const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
   { href: "/devices", key: "nav.devices" },
 ];
 
-// The persistent status bar. It names the store link (to the edge on the LAN, not the cloud — a
-// store is meant to trade with the cloud unreachable), the open shift, the language, and a theme
-// toggle. Nothing here ever moves between states; only its text and colour change.
+// The persistent status bar. It names the store link (to the edge on the LAN), the cloud when there is
+// something to say about it — "Offline — selling normally" and how many events are waiting, amber
+// and then red as the backlog deepens, never a block (ADR-0137) — the open shift, the language, and
+// a theme toggle. Nothing here ever moves between states; only its text and colour change.
 //
 // # Why every control here is `min-h-touch`
 //
@@ -54,6 +81,19 @@ export function StatusBar() {
     }
   };
   const linkColour = () => (state.link === "open" ? "bg-ok" : "bg-awaiting");
+
+  // Poll the cloud link while this device is paired. A paired device that nobody has signed in to
+  // yet is refused the read, which costs nothing and leaves the bar as it was.
+  onMount(() => {
+    const poll = () => {
+      if (deviceToken() !== null) {
+        void loadSync();
+      }
+    };
+    poll();
+    const timer = setInterval(poll, SYNC_POLL_MS);
+    onCleanup(() => clearInterval(timer));
+  });
 
   const initial = document.documentElement.dataset["theme"] ?? "system";
   const [theme, setTheme] = createSignal(initial);
@@ -82,6 +122,36 @@ export function StatusBar() {
         <span class={`inline-block h-2.5 w-2.5 rounded-full ${linkColour()}`} aria-hidden="true" />
         {t(linkKey())}
       </span>
+      <Show when={cloudNotice()}>
+        {(notice) => (
+          <span
+            class="inline-flex items-center gap-2"
+            classList={{
+              "text-ink-muted": notice().tone === "muted",
+              "text-awaiting": notice().tone === "warn",
+              "text-danger font-semibold": notice().tone === "danger",
+            }}
+            role="status"
+            data-outcome="cloud-notice"
+          >
+            <span
+              class="inline-block h-2.5 w-2.5 rounded-full"
+              classList={{
+                "bg-awaiting": notice().tone !== "danger",
+                "bg-danger": notice().tone === "danger",
+              }}
+              aria-hidden="true"
+            />
+            {t(notice().key)}
+            <Show when={(state.sync?.outbox_depth ?? 0) > 0}>
+              <span class="tabular-nums">
+                {"· "}
+                {t("status.cloud_waiting", { count: state.sync?.outbox_depth ?? 0 })}
+              </span>
+            </Show>
+          </span>
+        )}
+      </Show>
       <Show
         when={state.shift}
         fallback={<span class="text-ink-muted">{t("status.no_shift")}</span>}

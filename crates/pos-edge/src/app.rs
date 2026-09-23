@@ -82,6 +82,7 @@ use crate::idgen::EdgeIdGenerator;
 use crate::lease_state::CurrentStanding;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
+use crate::sync_status::{OUTBOX_PLANNED_DEPTH, OutboxLevel, SyncReport, SyncStatus};
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap
 /// seconds and no daylight saving: a retention window is a duration, not a calendar walk, and being
@@ -1948,6 +1949,10 @@ pub struct Edge<S> {
     /// that refuse on it and the response header that reports it are all reading the same value.
     /// `Active` until a pull says otherwise, which is every box that has never been issued a lease.
     standing: Arc<CurrentStanding>,
+    /// What the status bar says about the cloud link and the outbox
+    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Written by the
+    /// outbox drain and the heartbeat, read by `GET /api/sync`.
+    sync: SyncStatus,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -2093,6 +2098,40 @@ impl<S: EventStore> Edge<S> {
             projection: Mutex::new(Projection::default()),
             receipts,
             standing: Arc::new(CurrentStanding::new()),
+            sync: SyncStatus::new(),
+        })
+    }
+
+    /// The cloud-link and outbox-depth cell the status bar reads
+    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+    #[must_use]
+    pub const fn sync(&self) -> &SyncStatus {
+        &self.sync
+    }
+
+    /// What the status bar shows: how many events wait for the cloud, how worried to be about it,
+    /// and whether the cloud was reachable on the drain's last pass.
+    ///
+    /// The depth is reused for [`DEPTH_TTL`](crate::sync_status::DEPTH_TTL) so every device polling
+    /// at once costs the store one count.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the depth had to be measured and the store could not be read.
+    pub async fn sync_report(&self) -> Result<SyncReport, AppError> {
+        let now = tokio::time::Instant::now();
+        let depth = if let Some(depth) = self.sync.cached_depth(now) {
+            depth
+        } else {
+            let depth = self.store.outbox_depth(self.identity.store_id).await?;
+            self.sync.record_depth(depth, now);
+            depth
+        };
+        Ok(SyncReport {
+            outbox_depth: depth,
+            outbox_level: OutboxLevel::of(depth, OUTBOX_PLANNED_DEPTH),
+            cloud_link: self.sync.cloud_link(),
+            last_sync_time: self.sync.last_sync_time(),
         })
     }
 
@@ -4324,6 +4363,26 @@ impl<S: EventStore> Edge<S> {
             state: ShiftState::Open,
             expected_amount: None,
             counted_amount: None,
+            variance: None,
+            print_shift_report: false,
+        })
+    }
+
+    /// The shift trading now, as a device may see it: its id, its state and — once counted — the
+    /// count the cashier entered. `None` when no shift is open.
+    ///
+    /// Blind (§11.1): neither the expected amount nor the variance is in the view, whatever the
+    /// shift's state, because a count entered after reading the expectation is not a blind count.
+    #[must_use]
+    pub fn current_shift(&self) -> Option<ShiftView> {
+        let projection = self.lock_projection();
+        let shift_id = projection.open_shift?;
+        let record = projection.shift(shift_id)?;
+        Some(ShiftView {
+            shift_id,
+            state: record.state,
+            expected_amount: None,
+            counted_amount: record.counted,
             variance: None,
             print_shift_report: false,
         })

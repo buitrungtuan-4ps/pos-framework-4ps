@@ -61,6 +61,11 @@ pub(crate) struct LocaleResponse {
     /// invented was `en-US` for every store in every country. Nothing on the screen reads it yet;
     /// the till follows in its own change, because it alters a figure a cashier is looking at.
     number_format: NumberFormat,
+    /// The store's display language (a BCP 47 tag from the `locale` node), absent when it has set
+    /// none. A till that has never been told otherwise starts in it, so a Vietnamese shop does not
+    /// open every reload in English.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_language: Option<String>,
 }
 
 /// `GET /api/locale` — the store's published money settings, read from the live session.
@@ -78,6 +83,7 @@ where
             cash_rounding_increment: session.cash_rounding_increment,
             prices_include_tax: session.prices_include_tax,
             number_format: session.number_format.clone(),
+            display_language: session.display_language.clone(),
         }),
     )
         .into_response()

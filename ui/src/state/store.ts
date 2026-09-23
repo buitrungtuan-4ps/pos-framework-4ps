@@ -6,6 +6,7 @@
 import { createStore, produce } from "solid-js/store";
 
 import { api } from "../api/client";
+import { adoptStoreLanguage } from "../i18n";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -20,6 +21,8 @@ import type {
   ModifierGroup,
   PaymentRequest,
   ReasonCodeEntry,
+  ShiftResponse,
+  SyncResponse,
 } from "../api/types";
 import {
   FALLBACK_NUMBER_FORMAT,
@@ -179,6 +182,10 @@ interface StoreShape {
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
   shift: ShiftInfo | null;
+  // The cloud link and the outbox (ADR-0137), polled by the status bar. Null until the first read,
+  // and on an edge that predates the route — the bar then says nothing about the cloud, which is
+  // what it said before.
+  sync: SyncResponse | null;
 }
 
 const tid = (code: string): string => code.padStart(26, "0");
@@ -232,6 +239,7 @@ const [state, setState] = createStore<StoreShape>({
   reasonCodes: [],
   bumped: {},
   shift: null,
+  sync: null,
 });
 
 export { state };
@@ -519,6 +527,40 @@ export function fold(event: ServerEvent): void {
             draft.tableState[table] = "TABLE_STATE_AWAITING_PAYMENT";
           }),
         );
+      }
+      break;
+    }
+    // The cash shift, so a shift opened, counted or closed on one device is the shift every other
+    // device shows (F4). Each carries its id under its own name — the payloads predate one field for
+    // it — and a counted event carries the count, never the expectation: the close is what reveals.
+    case "cash.shift.opened": {
+      const shiftId = str(payload, "opened_shift_id");
+      if (shiftId !== null) {
+        replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+      }
+      break;
+    }
+    case "cash.shift.counted": {
+      const shiftId = str(payload, "counted_shift_id");
+      const counted = asMoney(payload["counted_amount"]);
+      if (shiftId !== null) {
+        replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+      }
+      break;
+    }
+    case "cash.shift.closed": {
+      const shiftId = str(payload, "closed_shift_id");
+      const expected = asMoney(payload["expected_amount"]);
+      const counted = asMoney(payload["counted_amount"]);
+      const variance = asMoney(payload["variance"]);
+      if (shiftId !== null) {
+        replaceShift({
+          shiftId,
+          state: "SHIFT_STATE_CLOSED",
+          expected: expected ?? undefined,
+          counted: counted ?? undefined,
+          variance: variance ?? undefined,
+        });
       }
       break;
     }
@@ -908,6 +950,7 @@ export async function loadLocale(): Promise<void> {
     setState("cashRoundingIncrement", response.cash_rounding_increment);
     setState("currencyExponent", response.currency_exponent);
     setState("numberFormat", response.number_format);
+    adoptStoreLanguage(response.display_language);
   } catch {
     // Keep whatever is loaded; the next boot or reload tries again.
   }
@@ -1027,7 +1070,55 @@ export async function loadStore(): Promise<void> {
     loadLocale(),
     loadReasonCodes(),
     loadLiveOrders(),
+    loadShift(),
   ]);
+}
+
+// The shift open on this store right now (F4).
+//
+// A shift used to live only in the browser that opened it: a reload, a second till or a tablet that
+// restarted mid-shift drew "No shift open" and offered to open one, the edge refused because one was
+// open, and nothing on screen could count or close it. Forgiving like the other loaders — an edge
+// that predates the route, or a blip, leaves whatever is held.
+export async function loadShift(): Promise<void> {
+  let response: ShiftResponse | null;
+  try {
+    response = await api.currentShift();
+  } catch {
+    return;
+  }
+  replaceShift(
+    response === null
+      ? null
+      : { shiftId: response.shift_id, state: response.state, counted: response.counted_amount },
+  );
+}
+
+// Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
+// closed one would keep the closed one's variance on screen; naming every field is what replaces it.
+function replaceShift(info: ShiftInfo | null): void {
+  setState(
+    "shift",
+    info === null
+      ? null
+      : {
+          shiftId: info.shiftId,
+          state: info.state,
+          expected: info.expected,
+          counted: info.counted,
+          variance: info.variance,
+        },
+  );
+}
+
+// The cloud link and the outbox, for the status bar (ADR-0137). A failed read keeps the last one:
+// a bar that blanked on every blip would flicker exactly when the network is worst.
+export async function loadSync(): Promise<void> {
+  try {
+    setState("sync", await api.sync());
+  } catch {
+    // Keep the last reading; the next poll tries again.
+  }
 }
 
 // Sends every unsent line on this table's order in one act — the operator's own unit of work.

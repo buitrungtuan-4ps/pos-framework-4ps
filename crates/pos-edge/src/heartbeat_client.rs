@@ -279,7 +279,12 @@ where
     S: EventStore + Send + Sync,
 {
     match edge.store().outbox_depth(edge.store_id()).await {
-        Ok(depth) => Some(depth),
+        Ok(depth) => {
+            // The same depth the status bar grades (ADR-0137): recording it here is what logs a
+            // threshold crossing on a box nobody is looking at.
+            edge.sync().record_depth(depth, tokio::time::Instant::now());
+            Some(depth)
+        }
         Err(error) => {
             tracing::warn!(%error, "could not read the outbox depth; the heartbeat reports none");
             None

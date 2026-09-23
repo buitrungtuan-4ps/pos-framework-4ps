@@ -143,5 +143,7 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0134](0134-a-currency-says-how-many-decimals-it-has.md) | A currency says how many decimals it has, and a missing answer is not zero: the exponent is a published country value, not a three-row table in the front end | Accepted |
 | [0135](0135-the-console-reads-money-the-way-the-till-does.md) | The console reads and writes money the way the till does: the same published exponent, on the surface where prices are authored | Accepted |
 | [0136](0136-a-store-publishes-how-it-writes-numbers.md) | A store publishes how it writes numbers, and each surface knows whose reading it serves: the till and the paper draw the store's, the console draws the reader's (Amendment 1 — a menu belongs to a tenant, so only a store's own settings use its marks) | Accepted |
+| [0137](0137-a-deep-outbox-warns-and-never-refuses.md) | A deep outbox warns and never refuses a sale: the disk is the bound, the status bar says "offline — selling normally", and a refusal carries a translatable reason | Accepted |
+| [0138](0138-the-edge-compresses-what-it-sends.md) | The edge compresses what it sends to a device: gzip on `/api/*` and the embedded assets, negotiated, above a size floor, never on `/ws` | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

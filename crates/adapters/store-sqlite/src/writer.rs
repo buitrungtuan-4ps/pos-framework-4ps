@@ -24,10 +24,6 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, EventId, OrderId, StoreId};
 use pos_proto::time::BusinessDate;
 
-/// How many undelivered events the store holds before pushing back — mirrors the fake, so
-/// back-pressure behaves identically in tests and in the field.
-pub const OUTBOX_CAPACITY: usize = 10_000;
-
 /// An inbound-order idempotency row buffered for the order's transaction (ADR-0064). The record is
 /// pre-serialised to JSON by the store so the writer thread stays free of `pos_ports` types.
 #[derive(Debug)]
@@ -1092,20 +1088,10 @@ fn write_events(
                 hash,
             };
 
-            let depth: i64 = tx
-                .query_row(
-                    "SELECT COUNT(*) FROM outbox WHERE store_id = ?1",
-                    params![store_id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| db_error(port, error))?;
-            if usize::try_from(depth).unwrap_or(usize::MAX) >= OUTBOX_CAPACITY {
-                // Returning here drops `tx`, which rolls the whole transaction back — nothing partial.
-                return Err(PortError::resource_exhausted(
-                    port,
-                    "the outbox is at capacity",
-                ));
-            }
+            // No depth check here, and no refusal: a deep outbox is a store that has been offline
+            // for a while, and refusing its next sale would turn a cloud outage into a closed shop
+            // (ADR-0137). The outbox is bounded by the disk, like the log it copies, and the edge
+            // warns long before either fills.
             tx.execute(
                 "INSERT INTO outbox (store_id, envelope) VALUES (?1, ?2)",
                 params![store_id, json],

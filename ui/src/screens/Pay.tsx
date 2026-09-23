@@ -1,7 +1,6 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
 import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
@@ -20,6 +19,7 @@ import {
   voidBill,
   formatAmount,
 } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
 // store can hold reasons for one and not the other — and the picker here offers only the entries
@@ -129,13 +129,13 @@ export function Pay() {
     void loadCheck(params.id)
       .then((totals) => setCheck(totals))
       .catch((caught: unknown) =>
-        setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+        setError(errorMessage(caught)),
       );
     if (billId() === null) {
       openBill(params.id)
         .then((id) => setBillId(id))
         .catch((caught: unknown) =>
-          setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+          setError(errorMessage(caught)),
         );
     }
   });
@@ -230,7 +230,7 @@ export function Pay() {
     try {
       setDone(await settle(id, payments, buyer()));
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
@@ -293,7 +293,7 @@ export function Pay() {
         setVoided(true);
       })
       .catch((caught: unknown) =>
-        setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+        setError(errorMessage(caught)),
       );
   };
 
@@ -344,7 +344,7 @@ export function Pay() {
         closeDiscount();
       })
       .catch((caught: unknown) =>
-        setError(caught instanceof ApiError ? caught.message : t("common.store_error")),
+        setError(errorMessage(caught)),
       );
   };
 

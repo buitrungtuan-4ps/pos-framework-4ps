@@ -104,12 +104,12 @@ Tokens live in one theme file per surface (`dashboard/src/styles/tokens.css`, `u
 
 | Situation | What the UI does |
 |---|---|
-| No internet | Status bar reads "Offline — selling normally", counts pending events, and blocks nothing |
+| No internet | Status bar reads "Offline — selling normally", counts pending events, and blocks nothing. It reads `GET /api/sync` — the outbox depth, its level against the planned depth, and what the outbox drain last saw of the cloud — and turns amber from half the planned depth and red from four fifths. **No depth refuses a sale** ([ADR-0137](adr/0137-a-deep-outbox-warns-and-never-refuses.md)) |
 | Station printer failure | Red badge on that station's kitchen card plus exits: reprint, switch to backup printer; the print queue shows pending tickets |
 | Offline beyond the configured threshold | Warning banner, escalating to a per-shift manager acknowledgement — never an automatic block on selling |
 | Card result unknown | Bill parked in an amber state with two clear options (confirm manually against the terminal, or cancel), and it appears in the reconciliation list |
 | Store server restarting | Clients reconnect via `pos.local` showing "Reconnecting…" for a few seconds; tables and shifts are preserved |
-| **Device restarting** (browser reload, tablet waking, kitchen display switched on mid-service) | The device reads `GET /api/orders/live` at boot and redraws every open order, its lines and the bill already on it. A device learns lines from the fan-out, and the fan-out carries what happens *next* — without this read the order screen, the payment screen and the kitchen board all came back empty over live food. The same read answers a `resync`, which is the link telling a client it fell behind. |
+| **Device restarting** (browser reload, tablet waking, kitchen display switched on mid-service) | The device reads `GET /api/orders/live` at boot and redraws every open order, its lines and the bill already on it, and `GET /api/shifts/current` for the shift that is open — blind, so the answer never carries the expected amount — which is what lets a reloaded till count and close the shift another device opened. A device learns lines from the fan-out, and the fan-out carries what happens *next* — without this read the order screen, the payment screen and the kitchen board all came back empty over live food. The same read answers a `resync`, which is the link telling a client it fell behind. |
 | QR ordering unavailable (store or cloud offline) | The guest page reads "Please ask a staff member" — staff are always the fallback |
 
 ## 5. Dashboard screen inventory

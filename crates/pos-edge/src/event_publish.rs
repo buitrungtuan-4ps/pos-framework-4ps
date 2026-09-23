@@ -45,10 +45,12 @@ use std::sync::Arc;
 
 use pos_ports::event_store::{EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::message_link::MessageLink;
+use pos_proto::ClockSource;
 use pos_proto::protocol::{Hello, HelloOutcome};
 use pos_proto::text::ReleaseTag;
 
 use crate::app::Edge;
+use crate::clock::SystemClock;
 
 /// How long to wait after draining everything before looking again. The outbox is local, so this is
 /// a cheap query; the interval keeps an idle store from spinning.
@@ -307,6 +309,7 @@ where
             if self.handshake().await {
                 break;
             }
+            self.edge.sync().mark_offline();
             tokio::select! {
                 () = &mut shutdown => {
                     // No link was ever negotiated, so there is nothing to drain over. Say what is
@@ -328,7 +331,17 @@ where
         }
 
         loop {
-            let wait = match self.drain_once().await {
+            let pass = self.drain_once().await;
+            // What the status bar says about the cloud (ADR-0137). A stalled pass reached the far
+            // side and moved nothing, which is "offline" to the one person reading the bar: their
+            // sales are not reaching the cloud.
+            match &pass {
+                Ok(Drained::Empty | Drained::Published(_)) => {
+                    self.edge.sync().mark_online(SystemClock.now());
+                }
+                Ok(Drained::Stalled) | Err(_) => self.edge.sync().mark_offline(),
+            }
+            let wait = match pass {
                 // An empty outbox and a link taking nothing both mean this pass moved no records,
                 // so both idle. Only the stopping drain needs to tell them apart.
                 Ok(Drained::Empty | Drained::Stalled) => IDLE_INTERVAL,

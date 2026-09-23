@@ -18,6 +18,49 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A deep outbox no longer stops a store from selling**
+  ([ADR-0137](docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Both event stores refused
+  every append once 10,000 events were waiting for the cloud — less than a day offline at a busy
+  store — and the till answered `503 the store is unavailable` to every seat, line, fire, settle
+  and shift open from then on, with nothing in the log and a green status bar. The refusal is gone
+  from `store-sqlite` and `pos-fakes` alike, and so is the `SELECT COUNT(*)` it ran inside every
+  sale's transaction. The outbox is bounded by the disk, as the event log always was.
+  - **The till says so instead.** `GET /api/sync` (new) reports the outbox depth, its level against
+    a planned depth of 100,000 events, and what the outbox drain last saw of the cloud; the status
+    bar reads it every 15 seconds and shows *"Offline — selling normally"* with the waiting count,
+    amber from half the planned depth and red from four fifths — `docs/ui-ux.md` §4 as written.
+  - **The box's log says so too:** one `WARN` when the outbox crosses half and four fifths of the
+    plan, one `ERROR` past it, one `INFO` when it drains back under half. The heartbeat's depth read
+    feeds the same grading, so a store nobody is watching still logs the day it went quiet.
+  - **Upgrade note:** the adapters' public `OUTBOX_CAPACITY` constants are removed; nothing in the
+    workspace read them. No migration, no protocol change.
+- **A refusal carries a reason a till can translate.** Every domain refusal the edge answers now
+  has a `pos-error-reason` header — `SHIFT_ALREADY_OPEN`, `STORE_UNAVAILABLE`,
+  `APPROVAL_REQUIRED`, … — beside its unchanged English body, and the till shows the operator a
+  sentence in their language with a next step instead of the log line. A token the till has no
+  sentence for, or an older edge, still shows the English. Exposed across origins with the other
+  two edge headers (ADR-0111). **Upgrade note:** none; the body is unchanged.
+
+### Fixed
+
+- **A reloaded till can count and close the open shift.** The shift lived only in the browser that
+  opened it: a reload, a second till or a tablet that restarted mid-shift showed "No shift open",
+  offered to open one, and was refused because one was. `GET /api/shifts/current` (new) returns the
+  open shift — blind, never the expected amount — the till reads it at boot, and it folds the
+  `cash.shift.*` events so every device shows the same shift.
+- **The order screen's header names the table.** It cut the leading zeros off the table's id, so a
+  published table read "Table 69" over Table 1 while the floor, the kitchen board and the pass all
+  said 1. It now uses the published label.
+- **The till remembers its language.** Every reload came back in English; the choice is now kept
+  per device, and a device that has never chosen starts in the store's published display language,
+  which `GET /api/locale` now carries as `display_language`.
+- **Toppings no longer sell as standalone items.** With no button layout published, the flat menu
+  drew every modifier choice ("Size — 30cm", "Extra cheese") as its own button beside the pizzas.
+  Items that are only ever a choice inside a modifier group are left out of that grid; search still
+  finds them.
+
+### Changed
+
 - **`intl-messageformat` moves to v12** in both `ui/` and `dashboard/`. A major version of the
   library that formats every user-visible string in the product is not a bump to take on a green
   tick, so it was checked rather than assumed: formatjs releases its whole monorepo in lockstep, and
