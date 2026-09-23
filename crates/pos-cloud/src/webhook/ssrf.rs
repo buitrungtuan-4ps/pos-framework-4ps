@@ -131,7 +131,8 @@ pub enum ForbiddenReason {
     Benchmarking,
     /// Documentation ranges (`192.0.2/24`, `198.51.100/24`, `203.0.113/24`, `2001:db8::/32`).
     Documentation,
-    /// Reserved or future-use (`240/4`, `255.255.255.255`).
+    /// Reserved or future-use (`240/4`, `255.255.255.255`, and the part of `64:ff9b::/32` that
+    /// carries no assigned NAT64 prefix).
     Reserved,
     /// Multicast (`224/4`, `ff00::/8`).
     Multicast,
@@ -274,9 +275,10 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
 
 /// The forbidden class an address embeds behind a NAT64 prefix, if any.
 ///
-/// Two prefixes, and they do not agree on where the IPv4 sits. The well-known `64:ff9b::/96` puts it
-/// in the low 32 bits. The local-use `64:ff9b:1::/48` (RFC 8215) is a /48, and RFC 6052 §2.2 splits a
-/// /48 prefix's embedded address around the reserved `u` octet at bits 64-71:
+/// `64:ff9b::/32` holds exactly two assigned prefixes, and they do not agree on where the IPv4 sits.
+/// The well-known `64:ff9b::/96` (RFC 6052) puts it in the low 32 bits. The local-use `64:ff9b:1::/48`
+/// (RFC 8215) is a /48, and RFC 6052 §2.2 splits a /48 prefix's embedded address around the reserved
+/// `u` octet at bits 64-71:
 ///
 /// ```text
 /// |48|     prefix            |v4(16) | u | (16)  | suffix            |
@@ -286,36 +288,49 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
 /// so the address is bits 48-63 and 72-87 — not the low 32 bits, and not segment 4 read whole, which
 /// takes `u` as an address byte and stops an octet short.
 ///
-/// Both readings are tried for the local-use prefix, and a forbidden answer from either is enough.
-/// This only ever adds a rejection: an address whose every reading is public falls through.
+/// Each prefix is decoded the way its own length says, and **only** that way. A reading borrowed from
+/// the other length does not abstain on a mismatch, it invents an answer: the /48 split reads a /96
+/// address's zero padding as `0.0.0.0`, which `classify_v4` refuses as unspecified — so applying it to
+/// the well-known prefix would refuse every NAT64 destination there, including the public ones the
+/// prefix exists to carry.
+///
+/// The rest of `64:ff9b::/32` is refused outright rather than decoded. IANA assigns that /32 no
+/// translation prefix beyond the two above, and RFC 6052 §3.2 takes a network-specific prefix from the
+/// operator's own space, never from here — so nothing in the remainder is a destination anyone can
+/// legitimately reach, and there is no prefix length to decode it at. Refusing the block closes both
+/// the subnets a decoder would have to enumerate (`64:ff9b:0:1::127.0.0.1`, `64:ff9b:2::127.0.0.1`)
+/// and any future length nobody here thought of. The embedded class is still read where it is
+/// available, because "private network" tells the operator reading the log more than "reserved" does.
 fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
-    // NAT64 well-known prefix (`64:ff9b::/96`, RFC 6052) or local-use prefix (`64:ff9b:1::/48`, RFC 8215).
-    if segments[0] == 0x0064 && segments[1] == 0xff9b {
-        if segments[2] == 0 && segments[3] == 0 && segments[4] == 0 && segments[5] == 0 {
-            let [a, b, c, d] = ip.octets()[12..16] else {
-                unreachable!()
-            };
-            return classify_v4(Ipv4Addr::new(a, b, c, d));
-        } else if segments[2] == 0x0001 {
-            let [a, b, c, d] = ip.octets()[12..16] else {
-                unreachable!()
-            };
-            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
-                return Some(reason);
-            }
-            // Bits 48-63 and 72-87, skipping `u` — see this function's own documentation.
-            let v4_rfc6052 = Ipv4Addr::new(
-                (segments[3] >> 8) as u8,
-                (segments[3] & 0xff) as u8,
-                (segments[4] & 0xff) as u8,
-                (segments[5] >> 8) as u8,
-            );
-            if let Some(reason) = classify_v4(v4_rfc6052) {
-                return Some(reason);
-            }
-        }
+    if segments[0] != 0x0064 || segments[1] != 0xff9b {
+        return None;
     }
-    None
+    let [a, b, c, d] = ip.octets()[12..16] else {
+        unreachable!()
+    };
+    let low_32 = Ipv4Addr::new(a, b, c, d);
+
+    // The well-known prefix (`64:ff9b::/96`): a /96, so the low 32 bits are the whole address.
+    if segments[2] == 0 && segments[3] == 0 && segments[4] == 0 && segments[5] == 0 {
+        return classify_v4(low_32);
+    }
+
+    // The local-use prefix (`64:ff9b:1::/48`): bits 48-63 and 72-87, skipping `u`. The low 32 bits are
+    // tried too — a malformed address that parks its IPv4 there is still stating an intent.
+    if segments[2] == 0x0001 {
+        if let Some(reason) = classify_v4(low_32) {
+            return Some(reason);
+        }
+        return classify_v4(Ipv4Addr::new(
+            (segments[3] >> 8) as u8,
+            (segments[3] & 0xff) as u8,
+            (segments[4] & 0xff) as u8,
+            (segments[5] >> 8) as u8,
+        ));
+    }
+
+    // Everything else under `64:ff9b::/32`.
+    Some(classify_v4(low_32).unwrap_or(ForbiddenReason::Reserved))
 }
 
 /// The forbidden class of an IPv6 address, or `None` if it is public unicast.
@@ -667,6 +682,43 @@ mod tests {
         // And the same prefix carrying a genuinely public address is still allowed: every embedded
         // reading here only ever adds a rejection, never removes one.
         assert_eq!(classify_ip(ip("64:ff9b:1:808:0:808:808:808")), Ok(()));
+    }
+
+    /// `64:ff9b::/32` carries two assigned prefixes; the rest of it is refused rather than decoded.
+    ///
+    /// Its own test because the two halves pull against each other, and a fix that only watches one
+    /// half breaks the other.
+    #[test]
+    fn an_unassigned_nat64_subnet_is_refused_and_the_assigned_ones_still_decode() {
+        // The gap. A subnet that is neither the well-known `::/96` nor the local-use `:1::/48` matched
+        // no branch, so it fell out of `classify_v6` as ordinary public unicast and `64:ff9b:dead::10.0.0.5`
+        // reached the private network.
+        for (address, reason) in [
+            ("64:ff9b:0:1::127.0.0.1", ForbiddenReason::Loopback),
+            ("64:ff9b:2::127.0.0.1", ForbiddenReason::Loopback),
+            ("64:ff9b:0:1::169.254.169.254", ForbiddenReason::LinkLocal),
+            ("64:ff9b:dead::10.0.0.5", ForbiddenReason::Private),
+            // With no assigned prefix there is no length to read the address at, so a public-looking
+            // embedded figure buys nothing: the block is refused whole. `Reserved` is what is left to
+            // say when the bytes decode to nothing forbidden.
+            ("64:ff9b:0:1::8.8.8.8", ForbiddenReason::Reserved),
+            ("64:ff9b:ffff::8.8.8.8", ForbiddenReason::Reserved),
+        ] {
+            assert_eq!(
+                classify_ip(ip(address)),
+                Err(SsrfRejection::ForbiddenAddress(ip(address), reason)),
+                "{address} sits in no assigned NAT64 prefix and must be refused"
+            );
+        }
+
+        // The other half, and the one a wider rule costs. The well-known prefix is a /96: its address
+        // is the low 32 bits and the zeros in segments 3-5 are padding, not an address. Read that
+        // padding with the /48 split — the reading the *local-use* prefix needs — and it becomes
+        // `0.0.0.0`, which `classify_v4` refuses as unspecified. A decoder widened across the whole
+        // /32 therefore refuses every well-known-prefix destination, including the public ones the
+        // prefix exists to carry, and fails closed so quietly that no existing test notices.
+        assert_eq!(classify_ip(ip("64:ff9b::8.8.8.8")), Ok(()));
+        assert_eq!(classify_ip(ip("64:ff9b::93.184.216.34")), Ok(()));
     }
 
     #[test]
