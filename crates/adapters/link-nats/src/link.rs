@@ -62,14 +62,24 @@ impl NatsLink {
     /// `POS_EDGE_NATS_URL` is silently discarded and a broker with an `authorization` block refuses
     /// the connection.
     ///
+    /// **A broker that is not reachable yet is not an error.** The client connects in the
+    /// background and keeps trying, and until it does every call through the link fails as the
+    /// broker being unavailable — which the publisher already treats as "offline, try again". A
+    /// store PC routinely boots before its router does, after a power cut; failing here left such a
+    /// box with no publisher at all, trading on and never shipping an event until somebody
+    /// restarted it.
+    ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if NATS cannot be reached.
+    /// [`PortError::unavailable`] if the address itself is unusable.
     pub async fn connect(url: &str, config: NatsConfig) -> Result<Self, PortError> {
         let endpoint = crate::endpoint::split(url);
-        let client = async_nats::connect_with_options(endpoint.address(), endpoint.options())
-            .await
-            .map_err(unavailable)?;
+        let client = async_nats::connect_with_options(
+            endpoint.address(),
+            endpoint.options().retry_on_initial_connect(),
+        )
+        .await
+        .map_err(unavailable)?;
         Ok(Self::from_client(client, config))
     }
 

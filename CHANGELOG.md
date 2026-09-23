@@ -54,6 +54,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A store that boots before its internet does ships its sales once the line comes back.** The
+  edge's event-stream link failed its connect when the broker was unreachable at boot — the normal
+  case after a power cut, when the PC comes up before the router — and the edge then started no
+  publisher at all: the store kept trading and shipped nothing to the cloud until somebody restarted
+  it, while the status bar, never having measured the link, said nothing. The link now connects in
+  the background (`retry_on_initial_connect`), so the publisher runs from boot: the status bar reads
+  *Offline — selling normally* while the line is down and the outbox drains when it returns. A
+  handshake that fails because the link is not up yet is retried after 15 seconds; only a cloud that
+  answers with no common protocol version still waits five minutes.
 - **A store activated while it runs starts syncing.** The cloud loops start at boot behind the
   activation gate, so a box activated at `/setup` sat unsynced until somebody restarted it, which the
   bring-up guide never said to do. A successful activation now asks for the graceful restart an

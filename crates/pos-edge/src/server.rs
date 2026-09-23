@@ -1565,12 +1565,16 @@ where
     // Connecting is I/O and can fail on a box whose network is not up yet. That is not fatal: the
     // events are durable in the outbox, so the box trades and the next boot (or the next slice's
     // reconnect) picks them up.
+    // A broker that is not reachable yet is not a failure here: the link connects in the
+    // background, and the publisher reports the store offline until it does. Only an address that
+    // cannot be used at all ends up in this arm.
     let link = match NatsLink::connect(url.trim(), config).await {
         Ok(link) => link,
         Err(error) => {
             tracing::warn!(
                 %error,
-                "could not connect to the event stream; the outbox holds and the store keeps trading"
+                "the event-stream address in {NATS_URL_ENV} is unusable; the outbox holds and the \
+                 store keeps trading"
             );
             return None;
         }
