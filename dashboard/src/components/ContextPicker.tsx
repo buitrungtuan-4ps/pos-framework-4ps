@@ -44,6 +44,35 @@ export function ContextPicker() {
   const [tenantSearch, setTenantSearch] = createSignal("");
   const [storeSearch, setStoreSearch] = createSignal("");
 
+  // The cursor lands in the tenant search box when the panel opens, so an operator on a cell with
+  // thirty tenants types the name instead of tabbing to the box first.
+  //
+  // The effect reads `tenants()` as well as `open()` on purpose. On the **first** open the list is
+  // still in flight and the box is not in the DOM — the skeleton is — so an effect watching only
+  // `open()` reaches for a ref that is still `undefined`, focuses nothing, and never runs again
+  // because nothing it watched changed. The feature would then work from the second open onward and
+  // never on the one that matters. Reading the list makes it run again when the box appears.
+  //
+  // `focused` latches it to once per opening. Creating a tenant refreshes the list while the panel
+  // is open, and without the latch that would haul the cursor out of whatever the operator was
+  // typing in and back to the top of the panel.
+  //
+  // `queueMicrotask` defers past the render `<Show>` is about to do: the effect can run before the
+  // box is attached, and a microtask lands after it.
+  let tenantSearchInput: HTMLInputElement | undefined;
+  let focused = false;
+  createEffect(() => {
+    if (!open()) {
+      focused = false;
+      return;
+    }
+    if (focused || (tenants()?.length ?? 0) === 0) {
+      return;
+    }
+    focused = true;
+    queueMicrotask(() => tenantSearchInput?.focus());
+  });
+
   const loadTenants = async () => {
     setFailed(false);
     setBusy(true);
@@ -192,6 +221,7 @@ export function ContextPicker() {
       <button
         type="button"
         aria-label={t("context.change")}
+        aria-haspopup="dialog"
         aria-expanded={open()}
         onClick={toggle}
         class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
@@ -204,7 +234,15 @@ export function ContextPicker() {
       </button>
 
       <Show when={open()}>
-        <div class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay">
+        {/* A dialog rather than an unnamed `div`: a screen reader otherwise announces the panel's
+            contents with nothing to say what opened or what it is. Deliberately not `aria-modal` —
+            the panel does not trap focus and the page behind it stays live — but Escape closes it
+            (`useEscape`, above), which is what the role promises. */}
+        <div
+          role="dialog"
+          aria-label={t("context.change")}
+          class="absolute left-0 z-20 mt-1 w-80 rounded-token border border-line bg-surface shadow-overlay"
+        >
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("context.workingIn")}</span>
             <Button variant="secondary" onClick={() => setOpen(false)}>
@@ -234,6 +272,7 @@ export function ContextPicker() {
                   }
                 >
                   <input
+                    ref={tenantSearchInput}
                     type="text"
                     aria-label={t("context.search")}
                     placeholder={t("context.search")}

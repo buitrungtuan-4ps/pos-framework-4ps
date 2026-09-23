@@ -21,6 +21,7 @@ import { ContextPicker } from "../src/components/ContextPicker";
 import { setStoreId, setTenantId, tenantId, tenantName } from "../src/state/session";
 
 const TENANT = { tenant_id: "01M22190WCY5PS7KCA7ET7H679", name: "Pizza 4P's Vietnam" };
+const OTHER = { tenant_id: "01M2219YDKJ4Q2X5N0R8BW3T61", name: "Pizza 4P's Japan" };
 
 const listTenants = vi.fn();
 const listStores = vi.fn();
@@ -91,5 +92,40 @@ describe("the context picker on a fresh install", () => {
 
     await waitFor(() => expect(tenantId()).toBe(TENANT.tenant_id));
     expect(tenantName()).toBe(TENANT.name);
+  });
+});
+
+// Opening the picker on a cell that already has tenants — the everyday case, not the fresh install
+// above.
+describe("the context picker on a cell that already has tenants", () => {
+  beforeEach(() => {
+    listTenants.mockResolvedValue([TENANT, OTHER]);
+  });
+
+  it("puts the cursor in the search box the first time it is opened", async () => {
+    // The first open is the whole test. On it the list is still in flight, so the box is not in the
+    // DOM yet and the skeleton is — focus logic that waits only on the panel being open reaches for
+    // a ref that is still `undefined`, silently focuses nothing, and never runs again. The picker
+    // then focuses correctly from the *second* open onward, which is the one nobody notices is
+    // broken. Asserting on a reopen would pass against exactly that bug.
+    mountPicker();
+    fireEvent.click(screen.getByLabelText("Change tenant or store"));
+
+    const box = await screen.findByLabelText("Search…");
+    await waitFor(() => expect(document.activeElement).toBe(box));
+  });
+
+  it("announces the panel as a dialog the trigger opens", async () => {
+    // Without these the panel is an unnamed `div`: a screen reader reads its contents with nothing
+    // to say what opened or what it is for.
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+
+    fireEvent.click(trigger);
+
+    // Asked for by its accessible name, so the assertion is what a screen reader would announce
+    // rather than which attribute happens to carry it.
+    expect(await screen.findByRole("dialog", { name: "Change tenant or store" })).toBeDefined();
   });
 });
