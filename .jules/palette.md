@@ -1,3 +1,9 @@
+## 2026-09-23 - Focus On Open Must Wait For The Element, Not Only For The Panel
+
+**Learning:** Focusing a search box from an effect that watches only `open()` works from the second open onward and never on the first. On the first open the list behind the box is still loading, the `<Show>` is rendering its skeleton, and the ref is still `undefined` — so `queueMicrotask(() => ref?.focus())` focuses nothing and the effect never runs again, because nothing it tracked changed. The optional-chain that makes it safe is also what makes it silent.
+
+**Action:** An effect that focuses a conditionally-rendered element must read the signal that decides whether it is rendered, so it re-runs when the element appears; and latch it to once per opening, or a list refresh while the panel is open will haul the cursor out of whatever the operator is typing. Test the **first** open — a test written against a reopen passes against exactly this bug.
+
 ## 2026-08-18 - Command Palette Combobox & Modal Overlay Accessibility
 
 **Learning:** Overlay command palettes using list filtering and keyboard navigation require explicit WAI-ARIA combobox/listbox roles (`role="dialog"`, `role="combobox"`, `role="listbox"`, `role="option"`, `aria-selected`) for screen readers. Furthermore, keyboard navigation in scrollable lists needs explicit `scrollIntoView({ block: "nearest" })` on active option updates so items don't move off-screen during arrow key traversal. Safe optional chaining (`scrollIntoView?.()`) is essential for jsdom compatibility in Vitest suite.

@@ -18,6 +18,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console's context picker opens with the cursor already in its search box, and announces
+  itself.** On a cell carrying thirty tenants, opening the picker and then reaching for the search
+  box is a step the operator should not have to take; the box now takes focus as the panel opens.
+  The trigger carries `aria-haspopup="dialog"` and the panel is a `role="dialog"` named by the same
+  string, so a screen reader says what opened rather than reading an unnamed `div`. Deliberately not
+  `aria-modal`: the panel does not trap focus and the page behind it stays live, but Escape closes
+  it, which is what the role promises.
+  - The focus waits on the **tenant list**, not only on the panel being open. On a first open the
+    list is still in flight and the box is not in the DOM — the skeleton is — so focusing when the
+    panel opens reaches for an element that does not exist yet, silently focuses nothing, and never
+    tries again. That works from the second open onward and never on the one that matters, and a
+    test written against a reopen would not see it. Two tests pin it: the first open, and the
+    dialog's accessible name.
+  - **Upgrade note:** none.
+
 - **The order screen's menu search folds each string once, not once per comparison.** `matches` ran
   `fold` on both sides *inside* the scan, so every keystroke re-normalized the query once per menu
   item and re-normalized every caption — a couple of hundred items, each with the price book's name
