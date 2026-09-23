@@ -18,6 +18,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A store now verifies its own event chain at startup**
+  ([ADR-0131](docs/adr/0131-a-chained-event-log.md) decision 3). The chain has been computed on
+  every append, stored, and published to the cloud at shift close since it was built — and never
+  walked by anything except its own tests. `verify_chain` had no caller outside
+  `store-sqlite/tests/chain.rs`, so the half of the design that lets a shop detect its own
+  corruption **with no internet** ([ADR-0001](docs/adr/0001-offline-first-store-autonomy.md)) was
+  never switched on.
+  - **The walk is chunked, and that is not an optimisation.** It is a read, but it is served by the
+    single writer thread ([ADR-0015](docs/adr/0015-sqlite-access.md)), so a whole-log walk in one
+    command would hold that thread for its full length — measured at ~22 µs a record in a release
+    build, that is close to four seconds at ninety days of trading and sixteen at a year, with every
+    sale queued behind it. Wiring decision 3 up the obvious way would have stalled tills mid-service.
+    A chunk is a thousand records (~22 ms, about one ordinary write), and `ChainCursor` carries the
+    hash and the sequence anchor across each boundary so the chain is still checked link by link
+    across the whole log.
+  - **Spawned, not awaited**, which is decision 3's own instruction: *"a till that refuses to sell
+    because yesterday's log is damaged turns a record-keeping fault into a closed shop, which is the
+    worse failure."* The till opens on time and the walk runs beside it.
+  - A break is logged loudly with the position it was found at — the figure that says how much of
+    the log is above suspicion — and trading continues. The cloud anchor (decision 4) remains the
+    second line, and the only one that catches the two cases a local chain cannot: a truncated tail
+    and a re-derived edit.
+  - **Upgrade note:** none. A store with a sound log sees one extra line at boot.
+
+
 - **A release report says which clock each shop's time is in.** "Monday 04:00, local" is one instant
   per timezone ([ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md) §2), and the
   console drew all of them in the *reader's* clock — so an operator in Ho Chi Minh City reviewing a

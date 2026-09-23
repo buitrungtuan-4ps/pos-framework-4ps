@@ -26,9 +26,9 @@ use pos_proto::ulid::Ulid;
 use crate::migrations;
 use crate::tx::SqliteTx;
 use crate::writer::{
-    self, ClaimedPrintJob, Command, DeviceSessionRow, IntakeWrite, PairedDeviceRow,
-    PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding, PrintEnqueue, QueuedPrintJob,
-    RegistryCommand, SelfTestRow, SubjectWrite,
+    self, CHAIN_CHUNK, ChainChunk, ChainCursor, ClaimedPrintJob, Command, DeviceSessionRow,
+    IntakeWrite, PairedDeviceRow, PrintAgentBacklog, PrintAgentClaim, PrintAgentStanding,
+    PrintEnqueue, QueuedPrintJob, RegistryCommand, SelfTestRow, SubjectWrite,
 };
 
 /// How many commands may queue for the writer thread before senders wait — back-pressure, so a
@@ -583,11 +583,30 @@ impl SqliteStore {
     ///
     /// [`PortError::unavailable`] if the store cannot be reached.
     pub async fn verify_chain(&self, store_id: StoreId) -> Result<ChainStatus, PortError> {
-        self.ask(PortName::EventStore, move |reply| Command::VerifyChain {
-            store_id,
-            reply,
-        })
-        .await
+        // A loop of bounded commands rather than one long one. The walk is a read, but it is
+        // served by the single writer thread (ADR-0015), so a whole-log walk in one command would
+        // hold that thread for as long as the walk takes — nearly four seconds at ninety days of
+        // trading, sixteen at a year — and every sale queued behind it would wait. Chunked, the
+        // worst a bill can be delayed is one chunk, and the chain is still checked link by link
+        // across the whole log: `ChainCursor` carries the hash across each boundary.
+        let mut cursor = ChainCursor::start();
+        loop {
+            let chunk = self
+                .ask(PortName::EventStore, {
+                    let cursor = cursor.clone();
+                    move |reply| Command::VerifyChainChunk {
+                        store_id,
+                        cursor,
+                        limit: CHAIN_CHUNK,
+                        reply,
+                    }
+                })
+                .await?;
+            match chunk {
+                ChainChunk::Finished(status) => return Ok(status),
+                ChainChunk::More(next) => cursor = next,
+            }
+        }
     }
 }
 
