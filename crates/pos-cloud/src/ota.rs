@@ -42,6 +42,7 @@ use core::future::Future;
 
 use pos_ports::blob_store::BlobKey;
 use pos_proto::Timestamp;
+use pos_proto::ids::StoreId;
 
 /// The longest release tag or target triple accepted into a key.
 ///
@@ -139,6 +140,13 @@ impl TargetTriple {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this is a Windows build — the only kind a one-file installer can be
+    /// ([`installer_file_name`]).
+    #[must_use]
+    pub fn is_windows(&self) -> bool {
+        self.0.contains("-windows")
     }
 }
 
@@ -256,6 +264,83 @@ pub fn artifact_key(
         file = kind.file_name()
     );
     BlobKey::parse(&key).map_err(|_unreachable| ReleaseTagError::ForbiddenCharacter)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The one-file installer
+// ---------------------------------------------------------------------------------------------
+
+/// The Windows build a one-file installer is served for when the console names none — the one
+/// Windows target the release workflow builds.
+pub const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// What a one-file installer's name starts with. The edge reads the same prefix, ignoring case, to
+/// tell that it was double-clicked as an installer rather than started as a server
+/// ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)).
+pub const INSTALLER_PREFIX: &str = "pos-edge-setup_";
+
+/// The longest host name DNS allows.
+const MAX_HOST_LEN: usize = 253;
+
+/// Why a cloud address cannot be written into an installer's file name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallerNameError {
+    /// Empty, longer than a host name can be, or holding a character the edge's reader does not
+    /// accept — an IPv6 literal among them.
+    Host,
+    /// Not a port from 1 to 65535.
+    Port,
+}
+
+impl fmt::Display for InstallerNameError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Host => {
+                "the cloud's host may contain only letters, digits, '.' and '-' — open the console \
+                 by its host name rather than an IPv6 address"
+            }
+            Self::Port => "the cloud's port must be a number from 1 to 65535",
+        })
+    }
+}
+
+impl core::error::Error for InstallerNameError {}
+
+/// The name a store's one-file installer is saved under:
+/// `pos-edge-setup_<host>[@<port>]_<store ULID>.exe`
+/// ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).
+///
+/// `cloud` is this cloud's address as a browser shows it — `host` or `host:port`, which is what
+/// `window.location.host` reads. The colon becomes `@` because Windows forbids `:` in a file name,
+/// and the host is lowercased. Anything else is refused rather than escaped: the edge reads the name
+/// back accepting letters, digits, `.` and `-` and nothing more, and a name it cannot read is a file
+/// that quietly starts as a server instead of installing.
+///
+/// # Errors
+///
+/// [`InstallerNameError`] naming the half of `cloud` that cannot be carried.
+pub fn installer_file_name(cloud: &str, store_id: StoreId) -> Result<String, InstallerNameError> {
+    let (host, port) = match cloud.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (cloud, None),
+    };
+    if host.is_empty()
+        || host.len() > MAX_HOST_LEN
+        || !host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return Err(InstallerNameError::Host);
+    }
+    let host = host.to_ascii_lowercase();
+    let address = match port {
+        None => host,
+        Some(port) => match port.parse::<u16>() {
+            Ok(port) if port != 0 => format!("{host}@{port}"),
+            _ => return Err(InstallerNameError::Port),
+        },
+    };
+    Ok(format!("{INSTALLER_PREFIX}{address}_{store_id}.exe"))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -398,13 +483,65 @@ pub trait ArtifactStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtifactKind, ArtifactStoreError, RecordOutcome, ReleaseArtifact, ReleaseTagError,
-        TargetTriple, TargetTripleError, admit_artifact, artifact_key, validate_release_tag,
+        ArtifactKind, ArtifactStoreError, InstallerNameError, RecordOutcome, ReleaseArtifact,
+        ReleaseTagError, TargetTriple, TargetTripleError, WINDOWS_TARGET, admit_artifact,
+        artifact_key, installer_file_name, validate_release_tag,
     };
     use pos_proto::Timestamp;
+    use pos_proto::ids::StoreId;
 
     /// The two targets R1's release workflow actually cross-compiles.
     const SHIPPED_TARGETS: [&str; 2] = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"];
+
+    /// The store the edge's own file-name tests use (`pos-edge/src/setup.rs`).
+    const STORE: &str = "01J9ZQ3M6V4Q1ZB2Y7H8K5N0PX";
+
+    fn store() -> StoreId {
+        StoreId::new(STORE.parse().expect("a ULID"))
+    }
+
+    #[test]
+    fn an_installer_is_named_for_its_cloud_and_its_store() {
+        // The names the edge's reader is tested against, so both halves of the convention are held
+        // to one spelling: the cloud writes these, the edge reads them.
+        assert_eq!(
+            installer_file_name("pos.example.vn", store()),
+            Ok(format!("pos-edge-setup_pos.example.vn_{STORE}.exe"))
+        );
+        assert_eq!(
+            installer_file_name("Cloud.Example.com:8443", store()),
+            Ok(format!("pos-edge-setup_cloud.example.com@8443_{STORE}.exe"))
+        );
+        assert_eq!(
+            installer_file_name("localhost:8080", store()),
+            Ok(format!("pos-edge-setup_localhost@8080_{STORE}.exe"))
+        );
+    }
+
+    #[test]
+    fn a_cloud_address_the_edge_could_not_read_back_is_refused() {
+        for (cloud, error) in [
+            ("", InstallerNameError::Host),
+            ("[::1]:8080", InstallerNameError::Host),
+            // The edge splits the name at its last `_`, so a host holding one would move the store.
+            ("cloud_example.com", InstallerNameError::Host),
+            ("cloud.example.com/x", InstallerNameError::Host),
+            ("cloud.example.com:", InstallerNameError::Port),
+            ("cloud.example.com:0", InstallerNameError::Port),
+            ("cloud.example.com:65536", InstallerNameError::Port),
+            ("cloud.example.com:https", InstallerNameError::Port),
+        ] {
+            assert_eq!(installer_file_name(cloud, store()), Err(error), "{cloud:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_windows_build_is_an_installer() {
+        assert!(target(WINDOWS_TARGET).is_windows());
+        for text in SHIPPED_TARGETS {
+            assert!(!target(text).is_windows(), "{text}");
+        }
+    }
 
     fn target(text: &str) -> TargetTriple {
         TargetTriple::parse(text).expect("a valid triple")

@@ -56,6 +56,7 @@ import {
   RowActions,
   TechnicalDetails,
 } from "../components/kit";
+import { SetupFile } from "../components/SetupFile";
 import { toast } from "../components/Toast";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import { DEFAULT_BIND_PORT } from "../installers.mjs";
@@ -824,6 +825,15 @@ export function Stores() {
                     <Show when={handoffKey()}>
                       <Banner tone="danger" message={t("handoff.secretWarning")} />
                     </Show>
+                    {/* The setup file first: on Windows it is the whole install in one
+                        double-click (ADR-0141), and the four files below stay for what it cannot
+                        cover — a Linux box, a hand-managed host, a technician who wants to read
+                        the script before it runs on a shop's only till. */}
+                    <SetupFile
+                      tenantId={tenantId()}
+                      storeId={row().store_id}
+                      hasKey={handoffKey() !== null}
+                    />
                     <For each={HANDOFF_FILES}>
                       {(file) => (
                         <div class="flex flex-col gap-1">

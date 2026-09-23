@@ -34,6 +34,8 @@ const STORE = {
 };
 
 const createApiKey = vi.fn();
+const getOtaRollout = vi.fn();
+const listHostedRelease = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
@@ -41,6 +43,8 @@ vi.mock("../src/api/client", () => ({
     listBrands: () => Promise.resolve([]),
     listTenants: () => Promise.resolve([{ ...TENANT, status: "active", etag: "v1" }]),
     createApiKey: (...args: unknown[]) => createApiKey(...args),
+    getOtaRollout: (...args: unknown[]) => getOtaRollout(...args),
+    listHostedRelease: (...args: unknown[]) => listHostedRelease(...args),
     createStore: vi.fn(),
     createBrand: vi.fn(),
     updateStore: vi.fn(),
@@ -93,6 +97,8 @@ describe("handing a store's files over again", () => {
     localStorage.clear();
     vi.clearAllMocks();
     createApiKey.mockResolvedValue({ id: "01M221KEY", token: TOKEN });
+    getOtaRollout.mockResolvedValue(null);
+    listHostedRelease.mockResolvedValue({ release: "", artifacts: [] });
     selectTenant(TENANT.tenant_id, TENANT.name);
   });
   afterEach(cleanup);
@@ -157,6 +163,57 @@ describe("handing a store's files over again", () => {
     );
     expect(createApiKey).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog").textContent).toContain(messages["handoff.withoutKey"]);
+  });
+
+  it("offers the Windows setup file for the release the store's rollout targets", async () => {
+    // The one-file path (ADR-0141): the release's own executable, under a name that installs this
+    // store and dials the cloud this browser is looking at. The version starts at the rollout's
+    // target, and the link appears only once the cloud says it holds a Windows build of it.
+    getOtaRollout.mockResolvedValue({
+      target_version: "1.5.0",
+      min_ring: "fleet",
+      rollout_percent: 100,
+      signing_key_id: "test-key",
+    });
+    listHostedRelease.mockResolvedValue({
+      release: "1.5.0",
+      artifacts: [
+        { arch: "x86_64-pc-windows-msvc", size_bytes: 1, sha256: "00", recorded_at_ms: 0 },
+      ],
+    });
+    await openHandoff();
+    fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
+    const link = await waitFor(() =>
+      screen.getByRole("link", { name: messages["setupFile.download"] }),
+    );
+    const query = new URLSearchParams({ store_id: STORE.store_id, cloud: window.location.host });
+    expect(link.getAttribute("href")).toBe(
+      `/admin/ota/releases/1.5.0/installer?${query.toString()}`,
+    );
+    expect(listHostedRelease).toHaveBeenCalledWith("1.5.0");
+    // No key was issued, so the setup window's question is answered in advance: skip it, and what
+    // that costs.
+    expect(screen.getByRole("dialog").textContent).toContain(messages["setupFile.noKey"]);
+  });
+
+  it("says so when the cloud holds no Windows build of the release", async () => {
+    getOtaRollout.mockResolvedValue({
+      target_version: "1.5.0",
+      min_ring: "fleet",
+      rollout_percent: 100,
+      signing_key_id: "test-key",
+    });
+    listHostedRelease.mockResolvedValue({
+      release: "1.5.0",
+      artifacts: [
+        { arch: "x86_64-unknown-linux-gnu", size_bytes: 1, sha256: "00", recorded_at_ms: 0 },
+      ],
+    });
+    await openHandoff();
+    fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
+    const expected = (messages["setupFile.notHosted"] ?? "").replace("{release}", "1.5.0");
+    await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain(expected));
+    expect(screen.queryByRole("link", { name: messages["setupFile.download"] })).toBeNull();
   });
 
   it("says the device credential is gone with the machine", async () => {

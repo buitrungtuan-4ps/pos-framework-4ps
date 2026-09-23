@@ -147,5 +147,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0138](0138-the-edge-compresses-what-it-sends.md) | The edge compresses what it sends to a device: gzip on `/api/*` and the embedded assets, negotiated, above a size floor, never on `/ws` | Accepted |
 | [0139](0139-the-till-draws-the-pairing-code-as-a-qr.md) | The till draws the pairing link as a QR code: `qrcode-generator` in the till, loaded only by the screens that show a link | Accepted |
 | [0140](0140-a-store-pc-installs-itself-from-one-file.md) | A store PC installs itself from one file: `pos-edge install` carries the tested script, reads the store and cloud from its own file name, asks for elevation, and activation restarts the box | Accepted |
+| [0141](0141-the-console-hands-out-the-installer-by-name.md) | The console hands out the installer by name: a cloud route serves the hosted Windows release as `pos-edge-setup_<cloud>_<store>.exe`, and the setup window asks for the store key | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

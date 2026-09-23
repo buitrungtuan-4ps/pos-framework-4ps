@@ -18,6 +18,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console hands out the Windows setup file**
+  ([ADR-0141](docs/adr/0141-the-console-hands-out-the-installer-by-name.md)). The Stores screen's
+  *Move to a new box* drawer and the new-store wizard offer **Download the setup file**, and
+  `GET /admin/ota/releases/{release}/installer?store_id=&cloud=` serves the hosted release's own
+  Windows executable, byte for byte, named `pos-edge-setup_<cloud>_<store>.exe` so a double-click
+  installs that store. It needs `console.data.read`. The console starts from the version the store's
+  rollout targets and shows the link only once the cloud holds a Windows build of it. When the console
+  was opened over plain http at a network address it says why it cannot offer one instead. The setup
+  window now **asks for the store key** (the script's new `-AskSyncKey` switch, passed by
+  `pos-edge install`), so a store installed this way syncs as soon as it is activated. The key is
+  pasted into the elevated window and goes only into the service's registry key; Enter skips it.
+  **Upgrade note:** `install-pos-edge.ps1` gains an optional `-AskSyncKey` switch; a script run
+  without it behaves exactly as before.
 - **A Windows store PC installs itself from one file**
   ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)). `pos-edge install`
   runs the `install-pos-edge.ps1` the console generates — compiled into the binary, so it is the
