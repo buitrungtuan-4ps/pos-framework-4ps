@@ -16,6 +16,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **⚡ Bolt: Memoized search captions and added single-entry fold cache in order screen.**
+  `fold()` in `ui/src/lib/search.ts` now uses a single-entry input cache to bypass redundant
+  NFD Unicode normalization and regex diacritic stripping when filtering menu items. `Order.tsx`
+  pre-folds item captions in its `captions` `createMemo`, reducing string normalization calls from
+  ~500 down to 1 per keystroke during menu search.
+
 ### Added
 
 - **A country states how many decimals its currency has.** `LocalePack` gains `currency_exponent`,

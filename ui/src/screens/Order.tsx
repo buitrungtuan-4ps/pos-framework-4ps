@@ -5,7 +5,7 @@ import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
-import { matches } from "../lib/search";
+import { fold, matches } from "../lib/search";
 import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
   addItem,
@@ -183,13 +183,17 @@ export function Order() {
   // carries for that (`menuItemMap`, `arranged`) exist because a linear scan per render is what this
   // grid costs, and a scan per *letter typed* would be worse than either.
   const captions = createMemo(() => {
-    const byItem = new Map<string, string[]>(
-      state.menu.map((item) => [item.menu_item_id, [item.display_name]]),
+    const byItem = new Map<string, { raw: string[]; folded: string[] }>(
+      state.menu.map((item) => [
+        item.menu_item_id,
+        { raw: [item.display_name], folded: [fold(item.display_name)] },
+      ]),
     );
     const record = (button: LayoutButton) => {
       const known = byItem.get(button.menu_item_id);
-      if (known !== undefined && !known.includes(button.label)) {
-        known.push(button.label);
+      if (known !== undefined && !known.raw.includes(button.label)) {
+        known.raw.push(button.label);
+        known.folded.push(fold(button.label));
       }
     };
     for (const category of state.layout) {
@@ -206,9 +210,10 @@ export function Order() {
   // outside it, and a flat result list is outside it.
   const results = createMemo(() =>
     searching()
-      ? state.menu.filter((item) =>
-          matches(query(), captions().get(item.menu_item_id) ?? [item.display_name]),
-        )
+      ? state.menu.filter((item) => {
+          const entry = captions().get(item.menu_item_id);
+          return matches(query(), entry?.raw ?? [item.display_name], entry?.folded);
+        })
       : [],
   );
 

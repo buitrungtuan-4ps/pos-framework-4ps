@@ -1,3 +1,9 @@
+## 2026-09-17 - Pre-folding Static Captions & Caching String Fold in SolidJS Search
+
+**Learning:** In SolidJS search filters running over dynamic signals (like menu search on every keystroke), calling `fold()` on un-memoized static item/button captions inside `array.filter()` executes expensive NFD Unicode normalization and diacritic regexes hundreds of times per keystroke (~500 calls for 200 items). Pre-folding static captions inside a parent `createMemo` map and adding a single-entry input cache to `fold()` avoids re-normalizing identical query and caption strings during search typing, reducing heavy string operations by ~500x.
+
+**Action:** When filtering array items by search query in SolidJS, pre-fold static item labels in `createMemo` and pass pre-folded captions to the match function so zero caption normalization runs during typing.
+
 ## 2026-09-17 - Ordering createMemo Declarations to Prevent TDZ Errors in SolidJS
 
 **Learning:** In SolidJS, `createMemo` evaluates immediately upon component initialization. Defining `createMemo` accessors above the signal/resource getters they reference (e.g. `countries()`) causes a Temporal Dead Zone error (`ReferenceError: Cannot access ... before initialization`) when mounted. Placing `createMemo` declarations below their dependent accessor definitions prevents TDZ runtime failures while maintaining cached performance benefits.

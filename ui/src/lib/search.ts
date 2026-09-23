@@ -20,21 +20,31 @@
 // whole strings; what a search needs is a *substring* test, which a collator does not offer. Folding
 // both sides and using `includes` is the operation this actually is.
 
+// Single-entry cache for fold() to avoid repeated Unicode normalization and regexes
+// when fold() is called on the same string (e.g. query.trim()) across array filters.
+let lastFoldInput: string | null = null;
+let lastFoldOutput = "";
+
 /** The form two strings are compared in: lower case, no tone marks, `đ` as `d`. */
 export function fold(text: string): string {
-  return (
-    text
-      .toLowerCase()
-      // `Đ` lower-cases to `đ` first, so one replacement covers both.
-      .replace(/đ/g, "d")
-      .normalize("NFD")
-      // The combining diacritical marks block — what NFD just split off.
-      .replace(/[\u0300-\u036f]/g, "")
-  );
+  if (text === lastFoldInput) {
+    return lastFoldOutput;
+  }
+  const result = text
+    .toLowerCase()
+    // `Đ` lower-cases to `đ` first, so one replacement covers both.
+    .replace(/đ/g, "d")
+    .normalize("NFD")
+    // The combining diacritical marks block — what NFD just split off.
+    .replace(/[\u0300-\u036f]/g, "");
+  lastFoldInput = text;
+  lastFoldOutput = result;
+  return result;
 }
 
 /**
  * Whether any of `captions` contains `query`, both folded.
+ * Accepts optional pre-folded captions `foldedCaptions` to bypass re-folding static captions during typing.
  *
  * Several captions per item rather than one, because an item has more than one name an operator
  * might reach for: the price book's, and whatever the console wrote on the button for it
@@ -44,10 +54,15 @@ export function fold(text: string): string {
  * An empty query matches nothing rather than everything — the caller decides what an empty box
  * means, and for this screen it means "show the grid", not "show every item as a result".
  */
-export function matches(query: string, captions: readonly string[]): boolean {
+export function matches(
+  query: string,
+  captions: readonly string[],
+  foldedCaptions?: readonly string[],
+): boolean {
   const needle = fold(query.trim());
   if (needle === "") {
     return false;
   }
-  return captions.some((caption) => fold(caption).includes(needle));
+  const targets = foldedCaptions ?? captions.map((caption) => fold(caption));
+  return targets.some((caption) => caption.includes(needle));
 }
