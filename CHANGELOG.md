@@ -1166,6 +1166,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Fix SSRF bypass via NAT64 prefixes under `64:ff9b::/32` in webhook filter.**
+  Webhook destinations using NAT64 prefixes under `64:ff9b::/32` with arbitrary subnets (such as `64:ff9b:0:1::127.0.0.1` or `64:ff9b:2::127.0.0.1`) bypassed SSRF validation because `classify_nat64` specifically checked `segments[2] == 0` or `segments[2] == 1`. `classify_nat64` now evaluates embedded IPv4 addresses for all prefixes under `64:ff9b::/32`. **Upgrade note:** none.
+
 - **Refuse IPv4 `0.0.0.0/8` range ("This host on this network") in webhook SSRF filter.**
   `Ipv4Addr::is_unspecified()` in Rust std only checks for `0.0.0.0`, leaving other addresses in the `0.0.0.0/8` range (such as `0.0.0.1` or `0.1.2.3`) unclassified and allowing potential SSRF bypasses depending on OS network stack / socket binding behavior. `classify_v4` now checks `a == 0` to block the entire `0.0.0.0/8` range as `ForbiddenReason::Unspecified`. **Upgrade note:** none.
 

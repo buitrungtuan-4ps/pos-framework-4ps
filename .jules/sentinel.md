@@ -17,3 +17,8 @@
 **Vulnerability:** The `64:ff9b:1::/48` local-use branch added for the ISATAP fix read its embedded IPv4 from segment 4 whole, so `64:ff9b:1:c000:2:500:808:808` — which embeds the documentation address 192.0.2.5 — classified as public and passed the SSRF filter.
 **Learning:** RFC 6052 §2.2 does not place a prefix's embedded IPv4 in the low 32 bits for anything shorter than a /96. A /48 splits it around the reserved `u` octet at bits 64-71: the address is bits 48-63 and 72-87. Most wrong readings are invisible in tests because the private ranges are decided by their first byte or two, so bytes 2 and 3 can be read wrongly and still land in the same forbidden /8.
 **Prevention:** When testing an address-extraction fix, choose a range that needs the *late* bytes to decide — `192.0.2.0/24` rather than `127.0.0.0/8` — so a passing test cannot be passing by luck.
+
+## 2026-09-23 - [NAT64 /32 Subnet SSRF Bypass]
+**Vulnerability:** Webhook destinations using NAT64 prefixes under `64:ff9b::/32` with arbitrary subnets (such as `64:ff9b:0:1::127.0.0.1` or `64:ff9b:2::127.0.0.1`) bypassed SSRF validation because `classify_nat64` specifically checked `segments[2] == 0` (with zero intermediate segments) or `segments[2] == 1`.
+**Learning:** NAT64 prefixes under RFC 6052 / RFC 8215 cover the entire `64:ff9b::/32` block. Explicitly matching specific subnets (`0` or `1`) allowed all other subnets under `64:ff9b::/32` to fall through unclassified.
+**Prevention:** For any IPv6 address matching `segments[0] == 0x0064 && segments[1] == 0xff9b` (`64:ff9b::/32`), evaluate both embedded IPv4 address representations (low 32 bits and RFC 6052 split bits) through `classify_v4`.

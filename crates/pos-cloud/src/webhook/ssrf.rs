@@ -289,30 +289,23 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
 /// Both readings are tried for the local-use prefix, and a forbidden answer from either is enough.
 /// This only ever adds a rejection: an address whose every reading is public falls through.
 fn classify_nat64(segments: [u16; 8], ip: Ipv6Addr) -> Option<ForbiddenReason> {
-    // NAT64 well-known prefix (`64:ff9b::/96`, RFC 6052) or local-use prefix (`64:ff9b:1::/48`, RFC 8215).
+    // NAT64 IPv4-embedded IPv6 prefix (`64:ff9b::/32`, RFC 6052, RFC 8215).
     if segments[0] == 0x0064 && segments[1] == 0xff9b {
-        if segments[2] == 0 && segments[3] == 0 && segments[4] == 0 && segments[5] == 0 {
-            let [a, b, c, d] = ip.octets()[12..16] else {
-                unreachable!()
-            };
-            return classify_v4(Ipv4Addr::new(a, b, c, d));
-        } else if segments[2] == 0x0001 {
-            let [a, b, c, d] = ip.octets()[12..16] else {
-                unreachable!()
-            };
-            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
-                return Some(reason);
-            }
-            // Bits 48-63 and 72-87, skipping `u` — see this function's own documentation.
-            let v4_rfc6052 = Ipv4Addr::new(
-                (segments[3] >> 8) as u8,
-                (segments[3] & 0xff) as u8,
-                (segments[4] & 0xff) as u8,
-                (segments[5] >> 8) as u8,
-            );
-            if let Some(reason) = classify_v4(v4_rfc6052) {
-                return Some(reason);
-            }
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+            return Some(reason);
+        }
+        // Bits 48-63 and 72-87, skipping `u` — see this function's own documentation.
+        let v4_rfc6052 = Ipv4Addr::new(
+            (segments[3] >> 8) as u8,
+            (segments[3] & 0xff) as u8,
+            (segments[4] & 0xff) as u8,
+            (segments[5] >> 8) as u8,
+        );
+        if let Some(reason) = classify_v4(v4_rfc6052) {
+            return Some(reason);
         }
     }
     None
@@ -559,6 +552,27 @@ mod tests {
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::1"),
                 ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b:0:1::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:0:1::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b:2::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:2::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("64:ff9b:0:1::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("64:ff9b:0:1::169.254.169.254"),
+                ForbiddenReason::LinkLocal
             ))
         );
         assert_eq!(
