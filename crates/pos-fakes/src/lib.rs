@@ -24,6 +24,11 @@
 //! [`RESOURCE_EXHAUSTED`](pos_ports::PortError::resource_exhausted) at them — which also means the
 //! contract cases that check back-pressure are checking something real.
 //!
+//! The one queue with no count limit is the event store's outbox, and that is the real store's
+//! behaviour rather than an exemption from it: a deep outbox is a store that has been offline for a
+//! while, and it keeps selling ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+//! A fake that refused would hold every edge test to a rule the field does not have.
+//!
 //! # Not a mock
 //!
 //! Nothing here records calls for a test to assert on, and there is no `expect_called_once`. A fake

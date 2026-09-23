@@ -1,9 +1,10 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type { MintedCode, PairedDevice } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { locale, t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -55,7 +56,7 @@ export function Devices() {
       setDurable(state.durable);
       setError(null);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
@@ -74,7 +75,7 @@ export function Devices() {
       setConfirmAll("");
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -94,7 +95,7 @@ export function Devices() {
       setMinted(await api.mintPairingCode());
     } catch (caught) {
       setMinted(null);
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }

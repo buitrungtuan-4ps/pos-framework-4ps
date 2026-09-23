@@ -1,7 +1,6 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
@@ -24,6 +23,7 @@ import {
   seatFor,
   seatsEnabled,
   state,
+  tableLabel,
   tableState,
   unfiredLinesForTable,
   unsentCoursesForTable,
@@ -31,6 +31,7 @@ import {
   type OrderLine,
   formatAmount,
 } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
@@ -44,14 +45,21 @@ export function Order() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [error, setError] = createSignal<string | null>(null);
-  const label = () => params.id.replace(/^0+/, "") || params.id;
+  // The table's published label — the number the floor, the kitchen board and the pass all show
+  // (F6). Cutting leading zeros off the id is what this used to do, which was right for the
+  // bootstrap floor's `01`…`12` and wrong for every published table: a ULID lost its zeros and the
+  // header read "Table 69" over Table 1. Only a table the floor does not know yet falls back to it.
+  const label = () => {
+    const published = tableLabel(params.id);
+    return published !== params.id ? published : params.id.replace(/^0+/, "") || params.id;
+  };
 
   const guard = async (run: () => Promise<void>) => {
     setError(null);
     try {
       await run();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
@@ -144,6 +152,15 @@ export function Order() {
   const menuItemMap = createMemo(
     () => new Map(state.menu.map((item) => [item.menu_item_id, item])),
   );
+
+  // The flat fallback's items: the price book without the ones that are only ever a choice inside a
+  // modifier group (F11). With no layout published, "Size — 30cm" and "Extra cheese" drew as buttons
+  // of their own beside the pizzas, and a topping could be sold alone with nothing to go on. Search
+  // still finds them — an operator who types a name gets what the price book holds.
+  const headlineItems = createMemo(() => {
+    const choices = new Set(state.modifierGroups.flatMap((group) => group.member_menu_item_ids));
+    return state.menu.filter((item) => !choices.has(item.menu_item_id));
+  });
 
   // Layout names the item; the price book prices it; the two meet only at the id (ADR-0066).
   // Uses O(1) hash map lookup instead of O(N) state.menu.some(...).
@@ -787,7 +804,7 @@ export function Order() {
             fallback={
               <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
                 <For
-                  each={state.menu}
+                  each={headlineItems()}
                   fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
                 >
                   {(item) => sellButton(item, item.display_name)}

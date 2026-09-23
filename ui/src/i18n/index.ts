@@ -17,12 +17,55 @@ export const LOCALES: readonly Locale[] = ["en", "vi"];
 
 const CATALOGUES: Record<Locale, Record<string, string>> = { en, vi };
 
-const [locale, setLocaleSignal] = createSignal<Locale>("en");
+// The language this device's operator chose, kept across reloads (F10). Until it was kept, every
+// reload, every tablet that woke and every till that restarted came back in English, and a
+// Vietnamese shop tapped the toggle on every device every time. Per device, because the person at a
+// till is the one who reads it; wrapped because storage can be unavailable (a private window, a
+// locked-down kiosk profile) and a language is not worth failing a boot over.
+const CHOSEN = "pos.locale";
+
+function chosen(): Locale | null {
+  try {
+    const value = globalThis.localStorage?.getItem(CHOSEN);
+    return LOCALES.find((candidate) => candidate === value) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const [locale, setLocaleSignal] = createSignal<Locale>(chosen() ?? "en");
 export { locale };
 
-export function setLocale(next: Locale): void {
+function apply(next: Locale): void {
   setLocaleSignal(next);
-  document.documentElement.lang = next;
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = next;
+  }
+}
+apply(locale());
+
+// The operator picked a language: show it, and remember it on this device.
+export function setLocale(next: Locale): void {
+  apply(next);
+  try {
+    globalThis.localStorage?.setItem(CHOSEN, next);
+  } catch {
+    // Shown for this session; the next reload starts from the store's language again.
+  }
+}
+
+// The store's own display language, as the default for a device whose operator has chosen none.
+// `tag` is the BCP 47 tag the store publishes (`vi`, `vi-VN`); a language the till has no catalogue
+// for leaves the current one. Never overrides a choice the operator made on this device.
+export function adoptStoreLanguage(tag: string | undefined): void {
+  if (tag === undefined || chosen() !== null) {
+    return;
+  }
+  const primary = tag.toLowerCase().split("-")[0];
+  const match = LOCALES.find((candidate) => candidate === primary);
+  if (match !== undefined) {
+    apply(match);
+  }
 }
 
 // Compiled formatters are cached by locale+key: intl-messageformat parses the ICU pattern once.

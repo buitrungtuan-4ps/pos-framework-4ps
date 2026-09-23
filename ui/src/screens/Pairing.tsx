@@ -1,9 +1,10 @@
 import { Show, createSignal } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 
 // Pairing a device: the operator reads a six-digit code off the edge and enters it here (or opens
 // the QR link, which lands here with the code pre-filled). Redeeming is single-use; an unknown or
@@ -28,7 +29,7 @@ export function Pairing() {
       // on sign-in, not the floor.
       navigate("/signin", { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 

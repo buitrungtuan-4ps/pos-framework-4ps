@@ -1,10 +1,11 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type { RejectReason, WaitingOrder } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatAmount } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
 // (ADR-0116).
@@ -26,7 +27,7 @@ export function Confirm() {
   const [busy, setBusy] = createSignal(false);
 
   const explain = (caught: unknown) =>
-    setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+    setError(errorMessage(caught));
 
   const refresh = () =>
     api

@@ -35,6 +35,7 @@ import type {
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
+  SyncResponse,
   TableResponse,
   VoidBillResponse,
   VoidRequest,
@@ -43,11 +44,16 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number;
+  // The stable token the edge names a refusal by (`pos-error-reason`, ADR-0137), or null for an edge
+  // too old to send one. The message is the edge's English sentence; this is what a screen
+  // translates.
+  readonly reason: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, reason: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.reason = reason;
   }
 
   // A refused command (illegal move, missing permission, underpaid bill) — the caller's fault, worth
@@ -116,7 +122,11 @@ async function request<T>(
       clearDeviceToken();
     }
     const text = await response.text().catch(() => "");
-    throw new ApiError(response.status, text.trim() || response.statusText);
+    throw new ApiError(
+      response.status,
+      text.trim() || response.statusText,
+      response.headers.get("pos-error-reason"),
+    );
   }
   return (await response.json()) as T;
 }
@@ -282,6 +292,10 @@ export const api = {
 
   openShift: (open: OpenShiftRequest) =>
     request<ShiftResponse>("POST", "/api/shifts", open),
+  // The shift open now, or null (F4): what lets a device that reloaded count and close it.
+  currentShift: () => request<ShiftResponse | null>("GET", "/api/shifts/current"),
+  // The cloud link and the outbox, for the status bar (ADR-0137).
+  sync: () => request<SyncResponse>("GET", "/api/sync"),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>

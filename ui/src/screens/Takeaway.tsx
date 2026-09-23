@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
@@ -12,6 +12,7 @@ import {
   tenderAccepted,
   tipsEnabled,
 } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
 // (ADR-0093).
@@ -33,7 +34,7 @@ export function Takeaway() {
   const [error, setError] = createSignal<string | null>(null);
 
   const explain = (caught: unknown) =>
-    setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+    setError(errorMessage(caught));
 
   const refresh = () =>
     api

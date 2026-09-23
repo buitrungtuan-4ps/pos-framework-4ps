@@ -72,6 +72,7 @@ pub mod relay_client;
 pub mod server;
 pub mod sntp;
 pub mod state;
+pub mod sync_status;
 pub mod telemetry;
 pub mod trusted_keys;
 pub mod version;

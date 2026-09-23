@@ -1,9 +1,10 @@
 import { Match, Switch, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
-import { ApiError, api, deviceToken } from "../api/client";
+import { api, deviceToken } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 
 // Activating the store server: the operator reads the `XXXX-XXXX-XXXX` code off the box's setup sheet
 // and enters it here. The edge exchanges it with the cloud once, keeps the device credential it gets
@@ -69,7 +70,7 @@ export function Setup() {
       // may send a command (ADR-0084), unless it already holds one.
       navigate(deviceToken() === null ? "/pair" : "/", { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }

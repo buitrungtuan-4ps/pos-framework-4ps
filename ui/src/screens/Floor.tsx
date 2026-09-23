@@ -1,7 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
@@ -16,6 +15,7 @@ import {
   type TableCard,
 } from "../state/store";
 import { Takeaway } from "./Takeaway";
+import { errorMessage } from "../lib/errors";
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -83,7 +83,7 @@ export function Floor() {
         navigate(`/table/${tableId}`);
       }
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
