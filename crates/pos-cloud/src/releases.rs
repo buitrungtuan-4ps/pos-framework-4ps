@@ -231,6 +231,18 @@ pub struct ResolvedStore {
     pub store_id: StoreId,
     /// Its instant, or why it has none.
     pub outcome: Result<i64, ResolveRefusal>,
+    /// The IANA zone the instant was resolved against, for a wall-clock release.
+    ///
+    /// Carried out of the resolution rather than looked up again later, and it is the *reason* this
+    /// field exists rather than a convenience: an instant alone cannot be reviewed. "04:00 at Ginza"
+    /// and the same moment read in Ho Chi Minh City are one number and two different sentences, and
+    /// [ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 rejected
+    /// fire-time conversion precisely so the operator could be shown the first one. Re-reading the
+    /// store's zone afterwards would describe an approved schedule with a fact that may since have
+    /// changed — the same defect §26 names about moving the publish itself, one step removed.
+    ///
+    /// `None` for a release given a plain UTC instant, which needs no zone and never had one.
+    pub timezone: Option<String>,
 }
 
 /// Resolves a moment for every target store, keeping the refusals rather than stopping at the first.
@@ -247,6 +259,13 @@ pub fn resolve_for_stores(moment: &ReleaseMoment, stores: &[TargetStore]) -> Vec
         .map(|store| ResolvedStore {
             store_id: store.store_id,
             outcome: resolve_moment(moment, store),
+            // The zone only describes a wall-clock resolution. An instant release resolves the same
+            // number at every store and naming a clock beside it would invent a precision it does
+            // not have.
+            timezone: match moment {
+                ReleaseMoment::WallClock { .. } => store.timezone.clone(),
+                ReleaseMoment::Instant(_) => None,
+            },
         })
         .collect()
 }
@@ -480,6 +499,45 @@ mod tests {
             2 * 60 * 60 * 1000,
             "Tokyo's 04:00 comes two hours before Ho Chi Minh City's"
         );
+    }
+
+    #[test]
+    fn a_resolved_store_keeps_the_clock_its_instant_was_read_in() {
+        // An instant alone cannot be reviewed. ADR-0125 §26 rejected fire-time conversion so the
+        // operator could be shown "04:00 at each of these forty shops" — which needs the clock
+        // beside the moment, or the console can only draw it in the reader's own time. Dropping
+        // `timezone` here puts the report back to printing forty numbers nobody can check.
+        let resolved = resolve_for_stores(
+            &monday_0400(),
+            &[at(Some("Asia/Ho_Chi_Minh"), 1), at(Some("Asia/Tokyo"), 2)],
+        );
+        let zones: Vec<Option<&str>> = resolved
+            .iter()
+            .map(|store| store.timezone.as_deref())
+            .collect();
+        assert_eq!(
+            zones,
+            vec![Some("Asia/Ho_Chi_Minh"), Some("Asia/Tokyo")],
+            "each store keeps the zone its own instant was resolved against"
+        );
+    }
+
+    #[test]
+    fn an_instant_release_names_no_clock_because_it_has_none() {
+        // The other half, and the reason this is an `Option`: one UTC instant is the same moment at
+        // every shop. Naming a zone beside it would invent a precision the release never had — the
+        // operator did not say "04:00 local", they said "this moment".
+        let resolved = resolve_for_stores(
+            &ReleaseMoment::Instant(1_800_000_000_000),
+            &[at(Some("Asia/Tokyo"), 1), at(None, 2)],
+        );
+        for store in &resolved {
+            assert!(
+                store.timezone.is_none(),
+                "an instant release resolves against no clock, even where the store publishes one"
+            );
+            assert!(store.outcome.is_ok(), "an instant needs no locale");
+        }
     }
 
     #[test]

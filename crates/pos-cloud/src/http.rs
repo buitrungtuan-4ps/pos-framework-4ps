@@ -17903,6 +17903,9 @@ where
         // Authored one node at a time from the Campaigns screen, so it belongs to no release
         // ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
         release_id: None,
+        // This route takes an instant directly, so no wall-clock time was resolved against any
+        // store's clock and there is none to name.
+        resolved_timezone: None,
     };
     match state.scheduled.schedule(&publish).await {
         Ok(()) => {
@@ -27216,6 +27219,14 @@ struct ReleasePairView {
     /// The same spelling `GET /admin/config/scheduled` already gives this exact row.
     status: ScheduledPublishStatus,
     effective_at_ms: i64,
+    /// The IANA zone `effective_at_ms` was resolved against, or `None`.
+    ///
+    /// What turns the instant back into the sentence the operator approved. A wall-clock release is
+    /// one instant per timezone (ADR-0125 §2), and a console that prints the instant without the
+    /// clock it came from draws every shop's 04:00 in the reader's own time — which is the review
+    /// ADR-0125 §26 rejected fire-time conversion to avoid. `None` for a release timed as a plain
+    /// UTC instant, which has no per-store clock, and for pairs written before the column existed.
+    resolved_timezone: Option<String>,
     applied_version_id: Option<String>,
     failure: Option<String>,
 }
@@ -27802,6 +27813,18 @@ where
         .iter()
         .filter_map(|store| store.outcome.as_ref().ok().map(|at| (store.store_id, *at)))
         .collect();
+    // The clock each instant was read in, written down beside it. Without this the report can print
+    // the moment but not the sentence an operator approved — "04:00 at Ginza" and the same instant
+    // read in Ho Chi Minh City are one number and two different reviews (ADR-0125 §26).
+    let zones: std::collections::BTreeMap<StoreId, String> = resolved
+        .iter()
+        .filter_map(|store| {
+            store
+                .timezone
+                .as_ref()
+                .map(|zone| (store.store_id, zone.clone()))
+        })
+        .collect();
     let now_ms = state.clock.now().as_milliseconds_since_epoch();
     let mut written = 0_usize;
     for (store_id, node_key, node_value) in pairs {
@@ -27823,6 +27846,7 @@ where
             effective_at_ms,
             created_by: context.admin.id.clone(),
             release_id: Some(release_id.clone()),
+            resolved_timezone: zones.get(&store_id).cloned(),
         };
         if let Err(error) = state.scheduled.schedule(&publish).await {
             // Some pairs are already written. They are visible in the report and the release stays
@@ -28120,6 +28144,7 @@ where
                 node: pair.node_key,
                 status: pair.status,
                 effective_at_ms: pair.effective_at_ms,
+                resolved_timezone: pair.resolved_timezone,
                 applied_version_id: pair.applied_version_id,
                 failure: pair.failure,
             })

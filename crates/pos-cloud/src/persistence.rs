@@ -2941,6 +2941,7 @@ fn scheduled_from_row(row: ScheduledPublishRow) -> Result<ScheduledPublish, Sche
         applied_version_id: row.applied_version_id,
         release_id: row.release_id,
         failure: row.failure,
+        resolved_timezone: row.resolved_timezone,
     })
 }
 
@@ -2960,6 +2961,7 @@ impl ScheduledPublishStore for PostgresScheduledPublishes {
             effective_at_ms: publish.effective_at_ms,
             created_by: &publish.created_by,
             release_id: publish.release_id.as_deref(),
+            resolved_timezone: publish.resolved_timezone.as_deref(),
         };
         self.schedule(&row)
             .await

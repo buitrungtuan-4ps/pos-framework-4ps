@@ -44,7 +44,7 @@ import type {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage } from "../lib/errors";
-import { formatInstant } from "../lib/format";
+import { formatInstant, formatInstantIn } from "../lib/format";
 import { RELEASE_NODE_PARAM } from "../lib/publish-copy";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -442,7 +442,7 @@ export function Releases() {
       <span class="text-sm text-ink">{storeName(pair.store_id)}</span>
       <span class="text-sm text-ink-muted">{nodeLabel(pair.node)}</span>
       <span class="text-sm text-ink-muted">
-        {formatInstant(pair.effective_at_ms)}
+        {formatInstantIn(pair.effective_at_ms, pair.resolved_timezone)}
       </span>
       <Show when={pair.failure}>
         {(reason) => <span class="text-sm text-danger">{reason()}</span>}

@@ -251,6 +251,12 @@ const MIGRATION_0066: &str = include_str!("../migrations/0066_catalog_courses.sq
 /// `(tenant_id, store_id, chain_seq)` is the refusal: one head per chain length, for ever.
 const MIGRATION_0067: &str = include_str!("../migrations/0067_chain_anchors.sql");
 
+/// The clock a scheduled publish was timed against
+/// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26). The instant was
+/// already written per store; the zone it was read in was not, so the console could print the moment
+/// but not the sentence an operator approved.
+const MIGRATION_0068: &str = include_str!("../migrations/0068_scheduled_publish_timezone.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -577,6 +583,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0067)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0068)
             .await
             .map_err(unavailable)
     }

@@ -3637,6 +3637,7 @@ mod scheduled_publishes {
             effective_at_ms,
             created_by: "admin-1",
             release_id: None,
+            resolved_timezone: None,
         }
     }
 
@@ -8052,6 +8053,8 @@ mod release_pairs {
             effective_at_ms: 1_000,
             created_by: "admin-1",
             release_id,
+            // The standalone-schedule shape: an instant, resolved against no store's clock.
+            resolved_timezone: None,
         }
     }
 

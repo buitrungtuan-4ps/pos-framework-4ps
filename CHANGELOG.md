@@ -18,6 +18,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A release report says which clock each shop's time is in.** "Monday 04:00, local" is one instant
+  per timezone ([ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md) §2), and the
+  console drew all of them in the *reader's* clock — so an operator in Ho Chi Minh City reviewing a
+  fleet that includes Tokyo saw `23:00 on the 23rd` against a shop switching over at `01:00 on the
+  24th`. The same moment, the wrong day, and nothing on the row admitting it. That is precisely the
+  review §26 rejected fire-time conversion in order to get: *"a release that says '04:00 local, at
+  these forty stores' and lists forty instants is reviewable."*
+  - The zone each instant was resolved against is now **recorded with the decision** and served on
+    the pair, and the report prints the time in it with the IANA name beside it. Recorded rather
+    than looked up later for the reason §26 gives about the instant itself — a store whose published
+    timezone changes afterwards must not silently re-describe a schedule an operator already signed
+    off.
+  - `resolved_timezone` is additive and nullable on `scheduled_publishes` (migration `0068`), on the
+    pair in `GET /admin/config-releases/{id}`, and in the console's `ReleasePair`. Null means "this
+    row cannot name its clock", which covers a release timed as a plain UTC instant (§24's escape
+    hatch, which has no per-store clock), ADR-0077's standalone schedules, and rows written before
+    the column existed. All three render exactly as they do today.
+  - `formatInstantIn` joins `formatInstant` in `lib/format.ts`. A null or unknown zone falls back to
+    the reader's clock rather than throwing — the cloud refuses an unknown IANA name at schedule
+    time, so that path needs a browser tzdb older than the cloud's.
+  - **Upgrade note:** none. The migration is additive and needs no backfill: the zone of a publish
+    already scheduled was never recorded and cannot be recovered without assuming the store has not
+    moved, which is the assumption this column exists to stop.
+
+
 - **The console prints a timestamp one way, in the locale the operator chose.** It had three ways,
   and the third was a defect: the release instant and the per-store effective time on Releases, and
   the effective time on Campaigns, called `new Date(ms).toLocaleString()` with **no locale**, so they
