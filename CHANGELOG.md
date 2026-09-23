@@ -57,6 +57,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The status bar names the cash shift in the operator's language.** It spliced the wire token into
+  a translated template, so a Vietnamese till read "Ca open"; each state now has its own sentence
+  ("Đang mở ca", "Ca đã kiểm đếm", "Ca đã đóng").
 - **`/setup` says why an activation failed, in the operator's language.** The activation routes
   answered with a bare English sentence and no `pos-error-reason` token, so the first screen a
   technician meets showed "the activation service is unavailable" to a Vietnamese shop. Every
