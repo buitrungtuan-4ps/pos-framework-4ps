@@ -173,9 +173,9 @@ service is up, for Step 3. Or, from an administrator prompt with any file name:
 The key is a secret, so it is never in the file or its name. Pasted at the prompt, it goes only into
 the service's own registry key, exactly where `-SyncKey` puts it. Skipped, the store still sells,
 pairs and activates, and config sync and the order relay refuse until a key is installed. The console
-will not offer the file when it was opened over plain http at a network address, because the file
-tells the store to dial the cloud over `https`. Windows SmartScreen warns on the unsigned file, as it
-does for the binary today.
+will not offer the file when it was opened over plain http, because the file tells the store to dial
+the cloud over `https`, the only way a store dials it. Windows SmartScreen warns on the unsigned file,
+as it does for the binary today.
 
 ### By hand (a host you manage yourself)
 

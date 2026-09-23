@@ -5,6 +5,13 @@ import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
 
+// What the bar says about the cash shift, per state (the wire tokens are the edge's `SHIFT_STATE_*`).
+const SHIFT_STATE_LABELS: Readonly<Record<string, MessageKey>> = {
+  SHIFT_STATE_OPEN: "status.shift_open",
+  SHIFT_STATE_COUNTED: "status.shift_counted",
+  SHIFT_STATE_CLOSED: "status.shift_closed",
+};
+
 // How often the bar asks the edge about the cloud (ADR-0137). The edge caches the depth for five
 // seconds, so a floor of tablets polling at this rate costs it one count per window between them.
 const SYNC_POLL_MS = 15_000;
@@ -161,9 +168,9 @@ export function StatusBar() {
       >
         {(shift) => (
           <span class="text-ink-muted">
-            {t("status.shift", {
-              state: shift().state.replace("SHIFT_STATE_", "").toLowerCase(),
-            })}
+            {/* A sentence per state, not the wire token spliced into one: "Ca open" is what a
+                Vietnamese till read when the state was lower-cased into a translated template. */}
+            {t(SHIFT_STATE_LABELS[shift().state] ?? "status.shift_open")}
           </span>
         )}
       </Show>

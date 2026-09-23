@@ -22,8 +22,9 @@
 //! have broken that.
 //!
 //! A browser saving a second copy calls it `… (1).exe`; that suffix is tolerated. A cloud on a port
-//! other than 443 is written `host@port`. A cloud at `localhost` or a loopback address is dialled
-//! over plain HTTP, which is the only case where the name does not imply `https`.
+//! other than 443 is written `host@port`. The name always means `https`, `localhost` included: the
+//! edge's cloud transport speaks nothing else, so a name that implied plain HTTP would install a box
+//! that refuses its own cloud and runs LAN-only.
 //!
 //! # What runs where
 //!
@@ -70,7 +71,7 @@ pub enum InstallInputError {
     /// The store id is not a ULID.
     #[error("the store id is not a ULID: {0}")]
     StoreId(String),
-    /// The cloud is not an absolute `https` URL (or `http` on a loopback address).
+    /// The cloud is not an absolute `https` URL — the only kind the edge's cloud transport dials.
     #[error("the cloud is not an https URL: {0}")]
     CloudUrl(String),
 }
@@ -206,28 +207,17 @@ fn cloud_from_host(host: &str) -> Result<url::Url, InstallInputError> {
     if !valid_name {
         return Err(InstallInputError::CloudUrl(host.to_owned()));
     }
-    let scheme = if is_loopback(name) { "http" } else { "https" };
     let text = match port {
-        Some(port) => format!("{scheme}://{name}:{port}"),
-        None => format!("{scheme}://{name}"),
+        Some(port) => format!("https://{name}:{port}"),
+        None => format!("https://{name}"),
     };
     url::Url::parse(&text).map_err(|_| InstallInputError::CloudUrl(host.to_owned()))
 }
 
-fn is_loopback(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host
-            .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_loopback())
-}
-
-/// `https`, or `http` only on a loopback host: a store's credential crosses this link.
+/// `https` with a host, and nothing else: a store's credential crosses this link, and the edge's
+/// cloud transport refuses any other scheme — on a loopback address too.
 fn acceptable_cloud(url: &url::Url) -> bool {
-    match url.scheme() {
-        "https" => url.host_str().is_some(),
-        "http" => url.host_str().is_some_and(is_loopback),
-        _ => false,
-    }
+    url.scheme() == "https" && url.host_str().is_some()
 }
 
 /// Runs the install: elevate if needed, then the embedded script.
@@ -381,10 +371,12 @@ mod tests {
     }
 
     #[test]
-    fn only_a_loopback_cloud_is_dialled_over_plain_http() {
+    fn a_loopback_cloud_is_dialled_over_https_too() {
+        // The edge's cloud transport speaks only https, so a name implying plain HTTP would install
+        // a box that refuses its own cloud and runs LAN-only.
         let target = from_file_name(&format!("pos-edge-setup_localhost@8080_{STORE}.exe"))
             .expect("a tagged name");
-        assert_eq!(target.cloud_url.as_str(), "http://localhost:8080/");
+        assert_eq!(target.cloud_url.as_str(), "https://localhost:8080/");
     }
 
     #[test]
@@ -412,14 +404,16 @@ mod tests {
         let target = from_arguments(&args).expect("reads");
         assert_eq!(target.store_id.to_string(), STORE);
 
-        let plain: Vec<String> = ["--store", STORE, "--cloud", "http://pos.example.vn"]
-            .iter()
-            .map(|value| (*value).to_owned())
-            .collect();
-        assert!(matches!(
-            from_arguments(&plain),
-            Err(InstallInputError::CloudUrl(_))
-        ));
+        for plain in ["http://pos.example.vn", "http://localhost:8080"] {
+            let args: Vec<String> = ["--store", STORE, "--cloud", plain]
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect();
+            assert!(
+                matches!(from_arguments(&args), Err(InstallInputError::CloudUrl(_))),
+                "{plain} is refused: the edge dials its cloud over https only"
+            );
+        }
         assert_eq!(from_arguments(&[]), Err(InstallInputError::Missing));
     }
 

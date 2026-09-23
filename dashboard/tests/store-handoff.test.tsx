@@ -68,6 +68,13 @@ const TOKEN = "test-store-key-not-a-credential";
 
 const messages = en as Record<string, string>;
 
+/**
+ * Where the page is, for the setup file: Vitest's jsdom instance, which is what lets a case put the
+ * console at an `https` origin — the only kind that offers one — and back.
+ */
+const page = (globalThis as unknown as { jsdom: { reconfigure(options: { url: string }): void } })
+  .jsdom;
+
 function mountStores() {
   return render(() => (
     <MemoryRouter>
@@ -101,7 +108,10 @@ describe("handing a store's files over again", () => {
     listHostedRelease.mockResolvedValue({ release: "", artifacts: [] });
     selectTenant(TENANT.tenant_id, TENANT.name);
   });
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    page.reconfigure({ url: "http://localhost:3000/" });
+  });
 
   it("is reachable from the store's own row", async () => {
     await openHandoff();
@@ -181,6 +191,7 @@ describe("handing a store's files over again", () => {
         { arch: "x86_64-pc-windows-msvc", size_bytes: 1, sha256: "00", recorded_at_ms: 0 },
       ],
     });
+    page.reconfigure({ url: "https://console.example.com/" });
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
     const link = await waitFor(() =>
@@ -209,11 +220,24 @@ describe("handing a store's files over again", () => {
         { arch: "x86_64-unknown-linux-gnu", size_bytes: 1, sha256: "00", recorded_at_ms: 0 },
       ],
     });
+    page.reconfigure({ url: "https://console.example.com/" });
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
     const expected = (messages["setupFile.notHosted"] ?? "").replace("{release}", "1.5.0");
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain(expected));
     expect(screen.queryByRole("link", { name: messages["setupFile.download"] })).toBeNull();
+  });
+
+  it("offers no setup file to a console on plain http, and says why", async () => {
+    // The edge dials its cloud over https only, loopback included, so a file named from an http
+    // origin would install a box that refuses its own cloud.
+    await openHandoff();
+    fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog").textContent).toContain(messages["setupFile.needsHttps"]),
+    );
+    expect(screen.queryByRole("link", { name: messages["setupFile.download"] })).toBeNull();
+    expect(listHostedRelease).not.toHaveBeenCalled();
   });
 
   it("says the device credential is gone with the machine", async () => {

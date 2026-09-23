@@ -25,7 +25,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   Windows executable, byte for byte, named `pos-edge-setup_<cloud>_<store>.exe` so a double-click
   installs that store. It needs `console.data.read`. The console starts from the version the store's
   rollout targets and shows the link only once the cloud holds a Windows build of it. When the console
-  was opened over plain http at a network address it says why it cannot offer one instead. The setup
+  was opened over plain http it says why it cannot offer one instead: the file tells the store to dial
+  `https`, and a file name always means `https`, `localhost` included — the edge's cloud transport
+  dials nothing else ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)
+  Correction 1). The setup
   window now **asks for the store key** (the script's new `-AskSyncKey` switch, passed by
   `pos-edge install`), so a store installed this way syncs as soon as it is activated. The key is
   pasted into the elevated window and goes only into the service's registry key; Enter skips it.
@@ -54,6 +57,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The status bar names the cash shift in the operator's language.** It spliced the wire token into
+  a translated template, so a Vietnamese till read "Ca open"; each state now has its own sentence
+  ("Đang mở ca", "Ca đã kiểm đếm", "Ca đã đóng").
+- **`/setup` says why an activation failed, in the operator's language.** The activation routes
+  answered with a bare English sentence and no `pos-error-reason` token, so the first screen a
+  technician meets showed "the activation service is unavailable" to a Vietnamese shop. Every
+  refusal now carries a token — `ACTIVATION_REFUSED` (whatever the cloud's reason, so a refused code
+  still reveals nothing), `ACTIVATION_CODE_MALFORMED`, `ALREADY_ACTIVATED`, `ACTIVATION_WRONG_STATE`,
+  `ACTIVATION_UNAVAILABLE` — and the till translates each with a next step.
+- **A store that boots before its internet does ships its sales once the line comes back.** The
+  edge's event-stream link failed its connect when the broker was unreachable at boot — the normal
+  case after a power cut, when the PC comes up before the router — and the edge then started no
+  publisher at all: the store kept trading and shipped nothing to the cloud until somebody restarted
+  it, while the status bar, never having measured the link, said nothing. The link now connects in
+  the background (`retry_on_initial_connect`), so the publisher runs from boot: the status bar reads
+  *Offline — selling normally* while the line is down and the outbox drains when it returns. A
+  handshake that fails because the link is not up yet is retried after 15 seconds; only a cloud that
+  answers with no common protocol version still waits five minutes.
 - **A store activated while it runs starts syncing.** The cloud loops start at boot behind the
   activation gate, so a box activated at `/setup` sat unsynced until somebody restarted it, which the
   bring-up guide never said to do. A successful activation now asks for the graceful restart an
