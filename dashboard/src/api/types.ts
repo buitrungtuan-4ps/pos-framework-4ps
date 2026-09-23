@@ -551,6 +551,17 @@ export interface ReleasePair {
   readonly node: string;
   readonly status: ScheduledPublishStatus;
   readonly effective_at_ms: number;
+  /**
+   * The IANA zone `effective_at_ms` was resolved against, or `null`.
+   *
+   * What turns the instant back into the sentence the operator approved. A wall-clock release is one
+   * instant per timezone, and printing the instant without its clock draws every shop's 04:00 in the
+   * reader's own time — which is the review
+   * [ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 rejected
+   * fire-time conversion to get. `null` for a release timed as a plain UTC instant, which has no
+   * per-store clock.
+   */
+  readonly resolved_timezone: string | null;
   readonly applied_version_id: string | null;
   readonly failure: string | null;
 }

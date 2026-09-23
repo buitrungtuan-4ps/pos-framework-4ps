@@ -53,6 +53,42 @@ export function formatInstant(atMs: number): string {
 }
 
 /**
+ * An instant read in a named clock, with the clock named (e.g. `23 Sep 2026, 04:00 Asia/Tokyo`).
+ *
+ * [`formatInstant`] renders in the reader's timezone, which is right for a console-side record and
+ * wrong for a store's own schedule. A wall-clock release is one instant per timezone
+ * ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §2), so a report that
+ * prints only the instant shows an operator in Ho Chi Minh City `02:00` against the Tokyo shop of a
+ * "Monday 04:00 local" release. Correct as a moment, and not the review §26 rejected fire-time
+ * conversion to obtain.
+ *
+ * The zone is printed, not merely applied. `04:00` with no clock beside it is the same ambiguity one
+ * step along: the reader cannot tell whose four o'clock it is. `DateField` in the kit already prints
+ * the IANA name beside a date input for this reason; this is the same promise on the way out.
+ *
+ * A `null` zone falls back to the reader's clock, which is what a release timed as a plain UTC
+ * instant means — it has no per-store clock to name. A zone the browser's tzdb does not know does
+ * the same: the cloud refuses an unknown IANA name at schedule time, so reaching this needs a
+ * browser older than the cloud, and the reader's clock unlabelled is what every other timestamp in
+ * the console shows anyway.
+ */
+export function formatInstantIn(atMs: number, zone: string | null): string {
+  if (zone === null || zone === "") {
+    return formatInstant(atMs);
+  }
+  try {
+    const drawn = new Intl.DateTimeFormat(locale(), {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: zone,
+    }).format(atMs);
+    return `${drawn} ${zone}`;
+  } catch {
+    return formatInstant(atMs);
+  }
+}
+
+/**
  * A past instant as locale-aware relative text (e.g. `5 minutes ago`, `2 hours ago`). `seconds` is how
  * long ago the instant was (a non-negative age). Uses `Intl.RelativeTimeFormat`, so the phrasing is
  * localized by the platform without a catalogue entry per unit; the fleet view's "last seen" and the

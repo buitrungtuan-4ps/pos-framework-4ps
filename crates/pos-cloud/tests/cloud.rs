@@ -23991,6 +23991,7 @@ impl pos_cloud::scheduling::ScheduledPublishStore for FakeScheduledPublishes {
                 applied_version_id: None,
                 release_id: publish.release_id.clone(),
                 failure: None,
+                resolved_timezone: publish.resolved_timezone.clone(),
             });
         Ok(())
     }

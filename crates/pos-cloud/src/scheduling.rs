@@ -90,6 +90,19 @@ pub struct NewScheduledPublish {
     /// schedule is not a release and does not become one
     /// ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md)).
     pub release_id: Option<String>,
+    /// The IANA zone this row's instant was resolved against, or `None`.
+    ///
+    /// Written beside the instant rather than derived from the store later, because it describes a
+    /// decision an operator approved: "04:00 at Ginza" and the same moment read elsewhere are one
+    /// number and two sentences, and
+    /// [ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 rejected
+    /// fire-time conversion so the operator could be shown the first. A store whose published zone
+    /// changes afterwards must not silently re-describe a schedule that was already signed off.
+    ///
+    /// `None` for a release timed as a plain UTC instant, which needs no zone, for ADR-0077's
+    /// standalone schedules, which are not releases, and for any row written before the column
+    /// existed. All three mean the same thing to a reader: this row cannot name its clock.
+    pub resolved_timezone: Option<String>,
 }
 
 /// A stored scheduled publish.
@@ -122,6 +135,12 @@ pub struct ScheduledPublish {
     /// still trying. A row that fails stays `Pending` and is retried; the text is the most recent
     /// reason, not a history.
     pub failure: Option<String>,
+    /// The IANA zone this row's instant was resolved against, or `None`.
+    ///
+    /// The read side of [`NewScheduledPublish::resolved_timezone`], and what lets the console print
+    /// "04:00 Asia/Tokyo" where it could previously only print an instant in whatever clock the
+    /// reader's browser was in.
+    pub resolved_timezone: Option<String>,
 }
 
 /// Persists and reads scheduled publishes.
@@ -686,6 +705,7 @@ mod tests {
                 applied_version_id: None,
                 release_id: publish.release_id.clone(),
                 failure: None,
+                resolved_timezone: publish.resolved_timezone.clone(),
             });
             Ok(())
         }
@@ -805,6 +825,7 @@ mod tests {
             effective_at_ms,
             created_by: "admin-1".to_owned(),
             release_id: None,
+            resolved_timezone: None,
         }
     }
 
@@ -991,6 +1012,7 @@ mod tests {
             applied_version_id: None,
             release_id: release.map(str::to_owned),
             failure: None,
+            resolved_timezone: None,
         }
     }
 

@@ -36,6 +36,8 @@ pub struct NewScheduledPublishRow<'a> {
     pub created_by: &'a str,
     /// The release this pair belongs to, or `None` for a standalone schedule (ADR-0125).
     pub release_id: Option<&'a str>,
+    /// The IANA zone the instant was resolved against, or `None` (ADR-0125 §26).
+    pub resolved_timezone: Option<&'a str>,
 }
 
 /// One stored scheduled-publish row.
@@ -63,6 +65,8 @@ pub struct ScheduledPublishRow {
     pub release_id: Option<String>,
     /// Why it last failed to apply, or `None`.
     pub failure: Option<String>,
+    /// The IANA zone this row's instant was resolved against, or `None`.
+    pub resolved_timezone: Option<String>,
 }
 
 /// The scheduled-publish store over a shared pool. Built by
@@ -74,7 +78,8 @@ pub struct PostgresScheduledPublishes {
 
 const SELECT_COLUMNS: &str = "id, tenant_id, store_id, node_key, node_value::text, \
      (extract(epoch from effective_at) * 1000)::bigint, status, \
-     (extract(epoch from created_at) * 1000)::bigint, applied_version_id, release_id, failure";
+     (extract(epoch from created_at) * 1000)::bigint, applied_version_id, release_id, failure, \
+     resolved_timezone";
 
 fn row_from(row: &tokio_postgres::Row) -> ScheduledPublishRow {
     ScheduledPublishRow {
@@ -89,6 +94,7 @@ fn row_from(row: &tokio_postgres::Row) -> ScheduledPublishRow {
         applied_version_id: row.get(8),
         release_id: row.get(9),
         failure: row.get(10),
+        resolved_timezone: row.get(11),
     }
 }
 
@@ -107,9 +113,10 @@ impl PostgresScheduledPublishes {
         connection
             .execute(
                 "INSERT INTO scheduled_publishes \
-                 (id, tenant_id, store_id, node_key, node_value, effective_at, created_by, release_id) \
+                 (id, tenant_id, store_id, node_key, node_value, effective_at, created_by, release_id, \
+                  resolved_timezone) \
                  VALUES ($1, $2, $3, $4, $5::text::jsonb, \
-                 to_timestamp($6::bigint::double precision / 1000.0), $7, $8)",
+                 to_timestamp($6::bigint::double precision / 1000.0), $7, $8, $9)",
                 &[
                     &row.id,
                     &row.tenant_id,
@@ -119,6 +126,7 @@ impl PostgresScheduledPublishes {
                     &row.effective_at_ms,
                     &row.created_by,
                     &row.release_id,
+                    &row.resolved_timezone,
                 ],
             )
             .await

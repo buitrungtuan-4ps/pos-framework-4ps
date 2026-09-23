@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { setLocale } from "../src/i18n";
-import { formatInstant } from "../src/lib/format";
+import { formatInstant, formatInstantIn } from "../src/lib/format";
 
 // 2026-09-23T14:05:00Z — a day-of-month above 12, so the day and the month cannot be confused for
 // each other by coincidence. Rendered in the runner's zone, which is why the assertions below are
@@ -57,5 +57,47 @@ describe("formatInstant", () => {
     // malformed row should not blank the table it appears in.
     expect(formatInstant(Number.NaN)).toBe("NaN");
     expect(formatInstant(8.64e15 + 1)).toBe(String(8.64e15 + 1));
+  });
+});
+
+// The half #437 deliberately left open, and ADR-0125 §26's actual requirement: a release scheduled
+// "Monday 04:00, local" is one instant per timezone, and a report that prints only the instant shows
+// an operator in Ho Chi Minh City `02:00` against the Tokyo shop. Correct as a moment, and not a
+// review — which is exactly why §26 rejected converting at fire time.
+describe("formatInstantIn", () => {
+  it("reads the instant in the store's clock, not the reader's", () => {
+    // One moment, two shops, two sentences — and deliberately a moment that moves the *date* as
+    // well as the hour. 2026-09-23T16:00Z is 01:00 on the 24th in Tokyo and 23:00 on the 23rd in Ho
+    // Chi Minh City, so a report drawing both rows in one clock puts a shop's switchover on the
+    // wrong day, not merely at the wrong hour.
+    const at = Date.UTC(2026, 8, 23, 16, 0, 0);
+    const tokyo = formatInstantIn(at, "Asia/Tokyo");
+    const saigon = formatInstantIn(at, "Asia/Ho_Chi_Minh");
+    expect(tokyo).not.toBe(saigon);
+    expect(tokyo).toContain("Sep 24");
+    expect(tokyo).toContain("1:00 AM");
+    expect(saigon).toContain("Sep 23");
+    expect(saigon).toContain("11:00 PM");
+  });
+
+  it("names the clock, because an hour with no clock beside it is the same ambiguity", () => {
+    // `DateField` in the kit prints the IANA name beside a date input for this reason. Rendering in
+    // the right zone silently would leave the reader unable to tell whose 04:00 they are looking at.
+    expect(formatInstantIn(Date.UTC(2026, 8, 23, 19, 0, 0), "Asia/Tokyo")).toContain("Asia/Tokyo");
+  });
+
+  it("falls back to the reader's clock when there is no zone to name", () => {
+    // A release timed as a plain UTC instant has no per-store clock — ADR-0125 §24's escape hatch
+    // for a store still being set up — and neither do pairs written before the column existed.
+    const at = Date.UTC(2026, 8, 23, 19, 0, 0);
+    expect(formatInstantIn(at, null)).toBe(formatInstant(at));
+    expect(formatInstantIn(at, "")).toBe(formatInstant(at));
+  });
+
+  it("falls back rather than throwing on a zone this browser does not know", () => {
+    // Nearly unreachable: the cloud refuses an unknown IANA name at schedule time, so this needs a
+    // browser tzdb older than the cloud's. It must degrade to the reader's clock, not blank the row.
+    const at = Date.UTC(2026, 8, 23, 19, 0, 0);
+    expect(formatInstantIn(at, "Mars/Olympus_Mons")).toBe(formatInstant(at));
   });
 });
