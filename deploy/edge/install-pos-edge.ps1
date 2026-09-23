@@ -40,6 +40,10 @@
 .PARAMETER Root
     Where the store's state lives.
 
+.PARAMETER OpenSetup
+    Open this box's activation screen in the browser when the service is up. The one-file
+    installer (pos-edge install, ADR-0140) passes it; a remote shell has no browser to open.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 `
         -Binary .\pos-edge.exe -StoreId 01J... -CloudUrl https://cloud.example.com
@@ -58,6 +62,8 @@ param(
     [string] $SyncKey = '',
 
     [string] $BindPort = '8787',
+
+    [switch] $OpenSetup,
 
     [string] $Root = 'C:\ProgramData\pos-edge'
 )
@@ -285,3 +291,11 @@ if (Test-Path -LiteralPath $pairingPath) {
     Write-Host "The pairing URL is not there yet. Read $pairingPath in a moment, or $logPath for why the service did not get that far; the address is http://<this box>:$BindPort/."
 }
 if ($SyncKey) { Write-Host 'The store key is now in the service registry key. Clear it from your shell history.' }
+
+# The next step is activation, on this box's own screen (ADR-0050). The one-file installer asks
+# for it; a technician on a remote shell has no browser here, so it is a switch, not a default.
+if ($OpenSetup) {
+    $setupUrl = "http://localhost:$BindPort/setup"
+    Write-Host "Next: activate this store at $setupUrl with the code from the console."
+    try { Start-Process $setupUrl } catch { Write-Host "Open $setupUrl in a browser on this PC." }
+}

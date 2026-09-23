@@ -30,6 +30,7 @@ pub mod menu;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
+mod printers;
 pub mod qr;
 pub mod reason_codes;
 pub mod shifts;
@@ -470,6 +471,10 @@ where
         // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
         // normally" and how many events are waiting.
         .route("/api/sync", get(sync::read::<S>))
+        // The published printers, and a manager's test page on one — how a new store learns a
+        // printer is wired before a guest's receipt tells it.
+        .route("/api/printers", get(printers::list::<S>))
+        .route("/api/printers/{id}/test", post(printers::test::<S>))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&sessions),
             auth::require_signed_in,

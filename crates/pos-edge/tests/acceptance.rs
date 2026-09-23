@@ -232,6 +232,7 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         Arc::new(pos_edge::print_agent::InMemoryPrintAgents::new()),
         pos_edge::print_queue::InMemoryPrintQueue::new(),
         &shutdown_rx,
+        None,
     )
     .await
     .expect("the edge composes");

@@ -64,13 +64,21 @@ async fn app() -> (Router, String) {
 /// The same router, with a print dispatcher layered in and the given devices published — the shape
 /// `serve` composes ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Router, String) {
+    app_with_permissions(printing, PermissionSet::default()).await
+}
+
+/// [`app_with`], signing in somebody granted `permissions` — a manager, for the routes that need one.
+async fn app_with_permissions(
+    printing: Option<(Arc<Printers>, PublishedDevices)>,
+    permissions: PermissionSet,
+) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
         STAFF_CODE,
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
-            permissions: PermissionSet::default(),
+            permissions,
             discount_ceiling: None,
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
@@ -700,4 +708,85 @@ async fn a_fired_line_tells_a_reloaded_board_which_station_it_went_to() {
 
     let (_, live) = send(app, &token, "GET", "/api/orders/live", None).await;
     assert_eq!(live[0]["lines"][0]["station_id"], json!(station));
+}
+
+fn counter_printer() -> PublishedDevice {
+    PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9100)),
+        kind: DeviceKind::Printer.into(),
+        connection: DeviceConnection::Network.into(),
+        address: "192.0.2.10:9100".to_owned(),
+        name: DisplayName::new("Counter"),
+        station_id: None,
+        agent_device_id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_manager_prints_a_test_page_on_a_published_printer() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with_permissions(
+        Some((printers, PublishedDevices::new(vec![counter_printer()]))),
+        PermissionSet::default().with(pos_core::permission::Permission::ManageDevices),
+    )
+    .await;
+
+    let (status, listed) = send(app.clone(), &token, "GET", "/api/printers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["name"], "Counter");
+    let printer = listed[0]["device_id"].as_str().expect("an id").to_owned();
+
+    let (status, outcome) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/printers/{printer}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(outcome["print"], "PRINTED");
+    assert!(
+        !recorder.written.lock().expect("recorder").is_empty(),
+        "bytes reached the printer's transport"
+    );
+
+    // A printer this store never published is not guessed at.
+    let unknown = DeviceId::new(Ulid::from_u128(0x9999));
+    let (_, missing) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/printers/{unknown}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(missing["print"], "NO_PRINTER");
+}
+
+#[tokio::test]
+async fn a_test_page_needs_a_manager() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer()]),
+    )))
+    .await;
+    let printer = counter_printer().device_id;
+    let (status, reason) = send_for_reason(
+        app,
+        &token,
+        "POST",
+        &format!("/api/printers/{printer}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reason.as_deref(), Some("PERMISSION_DENIED"));
+    assert!(
+        recorder.written.lock().expect("recorder").is_empty(),
+        "no paper for a refusal"
+    );
 }

@@ -54,6 +54,17 @@ fn main() -> Result<(), EdgeError> {
         return archive(&std::env::args().skip(2).collect::<Vec<_>>());
     }
 
+    // And `install`, which sets this machine up as the store's service (ADR-0140) — asked for by
+    // name, or implied by a file the console named for its store (`pos-edge-setup_<cloud>_<store>`),
+    // which a technician double-clicks with no arguments at all. The installed copies are named
+    // `current` and `pos-edge.exe`, so the service itself never takes this path.
+    if std::env::args().nth(1).as_deref() == Some(pos_edge::setup::INSTALL_COMMAND) {
+        return pos_edge::setup::run(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
+    if pos_edge::setup::launched_as_installer() {
+        return pos_edge::setup::run(&[]);
+    }
+
     // On Windows, hand the main thread to the Service Control Manager when SCM is the one that
     // started us. `false` means this is an ordinary console run — a technician on the shop floor, or
     // the operator's rescue copy — and it falls through to exactly the same path Linux takes.

@@ -13,6 +13,7 @@ GET /api/orders/open
 GET /api/orders/{id}/check
 GET /api/pair/devices
 GET /api/print/jobs
+GET /api/printers
 GET /api/reason-codes
 GET /api/session
 GET /api/shifts/current
@@ -40,6 +41,7 @@ POST /api/pair/revoke
 POST /api/print/agent
 POST /api/print/agent/revoke
 POST /api/print/jobs/{job_id}/ack
+POST /api/printers/{id}/test
 POST /api/session/sign-in
 POST /api/session/sign-out
 POST /api/shifts

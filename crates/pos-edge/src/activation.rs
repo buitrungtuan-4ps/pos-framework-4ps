@@ -45,6 +45,7 @@ use pos_proto::ErrorStatus;
 
 use crate::app::Edge;
 use crate::lease_state::LeaseWatch;
+use crate::ota_client::RestartRequest;
 
 /// The collaborators the activation routes compose: the [`Edge`] (to append the completion event),
 /// the [`CloudSync`] channel (to exchange the code), and the [`KeyVault`] (to store the credential).
@@ -58,6 +59,10 @@ struct ActivationState<S, C, V> {
     /// `store.sqlite` ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     /// `None` on a router built without one — the on-fakes example and the tests.
     lease: Option<Arc<LeaseWatch>>,
+    /// How a successful activation starts the cloud loops: by asking for the same graceful restart an
+    /// installed update asks for. `None` on a router built without one — the tests and a box with no
+    /// service manager to start it again.
+    restart: Option<Arc<dyn RestartRequest>>,
 }
 
 // Hand-written rather than derived, so the state is `Clone` whatever `S`/`C`/`V` are (they sit behind
@@ -69,9 +74,14 @@ impl<S, C, V> Clone for ActivationState<S, C, V> {
             cloud: Arc::clone(&self.cloud),
             lease: self.lease.clone(),
             vault: Arc::clone(&self.vault),
+            restart: self.restart.clone(),
         }
     }
 }
+
+/// How long after answering a successful activation the edge asks for its restart — long enough
+/// for the answer to leave, short enough that the till's "restarting" message is brief.
+const RESTART_AFTER_ACTIVATION: core::time::Duration = core::time::Duration::from_millis(500);
 
 /// A device presenting its activation code.
 #[derive(Debug, Deserialize)]
@@ -104,6 +114,7 @@ pub fn activation_router<S, C, V>(
     vault: Arc<V>,
     lease: Option<Arc<LeaseWatch>>,
     origins: &Arc<crate::origins::Origins>,
+    restart: Option<Arc<dyn RestartRequest>>,
 ) -> Router
 where
     S: EventStore + Send + Sync + 'static,
@@ -129,6 +140,7 @@ where
         cloud,
         vault,
         lease,
+        restart,
     };
     Router::new()
         .route("/api/activate", post(activate::<S, C, V>))
@@ -209,6 +221,19 @@ where
     // slipped — it is logged and reconciled. `device.activation.completed` still carries the id.
     if let Err(error) = state.edge.record_activation(grant.device_id).await {
         tracing::error!(%error, "activation completed but the completion event could not be recorded");
+    }
+
+    // The cloud loops are started at boot, behind the activation gate, so a box activated while it
+    // runs would otherwise sit unsynced until somebody restarted it — which the bring-up guide never
+    // told anyone to do. A restart is the path every boot already takes: the loops, the OTA client
+    // and the stop-drain are all composed exactly as they would be. Asked for a moment after this
+    // answer leaves, and drained like any other stop, so the response reaches the till.
+    if let Some(restart) = state.restart.clone() {
+        tracing::info!("activated: restarting so the cloud loops start with the new credential");
+        tokio::spawn(async move {
+            tokio::time::sleep(RESTART_AFTER_ACTIVATION).await;
+            restart.request_restart();
+        });
     }
 
     (

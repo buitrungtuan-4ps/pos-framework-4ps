@@ -130,7 +130,14 @@ fn harness_with_origins(
     // No lease: the tests below are about the code exchange, and a store the cloud has never
     // issued a lease to has nothing to forget (ADR-0123). The one case that *is* about the lease
     // builds its own router below.
-    let router = activation_router(Arc::clone(&edge), cloud, Arc::clone(&vault), None, &origins);
+    let router = activation_router(
+        Arc::clone(&edge),
+        cloud,
+        Arc::clone(&vault),
+        None,
+        &origins,
+        None,
+    );
     (router, vault, edge)
 }
 
@@ -363,6 +370,7 @@ async fn activating_forgets_a_lease_generation_inherited_from_a_copied_disk() {
         Arc::clone(&vault),
         Some(Arc::clone(&lease)),
         &origins,
+        None,
     );
 
     let (status, _body) = call(
@@ -388,4 +396,60 @@ async fn activating_forgets_a_lease_generation_inherited_from_a_copied_disk() {
         LeaseStanding::Active,
         "forgetting only the cell would let the next config pull undo the activation"
     );
+}
+
+/// Records that a restart was asked for.
+#[derive(Debug, Default)]
+struct RestartRecorder(std::sync::atomic::AtomicBool);
+
+impl pos_edge::ota_client::RestartRequest for RestartRecorder {
+    fn request_restart(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A box activated while it runs restarts, so its cloud loops start with the credential it was just
+/// given — they are started at boot behind the activation gate, and nothing else would start them.
+#[tokio::test]
+async fn a_successful_activation_restarts_the_box_so_its_cloud_loops_start() {
+    let code = valid_code();
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3))),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("edge composes"),
+    );
+    let restarted = Arc::new(RestartRecorder::default());
+    let router = activation_router(
+        Arc::clone(&edge),
+        Arc::new(StubCloud {
+            accepts: code.clone(),
+        }),
+        Arc::new(FakeKeyVault::new()),
+        None,
+        &Arc::new(pos_edge::origins::Origins::new()),
+        Some(Arc::clone(&restarted) as Arc<dyn pos_edge::ota_client::RestartRequest>),
+    );
+
+    let (status, _) = call(
+        router,
+        "POST",
+        "/api/activate",
+        &format!(r#"{{"code":"{code}"}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Asked for just after the answer, so the answer is not cut off by the stop.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !restarted.0.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "no restart was asked for"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }

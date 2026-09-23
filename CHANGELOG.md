@@ -16,6 +16,36 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **A Windows store PC installs itself from one file**
+  ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)). `pos-edge install`
+  runs the `install-pos-edge.ps1` the console generates — compiled into the binary, so it is the
+  same script CI parses — with values it works out itself: from `--store <ULID> --cloud <URL>`, or
+  from a file named `pos-edge-setup_<cloud host>[@<port>]_<store ULID>.exe`, which installs when
+  double-clicked with no arguments. It asks for administrator rights (UAC), keeps its window open,
+  and opens `/setup` when the service is up. Any other file name runs as a server, as before. The
+  script gains an `-OpenSetup` switch for this; nothing else in it changes. **No store key travels
+  in the file**, so such a store sells, pairs and activates, and config sync and the order relay
+  refuse until a key is installed — the script's behaviour without `-SyncKey`.
+- **The pairing link is a QR code** on the Devices screen
+  ([ADR-0139](docs/adr/0139-the-till-draws-the-pairing-code-as-a-qr.md)), so the tablet being added
+  scans it instead of typing an address, a port and six digits against a five-minute clock. Drawn
+  as SVG by `qrcode-generator` (MIT, no dependencies), loaded only by that screen (a 7 KB gzipped
+  chunk). The screen warns when it was opened at `localhost`, whose link a phone cannot follow.
+- **Printers can be tested from the till.** `GET /api/printers` lists the printers the store's
+  configuration publishes and `POST /api/printers/{device_id}/test` prints a page naming the printer
+  — through the same dispatch a receipt takes, direct or through its agent — and says whether the PC
+  has fonts for Vietnamese. Test pages need `ManageDevices`. The Devices screen lists the printers
+  with a *Print a test page* button each.
+
+### Fixed
+
+- **A store activated while it runs starts syncing.** The cloud loops start at boot behind the
+  activation gate, so a box activated at `/setup` sat unsynced until somebody restarted it, which the
+  bring-up guide never said to do. A successful activation now asks for the graceful restart an
+  installed update uses; `/setup` says the box is restarting and waits for it before moving on.
+
 ### Fixed
 
 - **The store no longer gets slower with every order it has ever sold** (finding F2). The edge's

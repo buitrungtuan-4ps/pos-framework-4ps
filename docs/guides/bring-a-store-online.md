@@ -148,6 +148,26 @@ If you have no wizard-generated copy — a store the console did not create — 
 [`deploy/edge/install-pos-edge.ps1`](../../deploy/edge/install-pos-edge.ps1), which is the same
 script taking the store's values as parameters.
 
+### One file, double-clicked (Windows)
+
+The binary carries that same script ([ADR-0140](../adr/0140-a-store-pc-installs-itself-from-one-file.md)).
+Rename the release's `pos-edge.exe` to name its store and cloud —
+
+```
+pos-edge-setup_<cloud host>_<store ULID>.exe        e.g. pos-edge-setup_pos.example.vn_01J9ZQ3M6V4Q1ZB2Y7H8K5N0PX.exe
+pos-edge-setup_<cloud host>@<port>_<store ULID>.exe for a cloud on a port other than 443
+```
+
+— copy it onto the machine and double-click it. It asks for administrator rights (the UAC prompt),
+runs the script with those values in a window that stays open, and opens this box's **`/setup`** page
+when the service is up, for Step 3. Or, from an administrator prompt with any file name:
+`pos-edge.exe install --store <ULID> --cloud https://<cloud host>`.
+
+This path carries **no store key** — the key is a secret and does not go in a file name — so the store
+sells, pairs and activates, and config sync and the order relay refuse until a key is installed, as the
+script does without `-SyncKey`. Windows SmartScreen warns on the unsigned file, as it does for the
+binary today.
+
 ### By hand (a host you manage yourself)
 
 The step-by-step for both platforms is in
@@ -241,8 +261,9 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**.
 3. On any device on the store's LAN, open the store server's address in a browser. An unactivated box
    lands straight on **`/setup`**; type the code there. The **store server** — not the browser —
-   exchanges it with the cloud for a credential and keeps it in its own OS keyring. From then on the
-   store is activated and its config, heartbeat and order-relay loops run. A spent code is refused
+   exchanges it with the cloud for a credential and keeps it in its own OS keyring, then restarts
+   itself — the screen says so and waits — so that its config, heartbeat and order-relay loops start
+   with the new credential; they run at boot behind the activation gate. A spent code is refused
    ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous glyphs
    (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the counter
    rather than after a round-trip.
@@ -322,7 +343,16 @@ a table, ring up an item. **Unplug the network — it keeps working.**
 > redeeming it deletes the file. For the **second and every later** device you do not restart
 > anything: on a till that is already paired, with a **manager signed in**, open **Devices** in the
 > top bar and choose *Get a pairing code*. The six digits appear on screen, along with the URL to
-> open on the new tablet ([ADR-0118](../adr/0118-one-credential-per-box-and-the-cloud-learns.md)).
+> open on the new tablet and the same URL as a **QR code** for its camera
+> ([ADR-0118](../adr/0118-one-credential-per-box-and-the-cloud-learns.md),
+> [ADR-0139](../adr/0139-the-till-draws-the-pairing-code-as-a-qr.md)). Open Devices by the store
+> PC's network address rather than `localhost` — the link is built from the address the screen was
+> opened at, and the screen says so if that address is one a phone cannot reach.
+>
+> The same screen lists the **printers** this store's configuration publishes, with *Print a test
+> page* on each (manager only). The page names the printer and goes out the way a receipt does —
+> directly, or through the terminal that owns it — and says whether this PC has the fonts to print
+> Vietnamese.
 >
 > That code replaces whatever was live, including the boot one — the store never holds two at once.
 > It needs the `ManageDevices` permission, so a waiter's tap cannot admit hardware; if the button
