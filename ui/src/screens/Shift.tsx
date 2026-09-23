@@ -1,6 +1,7 @@
 import { Show, createSignal } from "solid-js";
 
 import { ApiError } from "../api/client";
+import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { money } from "../lib/money";
@@ -62,6 +63,7 @@ export function Shift() {
           value={amount()}
           onInput={(event) => setAmount(event.currentTarget.value)}
         />
+        <Keypad value={amount()} onChange={setAmount} data-step="floatKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
@@ -92,6 +94,7 @@ export function Shift() {
           value={amount()}
           onInput={(event) => setAmount(event.currentTarget.value)}
         />
+        <Keypad value={amount()} onChange={setAmount} data-step="countKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"

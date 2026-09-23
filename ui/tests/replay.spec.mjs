@@ -937,6 +937,48 @@ test("the till draws money with the exponent the store published", async ({ page
 
 // declaration, where the reason is read by anyone looking at the map — silently dropping out of the
 // browser gate is how coverage rots.
+// A cashier with no keyboard can still open the shift.
+//
+// `docs/ui-ux.md` has asked for "a large numeric keypad for cash" since it was written, and the
+// quick-cash buttons beside it were built while this was not. On a phone or a tablet the gap hid
+// itself: `inputmode="numeric"` summons the OS keypad and the field fills. On the 13"+ terminal a
+// counter is run from it summons one only where the platform's on-screen keyboard is enabled, and
+// where it is not, the float field cannot be filled and the shift cannot be opened.
+//
+// Driven entirely through the keys, with no `fill` anywhere: `fill` is what every other test here
+// uses and it is exactly the affordance a keyboardless terminal does not have. The digits are
+// pressed by their own faces, so the assertion is that a person pressing 1-0-0-0-0-0 gets 100000
+// rather than that a component exists.
+test("a cashier with no keyboard can enter a float on the keypad", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+
+    const keypad = page.locator('[data-step="floatKeypad"]');
+    for (const digit of ["1", "0", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await expect(page.locator("#float")).toHaveValue("100000");
+
+    // The correction keys matter as much as the digits: a cashier who mis-taps on a terminal has no
+    // other way back, and a keypad without them would make every slip a reload.
+    //
+    // Found by its accessible name rather than its face: the key draws `⌫`, and a glyph is not a
+    // name a screen reader can say, so the button carries an `aria-label` that becomes its name.
+    // Asking for the glyph here failed, which is the assertion working — a keypad whose correction
+    // keys were unnamed would be unusable with a reader and this test would not have noticed.
+    await keypad.getByRole("button", { name: "Delete the last digit" }).click();
+    await expect(page.locator("#float")).toHaveValue("10000");
+
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

@@ -2,6 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError } from "../api/client";
+import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import { money, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
@@ -574,6 +575,11 @@ export function Pay() {
                     onInput={(event) => setDiscountText(event.currentTarget.value)}
                   />
                 </label>
+                <Keypad
+                  value={discountText()}
+                  onChange={setDiscountText}
+                  data-step="discountKeypad"
+                />
                 <p class="mt-2 text-sm text-ink-muted">{t("pay.discount_manager")}</p>
                 <label class="mt-2 block text-sm">
                   {t("pay.approver_code")}
