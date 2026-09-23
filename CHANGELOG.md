@@ -18,6 +18,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Improved ContextPicker accessibility and search autofocus.** Added WAI-ARIA popup dialog attributes (`aria-haspopup="dialog"`, `role="dialog"`, `aria-label`) and automatic search input focus on open in `ContextPicker`.
+
 - **A country states how many decimals its currency has.** `LocalePack` gains `currency_exponent`,
   beside the cash increment and the denominations it already carries: `0` for the đồng and the yen,
   `2` for the paisa and the cent ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
