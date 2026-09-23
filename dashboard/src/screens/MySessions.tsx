@@ -8,7 +8,7 @@ import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { AdminSessionView } from "../api/types";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import {
   type Column,
@@ -20,19 +20,8 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { formatInstant } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
-
-// A Unix-ms instant as a locale-aware date-time; an unparseable value falls back to its raw number
-// rather than throwing, so a malformed row never blanks the table.
-function formatInstant(ms: number): string {
-  try {
-    return new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
-      new Date(ms),
-    );
-  } catch {
-    return String(ms);
-  }
-}
 
 export function MySessions() {
   const [revoking, setRevoking] = createSignal(false);

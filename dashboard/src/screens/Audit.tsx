@@ -8,8 +8,8 @@ import { createSignal, onMount, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { AdminIdentity, AuditEntry, TrailOrder } from "../api/types";
-import { locale, t } from "../i18n";
-import { formatRelativeAge } from "../lib/format";
+import { t } from "../i18n";
+import { formatInstant, formatRelativeAge } from "../lib/format";
 import {
   Banner,
   Button,
@@ -46,7 +46,7 @@ function ageSeconds(atMs: number): number {
 
 /** The absolute instant, in the reader's locale, for the detail drawer. */
 function absolute(atMs: number): string {
-  return new Date(atMs).toLocaleString(locale());
+  return formatInstant(atMs);
 }
 
 /** A JSON value pretty-printed for the before/after panels, or a placeholder when there is none. */

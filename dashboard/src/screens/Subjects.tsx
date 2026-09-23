@@ -12,7 +12,8 @@ import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { SubjectExport, SubjectMeta } from "../api/types";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
+import { formatInstant } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
@@ -120,10 +121,7 @@ export function Subjects() {
     }
   };
 
-  const collectedAt = (ms: number) =>
-    new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
-      new Date(ms),
-    );
+  const collectedAt = (ms: number) => formatInstant(ms);
 
   return (
     <div>

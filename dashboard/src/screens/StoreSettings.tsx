@@ -16,7 +16,8 @@ import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { Json } from "../api/types";
-import { locale as consoleLocale, LOCALES, localeName, t } from "../i18n";
+import { LOCALES, localeName, t } from "../i18n";
+import { formatInstant } from "../lib/format";
 import { RequireContext } from "../lib/scoped";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { usePublishedNodes } from "../lib/published";
@@ -341,7 +342,7 @@ export function StoreSettings() {
     return at === null
       ? t("storeSettings.runningNow")
       : t("storeSettings.runningNowAt", {
-          when: new Date(at).toLocaleString(consoleLocale()),
+          when: formatInstant(at),
         });
   };
 
