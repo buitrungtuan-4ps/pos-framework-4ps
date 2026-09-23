@@ -15,7 +15,8 @@ import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { ApiKeySummary, Store } from "../api/types";
-import { locale, type MessageKey, t } from "../i18n";
+import { type MessageKey, t } from "../i18n";
+import { formatInstant } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { tenantId } from "../state/session";
 import {
@@ -152,10 +153,7 @@ export function ApiKeys() {
     return stores().find((store) => store.store_id === row.store_id)?.name ?? row.store_id;
   };
 
-  const formatMoment = (ms: number) =>
-    new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
-      new Date(ms),
-    );
+  const formatMoment = (ms: number) => formatInstant(ms);
 
   // A key past its expiry stops working, and the console said "Active" (production-readiness O4):
   // `expires_at_ms` was served from the day the key store was written and this screen never read it.

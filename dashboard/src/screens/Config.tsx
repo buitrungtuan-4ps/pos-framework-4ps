@@ -15,7 +15,7 @@ import {
   type ConfigVersion,
   type Json,
 } from "../api/types";
-import { locale, type MessageKey, t } from "../i18n";
+import { type MessageKey, t } from "../i18n";
 
 // The level names are user-visible, so each maps to a static i18n key (a template-literal key would
 // not be a MessageKey and would defeat the type check).
@@ -25,6 +25,7 @@ const LEVEL_KEY: Record<ConfigLevel, MessageKey> = {
   store: "config.level.store",
   device: "config.level.device",
 };
+import { formatInstant } from "../lib/format";
 import { RequireContext } from "../lib/scoped";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { usePublishedNodes } from "../lib/published";
@@ -252,7 +253,7 @@ export function Config() {
     }
   };
 
-  const versionTime = (version: ConfigVersion) => new Date(version.at_ms).toLocaleString(locale());
+  const versionTime = (version: ConfigVersion) => formatInstant(version.at_ms);
 
   // A crude but honest line diff for stable-key config JSON: pretty-print both and mark each line of
   // `doc` that differs from `other` at the same index. Enough to show what a version changed.

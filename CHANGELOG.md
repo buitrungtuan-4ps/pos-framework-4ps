@@ -18,6 +18,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console prints a timestamp one way, in the locale the operator chose.** It had three ways,
+  and the third was a defect: the release instant and the per-store effective time on Releases, and
+  the effective time on Campaigns, called `new Date(ms).toLocaleString()` with **no locale**, so they
+  rendered in whatever the browser was set to. This console ships English and Vietnamese, which
+  order the day and the month differently — `09/23` and `23/09` are the same instant written two
+  ways, and half the readings were wrong with nothing on screen to admit it. All thirteen call sites
+  now go through `formatInstant` in `lib/format.ts`, beside `formatCount` and `formatRelativeAge`.
+  - It writes the month as a **name** (`dateStyle: "medium"`), which is the half that matters more
+    than passing the locale: a named month has no second reading even in a locale nobody here
+    anticipated, whereas the all-numeric default stays ambiguous however correct its locale.
+    Seconds are dropped, which no row in this console has ever shown.
+  - The guard from the copy in `MySessions` is kept, so a value `Intl` refuses falls back to its raw
+    number instead of blanking the table it appears in.
+  - **Still open:** every one of these renders in the *reader's* timezone and says nothing about it.
+    That is right for a console-side record and wrong for a store's own schedule —
+    [ADR-0125](docs/adr/0125-a-release-is-one-decision-many-writes.md) §26 chose cloud-side
+    conversion precisely so an operator could review "04:00 at each of these forty shops", and the
+    report draws those instants in the reader's clock instead. Closing it needs the store's
+    published `locale.timezone` at the console, which no admin API serves yet; `DateField` in the
+    kit already names the zone on the input side.
+  - **Upgrade note:** none.
+
+
 - **A press anywhere else closes the console's dropdowns.** The org switcher, the notification bell
   and the account menu closed only by pressing their own button again or by Escape, so a mouse user
   who opened one and changed their mind had to find the button they came from. All three now close

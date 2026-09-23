@@ -13,6 +13,46 @@ export function formatCount(value: number): string {
 }
 
 /**
+ * An absolute instant, as a date and a time the reader's locale writes (e.g. `23 Sep 2026, 14:05`).
+ *
+ * The one way the console prints a timestamp. It had three, and the third was the defect: three
+ * places called `new Date(ms).toLocaleString()` with **no locale**, which renders in whatever the
+ * browser is set to rather than the console the operator chose. That is not a cosmetic mismatch —
+ * this console ships English and Vietnamese, which order the day and the month differently, so
+ * `09/23` and `23/09` are the same instant written two ways and half the readings are wrong with
+ * nothing on screen to say so.
+ *
+ * `dateStyle: "medium"` rather than the default, because it writes the month as a **name**. Passing
+ * the locale fixes the three callers that forgot it; writing the month as a name means the reading
+ * cannot be ambiguous even when the locale is one nobody here anticipated. `timeStyle: "short"`
+ * drops the seconds, which no row in this console has ever needed.
+ *
+ * Renders in the **reader's** timezone, and says nothing about it — which is right for a
+ * console-side record like "when did this key last sign in" and wrong for a store's own schedule.
+ * `DateField` in the kit already draws that distinction for input, naming the store's zone beside
+ * the field; the output side of it needs the store's published `locale.timezone` at the console,
+ * which no API serves yet ([ADR-0125](../../../docs/adr/0125-a-release-is-one-decision-many-writes.md) §26
+ * is where that matters most). Until then, no caller here can claim a zone it does not have.
+ *
+ * A formatter per call, matching `formatCount` and `formatRelativeAge` beside it. Reusing one
+ * across calls would mean keying a cache by locale for a saving nobody has measured, at a few rows
+ * a render rather than a few hundred a keystroke.
+ *
+ * A value `Intl` refuses falls back to the raw number rather than throwing. That guard came from
+ * the copy in `MySessions`, whose own note is the reason to keep it: a malformed row should not
+ * blank the table it appears in. It costs nothing on the values that are fine.
+ */
+export function formatInstant(atMs: number): string {
+  try {
+    return new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
+      atMs,
+    );
+  } catch {
+    return String(atMs);
+  }
+}
+
+/**
  * A past instant as locale-aware relative text (e.g. `5 minutes ago`, `2 hours ago`). `seconds` is how
  * long ago the instant was (a non-negative age). Uses `Intl.RelativeTimeFormat`, so the phrasing is
  * localized by the platform without a catalogue entry per unit; the fleet view's "last seen" and the

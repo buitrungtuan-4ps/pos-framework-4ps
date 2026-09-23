@@ -44,6 +44,7 @@ import type {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage } from "../lib/errors";
+import { formatInstant } from "../lib/format";
 import { RELEASE_NODE_PARAM } from "../lib/publish-copy";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -133,7 +134,7 @@ function momentOf(release: Release): string {
     });
   }
   if (release.instant_at_ms !== null) {
-    return new Date(release.instant_at_ms).toLocaleString();
+    return formatInstant(release.instant_at_ms);
   }
   return t("releases.momentNone");
 }
@@ -441,7 +442,7 @@ export function Releases() {
       <span class="text-sm text-ink">{storeName(pair.store_id)}</span>
       <span class="text-sm text-ink-muted">{nodeLabel(pair.node)}</span>
       <span class="text-sm text-ink-muted">
-        {new Date(pair.effective_at_ms).toLocaleString()}
+        {formatInstant(pair.effective_at_ms)}
       </span>
       <Show when={pair.failure}>
         {(reason) => <span class="text-sm text-danger">{reason()}</span>}

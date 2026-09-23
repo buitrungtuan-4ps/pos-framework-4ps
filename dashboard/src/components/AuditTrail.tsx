@@ -7,8 +7,8 @@ import { createResource, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { AuditEntry } from "../api/types";
-import { locale, t } from "../i18n";
-import { formatRelativeAge } from "../lib/format";
+import { t } from "../i18n";
+import { formatInstant, formatRelativeAge } from "../lib/format";
 import { Skeleton, StatusBadge } from "./ui";
 
 /** How many entries one panel pulls; a Detail view's history is short, so this is generous. */
@@ -73,7 +73,7 @@ export function AuditTrail(props: { entityType: string; entityId?: string }) {
                     </div>
                     <span
                       class="text-xs text-ink-muted"
-                      title={new Date(entry.at_ms).toLocaleString(locale())}
+                      title={formatInstant(entry.at_ms)}
                     >
                       {formatRelativeAge(ageSeconds(entry.at_ms))}
                     </span>

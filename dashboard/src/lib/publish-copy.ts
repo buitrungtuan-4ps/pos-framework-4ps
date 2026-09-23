@@ -9,9 +9,10 @@ import { api } from "../api/client";
 import type { NodePreview } from "../api/types";
 import { type PublishState } from "../components/kit";
 import { toast } from "../components/Toast";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
 import { apiMessage } from "./errors";
 import { screenHref } from "../state/screens";
+import { formatInstant } from "./format";
 
 /** The query parameter a publish bar hands the publish centre, naming the node it came from. */
 export const RELEASE_NODE_PARAM = "node";
@@ -68,9 +69,6 @@ export function describePublish(state: PublishState, publishedAtMs: number | nul
   if (state === "never" || publishedAtMs === null) {
     return t("publish.never");
   }
-  const when = new Intl.DateTimeFormat(locale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(publishedAtMs));
+  const when = formatInstant(publishedAtMs);
   return state === "stale" ? t("publish.stale", { when }) : t("publish.published", { when });
 }

@@ -9,7 +9,8 @@ import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { MediaSummary } from "../api/types";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
+import { formatInstant } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
 import { actingAdmin, tenantId } from "../state/session";
@@ -96,10 +97,7 @@ export function Media() {
   };
 
   const sizeKb = (bytes: number) => t("media.sizeKb", { kb: Math.max(1, Math.round(bytes / 1024)) });
-  const createdAt = (ms: number) =>
-    new Intl.DateTimeFormat(locale(), { dateStyle: "medium", timeStyle: "short" }).format(
-      new Date(ms),
-    );
+  const createdAt = (ms: number) => formatInstant(ms);
 
   return (
     <div>

@@ -24,6 +24,7 @@ import {
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, isStale } from "../lib/errors";
+import { formatInstant } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { addToRelease, describePublish } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
@@ -669,7 +670,7 @@ export function Campaigns() {
                               label={t(`campaigns.sched.${row.status}` as MessageKey)}
                             />
                             <span class="text-sm text-ink">
-                              {new Date(row.effective_at_ms).toLocaleString()}
+                              {formatInstant(row.effective_at_ms)}
                             </span>
                             <Show when={row.status === "pending"}>
                               <Button
