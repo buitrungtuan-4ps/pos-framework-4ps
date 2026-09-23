@@ -113,8 +113,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   so two counter orders are no longer merged under one empty label.
 - **The edge gzips its answers** ([ADR-0138](docs/adr/0138-the-edge-compresses-what-it-sends.md)):
   `/api/*` and the embedded assets above 1 KB, for a client that sends `Accept-Encoding: gzip`, never
-  `/ws`. A large store's boot reads drop from ~490 KB to ~30 KB. Adds `async-compression` and two
-  codec crates through `tower-http`'s `compression-gzip`; `flate2` was already in the tree.
+  `/ws`. A busy large store's boot reads — menu, floor, layout, live orders — drop from ~513 KB to
+  ~39 KB (−92%, 120 tables with 89 seated), and the page itself from ~229 KB to ~65 KB. Adds
+  `async-compression` and two codec crates through `tower-http`'s `compression-gzip`; `flate2` was
+  already in the tree.
 - **The till works on a phone.** The status bar folds its destinations and settings behind a Menu
   button below tablet width (they took four rows, a third of the screen); an order line wraps its
   controls under the item name instead of squeezing it a word per line; a placed floor reflows into
