@@ -115,6 +115,17 @@ describe("the context picker on a cell that already has tenants", () => {
     await waitFor(() => expect(document.activeElement).toBe(box));
   });
 
+  it("closes when a pointer goes down outside it", async () => {
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog");
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("announces the panel as a dialog the trigger opens", async () => {
     // Without these the panel is an unnamed `div`: a screen reader reads its contents with nothing
     // to say what opened or what it is for.

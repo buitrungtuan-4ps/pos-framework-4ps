@@ -10,7 +10,7 @@
 // Both were fed the tenant's whole item master, and a native select's only search is type-ahead on
 // the first character — which, for a catalogue of Vietnamese names, is not a search.
 
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -103,6 +103,23 @@ describe("the single-choice picker", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     // Re-opening starts clean: a stale query is a picker that appears to have lost most of the
     // catalogue.
+    fireEvent.click(trigger());
+    expect(screen.getAllByRole("option")).toHaveLength(ITEMS.length);
+  });
+
+  it("closes on a press outside, and forgets the query with it", async () => {
+    // The behaviour `useClickOutside` carries, pinned at the site it was written for before three
+    // more sites started sharing it. It had no test of its own: the picker closing on an outside
+    // press is what makes it behave like the `<select>` it replaced, and a refactor could drop it
+    // without a single assertion noticing.
+    mount();
+    fireEvent.click(trigger());
+    fireEvent.input(screen.getByRole("combobox"), { target: { value: "mari" } });
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+    // And the query goes with it, the same as choosing does — `close()` is one function.
     fireEvent.click(trigger());
     expect(screen.getAllByRole("option")).toHaveLength(ITEMS.length);
   });

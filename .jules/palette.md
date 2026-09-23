@@ -1,3 +1,9 @@
+## 2026-09-23 - The Fourth Copy Is The Signal To Extract, Not To Write
+
+**Learning:** Click-outside dismissal was missing from the three header dropdowns and worth adding. But the same fourteen-line effect already existed in `ComboboxField`, so inlining it three more times makes four copies of one idea — and they had already begun to disagree, the new ones calling `setTimeout(() => setOpen(false), 0)` where the original calls `close()` directly, with nothing to say why. `lib/escape.ts` is the repository's own precedent sitting one line above each of those popovers: the same behaviour for the keyboard, extracted to `lib/` for exactly this reason, with a header explaining that a helper only five files can see is a helper everyone else goes without.
+
+**Action:** Before adding a behaviour to several components, grep for it — a copy already in the tree makes yours the extraction, not the addition. And when the original has no test, write one at that site first: it is what proves the extraction preserved the behaviour, and its absence is why the copy could drift in the first place.
+
 ## 2026-09-23 - Focus On Open Must Wait For The Element, Not Only For The Panel
 
 **Learning:** Focusing a search box from an effect that watches only `open()` works from the second open onward and never on the first. On the first open the list behind the box is still loading, the `<Show>` is rendering its skeleton, and the ref is still `undefined` — so `queueMicrotask(() => ref?.focus())` focuses nothing and the effect never runs again, because nothing it tracked changed. The optional-chain that makes it safe is also what makes it silent.

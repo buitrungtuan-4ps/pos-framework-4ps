@@ -25,6 +25,7 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 
 import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
+import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
 import { initials } from "../lib/format";
 import { setTheme, type Theme, theme, THEMES } from "../lib/theme";
@@ -53,6 +54,10 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   const location = useLocation();
   useEscape(open, () => setOpen(false));
 
+  // Pressing anywhere else closes it, the way the pickers in the kit already close.
+  let container: HTMLDivElement | undefined;
+  useClickOutside(open, () => container, () => setOpen(false));
+
   // Navigating closes the menu — the two links in it go somewhere, and a menu left hanging over the
   // screen the operator just asked for is a panel they have to dismiss before they can read it.
   createEffect(() => {
@@ -73,7 +78,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   };
 
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("account.open")}

@@ -87,6 +87,15 @@ describe("the account menu", () => {
     await waitFor(() => expect(screen.queryByRole("radiogroup")).toBeNull());
   });
 
+  it("closes when a pointer goes down outside it", async () => {
+    // The third way out, after the button and Escape. A mouse user who opened the menu and changed
+    // their mind should not have to find the button they came from.
+    mount();
+    await openMenu();
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(screen.queryByRole("radiogroup")).toBeNull());
+  });
+
   it("calls back on sign-out rather than logging out itself", async () => {
     // The menu does not own the session. `Shell` does — it clears the auth flag and navigates — so
     // the menu raising an event is what keeps one place responsible for ending a session.

@@ -10,11 +10,11 @@ import {
   createSignal,
   createUniqueId,
   For,
-  onCleanup,
   Show,
   splitProps,
 } from "solid-js";
 
+import { useClickOutside } from "../lib/dismiss";
 import { formatMinor, parseMoney } from "../lib/format";
 import { exponentFor } from "../state/money";
 
@@ -390,21 +390,10 @@ export function ComboboxField(props: {
     close();
   };
 
-  // Closing on a click elsewhere is what makes this behave like the select it replaces. Bound only
-  // while open, and on `pointerdown` rather than `click` so a press that starts outside and ends on
-  // the list does not select through a closing popover.
-  createEffect(() => {
-    if (!open()) {
-      return;
-    }
-    const onPointerDown = (event: PointerEvent) => {
-      if (root && !root.contains(event.target as Node)) {
-        close();
-      }
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown));
-  });
+  // Closing on a click elsewhere is what makes this behave like the select it replaces. The helper
+  // says why `pointerdown` and why only while open; this was the first of the four and is now the
+  // fourth to read it from one place.
+  useClickOutside(open, () => root, close);
 
   createEffect(() => {
     if (open()) {

@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A press anywhere else closes the console's dropdowns.** The org switcher, the notification bell
+  and the account menu closed only by pressing their own button again or by Escape, so a mouse user
+  who opened one and changed their mind had to find the button they came from. All three now close
+  on a pointer press outside them, which is what the pickers in the kit have always done.
+  - **One helper, four callers.** `useClickOutside` lives in `dashboard/src/lib/dismiss.ts`, beside
+    `lib/escape.ts` and for the reason that file gives about itself: the behaviour was written
+    inside `ComboboxField`, where the picker could see it and nothing else could. Rather than a
+    fourth, fifth and sixth copy of the same fourteen lines, the picker now reads it from the same
+    place — the same shape of extraction `useEscape` already is, one input device over.
+  - It binds on `pointerdown` rather than `click`, so a press that begins outside and ends on the
+    panel does not act through a popover that is already closing, and one listener covers mouse,
+    touch and pen. It is bound only while the panel is open; a document listener that outlives what
+    it closes is one every pointer press in the console pays for.
+  - `ComboboxField`'s own click-outside had no test. It has one now, so the extraction cannot
+    quietly drop the behaviour that makes the picker feel like the `<select>` it replaced.
+  - **Upgrade note:** none.
+
+
 - **The releases screen rescanned every store and group once per row it drew.** `storeName` and
   `groupName` were a `find` over the whole list, called once per release row and once per pair in a
   report, so a cell with a few hundred stores and a report of a few hundred pairs did tens of
