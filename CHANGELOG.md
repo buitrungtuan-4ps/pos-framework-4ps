@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The releases screen rescanned every store and group once per row it drew.** `storeName` and
+  `groupName` were a `find` over the whole list, called once per release row and once per pair in a
+  report, so a cell with a few hundred stores and a report of a few hundred pairs did tens of
+  thousands of comparisons to print names it had already looked up. Both now read a `Map` built in a
+  `createMemo`, so the scan happens once per data change rather than once per row. `upcoming`,
+  `storeOptions`, `groupOptions` and `nodeOptions` become memos for the same reason — each was a
+  plain function re-filtering, re-sorting or re-mapping on every read — and the report summary
+  counts its three statuses in one pass instead of three `filter` calls over the same array.
+  - **Upgrade note:** none. Every derived value produces what it produced before; only how often it
+    is recomputed changes.
+
+
 - **The console's context picker opens with the cursor already in its search box, and announces
   itself.** On a cell carrying thirty tenants, opening the picker and then reaching for the search
   box is a step the operator should not have to take; the box now takes focus as the panel opens.

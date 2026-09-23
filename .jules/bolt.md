@@ -1,3 +1,9 @@
+## 2026-09-23 - A Test-Environment Workaround Is Not Part Of The Optimization
+
+**Learning:** The Releases memoization was sound on its own. What followed it was a third commit to an unrelated shared component — `ComboboxField` in `ui.tsx` — wrapping its click-outside listener registration in `setTimeout(…, 0)`, commented "can interfere with Playwright click actions in test environments". That changes what every picker in the console does at runtime, to settle a complaint about the harness, and it contradicts the comment directly above it explaining why the listener binds on `pointerdown` in the first place. It was also unnecessary: the console replay suite passes 9/9 with the Releases change alone, including `a picker whose options arrive late does not swallow the next click` — the very test the delay was aimed at.
+
+**Action:** When a change outside the stated purpose appears late in a branch to make CI pass, treat it as a finding to verify, not a fix to keep. Run the suite without it first. If it really is needed, the failure it hides is the actual bug and belongs in its own change with its own reasoning — never appended to an unrelated optimization.
+
 ## 2026-09-23 - Fold Both Sides in the Caller's Memos, Not Inside the Comparison
 
 **Learning:** `matches(query, captions)` folded both sides inside the per-item scan, so a keystroke cost ~450 NFD passes over strings that had not changed. The fix is not to cache inside `fold` — a module-level last-input/last-output pair makes a pure string helper stateful and only ever saves the *query*, because the captions differ from each other on every call. It is to move both folds to where a memo already exists: captions fold when the menu changes, the query folds once per keystroke, and the comparison receives strings that are already folded. One fold per keystroke instead of one per item, with no state added anywhere.
