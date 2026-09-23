@@ -72,7 +72,9 @@ fn request_with_subprotocol(
 async fn a_published_event_reaches_a_connected_device() {
     let (state, token) = state_with_paired_device(1).await;
     let fanout = state.fanout.clone();
-    let app = pos_edge::http::router(state);
+    // Behind the compression layer the served application carries (ADR-0138): an upgrade is a
+    // `101` with no body, and a layer that wrapped it anyway would break every kitchen display.
+    let app = pos_edge::http::compress(pos_edge::http::router(state));
 
     // Bind an ephemeral port and serve in the background.
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");

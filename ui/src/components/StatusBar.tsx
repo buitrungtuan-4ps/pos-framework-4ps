@@ -95,6 +95,9 @@ export function StatusBar() {
     onCleanup(() => clearInterval(timer));
   });
 
+  // Whether the phone's folded menu is open. Irrelevant from a tablet up, where nothing folds.
+  const [menuOpen, setMenuOpen] = createSignal(false);
+
   const initial = document.documentElement.dataset["theme"] ?? "system";
   const [theme, setTheme] = createSignal(initial);
   const cycleTheme = () => {
@@ -164,43 +167,65 @@ export function StatusBar() {
           </span>
         )}
       </Show>
-      <nav class="flex flex-wrap items-center gap-1 text-ink-muted">
-        <For each={NAV.filter((item) => item.needs === undefined || item.needs())}>
-          {(item) => (
-            <A
-              href={item.href}
-              class="inline-flex min-h-touch items-center rounded-token px-3 no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-              activeClass="text-ink"
-              end
-            >
-              {t(item.key)}
-            </A>
-          )}
-        </For>
-      </nav>
+      {/*
+        On a phone the destinations and the three settings fold behind one button (F7): wrapped
+        in full they took four rows — about a third of a 390px screen — on every page, above the
+        work. From a tablet up they sit in the bar as before; `tablet:flex` beats the phone's
+        `hidden` because a variant is ordered after the base utility.
+      */}
       <button
         type="button"
-        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        aria-label={t("status.language")}
-        onClick={() => setLocale(locale() === "vi" ? "en" : "vi")}
+        class="ml-auto min-h-touch rounded-token border border-line px-3 text-ink tablet:hidden focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        aria-expanded={menuOpen()}
+        aria-controls="status-menu"
+        onClick={() => setMenuOpen(!menuOpen())}
       >
-        {t(locale() === "vi" ? "status.english" : "status.vietnamese")}
+        {t(menuOpen() ? "nav.menu_close" : "nav.menu")}
       </button>
-      <button
-        type="button"
-        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
-        onClick={cycleTheme}
+      <div
+        id="status-menu"
+        class="w-full flex-col items-stretch gap-1 tablet:flex tablet:w-auto tablet:flex-1 tablet:flex-row tablet:flex-wrap tablet:items-center tablet:gap-x-3"
+        classList={{ hidden: !menuOpen(), flex: menuOpen() }}
       >
-        {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
-      </button>
-      <button
-        type="button"
-        class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        onClick={() => void signOut()}
-      >
-        {t("nav.signout")}
-      </button>
+        <nav class="flex flex-col gap-1 text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center">
+          <For each={NAV.filter((item) => item.needs === undefined || item.needs())}>
+            {(item) => (
+              <A
+                href={item.href}
+                class="inline-flex min-h-touch items-center rounded-token px-3 no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                activeClass="text-ink"
+                onClick={() => setMenuOpen(false)}
+                end
+              >
+                {t(item.key)}
+              </A>
+            )}
+          </For>
+        </nav>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          aria-label={t("status.language")}
+          onClick={() => setLocale(locale() === "vi" ? "en" : "vi")}
+        >
+          {t(locale() === "vi" ? "status.english" : "status.vietnamese")}
+        </button>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
+          onClick={cycleTheme}
+        >
+          {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
+        </button>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          onClick={() => void signOut()}
+        >
+          {t("nav.signout")}
+        </button>
+      </div>
     </header>
   );
 }

@@ -763,9 +763,14 @@ fn read_chain_anchor(
     store_id: StoreId,
 ) -> Result<Option<ChainAnchor>, PortError> {
     let port = PortName::EventStore;
+    // `INDEXED BY` because the planner, left alone, walks the primary key for this store — every
+    // row of the log, and on a row that spilled, the overflow page `seq` sits on — to count rows
+    // the partial index holds directly (migration 0014). On a store installed after 0013 that
+    // index is empty, and this is the shift-close path on the writer thread.
     let unchained: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM events WHERE store_id = ?1 AND seq IS NULL",
+            "SELECT COUNT(*) FROM events INDEXED BY idx_events_store_id_unchained
+             WHERE store_id = ?1 AND seq IS NULL",
             params![store_id.to_string()],
             |row| row.get(0),
         )
@@ -855,9 +860,11 @@ fn verify_chain_chunk(
 ) -> Result<ChainChunk, PortError> {
     let port = PortName::EventStore;
     let unchained: u64 = if cursor.after_seq == 0 {
+        // Through the partial index, for the reason `read_chain_anchor` gives.
         let counted: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM events WHERE store_id = ?1 AND seq IS NULL",
+                "SELECT COUNT(*) FROM events INDEXED BY idx_events_store_id_unchained
+                 WHERE store_id = ?1 AND seq IS NULL",
                 params![store_id.to_string()],
                 |row| row.get(0),
             )

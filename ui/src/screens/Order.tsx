@@ -5,7 +5,7 @@ import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
-import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
+import type { LayoutButton, LayoutCategory, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
   addItem,
   chooseSeat,
@@ -176,6 +176,23 @@ export function Order() {
         category.subcategories.some((subcategory) => subcategory.buttons.some(priced)),
     ),
   );
+
+  // Which category the grid shows, when the console arranged more than one (F15). A large store's
+  // plan drew every category at once — 17 categories and 386 items in one column 23,000px tall and
+  // ten thousand DOM nodes — so a new server had to scroll a long way or know the name to type. One
+  // category at a time, picked from a row of tabs, is what a cashier scans; the first is shown until
+  // another is picked, and a pick that no longer exists (the plan was republished) falls back to it.
+  const [pickedCategory, setPickedCategory] = createSignal<string | null>(null);
+  const shownCategories = createMemo(() => {
+    const all = arranged();
+    if (all.length <= 1) {
+      return all;
+    }
+    const picked = all.find((category) => category.display_category_id === pickedCategory());
+    return [picked ?? all[0]].filter((category) => category !== undefined);
+  });
+  const isShown = (category: LayoutCategory) =>
+    shownCategories().some((shown) => shown.display_category_id === category.display_category_id);
 
   // What the operator has typed into the menu box. Empty means the grid, which is what the screen
   // has always shown; a query replaces it with the matches, flat, because a category heading over a
@@ -354,13 +371,16 @@ export function Order() {
           >
             {(line) => (
               <li
-                class="flex items-center gap-3 rounded-token border border-line bg-surface p-3"
+                class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-token border border-line bg-surface p-3 tablet:flex-nowrap"
                 data-outcome="line-added"
               >
                 {/* A voided line stays on the order, struck through. Removing the row would make a
                     mis-tapped void invisible to the person who made it — the guest is not charged
                     either way, and seeing what was cancelled is how the mistake gets noticed. */}
-                <span class="flex min-w-0 flex-1 flex-col">
+                {/* The name takes the whole first row on a phone and the controls wrap under it
+                    (F7): squeezed into one row at 390px the name broke a word per line, the seat
+                    chip sat on top of it and the stepper ran off the right edge. */}
+                <span class="flex min-w-0 basis-full flex-col tablet:basis-auto tablet:flex-1">
                   <span classList={{ "line-through text-ink-muted": voided(line) }}>
                     {line.name}
                   </span>
@@ -812,7 +832,32 @@ export function Order() {
               </div>
             }
           >
-            <For each={arranged()}>
+            <Show when={arranged().length > 1}>
+              <div
+                class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1"
+                role="tablist"
+                aria-label={t("order.categories")}
+              >
+                <For each={arranged()}>
+                  {(category) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={isShown(category)}
+                      class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
+                      classList={{
+                        "border-primary bg-selected text-selected-ink font-semibold": isShown(category),
+                        "border-line bg-surface text-ink": !isShown(category),
+                      }}
+                      onClick={() => setPickedCategory(category.display_category_id)}
+                    >
+                      {category.name}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <For each={shownCategories()}>
               {(category) => (
                 <section class="mb-4">
                   <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">

@@ -73,6 +73,9 @@ export interface LiveLine {
   // that has authored no courses. Optional for `modifier_menu_item_ids`'s reason as well: an edge
   // built before the field sends none.
   course_id?: string;
+  // The kitchen station it was fired to. Absent while it is on the pad, and from an edge older than
+  // the field.
+  station_id?: string;
 }
 
 // One open order, table or counter.

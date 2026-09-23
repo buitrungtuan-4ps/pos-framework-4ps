@@ -59,6 +59,12 @@ run-cloud:
 simulate:
     cargo run -q -p pos-simulator
 
+# The edge's performance budgets at a large trading history (F2), in a release build. Ignored by
+# `just test`, because a timing assertion in a debug build on a shared runner measures the runner.
+# `POS_BENCH_HISTORY=<orders>` and `POS_BENCH_STORE=sqlite` pick the history and the store.
+bench:
+    cargo test -p pos-edge --release --test perf_budget -- --ignored --nocapture
+
 test:
     cargo test --workspace --locked
     cargo test --workspace --doc

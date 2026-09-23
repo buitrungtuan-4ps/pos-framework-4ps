@@ -47,6 +47,8 @@ use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -290,6 +292,32 @@ pub fn time_out_for(app: Router, budget: Duration) -> Router {
         StatusCode::REQUEST_TIMEOUT,
         budget,
     ))
+}
+
+/// The smallest body worth compressing, in bytes. Below this a refusal or a one-line answer gains
+/// nothing a gzip header and a deflate stream do not cost back.
+pub const COMPRESS_ABOVE: u64 = 1024;
+
+/// Gzips a response for a client that asks, when it is large enough to be worth it
+/// ([ADR-0138](../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
+///
+/// The menu, the floor and the live orders are re-read on every reload, wake and `resync`, and on
+/// a large store they are about half a megabyte a time uncompressed, over the shop's own Wi-Fi. gzip
+/// takes them down by roughly 90%.
+///
+/// Negotiated: a client that sends no `Accept-Encoding: gzip` — a print agent, a `curl` in a runbook
+/// — gets exactly the bytes it got before. A `/ws` upgrade is a `101` with no body, so the size floor
+/// never lets it through; images and event streams are excluded by content type. Applied by the
+/// caller to the fully merged application, for the reason [`stamp_version`] is.
+pub fn compress(app: Router) -> Router {
+    app.layer(
+        CompressionLayer::new().compress_when(
+            SizeAbove::new(COMPRESS_ABOVE)
+                .and(NotForContentType::GRPC)
+                .and(NotForContentType::IMAGES)
+                .and(NotForContentType::SSE),
+        ),
+    )
 }
 
 /// Stamps the release and the lease standing onto every `/api/*` answer this application gives.

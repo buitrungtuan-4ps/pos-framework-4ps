@@ -532,8 +532,16 @@ impl SqliteStore {
 fn open_connection(path: &Path) -> Result<Connection, PortError> {
     let mut connection = Connection::open(path).map_err(open_error)?;
     connection
+        // `page_size` first, because it only takes effect on a database that has no pages yet: a
+        // new store's file. `events` is a WITHOUT ROWID table, whose rows live in an index b-tree
+        // that keeps only about 1,000 bytes of a row on a 4 KiB page — and an event row, envelope
+        // and chain hashes together, is just over that, so nearly every event took a whole overflow
+        // page of its own (~4.7 KB on disk for ~0.9 KB of data, measured). At 8 KiB a row keeps
+        // about 2,000 bytes locally and the same log is a quarter of the size (finding F5). An
+        // existing store keeps the page size its file was created with; SQLite ignores the pragma.
         .execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA page_size = 8192;
+             PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;",

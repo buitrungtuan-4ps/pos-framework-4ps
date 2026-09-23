@@ -145,5 +145,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0136](0136-a-store-publishes-how-it-writes-numbers.md) | A store publishes how it writes numbers, and each surface knows whose reading it serves: the till and the paper draw the store's, the console draws the reader's (Amendment 1 — a menu belongs to a tenant, so only a store's own settings use its marks) | Accepted |
 | [0137](0137-a-deep-outbox-warns-and-never-refuses.md) | A deep outbox warns and never refuses a sale: the disk is the bound, the status bar says "offline — selling normally", and a refusal carries a translatable reason | Accepted |
 | [0138](0138-the-edge-compresses-what-it-sends.md) | The edge compresses what it sends to a device: gzip on `/api/*` and the embedded assets, negotiated, above a size floor, never on `/ws` | Accepted |
+| [0139](0139-the-till-draws-the-pairing-code-as-a-qr.md) | The till draws the pairing link as a QR code: `qrcode-generator` in the till, loaded only by the screens that show a link | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

@@ -6,6 +6,8 @@ import { useDarkTakeover } from "../lib/screen";
 import { bump, firedLines, type KitchenLine } from "../state/store";
 
 interface TableGroup {
+  orderId: string;
+  // The table's published label, or "" for a counter order.
   label: string;
   lines: KitchenLine[];
 }
@@ -17,16 +19,25 @@ interface TableGroup {
 export function Expo() {
   useDarkTakeover();
 
+  // Grouped by order, which on a table is the table's one open order — and which keeps two counter
+  // orders apart: they share the empty label, and grouping on it would have bumped one order's food
+  // under the other's id.
   const groups = createMemo<TableGroup[]>(() => {
-    const byTable = new Map<string, KitchenLine[]>();
+    const byOrder = new Map<string, TableGroup>();
     for (const line of firedLines()) {
-      const lines = byTable.get(line.tableLabel) ?? [];
-      lines.push(line);
-      byTable.set(line.tableLabel, lines);
+      const group = byOrder.get(line.orderId) ?? {
+        orderId: line.orderId,
+        label: line.tableLabel,
+        lines: [],
+      };
+      group.lines.push(line);
+      byOrder.set(line.orderId, group);
     }
-    return [...byTable.entries()]
-      .map(([label, lines]) => ({ label, lines }))
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+    return [...byOrder.values()].sort(
+      (a, b) =>
+        a.label.localeCompare(b.label, undefined, { numeric: true }) ||
+        a.orderId.localeCompare(b.orderId),
+    );
   });
 
   const runAway = (lines: KitchenLine[]) => {
@@ -54,7 +65,11 @@ export function Expo() {
         >
           {(group) => (
             <div class="rounded-token border border-line bg-surface-raised p-4">
-              <p class="text-lg font-semibold">{t("common.table", { label: group.label })}</p>
+              <p class="text-lg font-semibold">
+                {group.label === ""
+                  ? t("kds.counter_order", { ref: group.orderId.slice(-4) })
+                  : t("common.table", { label: group.label })}
+              </p>
               <ul class="mt-2 flex flex-col gap-1">
                 <For each={group.lines}>
                   {(line) => (
