@@ -1,5 +1,8 @@
 {
   "app.brand": "Pizza 4P's",
+  "codepad.backspace": "Xoá ký tự cuối",
+  "codepad.clear": "Xoá hết",
+  "codepad.clear_short": "C",
   "common.back_floor": "← Sơ đồ bàn",
   "common.back_order": "← Gọi món",
   "common.cancel": "Hủy",
@@ -169,6 +172,8 @@
   "signin.code": "Mã nhân viên",
   "signin.hint": "Nhập mã nhân viên và mã PIN để bắt đầu ca làm.",
   "signin.locked": "Quá nhiều lần thử. Vui lòng đợi vài phút rồi thử lại.",
+  "signin.pad_code": "Bàn phím ảo để nhập mã nhân viên",
+  "signin.pad_pin": "Bàn phím số ảo để nhập mã PIN",
   "signin.pin": "Mã PIN",
   "signin.submit": "Đăng nhập",
   "signin.title": "Đăng nhập",

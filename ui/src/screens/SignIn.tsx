@@ -2,6 +2,7 @@ import { Show, createSignal, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
+import { CodePad } from "../components/CodePad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { loadStore } from "../state/store";
@@ -11,6 +12,12 @@ import { loadStore } from "../state/store";
 // synced roster and binds the device to that person, so every sale is attributable. A wrong code and
 // a wrong PIN get the same answer, so a guess learns nothing; repeated wrong PINs lock the account
 // (ADR-0030). Once signed in, the device goes to the floor.
+//
+// Both fields are fillable with no keyboard at all. `inputmode` asks the *platform* for one, which a
+// phone and a tablet always give and a fixed terminal gives only if its on-screen keyboard is
+// switched on; where it is not, this is the screen a shift stops at — and the badge code is not
+// digits, so a numeric pad would not have been enough either. `CodePad` draws the keys itself, in
+// whichever alphabet the focused field accepts.
 export function SignIn() {
   const navigate = useNavigate();
   // The PIN field, so a refusal can hand the cursor back to it.
@@ -19,6 +26,9 @@ export function SignIn() {
   const [pin, setPin] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
+  // Which field the on-screen pad types into. It follows focus rather than a toggle, so the pad
+  // costs no tap of its own; the code is where the screen starts, so that is where it starts.
+  const [filling, setFilling] = createSignal<"code" | "pin">("code");
 
   onMount(() => {
     // A device already signed in has no business here; a device not paired must pair first. Both are
@@ -87,6 +97,18 @@ export function SignIn() {
     }
   };
 
+  // The pad edits whichever field has focus, through that field's own rule — so a character the
+  // PIN would refuse is refused here too, rather than depending on the pad being drawn in the
+  // right mode.
+  const padValue = () => (filling() === "code" ? code() : pin());
+  const padChange = (next: string) => {
+    if (filling() === "code") {
+      setCode(next);
+    } else {
+      setPin(next.replace(/\D/g, ""));
+    }
+  };
+
   return (
     <section class="mx-auto max-w-sm p-4">
       <PageHeader title={t("signin.title")} />
@@ -100,6 +122,7 @@ export function SignIn() {
         autocomplete="username"
         class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-lg"
         value={code()}
+        onFocus={() => setFilling("code")}
         onInput={(event) => setCode(event.currentTarget.value)}
       />
 
@@ -114,6 +137,7 @@ export function SignIn() {
         autocomplete="current-password"
         class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.4em] tabular-nums"
         value={pin()}
+        onFocus={() => setFilling("pin")}
         onInput={(event) => setPin(event.currentTarget.value.replace(/\D/g, ""))}
       />
 
@@ -134,6 +158,14 @@ export function SignIn() {
       >
         {t("signin.submit")}
       </button>
+
+      <CodePad
+        id="signin-pad"
+        value={padValue()}
+        onChange={padChange}
+        mode={filling() === "code" ? "text" : "digits"}
+        label={filling() === "code" ? t("signin.pad_code") : t("signin.pad_pin")}
+      />
     </section>
   );
 }

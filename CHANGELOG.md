@@ -167,6 +167,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A staff member can start a shift on a till with no keyboard at all.** `CodePad`, a new on-screen
+  keyboard on the sign-in screen: A–Z above 0–9, with clear and backspace, typing into whichever of
+  the two fields has focus. `docs/ui-ux.md` §2 has asked for "a shared component for numeric and text
+  entry on touch devices without a physical keyboard" since it was written, and only the numeric half
+  — `Keypad`, for cash — had ever been built.
+  - **The missing half was the one that gates everything.** `inputmode` asks the *platform* for a
+    keyboard, which a phone and a tablet always give and a fixed 13"+ terminal gives only where its
+    on-screen keyboard is switched on. Where it is not, the float field could not be filled — fixed
+    when `Keypad` shipped — and neither could the badge code, which was not. That is not one awkward
+    field: a till nobody can sign in to is every field on every later screen.
+  - **A numeric pad would not have been enough.** The PIN field already strips non-digits, so a
+    numeric pad serves it; the badge code is free text, and the console's own placeholder for it
+    reads `e.g. A01`. A store that stamps `NV01A` on a badge is entering a string.
+  - It is a second component rather than a flag on `Keypad`, because that one drops a leading zero —
+    right for money, where `parseWhole` would otherwise read `05`, and wrong for `0512` as a PIN or
+    `0012` as a badge code. The letters are alphabetical rather than QWERTY: a badge code is three or
+    four characters hunted one at a time, not prose typed by touch. Keys are 48 px, the touch floor,
+    rather than the cash pad's 56 px, since this is pressed once at the start of a shift.
+  - The alphabet follows the field being filled, so a letter is never offered to a field that would
+    strip it, and a press never takes the caret out of the field it is filling.
+  - **The demo badge code now carries a letter** (`A01`, was `1001`). Every browser flow signs in with
+    whatever that constant says, so the whole gate had been typing a credential a numeric keypad could
+    enter — which is how the gap stayed invisible behind an otherwise thorough suite. A new replay flow
+    signs in at phone size with no `fill` anywhere, tapping every character of the code and the PIN on
+    the pad; 38 flows pass against a real edge.
+  - **Upgrade note:** none. `examples/minimal-edge` prints its badge code at boot, as before.
+
 - **A country states how many decimals its currency has.** `LocalePack` gains `currency_exponent`,
   beside the cash increment and the denominations it already carries: `0` for the đồng and the yen,
   `2` for the paisa and the cent ([ADR-0134](docs/adr/0134-a-currency-says-how-many-decimals-it-has.md)).
