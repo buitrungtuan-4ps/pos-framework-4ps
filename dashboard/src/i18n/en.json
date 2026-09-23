@@ -1505,7 +1505,7 @@
   "sessions.userAgent": "Device",
   "setupFile.download": "Download the setup file",
   "setupFile.hint": "The release's own pos-edge.exe, named for this store and this cloud. Double-click it on the shop's PC: it asks for administrator rights, installs the service, and opens the activation screen. No script, and nothing to type.",
-  "setupFile.needsHttps": "This console is open over plain http at a network address, and a setup file tells the store to dial the cloud over https. Open the console at its https address to download one.",
+  "setupFile.needsHttps": "This console is open over plain http, and a setup file tells the store to dial the cloud over https — the only way a store dials it. Open the console at its https address to download one.",
   "setupFile.noKey": "The setup window asks for a store key; press Enter to skip. Without one the store sells, pairs and activates, and configuration sync waits until a key is installed.",
   "setupFile.notHosted": "This cloud does not hold release {release} for Windows. Put it in the cloud from the OTA screen first.",
   "setupFile.pasteKey": "When the setup window asks for the store key, paste the key shown above. It goes only into the service's own registry key.",

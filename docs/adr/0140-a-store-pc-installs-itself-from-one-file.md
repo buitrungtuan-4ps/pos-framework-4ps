@@ -69,3 +69,11 @@ for itself:
   decision with its own keys, not something this can supply.
 - **Off Windows, `pos-edge install` says so and exits**: a Linux store runs the generated
   `install-pos-edge.sh`.
+
+## Correction 1 — the name always means `https` (2026-09-23)
+
+The decision above let a loopback host in the file name mean plain `http`. The edge's cloud transport
+(`CloudHttpClient::new`) dials only `https`, loopback included, so such a name installed a box that
+refused its own cloud and ran LAN-only. It was found by running the whole setup flow end to end
+against a local cloud. A name now always means `https`, and `pos-edge install --cloud` refuses an
+`http` URL wherever it points.

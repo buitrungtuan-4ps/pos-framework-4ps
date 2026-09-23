@@ -1505,7 +1505,7 @@
   "sessions.userAgent": "Thiết bị",
   "setupFile.download": "Tải tệp cài đặt",
   "setupFile.hint": "Chính tệp pos-edge.exe của bản phát hành, được đặt tên theo cửa hàng này và cloud này. Nhấp đúp trên máy tính của cửa hàng: tệp sẽ xin quyền quản trị, cài dịch vụ và mở màn hình kích hoạt. Không cần script, không phải gõ gì.",
-  "setupFile.needsHttps": "Console này đang mở qua http thường ở một địa chỉ mạng, trong khi tệp cài đặt bảo cửa hàng kết nối cloud qua https. Hãy mở console bằng địa chỉ https để tải tệp.",
+  "setupFile.needsHttps": "Console này đang mở qua http thường, trong khi tệp cài đặt bảo cửa hàng kết nối cloud qua https — cách duy nhất cửa hàng kết nối. Hãy mở console bằng địa chỉ https để tải tệp.",
   "setupFile.noKey": "Cửa sổ cài đặt sẽ hỏi khoá cửa hàng; nhấn Enter để bỏ qua. Không có khoá, cửa hàng vẫn bán, ghép nối và kích hoạt được, còn đồng bộ cấu hình sẽ chờ đến khi khoá được cài.",
   "setupFile.notHosted": "Cloud này chưa lưu bản phát hành {release} cho Windows. Hãy đưa bản đó lên cloud từ màn hình OTA trước.",
   "setupFile.pasteKey": "Khi cửa sổ cài đặt hỏi khoá cửa hàng, hãy dán khoá hiển thị ở trên. Khoá chỉ được ghi vào khoá registry riêng của dịch vụ.",

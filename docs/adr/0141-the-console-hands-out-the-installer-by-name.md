@@ -63,3 +63,10 @@ and activated but did not sync its configuration until somebody put a key on the
   judging.
 - **The download is buffered**, as the store-facing artifact route is: one file, for one person at a
   console.
+
+## Correction 1 — https only (2026-09-23)
+
+The console offered the setup file to a console on plain `http` at a loopback address, because
+ADR-0140 let such a name mean `http`. ADR-0140's Correction 1 removes that case: the edge dials only
+`https`. So the console now offers the file only when the console itself is on `https`, and says why
+otherwise.

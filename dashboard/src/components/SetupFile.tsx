@@ -19,8 +19,9 @@
 //
 // The browser's own location, as every generated installer does it: the console is served by
 // `pos_cloud`, so the origin the operator is looking at *is* the origin the store must dial. The
-// cloud writes it into the file name, which the edge reads back as `https` — so a console reached
-// over plain http at a network address cannot hand out a file that would work, and says so instead.
+// cloud writes it into the file name, and the edge reads a name back as `https` — the only scheme
+// its cloud transport dials, loopback included — so a console reached over plain http cannot hand
+// out a file that would work, and says so instead.
 
 import { createResource, createSignal, onMount, Show } from "solid-js";
 
@@ -31,11 +32,6 @@ import { Banner, TextField } from "./ui";
 
 /** The Windows build the cloud serves a setup file from — the one the release workflow builds. */
 const WINDOWS_TARGET = "x86_64-pc-windows-msvc";
-
-/** A console opened on the cloud machine itself, where the edge's reader dials plain http. */
-function isLoopback(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "[::1]" || /^127\./u.test(hostname);
-}
 
 /** The download URL: the release, the store, and the address this browser reached the cloud at. */
 export function setupFileHref(release: string, storeId: string, cloud: string): string {
@@ -50,7 +46,7 @@ export function SetupFile(props: {
   readonly hasKey: boolean;
 }) {
   const [release, setRelease] = createSignal("");
-  const secure = window.location.protocol === "https:" || isLoopback(window.location.hostname);
+  const secure = window.location.protocol === "https:";
 
   // The version this store's rollout targets is the one it would be updated to anyway, so the field
   // starts there — but never over something the operator has typed, and a store with no rollout
@@ -67,7 +63,7 @@ export function SetupFile(props: {
   });
 
   const [hosted] = createResource(
-    () => release().trim() || false,
+    () => (secure && release().trim()) || false,
     async (version) =>
       (await api.listHostedRelease(version)).artifacts.some(
         (artifact) => artifact.arch === WINDOWS_TARGET,

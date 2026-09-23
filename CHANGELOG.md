@@ -25,7 +25,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   Windows executable, byte for byte, named `pos-edge-setup_<cloud>_<store>.exe` so a double-click
   installs that store. It needs `console.data.read`. The console starts from the version the store's
   rollout targets and shows the link only once the cloud holds a Windows build of it. When the console
-  was opened over plain http at a network address it says why it cannot offer one instead. The setup
+  was opened over plain http it says why it cannot offer one instead: the file tells the store to dial
+  `https`, and a file name always means `https`, `localhost` included — the edge's cloud transport
+  dials nothing else ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)
+  Correction 1). The setup
   window now **asks for the store key** (the script's new `-AskSyncKey` switch, passed by
   `pos-edge install`), so a store installed this way syncs as soon as it is activated. The key is
   pasted into the elevated window and goes only into the service's registry key; Enter skips it.
