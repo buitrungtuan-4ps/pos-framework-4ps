@@ -104,6 +104,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   **Upgrade note:** none — test tooling only, no change to any shipped artifact.
 
+### Added
+
+- **A numeric keypad for money on the till.** `docs/ui-ux.md` has asked for *"a large numeric keypad
+  for cash"* since it was written, and the quick-cash denomination buttons beside it were built while
+  this was not. It now sits under the opening float, the blind count and the discount amount.
+
+  The gap hid itself on the devices it did not affect. On a phone or a tablet `inputmode="numeric"`
+  summons the OS keypad and the field fills. The **POS terminal** — the 13"+ class `docs/ui-ux.md`
+  §9 names, and the one a counter is run from — is a fixed touchscreen where an on-screen keyboard is
+  a platform setting rather than something a web page can rely on. Where it is not there, the float
+  field could not be filled and the shift could not be opened. That dependency is why the spec asks
+  for a keypad rather than for an `inputmode`.
+
+  Digits only, with no decimal key, because that is what those fields accept: a cashier types whole
+  units and the currency's exponent does the rest. Keys are 56px with 8px gaps, the floor
+  `docs/ui-ux.md` sets for a cash keypad — above the 48px touch minimum, because these are pressed
+  repeatedly and under time pressure. Clear and backspace carry accessible names, since a glyph is
+  not a name a screen reader can say.
+
+  The text field stays. A terminal with a USB keyboard and a tablet with an OS keypad both still type
+  into it, and removing it would trade one device class's problem for another's.
+
+  **Upgrade note:** none. Nothing changes for a device that already had a keyboard.
+
 ### Fixed
 
 - **The till draws money the way the store's own country writes it.** `formatMoney` grouped with
