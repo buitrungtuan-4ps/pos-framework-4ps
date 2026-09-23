@@ -54,7 +54,7 @@ export function Shift() {
 
       <Show when={phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED"}>
         <label class="block text-sm text-ink-muted" for="float">
-          {t("shift.float_label")}
+          {t("shift.float_label", { currency: storeCurrency() })}
         </label>
         <input
           id="float"
@@ -85,7 +85,7 @@ export function Shift() {
           {t("shift.open_hint")}
         </p>
         <label class="mt-3 block text-sm text-ink-muted" for="count">
-          {t("shift.count_label")}
+          {t("shift.count_label", { currency: storeCurrency() })}
         </label>
         <input
           id="count"
