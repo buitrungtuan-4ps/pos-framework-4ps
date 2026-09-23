@@ -671,7 +671,7 @@ async fn a_fired_line_tells_a_reloaded_board_which_station_it_went_to() {
         None,
     )
     .await;
-    let (_, line) = send(
+    let (_, added) = send(
         app.clone(),
         &token,
         "POST",
@@ -679,7 +679,7 @@ async fn a_fired_line_tells_a_reloaded_board_which_station_it_went_to() {
         Some(a_line_body()),
     )
     .await;
-    let line_id = line["order_line_id"]
+    let line_id = added["order_line_id"]
         .as_str()
         .expect("a line id")
         .to_owned();
