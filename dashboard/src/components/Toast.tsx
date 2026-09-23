@@ -7,6 +7,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { t } from "../i18n";
+import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
 import { Icon } from "./icons";
 
@@ -72,8 +73,12 @@ export function ToastHost() {
 export function NotificationBell() {
   const [open, setOpen] = createSignal(false);
   useEscape(open, () => setOpen(false));
+
+  // Pressing anywhere else closes it, the way the pickers in the kit already close.
+  let container: HTMLDivElement | undefined;
+  useClickOutside(open, () => container, () => setOpen(false));
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("notifications.open")}

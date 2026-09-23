@@ -10,6 +10,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
 import { t } from "../i18n";
+import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
 import {
   selectStore,
@@ -36,6 +37,10 @@ export function ContextPicker() {
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
   useEscape(open, () => setOpen(false));
+
+  // Pressing anywhere else closes it, the way the pickers in the kit already close.
+  let container: HTMLDivElement | undefined;
+  useClickOutside(open, () => container, () => setOpen(false));
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -217,7 +222,7 @@ export function ContextPicker() {
     storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
 
   return (
-    <div class="relative">
+    <div class="relative" ref={container}>
       <button
         type="button"
         aria-label={t("context.change")}

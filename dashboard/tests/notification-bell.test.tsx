@@ -33,6 +33,20 @@ describe("the notification bell", () => {
     expect(screen.getByRole("region", { name: "Notifications" })).toBeTruthy();
   });
 
+  it("closes when a pointer goes down outside it", async () => {
+    render(() => <NotificationBell />);
+    const button = screen.getByRole("button", { name: "Notifications" });
+    fireEvent.click(button);
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeTruthy();
+
+    fireEvent.pointerDown(document.body);
+
+    await waitFor(() => {
+      expect(button.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+    });
+  });
+
   it("disables the clear control while the history is empty", () => {
     render(() => <NotificationBell />);
     fireEvent.click(screen.getByRole("button", { name: "Notifications" }));
