@@ -1208,6 +1208,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A NAT64 subnet outside the two assigned prefixes walked past the webhook SSRF filter entirely.**
+  `classify_nat64` recognised the well-known `64:ff9b::/96` and the local-use `64:ff9b:1::/48`, and
+  matched nothing else — so an address such as `64:ff9b:dead::10.0.0.5` or `64:ff9b:0:1::127.0.0.1`
+  fell out of the IPv6 classifier as ordinary public unicast and was accepted as a webhook
+  destination. The rest of `64:ff9b::/32` is now refused outright: IANA assigns it no translation
+  prefix, and RFC 6052 §3.2 takes a network-specific prefix from the operator's own space rather than
+  from there, so nothing in the remainder is a destination anyone can legitimately reach and there is
+  no prefix length at which to decode one. The embedded class is still reported where the bytes yield
+  one, so the log says "private network" rather than "reserved".
+  - **The two assigned prefixes keep decoding at their own length, and only their own.** Borrowing
+    the /48 split for a /96 address does not abstain on the mismatch, it invents an answer: the zeros
+    in segments 3-5 of `64:ff9b::93.184.216.34` are padding, the split reads them as `0.0.0.0`, and
+    `classify_v4` refuses that as unspecified. A filter widened that way refuses every well-known-prefix
+    destination — including the public ones the prefix exists to carry — and fails closed quietly
+    enough that no existing test notices. A test now pins both directions.
+  - **Upgrade note:** none. A webhook destination inside `64:ff9b::/32` but outside `64:ff9b::/96`
+    and `64:ff9b:1::/48` is now refused at registration and at dispatch; no such address is routable.
+
 - **Refuse IPv4 `0.0.0.0/8` range ("This host on this network") in webhook SSRF filter.**
   `Ipv4Addr::is_unspecified()` in Rust std only checks for `0.0.0.0`, leaving other addresses in the `0.0.0.0/8` range (such as `0.0.0.1` or `0.1.2.3`) unclassified and allowing potential SSRF bypasses depending on OS network stack / socket binding behavior. `classify_v4` now checks `a == 0` to block the entire `0.0.0.0/8` range as `ForbiddenReason::Unspecified`. **Upgrade note:** none.
 
