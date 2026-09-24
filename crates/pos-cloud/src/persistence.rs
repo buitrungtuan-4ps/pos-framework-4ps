@@ -570,6 +570,19 @@ impl RegionAcknowledgementStore for PostgresConfigTrees {
 }
 
 impl LeaseStore for PostgresConfigTrees {
+    async fn highest_receipt_number(
+        &self,
+        _tenant: TenantId,
+        store: StoreId,
+    ) -> Result<Option<u64>, LeaseStoreError> {
+        // Store ids are unique across tenants, and the stored tenant is the registry's stamp, so the
+        // store alone names its log.
+        let highest = PostgresConfigTrees::highest_receipt_number(self, store)
+            .await
+            .map_err(|error| LeaseStoreError::new(error.to_string()))?;
+        Ok(highest.and_then(|number| u64::try_from(number).ok()))
+    }
+
     /// Forwards to the adapter's single-statement bump, so two admins replacing a machine at once
     /// serialise on the row rather than racing to the same generation — and so the generation and
     /// the edge placement beside it are written by the same statement

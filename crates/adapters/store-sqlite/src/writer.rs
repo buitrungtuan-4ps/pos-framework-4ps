@@ -266,6 +266,12 @@ pub(crate) enum Command {
         bill_id: BillId,
         reply: oneshot::Sender<Result<u64, PortError>>,
     },
+    /// Raise the receipt counter so the next number is above `floor` (ADR-0149).
+    RaiseReceiptFloor {
+        store_id: StoreId,
+        floor: u64,
+        reply: oneshot::Sender<Result<u64, PortError>>,
+    },
     /// Allocate (or return the already-allocated) daily queue number for a tableless order.
     AllocateQueueNumber {
         store_id: StoreId,
@@ -568,6 +574,13 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(allocate_receipt(&mut conn, store_id, bill_id));
+            }
+            Command::RaiseReceiptFloor {
+                store_id,
+                floor,
+                reply,
+            } => {
+                let _ = reply.send(raise_receipt_floor(&conn, store_id, floor));
             }
             Command::AllocateQueueNumber {
                 store_id,
@@ -1608,6 +1621,32 @@ fn outbox_depth(conn: &Connection, store_id: StoreId) -> Result<u64, PortError> 
         )
         .map_err(|error| db_error(port, error))?;
     Ok(u64::try_from(depth).unwrap_or(u64::MAX))
+}
+
+/// Raises the store's receipt counter so the next number it hands out is at least `floor + 1`, and
+/// returns that next number (ADR-0149).
+///
+/// One statement, monotonic: a counter already above the floor is left exactly where it is, so
+/// applying the same floor twice, or an older one after a newer, changes nothing. A store that has
+/// never allocated gets its counter row here, starting above the floor.
+fn raise_receipt_floor(conn: &Connection, store_id: StoreId, floor: u64) -> Result<u64, PortError> {
+    let port = PortName::EventStore;
+    let store = store_id.to_string();
+    let next = i64::try_from(floor.saturating_add(1)).unwrap_or(i64::MAX);
+    conn.execute(
+        "INSERT INTO receipt_counter (store_id, next_number) VALUES (?1, ?2)
+         ON CONFLICT (store_id) DO UPDATE SET next_number = max(next_number, excluded.next_number)",
+        params![store, next],
+    )
+    .map_err(|error| db_error(port, error))?;
+    let current: i64 = conn
+        .query_row(
+            "SELECT next_number FROM receipt_counter WHERE store_id = ?1",
+            params![store],
+            |row| row.get(0),
+        )
+        .map_err(|error| db_error(port, error))?;
+    Ok(u64::try_from(current).unwrap_or(0))
 }
 
 /// Allocates the next gapless receipt number for a bill, or returns the one it already has

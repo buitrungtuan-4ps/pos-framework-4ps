@@ -623,6 +623,17 @@ fn apply_origins(origins: &Origins, document: &serde_json::Value) {
     }
 }
 
+/// The highest receipt number the cloud has seen from this store, from the document's
+/// `receipt_floor` node (`{ "number": M }`, ADR-0149), or `None` when the node is absent or is not a
+/// whole number.
+#[must_use]
+pub fn receipt_floor(document: &serde_json::Value) -> Option<u64> {
+    document
+        .get("receipt_floor")
+        .and_then(|node| node.get("number"))
+        .and_then(serde_json::Value::as_u64)
+}
+
 /// Never fails the boot: a stored document that will not parse is logged and skipped, because a
 /// store that will not start is worse than a store on a stale menu.
 ///
@@ -879,6 +890,11 @@ where
         let Some(synced) = self.transport.fetch(self.held().as_deref()).await? else {
             return Ok(None);
         };
+        // The receipt floor first, before anything else in the document takes effect (ADR-0149): a
+        // replacement box learns it is the store from this same document, and its first receipt
+        // must already be above every number the cloud has seen. A floor that could not be written
+        // holds the version back below, so the next pull tries again.
+        let floor_applied = self.apply_receipt_floor(&synced).await;
         let base = self.edge.session();
         let rebuilt = session_from_config(&base, &synced.document);
         self.edge.apply_session(rebuilt);
@@ -926,12 +942,40 @@ where
         // as applied as it is ever going to be, and re-deciding it every interval would produce the
         // same refusal and the same log line for ever. The escape hatch there is a corrected
         // publish or a rollback, not a retry.
-        if revocations_applied {
+        if revocations_applied && floor_applied {
             *self.held_version.lock().expect("held-version lock") =
                 Some(synced.config_version_id.clone());
         }
         tracing::info!(version = %synced.config_version_id, "applied a new store config");
         Ok(Some(synced.config_version_id))
+    }
+
+    /// Raises the receipt counter to the document's `receipt_floor`, if it carries one
+    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    /// Returns whether the document is done with: `true` with no floor or a floor written, `false`
+    /// when the write failed and the version must be pulled again.
+    async fn apply_receipt_floor(&self, synced: &SyncedConfig) -> bool {
+        let Some(floor) = receipt_floor(&synced.document) else {
+            return true;
+        };
+        match self.edge.raise_receipt_floor(floor).await {
+            Ok(()) => {
+                tracing::info!(
+                    floor,
+                    "receipt numbers continue above what the cloud has seen"
+                );
+                true
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    floor,
+                    version = %synced.config_version_id,
+                    "could not raise the receipt counter to the published floor; holding this config version back so the next pull tries again"
+                );
+                false
+            }
+        }
     }
 
     /// Writes an applied document to the store's local [`ConfigStore`], so the next boot restores it

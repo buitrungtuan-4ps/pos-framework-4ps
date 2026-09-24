@@ -445,7 +445,7 @@ what a dead machine takes with it, because two of the four things are not in any
 | | Recovery |
 | --- | --- |
 | Which store this is, and which cloud it dials | **Regenerated.** A pure function of the registry row and this cloud's own origin. |
-| The store's sync key (`POS_EDGE_SYNC_KEY`) | **Re-issue.** Shown once and stored hashed, so it cannot be read back. The drawer issues a fresh one, scoped to the store with `read_config` + `relay_orders`. |
+| The store's sync key (`POS_EDGE_SYNC_KEY`) | **Not needed** since [ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md): the new box syncs with the device credential its activation mints. If the store uses a key anyway, re-issue it: it is shown once and stored hashed. The drawer issues a fresh one, scoped to the store with `read_config` + `relay_orders`. |
 | The device credential activation minted | **Gone.** It never left the old machine — it is in *that* machine's OS keyring ([ADR-0086](../adr/0086-edge-keyvault-and-activation.md)), not in a file and not on any screen. |
 | The store's event log (`store.sqlite`) | **Gone, in part.** Everything already published is safe in the fleet stream; anything still in the outbox is not — unless the store has a sealed archive ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)), which recovers everything up to when it was taken. |
 
@@ -473,6 +473,14 @@ Then, on the new machine:
 **Do the bump before you activate the replacement.** In that order the new box takes the store's
 current generation on first sight and is the store. The other way round it takes the old generation,
 and the bump then supersedes the machine that is actually trading.
+
+**The bump also tells the new box where its receipt numbers start**
+([ADR-0149](../adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)). It publishes the
+highest receipt number the cloud has seen from this store as `receipt_floor`, in the same version as
+the lease, and the new box raises its counter above it on the pull that makes it the store. A box
+restored from an older archive therefore skips the numbers issued since, rather than printing them a
+second time. What the cloud cannot know is a receipt the old box issued offline and never synced; the
+[replace-a-store-box guide](replace-a-store-box.md) covers that case.
 
 **Recovering what the old box had not published.** Two routes, in order of preference:
 
