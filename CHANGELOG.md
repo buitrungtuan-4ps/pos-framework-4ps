@@ -18,6 +18,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The edge forgets what it no longer needs, and only that**
+  ([ADR-0145](docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). The documents
+  promised each store kept 90 days of events, but nothing ever deleted one, so the database and the
+  start-up replay grew for as long as a store traded. Once an hour the edge now deletes an event
+  only when three things are true:
+  - the event link has acknowledged it;
+  - it is older than the store's retention (90 days by default; a per-store figure from the cloud
+    follows);
+  - nothing still open began before it: an order still owing, an open bill, a table that is not
+    free, a guest order awaiting staff, or the open shift.
+
+  A store that is offline keeps everything, however old. The newest chained record always stays,
+  deletion takes a prefix in commit order, and a checkpoint moves with it, so the kept log still
+  verifies link by link. The 90-day promise covers this event log, including the audit events in it.
+  It is not the retention of personal data, which ADR-0107 handles separately. **Upgrade note:**
+  migration 0015 adds a `chain_checkpoint` table. On a store older than 90 days, the first sweep, ten
+  minutes after boot, works through the backlog in chunks of 2,000 events, each its own short
+  transaction, so trading carries on beside it. The file stops growing rather than shrinking.
 - **Windows code signing a fork can switch on — or leave off**
   ([ADR-0142](docs/adr/0142-windows-signing-is-the-forks-choice.md)).
   `deploy/release/sign-windows.ps1` Authenticode-signs the Windows binary with whatever the fork

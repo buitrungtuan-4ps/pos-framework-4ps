@@ -280,6 +280,14 @@ impl StaffRoster {
     }
 }
 
+/// The range a store's [`EdgeSession::event_log_days`] may take
+/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+///
+/// Thirty days at least, so a typo cannot have a store forget last month; ten years at most, so a
+/// stray zero cannot keep a log forever. The cloud refuses a publish outside it, and the edge
+/// ignores one that arrives anyway, keeping what it had.
+pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u16> = 30..=3650;
+
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
 /// is config-driven; the values arrive from the cloud config tree in P7.
@@ -346,6 +354,14 @@ pub struct EdgeSession {
     /// Defaults to a year, the same figure `LocalePack::default` carries, so a store that has synced
     /// no locale still forgets.
     pub retention_days: u16,
+    /// How many days the edge keeps a **synced** event before retention may delete it
+    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+    ///
+    /// Per store, from the cloud's `retention` node, within [`EVENT_LOG_DAYS`]; 90 until one
+    /// arrives, the figure the documents have always promised. It is a floor, never a deadline: an
+    /// event the link has not acknowledged, or one an open order still needs, stays whatever this
+    /// says. Not [`Self::retention_days`], which is how long *personal data* lives, set by law.
+    pub event_log_days: u16,
     /// How this store writes a number: its decimal mark, its group mark, and how many digits go in a
     /// group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
     ///
@@ -561,6 +577,7 @@ impl EdgeSession {
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
+            event_log_days: 90,
             // The common convention — `1,234.5` — and not Vietnam's, deliberately: the bootstrap is
             // what an unsynced box of unknown country uses, and `pos-proto`'s own default test says
             // the same. A store that syncs a locale node replaces it.
@@ -1987,6 +2004,41 @@ impl Projection {
     /// the store has ever sold (F2).
     fn open_orders(&self) -> Vec<OrderId> {
         self.live.iter().copied().collect()
+    }
+
+    /// When the oldest business still open began, in milliseconds since the epoch, or `None` when
+    /// nothing is open (ADR-0145): an order still owing, an open bill, a table that is not free, a
+    /// guest order awaiting staff, the open shift.
+    ///
+    /// Read from the ids, not from stored times: every one of these is a ULID minted when it
+    /// opened, so its high bits are the moment it began, and every event that belongs to it came
+    /// after. Retention deletes nothing from that moment on, so a rebuild still finds everything the
+    /// open work needs.
+    fn oldest_open_work(&self, session: &EdgeSession) -> Option<u64> {
+        let live = self.live.first().map(|order_id| order_id.as_ulid());
+        let bills = self
+            .bills
+            .iter()
+            .filter(|(_, bill)| bill.state == BillState::Open)
+            .map(|(bill_id, _)| bill_id.as_ulid());
+        let tables = self
+            .tables
+            .iter()
+            .filter(|(_, state)| **state != TableState::Free)
+            .filter_map(|(table_id, _)| self.table_orders.get(table_id))
+            .map(|order_id| order_id.as_ulid());
+        let held = self
+            .orders_awaiting_staff_confirmation(session)
+            .first()
+            .map(|order_id| order_id.as_ulid());
+        let shift = self.open_shift.map(ShiftId::as_ulid);
+        live.into_iter()
+            .chain(bills)
+            .chain(tables)
+            .chain(held)
+            .chain(shift)
+            .map(Ulid::timestamp_ms)
+            .min()
     }
 
     /// The lines on an order that have not been sent yet, each with the id it is sent by, in id
@@ -3801,6 +3853,35 @@ impl<S: EventStore> Edge<S> {
             });
         }
         Ok(views)
+    }
+
+    /// The instant before which retention may delete a synced event
+    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)):
+    /// the store's [`EdgeSession::event_log_days`] ago, or a day before the oldest business still
+    /// open, whichever is earlier.
+    ///
+    /// The day's margin is for a clock that stepped: an event stamped a little before the order it
+    /// belongs to opened must still survive. The store adds the two rules only it can apply (keep
+    /// what is unsynced, keep the chain head); this is everything the projection knows.
+    ///
+    /// # Panics
+    ///
+    /// If the projection lock is poisoned — unreachable, as its critical section only reads.
+    #[must_use]
+    pub fn retention_horizon(&self, now: Timestamp) -> Timestamp {
+        const DAY_MS: i64 = 86_400_000;
+        let session = self.session();
+        let now_ms = now.as_milliseconds_since_epoch();
+        let aged = now_ms.saturating_sub(i64::from(session.event_log_days).saturating_mul(DAY_MS));
+        let open = self
+            .lock_projection()
+            .oldest_open_work(&session)
+            .map_or(i64::MAX, |began| {
+                i64::try_from(began)
+                    .unwrap_or(i64::MAX)
+                    .saturating_sub(DAY_MS)
+            });
+        Timestamp::from_milliseconds_since_epoch(aged.min(open).max(0)).unwrap_or(Timestamp::EPOCH)
     }
 
     /// Every open order with its lines — what a device reads to rebuild its screens.

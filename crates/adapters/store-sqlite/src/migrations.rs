@@ -37,6 +37,7 @@ const MIGRATIONS: &[(u32, &str)] = &[
         14,
         include_str!("../migrations/0014_unchained_events_index.sql"),
     ),
+    (15, include_str!("../migrations/0015_chain_checkpoint.sql")),
 ];
 
 /// Applies every migration the database has not yet seen.

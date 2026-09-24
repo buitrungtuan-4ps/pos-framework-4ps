@@ -22,7 +22,7 @@ use pos_ports::{PortError, PortName};
 use pos_proto::chain::{ChainBreak, ChainHash, ChainLink, ChainStatus};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{BillId, EventId, OrderId, StoreId};
-use pos_proto::time::BusinessDate;
+use pos_proto::time::{BusinessDate, Timestamp};
 
 /// An inbound-order idempotency row buffered for the order's transaction (ADR-0064). The record is
 /// pre-serialised to JSON by the store so the writer thread stays free of `pos_ports` types.
@@ -203,6 +203,21 @@ pub(crate) enum Command {
         cursor: ChainCursor,
         limit: u32,
         reply: oneshot::Sender<Result<ChainChunk, PortError>>,
+    },
+    /// Where the kept log begins: the `seq` and `hash` of the last record retention deleted
+    /// (ADR-0145), or `None` when it has deleted nothing.
+    ChainCheckpoint {
+        store_id: StoreId,
+        reply: oneshot::Sender<Result<Option<(u64, ChainHash)>, PortError>>,
+    },
+    /// Delete up to `limit` of a store's events that are synced, older than `before`, and not the
+    /// chain head, as a prefix in commit order (ADR-0145). One chunk, for the reason
+    /// `VerifyChainChunk` is one: this runs on the writer thread every sale waits on.
+    PruneEvents {
+        store_id: StoreId,
+        before: Timestamp,
+        limit: u32,
+        reply: oneshot::Sender<Result<PruneChunk, PortError>>,
     },
     /// Read a store's events, ascending by `event_id`, after an optional cursor.
     Read {
@@ -496,6 +511,17 @@ pub(crate) fn run(mut conn: Connection, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(verify_chain_chunk(&conn, store_id, &cursor, limit));
+            }
+            Command::ChainCheckpoint { store_id, reply } => {
+                let _ = reply.send(read_chain_checkpoint(&conn, store_id));
+            }
+            Command::PruneEvents {
+                store_id,
+                before,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(prune_events(&mut conn, store_id, before, limit));
             }
             Command::Read {
                 store_id,
@@ -831,6 +857,18 @@ impl ChainCursor {
             unchained: 0,
         }
     }
+
+    /// The start of what retention kept: after the checkpoint's record, expecting its hash
+    /// (ADR-0145). The first kept record must follow it with no gap and link to it, exactly as
+    /// every other record links to the one before.
+    pub(crate) const fn resume(after_seq: u64, expect_prev: ChainHash) -> Self {
+        Self {
+            after_seq,
+            expect_prev,
+            checked: 0,
+            unchained: 0,
+        }
+    }
 }
 
 /// What one chunk of a walk concluded.
@@ -859,7 +897,10 @@ fn verify_chain_chunk(
     limit: u32,
 ) -> Result<ChainChunk, PortError> {
     let port = PortName::EventStore;
-    let unchained: u64 = if cursor.after_seq == 0 {
+    // Counted on the first chunk, which is the only one that has checked nothing: a chunk that
+    // hands the thread back has always walked a full window. Not `after_seq == 0`, because a walk
+    // resumed from a retention checkpoint starts past zero.
+    let unchained: u64 = if cursor.checked == 0 {
         // Through the partial index, for the reason `read_chain_anchor` gives.
         let counted: i64 = conn
             .query_row(
@@ -973,6 +1014,212 @@ fn verify_chain_chunk(
         unchained,
         head: if checked == 0 { None } else { Some(previous) },
     }))
+}
+
+/// The `seq` and `hash` of the last record retention deleted for a store, or `None`.
+fn read_chain_checkpoint(
+    conn: &Connection,
+    store_id: StoreId,
+) -> Result<Option<(u64, ChainHash)>, PortError> {
+    let found = conn
+        .query_row(
+            "SELECT seq, hash FROM chain_checkpoint WHERE store_id = ?1",
+            params![store_id.to_string()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| db_error(PortName::EventStore, error))?;
+    Ok(found.map(|(seq, hash)| (u64::try_from(seq).unwrap_or(0), ChainHash::from_hex(&hash))))
+}
+
+/// What one retention chunk did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PruneChunk {
+    /// Events deleted by this chunk.
+    pub(crate) deleted: u64,
+    /// Whether it stopped because it reached its limit, rather than at a record that must stay.
+    pub(crate) more: bool,
+}
+
+/// Whether an envelope's stored `event_time` is before `before`. A time that does not parse is
+/// treated as not old enough: retention keeps what it cannot read rather than guess.
+fn stored_before(event_time: Option<&str>, before: Timestamp) -> bool {
+    event_time
+        .and_then(|text| text.parse::<Timestamp>().ok())
+        .is_some_and(|time| time < before)
+}
+
+/// Deletes up to `limit` of a store's events that are synced and older than `before`, as a prefix
+/// in commit order, and moves the checkpoint in the same transaction (ADR-0145).
+///
+/// Three stops, and it halts at the first record that meets any of them:
+///
+/// - **Not synced.** The outbox holds exactly the events the link has not acknowledged, in commit
+///   order, each carrying the `seq` it was stamped with. Everything before the first of them is
+///   synced; an empty outbox means everything is.
+/// - **Not old enough.** Its `event_time` is at or after `before`. The caller has already moved
+///   `before` back past anything still open (an order, a bill, the shift), so this is also the
+///   stop that keeps what the projection needs.
+/// - **The chain head.** The newest chained record always stays, so the next append continues the
+///   chain rather than restarting it at `seq` 1 — which would reuse positions the cloud holds.
+///
+/// Records from before the chain existed (migration 0013) precede every chained one, so they go
+/// first, oldest id first, and no chained record is touched until they are all gone.
+fn prune_events(
+    conn: &mut Connection,
+    store_id: StoreId,
+    before: Timestamp,
+    limit: u32,
+) -> Result<PruneChunk, PortError> {
+    let port = PortName::EventStore;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| db_error(port, error))?;
+
+    // `Some(None)` is an unacknowledged record with no `seq`: it predates the chain, so nothing
+    // chained is synced yet.
+    let first_unsynced: Option<Option<i64>> = tx
+        .query_row(
+            "SELECT json_extract(envelope, '$.chain.seq') FROM outbox
+             WHERE store_id = ?1 ORDER BY position LIMIT 1",
+            params![store_id.to_string()],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    let chunk = match first_unsynced {
+        Some(None) => PruneChunk {
+            deleted: 0,
+            more: false,
+        },
+        synced => match prune_unchained(&tx, store_id, before, limit)? {
+            Some(chunk) => chunk,
+            None => prune_chained(&tx, store_id, synced.flatten(), before, limit)?,
+        },
+    };
+    tx.commit().map_err(|error| db_error(port, error))?;
+    Ok(chunk)
+}
+
+/// The records from before the chain, oldest id first, stopping at the first one still too young.
+/// `None` when there are none left, so the chained records are next.
+fn prune_unchained(
+    tx: &Connection,
+    store_id: StoreId,
+    before: Timestamp,
+    limit: u32,
+) -> Result<Option<PruneChunk>, PortError> {
+    let port = PortName::EventStore;
+    let store = store_id.to_string();
+    let unchained: Vec<(String, Option<String>)> = {
+        let mut statement = tx
+            .prepare(
+                "SELECT event_id, json_extract(envelope, '$.event_time')
+                 FROM events INDEXED BY idx_events_store_id_unchained
+                 WHERE store_id = ?1 AND seq IS NULL
+                 ORDER BY event_id LIMIT ?2",
+            )
+            .map_err(|error| db_error(port, error))?;
+        let rows = statement
+            .query_map(params![store, i64::from(limit)], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(|error| db_error(port, error))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|error| db_error(port, error))?
+    };
+    if unchained.is_empty() {
+        return Ok(None);
+    }
+    let mut deleted: u64 = 0;
+    for (event_id, event_time) in &unchained {
+        if !stored_before(event_time.as_deref(), before) {
+            break;
+        }
+        tx.execute(
+            "DELETE FROM events WHERE store_id = ?1 AND event_id = ?2",
+            params![store, event_id],
+        )
+        .map_err(|error| db_error(port, error))?;
+        deleted = deleted.saturating_add(1);
+    }
+    // More whenever every record looked at went: either more unchained ones remain, or the chained
+    // ones are next. A stop on a young record ends the sweep, because every record after it in
+    // commit order is younger still.
+    Ok(Some(PruneChunk {
+        deleted,
+        more: deleted == u64::try_from(unchained.len()).unwrap_or(0),
+    }))
+}
+
+/// The chained records after the checkpoint, as a prefix in `seq` order: stops at the first one
+/// that is unsynced, too young, or the head. Moves the checkpoint with the delete.
+fn prune_chained(
+    tx: &Connection,
+    store_id: StoreId,
+    synced_below: Option<i64>,
+    before: Timestamp,
+    limit: u32,
+) -> Result<PruneChunk, PortError> {
+    let port = PortName::EventStore;
+    let store = store_id.to_string();
+    let checkpoint = read_chain_checkpoint(tx, store_id)?.map_or(0, |(seq, _)| seq);
+    let checkpoint = i64::try_from(checkpoint).unwrap_or(i64::MAX);
+    let head: Option<i64> = tx
+        .query_row(
+            "SELECT seq FROM events WHERE store_id = ?1 AND seq IS NOT NULL
+             ORDER BY seq DESC LIMIT 1",
+            params![store],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| db_error(port, error))?;
+    let candidates: Vec<(i64, String, Option<String>)> = {
+        let mut statement = tx
+            .prepare(
+                "SELECT seq, hash, json_extract(envelope, '$.event_time') FROM events
+                 WHERE store_id = ?1 AND seq IS NOT NULL AND seq > ?2
+                 ORDER BY seq LIMIT ?3",
+            )
+            .map_err(|error| db_error(port, error))?;
+        let rows = statement
+            .query_map(params![store, checkpoint, i64::from(limit)], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|error| db_error(port, error))?;
+        rows.collect::<Result<_, _>>()
+            .map_err(|error| db_error(port, error))?
+    };
+    let mut last: Option<(i64, &str)> = None;
+    let mut deleted: u64 = 0;
+    for (seq, hash, event_time) in &candidates {
+        if head.is_none_or(|head| *seq >= head)
+            || synced_below.is_some_and(|synced| *seq >= synced)
+            || !stored_before(event_time.as_deref(), before)
+        {
+            break;
+        }
+        last = Some((*seq, hash.as_str()));
+        deleted = deleted.saturating_add(1);
+    }
+    if let Some((seq, hash)) = last {
+        tx.execute(
+            "DELETE FROM events
+             WHERE store_id = ?1 AND seq IS NOT NULL AND seq > ?2 AND seq <= ?3",
+            params![store, checkpoint, seq],
+        )
+        .map_err(|error| db_error(port, error))?;
+        tx.execute(
+            "INSERT INTO chain_checkpoint (store_id, seq, hash) VALUES (?1, ?2, ?3)
+             ON CONFLICT (store_id) DO UPDATE SET seq = excluded.seq, hash = excluded.hash",
+            params![store, seq, hash],
+        )
+        .map_err(|error| db_error(port, error))?;
+    }
+    Ok(PruneChunk {
+        deleted,
+        more: deleted == u64::from(limit),
+    })
 }
 
 /// A store's chain head: the sequence and hash of its most recent chained record.
