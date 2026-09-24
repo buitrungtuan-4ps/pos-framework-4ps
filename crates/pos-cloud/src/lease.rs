@@ -794,6 +794,26 @@ pub trait LeaseStore {
         retired_at: Timestamp,
         retired_by: &str,
     ) -> impl Future<Output = Result<RetireOutcome, LeaseStoreError>> + Send;
+
+    /// The highest receipt number the cloud has ingested from this store, from its
+    /// `billing.bill.settled` events, or `None` when it has none
+    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    ///
+    /// Published beside every lease bump as the `receipt_floor` node, so a replacement box numbers
+    /// above it. Defaults to `None`, which publishes no floor: a store that cannot answer leaves the
+    /// replacement's counter where it is rather than guessing.
+    ///
+    /// # Errors
+    ///
+    /// [`LeaseStoreError`] if the log could not be read.
+    fn highest_receipt_number(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+    ) -> impl Future<Output = Result<Option<u64>, LeaseStoreError>> + Send {
+        let _ = (tenant, store);
+        core::future::ready(Ok(None))
+    }
 }
 
 /// A failure of the lease store itself — the row could not be read or written.

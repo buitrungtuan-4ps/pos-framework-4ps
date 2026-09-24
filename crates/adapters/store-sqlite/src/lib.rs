@@ -22,11 +22,13 @@
 //! against this adapter unchanged.
 
 mod migrations;
+mod page_size;
 mod snapshot;
 mod store;
 mod tx;
 mod writer;
 
+pub use page_size::{PAGE_SIZE, PageRebuild, needs_page_rebuild, rebuild_page_size};
 pub use snapshot::{integrity_check, snapshot_to};
 pub use store::SqliteStore;
 pub use tx::SqliteTx;

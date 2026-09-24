@@ -2456,6 +2456,18 @@ impl<S: EventStore> Edge<S> {
         self.identity.store_id
     }
 
+    /// Makes sure this box never issues a receipt number at or below `floor`, the highest the cloud
+    /// has seen from this store
+    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    /// A counter already above it is left alone.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the receipt authority cannot be written.
+    pub async fn raise_receipt_floor(&self, floor: u64) -> Result<(), PortError> {
+        self.receipts.raise_floor(self.store_id(), floor).await
+    }
+
     /// The event log this edge owns, lent read-only.
     ///
     /// The one caller is the outbox drain

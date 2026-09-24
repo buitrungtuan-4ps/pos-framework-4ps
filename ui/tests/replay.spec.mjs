@@ -1095,6 +1095,23 @@ test("a shift starts with no keyboard at all — badge code and PIN typed on the
   }
 });
 
+// A box being claimed (ADR-0148) shows its claim page and nothing of a till. `pos-edge claim` serves
+// only that page and `/api/claim`, so a status bar, navigation or sign-out drawn around it offered a
+// person reading a code off the box a row of places that all failed — which is what the round-two
+// demo found. The example store answers `/api/claim` with nothing, and that is fine here: the
+// assertion is about what surrounds the page, not what the claim is doing.
+test("a box being claimed shows its claim page and no till around it", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.goto(`${edge.baseURL}/claim`);
+    await expect(page.locator('[data-outcome="claim"]')).toBeVisible();
+    await expect(page.locator("header")).toHaveCount(0);
+    await expect(page.locator("nav")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

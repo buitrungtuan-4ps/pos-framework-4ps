@@ -949,9 +949,20 @@ struct FakeConfigTrees {
     /// race the retry exists for. `(key, value)` is set on the Store layer, as another node publish
     /// would set it.
     interpose: Arc<Mutex<Option<(String, serde_json::Value)>>>,
+    /// The highest receipt number the fake's log holds for any store (ADR-0149), or `None` for a
+    /// log with no settled bill.
+    highest_receipt: Arc<Mutex<Option<u64>>>,
 }
 
 impl pos_cloud::lease::LeaseStore for FakeConfigTrees {
+    async fn highest_receipt_number(
+        &self,
+        _tenant: TenantId,
+        _store: StoreId,
+    ) -> Result<Option<u64>, pos_cloud::lease::LeaseStoreError> {
+        Ok(*self.highest_receipt.lock().expect("lock"))
+    }
+
     /// Bumps in memory exactly as the adapter's one statement does: absent starts at generation 0,
     /// present moves to `generation + 1`, and there is no way to set an arbitrary value.
     ///
@@ -12822,6 +12833,65 @@ async fn a_rollout_and_a_placement_land_on_their_own_config_layers() {
         .expect("route the placement read");
     assert_eq!(placement.status(), StatusCode::OK);
     assert_eq!(json_body(placement).await["canary_bucket"], 10);
+}
+
+/// A replacement box numbers above what the cloud has seen
+/// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)):
+/// the bump publishes the highest receipt number the log holds as `receipt_floor`, in the **same**
+/// version as the `lease` node, and a log with no settled bill publishes no floor at all.
+#[tokio::test]
+async fn a_lease_bump_publishes_the_receipt_floor_beside_the_lease() {
+    let config_trees = FakeConfigTrees::default();
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+
+    let first = router
+        .clone()
+        .oneshot(bump_with_if_match(&body, &cookie, "*"))
+        .await
+        .expect("route the first bump");
+    assert_eq!(first.status(), StatusCode::OK);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert!(
+        state.record.layers[2].get("receipt_floor").is_none(),
+        "a store the cloud has seen no receipt from gets no floor"
+    );
+
+    *config_trees.highest_receipt.lock().expect("lock") = Some(40);
+    let second = router
+        .clone()
+        .oneshot(bump_with_if_match(&body, &cookie, "\"0\""))
+        .await
+        .expect("route the second bump");
+    assert_eq!(second.status(), StatusCode::OK);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let effective = &state
+        .record
+        .history
+        .last()
+        .expect("a published version")
+        .effective;
+    assert_eq!(
+        effective["receipt_floor"],
+        serde_json::json!({ "number": 40 })
+    );
+    assert_eq!(
+        effective["lease"],
+        serde_json::json!({ "generation": 1 }),
+        "the floor and the lease arrive in the same version"
+    );
 }
 
 #[tokio::test]

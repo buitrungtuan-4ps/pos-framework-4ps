@@ -55,3 +55,11 @@ therefore cannot be generic.
   finds a printer.
 - **A claimed box is an activated box.** The activation-code path stays for boxes installed with a
   store id, and nothing about it changes.
+
+**Amendment 1 (2026-09-24) — a box with no screen reads its code from its log.** The claim page is
+served on loopback only (`127.0.0.1:8080`), so a phone on the shop's network cannot open it, and the
+sentence above about reading it "from the local page on a phone" does not hold. Loopback is kept:
+showing an unbound code to the whole LAN would let anyone on it race the owner to bind the box to
+another store. A box with no screen shows its code in its log (`journalctl -u pos-edge-claim`, or the
+console window on Windows). Printing it on a receipt printer the claim finds is not built.
+

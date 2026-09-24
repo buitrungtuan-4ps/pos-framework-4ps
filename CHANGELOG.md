@@ -18,6 +18,42 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A replacement box never reuses a receipt number the cloud has seen**
+  ([ADR-0149](docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md), plan step
+  4.2). Every lease bump now publishes `receipt_floor` (`{ "number": M }`, the highest receipt
+  number ingested from the store's `billing.bill.settled` events) in the same config version as the
+  `lease` node. The edge raises its receipt counter above the floor on the pull that carries it,
+  before anything else in that document takes effect, and never lowers it; a floor it cannot write
+  holds the version back so the next pull tries again. A box restored from an older archive now skips
+  the numbers issued since instead of printing them twice. Receipts issued offline and never synced
+  remain the named risk. New guide: `docs/guides/replace-a-store-box.md`. **Upgrade note:** a new
+  Store-layer config node, `receipt_floor`; a bump on a cloud whose log cannot be read publishes the
+  lease without it and logs a warning.
+
+- **POS Station, a native till app** ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md),
+  plan steps 1.5, 3.2 and 3.3), in `apps/pos-station`, outside the workspace with its own lockfile.
+  A Tauri v2 window loads the till from the store's own edge, so it is always the version that edge
+  serves, and pairs natively: the token goes to the OS credential store and reaches the till through
+  ADR-0111's seam, so the till opens already paired. On the store PC (**Station**) it adds a tray
+  with the cloud link, the outbox and the printers, and notifications when they change; on a second
+  PC (**Terminal**) it runs the print agent as a restarted sidecar with that terminal's token. Pages
+  from the edge get no app commands. Measured on Ubuntu 24.04: a 4.4 MiB `.deb`, the till in about
+  0.55 s from launch, 380–550 MiB resident while idle. Windows (WebView2, LTSC, the installer) is
+  documented, not yet run. Not built by CI yet: that is a `.github` change awaiting an owner. Guide:
+  `docs/guides/pos-station.md`.
+
+- **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
+  ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).
+  `deploy/appliance/provision.sh` lays out exactly what the console's installer does (the `pos`
+  user, the update slots, `pos-edge.service` unchanged, `fonts-dejavu-core`). With `--store` it
+  writes `config.toml`; without it, it installs `pos-edge-claim.service`, which runs `pos-edge claim`
+  on first boot as the service's user, so one image serves every store. `--kiosk` adds cage and
+  Chromium on tty1 through a logind session, showing the claim page until the box is claimed and the
+  till after. `--dry-run` prints every action, and re-runs never replace the binary the edge is
+  running. `deploy/appliance/cloud-init.yaml` does the same on first boot, checking the binary's
+  minisign signature and pinning the script by SHA-256. The console's installer gate now also checks
+  the appliance scripts. Guide: `docs/guides/appliance.md`.
+
 - **A box installed with no store claims itself** with `pos-edge claim --cloud <url>`
   ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
   4.1, edge half). It opens a claim, shows the code in its log and on a page at
@@ -152,6 +188,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A box being claimed shows its code and nothing else.** The claim page
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)) was drawn
+  inside the till: a status bar reading "connecting", the till's navigation and a sign-out button, on
+  a box that has no store, where `pos-edge claim` serves nothing but the page and `/api/claim`, so
+  every one of those led somewhere that failed. The round-two demo found it. The page now renders on
+  its own.
+- **An old store's database is rebuilt at 8 KiB pages, once** (finding F5, one of the ten known
+  defects). New stores have been created at 8 KiB pages, where an event takes ~1.2 KB of disk
+  instead of ~4.7 KB, but SQLite ignores the page size on a file that already has pages, so every
+  store created earlier stayed at 4 KiB and four times the size. The edge now rewrites such a file
+  with `VACUUM` before it opens the store, logging before and after. It needs free disk about the
+  size of the result and delays that one start by up to a minute on a large store; a rebuild that
+  fails leaves the database untouched and is retried next start. **Upgrade note:** the first start
+  of this release on a store created before 8 KiB pages takes longer than usual.
+- **Two deployment instructions that did not work.** `docs/release-runbook.md` verified an artifact
+  with `minisign -P "$(cat minisign.pub)"`, which minisign refuses (`-P` takes the key line, not the
+  file); it now uses `-p minisign.pub`. `deploy/edge/README.md` added the printer group to a user
+  called `pos-edge`; the service runs as `pos`.
 - **A generated environment file no longer sets the store key to a sentence.** For a store with no
   key the console wrote `POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here`, and systemd
   keeps everything after the `=`, so the hint became the key and every `/sync` call was refused. The

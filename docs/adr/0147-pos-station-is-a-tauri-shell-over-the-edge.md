@@ -57,3 +57,25 @@ Plan items 1.5 (spike), 3.2 (Station) and 3.3 (Terminal) ask for one native app.
   works in the webview.
 - **The spike's WebView2-on-LTSC question stays open** until the app runs on an LTSC machine. The
   Linux build answers the rest: memory, installer size, kiosk and the print sidecar.
+
+**Amendment 1 (2026-09-24) — the app's dependencies, named.** Building the app needed four crates
+beside Tauri. Each is in the app's own lockfile, outside the workspace, so no edge or cloud binary
+takes it:
+
+| Crate | Why |
+|---|---|
+| `tauri-plugin-notification` 2 | the notifications this record promises Station mode (D-Bus on Linux, a toast on Windows) |
+| `ureq` 3, with `rustls` | the handful of calls to the edge, made synchronously on the app's own threads so no async task blocks; ring and the bundled Mozilla roots, as the workspace's own client (ADR-0054) |
+| `keyring` 3 | the OS keychain this record keeps the token in, with exactly the backends `key-vault-keyring` chose (ADR-0086). The workspace's `KeyVault` port is not used: the app sits outside the workspace, and a new `SecretName` would be a port change |
+| `log` | the facade Tauri already logs through |
+
+Two behaviours differ from the table above, for reasons found while building:
+
+- **Terminal mode has a small tray too** (open the till, status, quit), because a full-screen till
+  has no other way to reach them.
+- **Station mode reads the cloud link and the printers only while a till window is open.** Those
+  reads need a signed-in employee and reset that employee's idle sign-out, so polling them from the
+  tray would keep a till signed in for ever. Pairing health comes from `/api/pair/devices`, which
+  resets nothing. The edge publishes no printer online state, so the tray reports a printer joining
+  or leaving the list rather than going offline.
+

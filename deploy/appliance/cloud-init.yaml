@@ -1,0 +1,98 @@
+#cloud-config
+# Copyright (c) 2026 Pizza 4P's. All rights reserved.
+# Proprietary and confidential. Internal use only. See LICENSE.
+#
+# deploy/appliance/cloud-init.yaml — example user-data that turns a fresh Debian 12 or Ubuntu 24.04
+# machine (a mini-PC, a VM) into a store box that claims itself (ADR-0150, ADR-0148). The guide is
+# docs/guides/appliance.md. The `#cloud-config` line above must stay the first line of the file.
+#
+# THIS IS AN EXAMPLE. Every value in the block marked "Replace" below is a placeholder, and the
+# first-boot script refuses to run until each one has been replaced. None of them is a secret: a
+# release URL, a public key, a checksum and a cloud URL are all public facts. Nothing in this file
+# names a store either. The store is chosen at the console when the box is claimed, so one file
+# serves every store, and a copy that leaks claims nothing.
+#
+# What happens on first boot:
+#   1. cloud-init installs curl and minisign;
+#   2. the script downloads the pos-edge release binary and checks its minisign signature against
+#      the release key, which is the same check the edge makes on every update it installs (ADR-0047);
+#   3. it downloads provision.sh and checks it against the SHA-256 of the copy you reviewed;
+#   4. it runs provision.sh with --cloud and no --store, so the box shows a claim code;
+#   5. cloud-init reboots the box once, which is when the kiosk takes tty1.
+#
+# Its output goes to /var/log/cloud-init-output.log.
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - minisign
+
+write_files:
+  - path: /usr/local/sbin/pos-appliance-first-boot
+    owner: root:root
+    permissions: "0700"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      # --- Replace every value in this block. ----------------------------------------------------
+      # Where the release lives: the directory holding pos-edge-<tag>-<target>.bin and its .minisig.
+      # That is a GitHub Release of your fork, or wherever you mirror one (docs/release-runbook.md).
+      release_url="https://releases.example.com/pos-edge/vX.Y.Z"
+      tag="vX.Y.Z"
+      # x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu, matching this machine.
+      target="x86_64-unknown-linux-gnu"
+      # The second line of minisign.pub: the value your builds carry as POS_EDGE_TRUSTED_KEYS.
+      minisign_public_key="REPLACE-WITH-THE-SECOND-LINE-OF-minisign.pub"
+      # A copy of deploy/appliance/provision.sh you host, and the sha256sum of that exact copy.
+      provision_url="https://files.example.com/pos-appliance/provision.sh"
+      provision_sha256="REPLACE-WITH-THE-SHA256-OF-THAT-provision.sh"
+      # The cloud this box dials.
+      cloud_url="https://cloud.example.com"
+      # yes to open the till full screen on this machine's display; no for a box without a screen.
+      kiosk="yes"
+      # --------------------------------------------------------------------------------------------
+
+      for value in "$release_url" "$tag" "$minisign_public_key" "$provision_url" \
+        "$provision_sha256" "$cloud_url"; do
+        case $value in
+          *REPLACE* | *example.com* | *X.Y.Z*)
+            echo "pos-appliance: replace the placeholders in the user-data first (found: $value)" >&2
+            exit 1
+            ;;
+        esac
+      done
+
+      work=$(mktemp -d)
+      trap 'rm -rf "$work"' EXIT
+      cd "$work"
+
+      binary="pos-edge-${tag}-${target}.bin"
+      curl -fsSL --retry 5 -o "$binary" "$release_url/$binary"
+      curl -fsSL --retry 5 -o "$binary.minisig" "$release_url/$binary.minisig"
+      # Refuses bytes the release key did not sign. minisign finds "$binary.minisig" by itself.
+      minisign -Vm "$binary" -P "$minisign_public_key"
+
+      curl -fsSL --retry 5 -o provision.sh "$provision_url"
+      echo "$provision_sha256  provision.sh" | sha256sum -c -
+
+      # No --store: the box claims itself, and the console picks the store (ADR-0148).
+      args=(--binary "./$binary" --cloud "$cloud_url")
+      if [ "$kiosk" = yes ]; then
+        args+=(--kiosk)
+      fi
+      bash provision.sh "${args[@]}"
+
+runcmd:
+  - [/usr/local/sbin/pos-appliance-first-boot]
+
+# The kiosk takes tty1 at boot, so the box reboots once provisioning is done. A box without a screen
+# can drop this block; rebooting it anyway is harmless, and proves it comes back on its own.
+#
+# Only if provisioning finished: enabling the claim unit is one of provision.sh's last steps. A run
+# that failed leaves the box up, with the reason in /var/log/cloud-init-output.log.
+power_state:
+  mode: reboot
+  message: "pos appliance provisioned: rebooting once"
+  condition: [systemctl, is-enabled, --quiet, pos-edge-claim.service]

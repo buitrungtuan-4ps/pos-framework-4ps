@@ -107,6 +107,18 @@ function sendTo(path: string): void {
 }
 
 export function App() {
+  // A box being claimed (ADR-0148) is not a store server yet: `pos-edge claim` serves this page and
+  // `GET /api/claim`, and nothing else. So it gets the page alone — no status bar, no navigation, no
+  // sign-out and no live link. Each of those reaches for a store that does not exist yet, and on the
+  // box's own screen they offered a person reading a code off it a row of places that all failed.
+  if (window.location.pathname.startsWith("/claim")) {
+    return (
+      <main class="min-h-full" data-outcome="claim">
+        <Claim />
+      </main>
+    );
+  }
+
   const link = new LiveLink({
     onEvent: fold,
     onResync: () => {
@@ -150,11 +162,6 @@ export function App() {
   };
 
   onMount(() => {
-    // A box being claimed (ADR-0148) is not a store server yet: `pos-edge claim` serves only this
-    // page, so there is no link to open, no activation to check and no device to route.
-    if (window.location.pathname.startsWith("/claim")) {
-      return;
-    }
     link.start();
     // A store server provisioned for a cloud must be activated once before it can sync (ADR-0050,
     // ADR-0086); until then the operator belongs on `/setup`. Activation is checked ahead of pairing
@@ -190,7 +197,6 @@ export function App() {
       <Route path="/pair" component={Pairing} />
       <Route path="/devices" component={Devices} />
       <Route path="/setup" component={Setup} />
-      <Route path="/claim" component={Claim} />
       <Route path="/signin" component={SignIn} />
     </Router>
   );

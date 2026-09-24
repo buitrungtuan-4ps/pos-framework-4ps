@@ -362,3 +362,44 @@ fn a_loop_with_no_lease_leaves_the_box_active() {
         "a box with no lease authority wired has not established that it is superseded"
     );
 }
+
+/// A replacement box numbers its receipts above what the cloud has seen
+/// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)):
+/// the `receipt_floor` node the cloud publishes with a lease bump lifts the counter on the pull that
+/// carries it, and a floor below the counter changes nothing.
+#[test]
+fn a_published_receipt_floor_lifts_the_receipt_counter() {
+    use pos_edge::receipt::ReceiptAuthority as _;
+    use pos_proto::ids::BillId;
+
+    let receipts = Arc::new(InMemoryReceipts::new());
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(store_id()),
+            EdgeSession::bootstrap(),
+            receipts.clone(),
+        )
+        .expect("seed the id generator"),
+    );
+    let client = ConfigClient::new(
+        FakeConfigTransport {
+            version: version(),
+            document: serde_json::json!({ "receipt_floor": { "number": 40 } }),
+        },
+        edge,
+        None,
+    );
+    run_ready(client.pump_once()).expect("pump");
+
+    let bill = |n: u128| BillId::new(Ulid::from_u128(n));
+    let next = run_ready(receipts.allocate_receipt(store_id(), bill(1))).expect("allocates");
+    assert_eq!(
+        next, 41,
+        "the first receipt is above everything the cloud has seen"
+    );
+
+    run_ready(receipts.raise_floor(store_id(), 5)).expect("raises");
+    let after = run_ready(receipts.allocate_receipt(store_id(), bill(2))).expect("allocates");
+    assert_eq!(after, 42, "a lower floor never lowers the counter");
+}
