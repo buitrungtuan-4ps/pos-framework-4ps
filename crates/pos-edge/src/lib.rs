@@ -38,6 +38,7 @@ pub mod app;
 pub mod auth;
 pub mod backup;
 pub mod backup_client;
+pub mod claim;
 pub mod clock;
 pub mod cloud_http;
 pub mod config;

@@ -572,6 +572,16 @@ export interface ActivationStanding {
   activated: boolean;
 }
 
+/**
+ * What a box being claimed shows, from `GET /api/claim` (ADR-0148). Served only by `pos-edge claim`,
+ * on the box's own screen, before it belongs to any store.
+ */
+export type ClaimStatus =
+  | { state: "CONNECTING"; cloud: string }
+  | { state: "WAITING"; user_code: string; expires_at_ms: number; cloud: string }
+  | { state: "UNREACHABLE"; cloud: string }
+  | { state: "CLAIMED"; store_id: string };
+
 /** One printer the store published, from `GET /api/printers`. */
 export interface PrinterEntry {
   device_id: string;

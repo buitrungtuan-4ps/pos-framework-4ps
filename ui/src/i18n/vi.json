@@ -1,5 +1,11 @@
 {
   "app.brand": "Pizza 4P's",
+  "claim.claimed": "Đã nhận máy. Máy này giờ là máy chủ cửa hàng và sẽ khởi động trong giây lát.",
+  "claim.connecting": "Đang kết nối tới {cloud}…",
+  "claim.expires": "Mã này còn hiệu lực {minutes} phút nữa. Khi hết hạn sẽ có mã mới.",
+  "claim.hint": "Trên console tại {cloud}, mở Kích hoạt → Nhận máy, nhập mã này và chọn thiết bị mà máy này sẽ trở thành.",
+  "claim.title": "Nhận máy này",
+  "claim.unreachable": "Không kết nối được tới {cloud}. Hãy kiểm tra cáp mạng hoặc Wi-Fi; máy sẽ tiếp tục thử.",
   "common.back_counter": "← Quầy",
   "common.back_floor": "← Sơ đồ bàn",
   "common.back_order": "← Gọi món",

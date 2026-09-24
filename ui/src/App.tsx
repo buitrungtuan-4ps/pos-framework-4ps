@@ -15,6 +15,7 @@ import { Order } from "./screens/Order";
 import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Setup } from "./screens/Setup";
+import { Claim } from "./screens/Claim";
 import { Shift } from "./screens/Shift";
 import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
@@ -149,6 +150,11 @@ export function App() {
   };
 
   onMount(() => {
+    // A box being claimed (ADR-0148) is not a store server yet: `pos-edge claim` serves only this
+    // page, so there is no link to open, no activation to check and no device to route.
+    if (window.location.pathname.startsWith("/claim")) {
+      return;
+    }
     link.start();
     // A store server provisioned for a cloud must be activated once before it can sync (ADR-0050,
     // ADR-0086); until then the operator belongs on `/setup`. Activation is checked ahead of pairing
@@ -184,6 +190,7 @@ export function App() {
       <Route path="/pair" component={Pairing} />
       <Route path="/devices" component={Devices} />
       <Route path="/setup" component={Setup} />
+      <Route path="/claim" component={Claim} />
       <Route path="/signin" component={SignIn} />
     </Router>
   );
