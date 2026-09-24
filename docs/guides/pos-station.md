@@ -237,8 +237,8 @@ reads the fork's choice from the environment of the `tauri build`:
 | Set | Result |
 |---|---|
 | nothing | a notice, and an unsigned installer (SmartScreen warns on first run) |
-| `POS_SIGN_PFX_BASE64`, `POS_SIGN_PFX_PASSWORD` | signed with that certificate — a public CA's, or an internal one from `new-internal-signing-cert.ps1` |
-| `POS_SIGN_COMMAND` (with `{file}`) | signed by that command: an EV token, Azure Trusted Signing, a KMS through `jsign` |
+| `POS_SIGN_PFX_BASE64`, `POS_SIGN_PFX_PASSWORD` | signed with that certificate — an internal one from `new-internal-signing-cert.ps1`; a public CA no longer issues a `.pfx` ([release runbook](../release-runbook.md#authenticode-signing-the-windows-binary-for-windows-itself)) |
+| `POS_SIGN_COMMAND` (with `{file}`) | signed by that command: a public CA's certificate through its signing service (Azure Trusted Signing, DigiCert KeyLocker, SSL.com eSigner), an EV token, a KMS through `jsign` |
 | `POS_SIGN_REQUIRED=true` | no signing configured fails the build instead |
 
 The app has no over-the-air update of its own yet, so there is no minisign step to order it against.

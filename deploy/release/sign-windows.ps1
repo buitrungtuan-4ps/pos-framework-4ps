@@ -9,12 +9,13 @@
     call the same thing and cannot disagree.
 
       POS_SIGN_MODE           auto (default) | none | pfx | command
-      POS_SIGN_PFX_BASE64     pfx: the .pfx file, base64-encoded. A certificate from a public CA, or
-                              an internal one made by new-internal-signing-cert.ps1
+      POS_SIGN_PFX_BASE64     pfx: the .pfx file, base64-encoded: an internal certificate made by
+                              new-internal-signing-cert.ps1. A public CA has not issued a .pfx
+                              since June 2023; its keys stay in hardware (POS_SIGN_COMMAND)
       POS_SIGN_PFX_PASSWORD   pfx: its password
       POS_SIGN_COMMAND        command: any signer's command line, with {file} where the path goes.
-                              The route for a key that cannot leave its hardware - an EV certificate
-                              on a token, Azure Trusted Signing, a cloud KMS through jsign
+                              The route for a public CA's certificate, whose key cannot leave its
+                              hardware - a token, Azure Trusted Signing, a cloud KMS through jsign
       POS_SIGN_TIMESTAMP_URL  pfx: the RFC 3161 timestamp server (default http://timestamp.digicert.com).
                               A timestamp keeps the signature valid after the certificate expires
       POS_SIGN_DESCRIPTION    pfx: the description Windows shows in the UAC prompt

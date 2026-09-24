@@ -177,7 +177,10 @@ store key to paste and no broker token to copy. A store key still works if you g
 loops use it instead. The console will not offer the file when it was opened over plain http, because
 the file tells the store to dial the cloud over `https`, the only way a store dials it. Windows
 SmartScreen warns on the file unless your fork signs it
-([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)).
+([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)): the browser may ask whether to keep
+the file (keep it), and Windows opens with **Windows protected your PC** (choose **More info**, then
+**Run anyway**). It happens once per PC, at that first double-click; updates install without it, and
+the console's setup-file panel says the same.
 
 ### A box with no store yet: claim it
 

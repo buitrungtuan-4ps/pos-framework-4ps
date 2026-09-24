@@ -1520,6 +1520,7 @@
   "setupFile.release": "Bản phát hành",
   "setupFile.releaseHint": "Phiên bản cần cài — phiên bản các cửa hàng đang chạy, xem ở màn hình OTA. Sau đó máy tự cập nhật.",
   "setupFile.title": "Tệp cài đặt Windows (.exe)",
+  "setupFile.unsigned": "Nếu bản phát hành chưa được ký số, trình duyệt hoặc Windows có thể cảnh báo tệp này. Trình duyệt hỏi thì chọn Giữ lại (Keep). Windows hiện hộp “Windows đã bảo vệ PC của bạn” (Windows protected your PC) thì bấm “Thông tin thêm” (More info), rồi “Vẫn chạy” (Run anyway). Mỗi máy chỉ gặp một lần; các bản cập nhật sau tự cài, không hỏi lại.",
   "shell.breadcrumb": "Đường dẫn",
   "shell.version": "Phiên bản {version}",
   "stations.addRule": "Thêm quy tắc",
