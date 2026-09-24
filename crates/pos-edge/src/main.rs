@@ -126,6 +126,11 @@ where
 {
     let config = EdgeConfig::load(&path)?;
 
+    // A store created before 8 KiB pages is rewritten at them once, before anything opens the file
+    // (finding F5): its database shrinks to about a quarter. On a blocking thread, because a large
+    // store takes a while; and never fatal, because a store on its old page size still trades.
+    rebuild_page_size(&config.store_path).await;
+
     // The real edge stores events in SQLite (ADR-0015); the example uses the in-memory fakes.
     let store = SqliteStore::open(&config.store_path).map_err(EdgeError::Store)?;
     let identity = StoreIdentity::for_store(config.store_id);
@@ -241,6 +246,30 @@ fn self_test(config_path: &std::path::Path) -> Result<(), EdgeError> {
         "self-test passed: this binary runs and reads this store's configuration"
     );
     Ok(())
+}
+
+/// Rewrites a store database created before 8 KiB pages at 8 KiB, once, and says what it did.
+async fn rebuild_page_size(database: &std::path::Path) {
+    if !store_sqlite::needs_page_rebuild(database).unwrap_or(false) {
+        return;
+    }
+    tracing::info!(
+        database = %database.display(),
+        "rebuilding the store database at 8 KiB pages, once; a large store takes a minute"
+    );
+    let path = database.to_path_buf();
+    match tokio::task::spawn_blocking(move || store_sqlite::rebuild_page_size(&path)).await {
+        Ok(Ok(store_sqlite::PageRebuild::Rebuilt { from, pages })) => {
+            tracing::info!(from, pages, "rebuilt the store database at 8 KiB pages");
+        }
+        Ok(Ok(store_sqlite::PageRebuild::NotNeeded)) => {}
+        Ok(Err(error)) => tracing::warn!(
+            %error,
+            "could not rebuild the store database at 8 KiB pages; it opens on its old page size and \
+             tries again next start"
+        ),
+        Err(error) => tracing::warn!(%error, "the page-size rebuild did not finish"),
+    }
 }
 
 /// The subcommand that seals, opens and checks a store archive.
