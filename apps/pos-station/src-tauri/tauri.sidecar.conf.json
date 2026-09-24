@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/pos_print_agent"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local-pages",
+  "description": "The two bundled pages, and only they, may call the app's own commands. The till is a remote page (the edge's own URL) in a window no capability names, so it can invoke nothing (ADR-0147). No core or plugin permission is granted to any page.",
+  "local": true,
+  "windows": ["connect", "status"],
+  "permissions": [
+    "allow-set-language",
+    "allow-connect-context",
+    "allow-pair",
+    "allow-status"
+  ]
+}

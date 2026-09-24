@@ -1,0 +1,38 @@
+<!-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+     Proprietary and confidential. Internal use only. See LICENSE. -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-i18n="status.title">status.title</title>
+    <link rel="stylesheet" href="station.css" />
+    <script src="i18n.js" defer></script>
+    <script src="status.js" defer></script>
+  </head>
+  <body>
+    <main class="card">
+      <h1 data-i18n="status.title">status.title</h1>
+      <p id="mode" class="lead" data-i18n="status.loading">status.loading</p>
+      <p id="unsaved" class="notice" role="status" data-i18n="status.pairing_not_saved" hidden>
+        status.pairing_not_saved
+      </p>
+      <dl class="facts">
+        <dt data-i18n="status.edge">status.edge</dt>
+        <dd id="edge"></dd>
+        <dt data-i18n="status.pairing">status.pairing</dt>
+        <dd id="pairing"></dd>
+        <dt data-i18n="status.cloud">status.cloud</dt>
+        <dd id="cloud"></dd>
+        <dt data-i18n="status.outbox">status.outbox</dt>
+        <dd id="outbox"></dd>
+        <dt data-i18n="status.printers">status.printers</dt>
+        <dd id="printers"></dd>
+        <dt id="agent-label" data-i18n="status.agent" hidden>status.agent</dt>
+        <dd id="agent" hidden></dd>
+      </dl>
+      <p class="hint" data-i18n="status.printers.note">status.printers.note</p>
+      <p id="version" class="version"></p>
+    </main>
+  </body>
+</html>

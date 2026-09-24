@@ -1,0 +1,48 @@
+<!-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+     Proprietary and confidential. Internal use only. See LICENSE. -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title data-i18n="connect.title">connect.title</title>
+    <link rel="stylesheet" href="station.css" />
+    <script src="i18n.js" defer></script>
+    <script src="connect.js" defer></script>
+  </head>
+  <body>
+    <main class="card">
+      <h1 data-i18n="connect.title">connect.title</h1>
+      <p class="lead" data-i18n="connect.lead">connect.lead</p>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <form id="form" novalidate>
+        <label for="address" data-i18n="connect.address_label">connect.address_label</label>
+        <input
+          id="address"
+          name="address"
+          type="text"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-describedby="address-hint"
+          data-i18n-placeholder="connect.address_placeholder"
+        />
+        <p id="address-hint" class="hint" data-i18n="connect.address_hint">connect.address_hint</p>
+        <label for="code" data-i18n="connect.code_label">connect.code_label</label>
+        <input
+          id="code"
+          name="code"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="7"
+          aria-describedby="code-hint"
+          data-i18n-placeholder="connect.code_placeholder"
+        />
+        <p id="code-hint" class="hint" data-i18n="connect.code_hint">connect.code_hint</p>
+        <p id="error" class="error" role="alert" hidden></p>
+        <button id="submit" type="submit" data-i18n="connect.submit">connect.submit</button>
+      </form>
+    </main>
+  </body>
+</html>
