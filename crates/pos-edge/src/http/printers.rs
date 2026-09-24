@@ -20,11 +20,13 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use pos_core::business_date::{StoreTimeZone, local_time};
 use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
 use pos_proto::ids::DeviceId;
+use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
 use crate::clock::SystemClock;
@@ -101,7 +103,7 @@ where
                     edge.store_id(),
                     edge.print_job_id(),
                     device_id,
-                    &SystemClock.now().to_string(),
+                    &printed_at(SystemClock.now(), &session.timezone),
                 )
                 .await
         }
@@ -111,4 +113,34 @@ where
         print: outcome.as_wire(),
     })
     .into_response()
+}
+
+/// When a test page printed, as the shop's wall clock reads it: the store's timezone, named.
+///
+/// A store PC's clock usually keeps UTC, so the instant's own text told somebody in Ho Chi Minh City
+/// that a page printed at lunchtime came out at five in the morning.
+fn printed_at(now: Timestamp, zone: &StoreTimeZone) -> String {
+    match (local_time(now, zone), zone.iana_name()) {
+        (Ok(local), Some(name)) => format!("{local} ({name})"),
+        (Ok(local), None) => local.to_string(),
+        // Unreachable for a clock reading. The instant is still the truth, so print that.
+        (Err(_), _) => now.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pos_core::business_date::StoreTimeZone;
+
+    use super::printed_at;
+
+    #[test]
+    fn a_test_page_prints_the_shop_s_time_and_names_its_zone() {
+        let saigon = StoreTimeZone::from_iana_name("Asia/Ho_Chi_Minh").expect("a real zone");
+        let now = "2026-09-24T05:40:00Z".parse().expect("an instant");
+        assert_eq!(
+            printed_at(now, &saigon),
+            "2026-09-24 12:40 (Asia/Ho_Chi_Minh)"
+        );
+    }
 }

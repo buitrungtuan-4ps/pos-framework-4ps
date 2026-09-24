@@ -71,6 +71,13 @@ pub struct PricedLine {
     /// the base recipe plus one recipe per modifier, and a priced line that dropped the ids could
     /// only ever be fired as though the guest had ordered the bare item.
     pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// The names those modifiers have in the catalog that priced the line, index-aligned with
+    /// [`Self::modifier_menu_item_ids`]
+    /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)).
+    ///
+    /// Read in the same lookup that adds each modifier's price, so a name and the price inside
+    /// [`Self::unit_price`] come from one price book. The receipt prints these, never today's names.
+    pub modifier_display_names: Vec<DisplayName>,
     /// Whether the caller's quoted unit price differed from the store's. Reported, not refused: a
     /// stale quote loses a sale if refused and loses margin if honoured, so it is only surfaced.
     pub repriced: bool,
@@ -157,6 +164,7 @@ pub fn reprice_line(
     // or 86'd modifier refuses the line exactly as an unknown base item does. `checked_add` also
     // rejects a modifier priced in another currency, which folds into `Money`.
     let mut unit_price = base.unit_price;
+    let mut modifier_display_names = Vec::with_capacity(line.modifier_menu_item_ids.len());
     for modifier_id in &line.modifier_menu_item_ids {
         let modifier = catalog
             .get(*modifier_id)
@@ -165,6 +173,7 @@ pub fn reprice_line(
             return Err(RepriceError::Unavailable(*modifier_id));
         }
         unit_price = unit_price.checked_add(modifier.unit_price)?;
+        modifier_display_names.push(modifier.display_name.clone());
     }
 
     let line_total = unit_price.mul_quantity(line.quantity, Rounding::HalfUp)?;
@@ -190,6 +199,7 @@ pub fn reprice_line(
         tax_class_id: base.tax_class_id,
         tax_rate: tax_rate.as_ratio(),
         modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
+        modifier_display_names,
         repriced,
     })
 }
@@ -311,6 +321,32 @@ mod tests {
             "150,000 base + 20,000 cheese"
         );
         assert_eq!(priced.line_total, vnd(170_000));
+    }
+
+    #[test]
+    fn a_priced_line_names_its_modifiers_from_the_catalog_that_priced_it() {
+        // ADR-0144: the receipt prints these, so they come from the lookup that added the price —
+        // one per modifier, in the order the modifiers were chosen, repeats included.
+        let mut requested = line(item(500), Quantity::ONE);
+        requested.modifier_menu_item_ids = vec![item(600), item(600)];
+        let priced =
+            reprice_line(&catalog(), &rates(), SalesChannel::DineIn, &requested).expect("prices");
+        let names: Vec<&str> = priced
+            .modifier_display_names
+            .iter()
+            .map(DisplayName::as_str)
+            .collect();
+        assert_eq!(names, ["Extra cheese", "Extra cheese"]);
+        assert_eq!(priced.unit_price, vnd(190_000), "each one is charged");
+
+        let bare = reprice_line(
+            &catalog(),
+            &rates(),
+            SalesChannel::DineIn,
+            &line(item(500), Quantity::ONE),
+        )
+        .expect("prices");
+        assert!(bare.modifier_display_names.is_empty());
     }
 
     #[test]

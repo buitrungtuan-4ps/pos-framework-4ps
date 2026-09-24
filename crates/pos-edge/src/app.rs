@@ -1066,6 +1066,12 @@ pub struct ReceiptLine {
     pub unit_price: Money,
     /// The extended amount for the row. The rows sum to the bill's `subtotal`.
     pub line_total: Money,
+    /// The modifiers' names as the guest saw them when the line was added, printed `  + name` under
+    /// the row ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)).
+    ///
+    /// Empty for a line recorded before `sales.order_line.added` carried them: such a receipt
+    /// prints neither an id nor a name looked up today, so an old receipt reprints as it was.
+    pub modifier_display_names: Vec<DisplayName>,
 }
 
 /// What a fire tells the kitchen, for the caller to turn into a ticket.
@@ -1375,6 +1381,10 @@ struct LineRecord {
     tax_class_id: TaxClassId,
     /// The modifiers chosen at add time, which a fire consumes alongside the base recipe (§8).
     modifier_menu_item_ids: Vec<MenuItemId>,
+    /// The names those modifiers had at add time, which the receipt prints under the line
+    /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)). Empty for
+    /// a line recorded before the event carried them, and its receipt prints no modifiers.
+    modifier_display_names: Vec<DisplayName>,
     /// When the line went to the kitchen, or `None` while it is still on the pad.
     ///
     /// Taken from the *envelope* of `sales.order_line.fired` rather than read off a clock here, so
@@ -1406,6 +1416,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             line_total: event.line_total,
             tax_class_id: event.tax_class_id,
             modifier_menu_item_ids: event.modifier_menu_item_ids,
+            modifier_display_names: event.modifier_display_names,
             // An added line has not been fired, so there is no time to record yet. The fold on
             // `sales.order_line.fired` fills it from that event's own envelope.
             fired_time: None,
@@ -2674,6 +2685,9 @@ impl<S: EventStore> Edge<S> {
                 seat: None,
                 course_id: None,
                 modifier_menu_item_ids: priced.modifier_menu_item_ids.clone(),
+                // From the same book that priced the line (ADR-0144), not from this function's
+                // session snapshot, which the config pull may have swapped since.
+                modifier_display_names: priced.modifier_display_names.clone(),
                 note_present: *note_present,
             };
             let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
@@ -3591,6 +3605,21 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// The names `menu` gives a line's modifiers, index-aligned with `ids`
+    /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)) — or none
+    /// at all if the book cannot name every one.
+    ///
+    /// All or nothing, because the event promises the two lists line up by position, and one gap
+    /// would pair every later name with the wrong modifier. A book that cannot name a modifier it
+    /// offers is a publishing fault; that line's receipt prints no modifiers, as a line recorded
+    /// before ADR-0144 does, and the kitchen ticket still falls back to the id.
+    fn modifier_names(menu: &MenuCatalog, ids: &[MenuItemId]) -> Vec<DisplayName> {
+        ids.iter()
+            .map(|id| menu.get(*id).map(|entry| entry.display_name.clone()))
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default()
+    }
+
     /// Adds a line to the order the table holds (`sales.order_line.added`).
     ///
     /// Adding a line is not a state-machine transition and needs no permission; it records what the
@@ -3628,12 +3657,18 @@ impl<S: EventStore> Edge<S> {
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
-        Self::check_modifiers(&self.session(), &draft)?;
+        let session = self.session();
+        Self::check_modifiers(&session, &draft)?;
+        // The device priced this line from the session's price book and sends the modifiers' ids,
+        // never their names, so the names come from that book (ADR-0144).
+        let modifier_display_names =
+            Self::modifier_names(&session.menu, &draft.modifier_menu_item_ids);
         let order_id = self
             .lock_projection()
             .order_for_table(table_id)
             .ok_or(AppError::NoOpenOrder)?;
-        self.append_line(&ctx, order_id, draft).await
+        self.append_line(&ctx, order_id, draft, modifier_display_names)
+            .await
     }
 
     /// Opens a tableless order at the counter for the signed-in member of staff
@@ -3739,16 +3774,21 @@ impl<S: EventStore> Edge<S> {
             note_present: choice.note_present,
         };
         Self::check_modifiers(&session, &draft)?;
-        self.append_line(&ctx, order_id, draft).await
+        self.append_line(&ctx, order_id, draft, priced.modifier_display_names)
+            .await
     }
 
     /// Records a line on an order and folds it into the projection: the shared tail of the table
     /// path and the order path.
+    ///
+    /// `modifier_display_names` is the caller's, because each path priced the line against its own
+    /// book: the device's copy of the session's menu, or the edge's repricing (ADR-0144).
     async fn append_line(
         &self,
         ctx: &DecisionCtx,
         order_id: OrderId,
         draft: LineDraft,
+        modifier_display_names: Vec<DisplayName>,
     ) -> Result<LineView, AppError> {
         let order_line_id = OrderLineId::new(self.next_ulid());
 
@@ -3765,6 +3805,7 @@ impl<S: EventStore> Edge<S> {
             seat: draft.seat,
             course_id: draft.course_id,
             modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
+            modifier_display_names,
             note_present: draft.note_present,
         };
         self.commit_and_publish(ctx, &payload).await?;
@@ -5378,6 +5419,7 @@ impl<S: EventStore> Edge<S> {
                 quantity: line.quantity,
                 unit_price: line.unit_price,
                 line_total: line.line_total,
+                modifier_display_names: line.modifier_display_names.clone(),
             })
             .collect()
     }
@@ -6291,6 +6333,7 @@ mod tests {
             tax_class_id: EdgeSession::standard_tax_class(),
             tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
             modifier_menu_item_ids: Vec::new(),
+            modifier_display_names: Vec::new(),
             repriced: false,
         }
     }

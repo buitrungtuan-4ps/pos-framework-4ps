@@ -188,6 +188,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A receipt says what each line was made with**
+  ([ADR-0144](docs/adr/0144-a-line-records-the-names-of-its-modifiers.md), one of the ten known
+  defects). A guest who ordered a 30 cm Margherita got a receipt that said "Margherita": the size's
+  price was inside the unit price, but its name was nowhere. Each row now lists `  + name` for every
+  modifier chosen, under the item and above its amount, by the name the line recorded when it was
+  added, so a rename published before payment, or a reprint later, changes nothing.
+  `sales.order_line.added` gains `modifier_display_names`, filled from the price book the line was
+  priced against: the till's, for a line added at a table, and the edge's own repricing, for an
+  order line or an order from outside. **Upgrade note:** the field is additive and defaults to empty,
+  so no `PROTOCOL_VERSION` bump. An older edge ignores it, and a line recorded before this release
+  prints no modifiers rather than names looked up today.
+- **A printer test page prints the shop's time** (one of the ten known defects). It printed the PC's
+  clock as UTC (`2026-09-24T05:40:12.345Z`), so a page printed at lunchtime in Ho Chi Minh City said
+  05:40. It now prints the wall-clock time in the store's timezone and names the zone:
+  `2026-09-24 12:40 (Asia/Ho_Chi_Minh)`.
 - **A box being claimed shows its code and nothing else.** The claim page
   ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)) was drawn
   inside the till: a status bar reading "connecting", the till's navigation and a sign-out button, on

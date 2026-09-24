@@ -261,6 +261,18 @@ event_catalogue! {
         /// and the box will not boot.
         #[serde(default)]
         modifier_menu_item_ids: Vec<MenuItemId>,
+        /// The names the modifiers had when the line was priced, index-aligned with
+        /// `modifier_menu_item_ids`
+        /// ([ADR-0144](../../../docs/adr/0144-a-line-records-the-names-of-its-modifiers.md)).
+        ///
+        /// What the receipt prints under the line: a receipt shows what the guest agreed
+        /// to, not today's spelling (ADR-0129). Menu text, not personal data.
+        ///
+        /// `#[serde(default)]` for the same reason as the ids: a line written before this
+        /// field replays with none, and its receipt prints no modifiers rather than names
+        /// looked up today.
+        #[serde(default)]
+        modifier_display_names: Vec<DisplayName>,
         /// Whether a guest note was written.
         ///
         /// The note's **text** deliberately never enters the log — see `crate::text`.
@@ -1212,6 +1224,46 @@ mod tests {
         let payload: SalesOrderOpened =
             serde_json::from_str(json).expect("an unknown field must not break the read");
         assert_eq!(payload.guest_count, Some(4));
+    }
+
+    #[test]
+    fn a_line_recorded_before_modifier_names_existed_still_reads() {
+        // ADR-0144. Every line an upgrading store replays at start-up predates the field, so it
+        // must read, with no names: its receipt then prints no modifiers, and the box boots.
+        use super::SalesOrderLineAdded;
+        use crate::ids::{MenuItemId, OrderLineId, TaxClassId};
+        use crate::money::{CurrencyCode, Money, Ratio};
+        use crate::quantity::Quantity;
+        use crate::text::DisplayName;
+
+        let line = SalesOrderLineAdded {
+            order_id: OrderId::new(Ulid::from_parts(1, 9)),
+            order_line_id: OrderLineId::new(Ulid::from_parts(1, 10)),
+            menu_item_id: MenuItemId::new(Ulid::from_parts(1, 11)),
+            display_name: DisplayName::new("Margherita"),
+            quantity: Quantity::ONE,
+            unit_price: Money::new(CurrencyCode::VND, 190_000),
+            line_total: Money::new(CurrencyCode::VND, 190_000),
+            tax_class_id: TaxClassId::new(Ulid::from_parts(1, 12)),
+            tax_rate: Ratio::basis_points(1_000).expect("a rate"),
+            seat: None,
+            course_id: None,
+            modifier_menu_item_ids: vec![MenuItemId::new(Ulid::from_parts(1, 13))],
+            modifier_display_names: vec![DisplayName::new("30 cm")],
+            note_present: false,
+        };
+        let mut json = serde_json::to_value(&line).expect("serialise");
+        let removed = json
+            .as_object_mut()
+            .and_then(|fields| fields.remove("modifier_display_names"));
+        assert!(removed.is_some(), "a new line writes the names");
+
+        // From text, as a replay reads it: the currency code deserialises borrowed.
+        let text = serde_json::to_string(&json).expect("re-serialise");
+        let older: SalesOrderLineAdded =
+            serde_json::from_str(&text).expect("a line from before the field still reads");
+        assert!(older.modifier_display_names.is_empty());
+        assert_eq!(older.modifier_menu_item_ids, line.modifier_menu_item_ids);
     }
 
     #[test]

@@ -72,6 +72,7 @@ fn a_priced_line() -> pos_core::menu::PricedLine {
         tax_class_id: class(),
         tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
         modifier_menu_item_ids: Vec::new(),
+        modifier_display_names: Vec::new(),
         repriced: false,
     }
 }
