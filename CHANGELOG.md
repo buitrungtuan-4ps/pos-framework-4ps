@@ -39,8 +39,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   PC (**Terminal**) it runs the print agent as a restarted sidecar with that terminal's token. Pages
   from the edge get no app commands. Measured on Ubuntu 24.04: a 4.4 MiB `.deb`, the till in about
   0.55 s from launch, 380–550 MiB resident while idle. Windows (WebView2, LTSC, the installer) is
-  documented, not yet run. Not built by CI yet: that is a `.github` change awaiting an owner. Guide:
+  documented, not yet run. CI builds it, Windows installer included (next entry). Guide:
   `docs/guides/pos-station.md`.
+
+- **CI builds POS Station, and runs the edge's performance budgets every night.**
+  `.github/workflows/station.yml` runs the app's fmt, clippy and tests on Linux and bundles the
+  Windows installer, on every pull request or push to `main` that touches the app, the print agent
+  or `sign-windows.ps1`, and on demand. The installer, unsigned, is kept as the run artifact
+  `pos-station-windows-unsigned` for 14 days, for trying on a real PC. `nightly.yml` gains `bench`:
+  the `perf_budget` tests in a release build, over the in-memory store and over SQLite, so a store
+  that starts slowing with age again fails a job. **Upgrade note:** none — CI only, no change to any
+  shipped artifact.
 
 - **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
   ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).

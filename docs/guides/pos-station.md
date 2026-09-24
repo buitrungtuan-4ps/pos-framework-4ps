@@ -219,6 +219,16 @@ ours) is the middle choice.
 → `POS Station` on install (a per-machine installer, so every user of the store PC) and removes it on
 uninstall.
 
+### In CI
+
+[`.github/workflows/station.yml`](../../.github/workflows/station.yml) runs the Linux checks above and
+bundles the Windows installer the same way, with the same CLI version. It runs on every pull request
+that touches the app, the print agent or `sign-windows.ps1`, on those pushes to `main`, and on demand
+from the Actions tab (**station → Run workflow**). The installer is the run's artifact
+`pos-station-windows-unsigned`, kept for 14 days: download it from the run's summary page to try it on
+a real PC. Nothing in that workflow holds a key, so the installer is unsigned and SmartScreen asks
+once, on the first run.
+
 ## Sign it (Windows)
 
 `bundle.windows.signCommand` runs [ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)'s
@@ -322,8 +332,6 @@ scrolling smooth.
 - **Hardware for 3.3, out of scope per ADR-0147**: the customer display, the scale, the cash drawer
   and card-terminal SDKs. Each needs hardware to prove against, and some need a port and an adapter.
   A keyboard-wedge scanner already works in the webview.
-- **A CI job** that builds and tests the app: a `.github` change, which needs an owner review
-  ([ADR-0126](../adr/0126-when-an-agent-may-merge.md)).
 - **Printer online/offline** in the tray: needs an additive edge route.
 - **A persistent Linux credential store**: the Secret Service would survive a reboot but needs a
   desktop session running one — a decision, not a fix.
