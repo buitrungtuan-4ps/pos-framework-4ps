@@ -209,10 +209,12 @@ impl RollupStore for FakeRollups {
     }
 }
 
-/// The API-key store the bearer check consults, keyed by the public id.
+/// The API-key store the bearer check consults, keyed by the public id. Device credentials live in
+/// a table of their own, as in the real store (ADR-0143).
 #[derive(Clone, Default)]
 struct FakeKeys {
     rows: Arc<Mutex<HashMap<ApiKeyId, StoredApiKey>>>,
+    devices: Arc<Mutex<HashMap<ApiKeyId, StoredApiKey>>>,
 }
 
 impl FakeKeys {
@@ -225,6 +227,26 @@ impl ApiKeyStore for FakeKeys {
     async fn lookup(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
         Ok(self.rows.lock().expect("lock").get(&id).cloned())
     }
+
+    async fn lookup_device(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+        Ok(self.devices.lock().expect("lock").get(&id).cloned())
+    }
+}
+
+/// Mints a box's device credential for `store` the way activation does, and returns the
+/// `posdev_…` token the box would present (ADR-0143).
+fn issue_device_credential(keys: &FakeKeys, tenant_id: TenantId, store: StoreId) -> String {
+    let id = Ulid::from_u128(0x00DE_71CE);
+    let (minted, token) = pos_cloud::activation::mint_device_credential(id, FAKE_SECRET);
+    let stored = StoredApiKey::for_device(
+        ApiKeyId::new(minted.id),
+        &tenant_id.to_string(),
+        &store.to_string(),
+        &minted.secret_hash(),
+    )
+    .expect("a well-formed device row");
+    keys.devices.lock().expect("lock").insert(stored.id, stored);
+    token
 }
 
 impl ApiKeyAdminStore for FakeKeys {
@@ -3232,6 +3254,152 @@ async fn config_sync_records_store_liveness() {
         Some(version),
         "the held version the edge reported is recorded verbatim"
     );
+}
+
+/// A box publishes its own events with nothing but its device credential (ADR-0143): the hello is
+/// negotiated on the cloud's side, the whole batch lands, and a replay lands nothing new.
+#[tokio::test]
+async fn a_box_publishes_its_events_with_its_device_credential() {
+    let keys = FakeKeys::default();
+    let store = FakeStore::new();
+    let router = http::router(app_all(
+        Cloud::new(store.clone()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let token = issue_device_credential(&keys, tenant(), store_id());
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let hello =
+        pos_proto::protocol::Hello::current(store_id(), pos_proto::text::ReleaseTag::new("v1.0.0"));
+    let answered = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/events/hello"),
+            &serde_json::to_value(&hello).expect("a hello encodes"),
+            &token,
+        ))
+        .await
+        .expect("route the hello");
+    assert_eq!(answered.status(), StatusCode::OK);
+    let outcome: pos_proto::protocol::HelloOutcome =
+        serde_json::from_value(json_body(answered).await).expect("an outcome");
+    assert_eq!(
+        outcome,
+        pos_proto::protocol::HelloOutcome::Accepted {
+            protocol_version: pos_proto::PROTOCOL_VERSION
+        }
+    );
+
+    let uri = format!("/sync/stores/{store_ulid}/events");
+    let batch = serde_json::json!({ "events": fixtures::activations(store_id(), 1, 5) });
+    for attempt in ["first", "replay"] {
+        let published = router
+            .clone()
+            .oneshot(post_json_bearer(&uri, &batch, &token))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK, "{attempt}");
+        assert_eq!(
+            json_body(published).await,
+            serde_json::json!({ "accepted": 5 }),
+            "{attempt}: the whole batch is held"
+        );
+    }
+    let held = store
+        .read(&EventQuery::first(
+            store_id(),
+            core::num::NonZeroU32::new(100).expect("positive"),
+        ))
+        .await
+        .expect("read the log");
+    assert_eq!(held.len(), 5, "the replay stored nothing twice");
+}
+
+/// No credential writes another shop's history (ADR-0143). A batch with any other store in it is
+/// refused whole; so is a path naming another store, a store key without `publish_events`, and a
+/// batch over the limit. A store key that holds the scope publishes, for a fork that prefers keys.
+#[tokio::test]
+async fn publishing_is_confined_to_the_credential_s_own_store() {
+    let keys = FakeKeys::default();
+    let store = FakeStore::new();
+    let router = http::router(app_all(
+        Cloud::new(store.clone()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let token = issue_device_credential(&keys, tenant(), store_id());
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/events");
+    let elsewhere = StoreId::new(Ulid::from_u128(0x000E_15E1)); // another shop
+
+    let mut mixed = fixtures::activations(store_id(), 1, 3);
+    mixed.extend(fixtures::activations(elsewhere, 10, 1));
+    let refused = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({ "events": mixed }),
+            &token,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+    let other_path = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/events", elsewhere.as_ulid()),
+            &serde_json::json!({ "events": fixtures::activations(elsewhere, 20, 1) }),
+            &token,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(other_path.status(), StatusCode::FORBIDDEN);
+
+    let legacy = issue_store_key(
+        &keys,
+        tenant(),
+        store_id(),
+        &[Scope::ReadConfig, Scope::RelayOrders],
+    );
+    let batch = serde_json::json!({ "events": fixtures::activations(store_id(), 30, 2) });
+    let unscoped = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &batch, &legacy))
+        .await
+        .expect("route");
+    assert_eq!(unscoped.status(), StatusCode::FORBIDDEN);
+
+    let too_many = serde_json::json!({ "events": fixtures::activations(store_id(), 100, 257) });
+    let oversized = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &too_many, &token))
+        .await
+        .expect("route");
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+
+    let held = store
+        .read(&EventQuery::first(
+            store_id(),
+            core::num::NonZeroU32::new(1_000).expect("positive"),
+        ))
+        .await
+        .expect("read the log");
+    assert!(held.is_empty(), "nothing refused was stored");
+
+    let keyed = issue_store_key(&keys, tenant(), store_id(), &[Scope::PublishEvents]);
+    let published = router
+        .oneshot(post_json_bearer(&uri, &batch, &keyed))
+        .await
+        .expect("route");
+    assert_eq!(published.status(), StatusCode::OK);
 }
 
 #[tokio::test]

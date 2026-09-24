@@ -1270,6 +1270,76 @@ mod activation_codes {
             assert_eq!(revoked.status, "revoked");
         });
     }
+
+    /// A minted credential reads back for its slot; archiving its device marks it archived, which
+    /// the cloud refuses (ADR-0143); a credential with no registry row is not archived.
+    #[test]
+    fn a_device_credential_reads_back_and_its_device_s_archive_ends_it() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let codes = store.activation_codes();
+            let keys = store.api_keys();
+            let device = "DEVICE000000000000000000C1";
+            let credential = "CRED00000000000000000000C1";
+            codes
+                .issue(&[3_u8; 32], TENANT, STORE, device)
+                .await
+                .expect("issue the code");
+            assert!(
+                codes
+                    .consume_and_provision(&[3_u8; 32], credential, &[4_u8; 32])
+                    .await
+                    .expect("consume")
+            );
+
+            let row = keys
+                .fetch_device_credential(credential)
+                .await
+                .expect("fetch")
+                .expect("the minted credential is present");
+            assert_eq!(row.tenant_id, TENANT);
+            assert_eq!(row.store_id, STORE);
+            assert_eq!(row.secret_hash, vec![4_u8; 32]);
+            assert!(
+                !row.archived,
+                "no registry row: activation does not need one"
+            );
+
+            let registry = store.registry();
+            let version = registry
+                .insert_device(device, TENANT, STORE, "Till 1", "edge")
+                .await
+                .expect("register the device");
+            let live = keys
+                .fetch_device_credential(credential)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert!(!live.archived, "an active device's credential is live");
+
+            registry
+                .set_device(TENANT, device, "Till 1", "edge", "archived", &version)
+                .await
+                .expect("archive the device");
+            let archived = keys
+                .fetch_device_credential(credential)
+                .await
+                .expect("fetch")
+                .expect("still present");
+            assert!(
+                archived.archived,
+                "archiving the device ends its credential"
+            );
+
+            assert!(
+                keys.fetch_device_credential("CRED0000000000000000000000")
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "an unknown credential is absent"
+            );
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -698,8 +698,30 @@ impl cloud_sync_http::HttpTransport for OtaHttpTransport {
         path: &str,
         body: Vec<u8>,
     ) -> Result<cloud_sync_http::HttpResponse, cloud_sync_http::TransportError> {
+        self.client.post_json(path, body).await
+    }
+
+    async fn post_bytes(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<cloud_sync_http::HttpResponse, cloud_sync_http::TransportError> {
+        self.client.post_bytes(path, content_type, body).await
+    }
+}
+
+/// The keyed client is itself an [`HttpTransport`](cloud_sync_http::HttpTransport), at its own
+/// timeout: what `cloud-sync-http`'s adapters run on when they call `/sync`. The event link rides it
+/// as it is ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)),
+/// and [`OtaHttpTransport`] is this with a longer timeout.
+impl cloud_sync_http::HttpTransport for CloudHttpClient {
+    async fn post_json(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+    ) -> Result<cloud_sync_http::HttpResponse, cloud_sync_http::TransportError> {
         let response = self
-            .client
             .request_full(&hyper::Method::POST, path, None, body)
             .await
             .map_err(|error| cloud_sync_http::TransportError::new(error.to_string()))?;
@@ -723,7 +745,6 @@ impl cloud_sync_http::HttpTransport for OtaHttpTransport {
             None => (path, None),
         };
         let response = self
-            .client
             .request_full_as(&hyper::Method::POST, path, query, content_type, body)
             .await
             .map_err(|error| cloud_sync_http::TransportError::new(error.to_string()))?;

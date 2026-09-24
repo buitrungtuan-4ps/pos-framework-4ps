@@ -2,7 +2,9 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The edge's [`CloudSync`](pos_ports::CloudSync) adapter, over HTTPS to the store's cloud
-//! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)).
+//! ([ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)), and its
+//! [`MessageLink`](pos_ports::message_link::MessageLink) over the same transport, [`HttpLink`]
+//! ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 //!
 //! The store has exactly one request/response channel to the cloud ([ADR-0053](../../../docs/adr/0053-cloud-sync-port.md)),
 //! and this is its concrete adapter. Two calls ride it:
@@ -45,7 +47,9 @@
 #![forbid(unsafe_code)]
 
 mod client;
+mod link;
 mod wire;
 
 pub use client::HttpCloudSync;
+pub use link::{HttpLink, MAX_BATCH, MAX_BODY_BYTES};
 pub use wire::{HttpResponse, HttpTransport, TlsHttpTransport, TransportError};

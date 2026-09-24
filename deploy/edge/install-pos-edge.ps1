@@ -31,8 +31,8 @@
     The cloud's origin, e.g. https://cloud.example.com.
 
 .PARAMETER SyncKey
-    The store's scoped API key (read_config + relay_orders). Omit to install without one:
-    the store trades, and config sync and the order relay refuse until a key is installed.
+    Optional: a store API key (read_config + relay_orders) for the sync loops to present.
+    Omit it and the box syncs with the device credential its activation code mints.
 
 .PARAMETER BindPort
     The port the edge listens on. Defaults to 8787.
@@ -45,8 +45,8 @@
     installer (pos-edge install, ADR-0140) passes it; a remote shell has no browser to open.
 
 .PARAMETER AskSyncKey
-    With no -SyncKey, ask for the store key in this window instead of installing without one.
-    The one-file installer passes it (ADR-0141); a script run unattended must not stop to ask.
+    With no -SyncKey, ask for a store key in this window. Nothing passes it any more: the
+    device credential is enough (ADR-0143). A script run unattended must not stop to ask.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 `
@@ -229,31 +229,27 @@ $environment = @(
     "POS_EDGE_PAIRING_FILE=$pairingPath",
     'RUST_LOG=info'
 )
-# The one-file installer's name carries the store and the cloud but never the key (ADR-0141),
-# so it asks for the key here: pasted into this elevated window, it goes only into the service's
-# registry key below — never onto the network, and never into shell history.
+# Asked for only when -AskSyncKey is given: pasted into this elevated window, the key goes only
+# into the service's registry key below — never onto the network, and never into shell history.
 if (-not $SyncKey -and $AskSyncKey) {
     $entered = Read-Host -Prompt 'Paste the store key from the console, or press Enter to skip' -AsSecureString
     $SyncKey = [System.Net.NetworkCredential]::new('', $entered).Password.Trim()
 }
 
-# The scoped store key (read_config + relay_orders). The keyring is the better home for it
+# An optional store key (read_config + relay_orders). The keyring is the better home for it
 # (ADR-0086) and this is the headless bring-up override, exactly as POS_EDGE_SYNC_KEY is on
-# Linux. Without one the store still trades; config sync and the order relay refuse.
+# Linux. Without one the box syncs with its device credential once it is activated (ADR-0143).
 if ($SyncKey) {
     $environment += "POS_EDGE_SYNC_KEY=$SyncKey"
-} else {
-    Write-Warning 'no -SyncKey given: config sync and the order relay will refuse until one is installed'
 }
 
-# The event-bus URL is deliberately absent. Unlike the store key it is ONE secret shared by the
-# whole fleet, held on the cloud box, so the console cannot fill it in without spreading it across
-# every machine in the estate. Recover it on the cloud box, then add it here and restart:
+# Without an event-bus URL the box publishes its events over HTTPS to the cloud with its device
+# credential. Add one only if your cloud runs the NATS stream for store events. It is ONE secret
+# shared by the whole fleet, held on the cloud box, so the console cannot fill it in without
+# spreading it across every machine in the estate. Recover it on the cloud box, then add it here
+# and restart:
 #
 #   $env = 'POS_EDGE_NATS_URL=tls://:<that token>@<your cloud host>:4222'
-#
-# Until it is set the edge logs that POS_EDGE_NATS_URL is unset and the outbox holds — the store
-# trades either way.
 
 $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$service"
 New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null

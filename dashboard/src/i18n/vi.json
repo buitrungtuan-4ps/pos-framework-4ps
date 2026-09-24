@@ -1469,6 +1469,7 @@
   "scope.read_config": "Đọc cấu hình",
   "scope.read_rollups": "Đọc tổng hợp",
   "scope.relay_orders": "Chuyển đơn về cửa hàng",
+  "scope.publish_events": "Gửi sự kiện của cửa hàng lên cloud",
   "security.codesDescription": "Mã dùng một lần để đăng nhập nếu bạn mất trình xác thực. Mỗi mã dùng một lần. Hãy lưu ở nơi an toàn.",
   "security.codesGenerated": "Đã tạo mã khôi phục.",
   "security.codesOnce": "Hãy lưu các mã này ngay. Chỉ hiển thị một lần và tạo mã mới sẽ thay thế chúng.",
