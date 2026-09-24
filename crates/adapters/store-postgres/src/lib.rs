@@ -59,7 +59,7 @@ pub use admin::{
 };
 pub use alerts::{AlertRow, PostgresAlerts};
 pub use anchors::{AnchorRow, ConflictRow, ListedConflict, PostgresAnchors};
-pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, PostgresApiKeys};
+pub use apikeys::{ApiKeyRow, ApiKeySummaryRow, DeviceCredentialRow, PostgresApiKeys};
 pub use archives::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 pub use audit::{AuditLogRow, AuditOrder, PostgresAudit};
 pub use campaigns::{CampaignRow, PostgresCampaigns};

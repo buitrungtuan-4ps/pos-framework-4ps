@@ -164,18 +164,20 @@ pos-edge-setup_<cloud host>@<port>_<store ULID>.exe for a cloud on a port other 
 ```
 
 — which is also how to name a release binary by hand when there is no console to hand. Copy it onto
-the machine and double-click it. It asks for administrator rights (the UAC prompt), then **asks for the
-store key** in a window that stays open: paste the key the drawer or the wizard issued, or press
-Enter to skip. It runs the script with those values, and opens this box's **`/setup`** page when the
-service is up, for Step 3. Or, from an administrator prompt with any file name:
+the machine and double-click it. It asks for administrator rights (the UAC prompt), runs the script
+with those values in a window that stays open, and opens this box's **`/setup`** page when the service
+is up, for Step 3. Or, from an administrator prompt with any file name:
 `pos-edge.exe install --store <ULID> --cloud https://<cloud host>`.
 
-The key is a secret, so it is never in the file or its name. Pasted at the prompt, it goes only into
-the service's own registry key, exactly where `-SyncKey` puts it. Skipped, the store still sells,
-pairs and activates, and config sync and the order relay refuse until a key is installed. The console
-will not offer the file when it was opened over plain http, because the file tells the store to dial
-the cloud over `https`, the only way a store dials it. Windows SmartScreen warns on the unsigned file,
-as it does for the binary today.
+**The activation code is the only secret you handle.** The credential it mints authenticates the
+box's config sync, heartbeat, order relay and event publishing, for this store only
+([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so there is no
+store key to paste and no broker token to copy. A store key still works if you give the box one
+(`-SyncKey`, or the script's `-AskSyncKey` prompt when you run it yourself), and then the `/sync`
+loops use it instead. The console will not offer the file when it was opened over plain http, because
+the file tells the store to dial the cloud over `https`, the only way a store dials it. Windows
+SmartScreen warns on the file unless your fork signs it
+([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)).
 
 ### By hand (a host you manage yourself)
 

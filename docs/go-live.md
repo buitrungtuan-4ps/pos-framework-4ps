@@ -111,7 +111,9 @@ covers this in full.
 16. **Run the guided new-store wizard.** It emits both files an operator carries to the box: a
     `config.toml` (no secret) and an `env` file.
 
-17. ⛔ **GATE — the store key's scopes** ([H14](gate-register.md#4-human-decision--per-store)). It needs
+17. ⛔ **GATE — the store key's scopes** ([H14](gate-register.md#4-human-decision--per-store)), if you
+    issue one: a box without a store key syncs with its device credential
+    ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)). A key needs
     **both** `read_config` and `relay_orders`. The wizard pre-selects both, and this is worth checking
     anyway, because the failure is the nastiest one in this document: with only `read_config` the
     store looks **healthy** — configuration syncs, the fleet view shows it alive — while every

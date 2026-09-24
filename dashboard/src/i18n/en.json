@@ -1469,6 +1469,7 @@
   "scope.read_config": "Read configuration",
   "scope.read_rollups": "Read rollups",
   "scope.relay_orders": "Relay orders to the store",
+  "scope.publish_events": "Publish the store's events",
   "security.codesDescription": "One-time codes to sign in if you lose your authenticator. Each works once. Store them somewhere safe.",
   "security.codesGenerated": "Recovery codes generated.",
   "security.codesOnce": "Save these codes now. They are shown only once, and generating new ones replaces them.",

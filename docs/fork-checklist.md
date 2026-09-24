@@ -124,8 +124,10 @@ The console's guided new-store wizard produces both files an operator carries to
   outbox grows for as long as it runs. The wizard now always emits both — it emitted neither at
   first, and each omission was invisible from the console, because a store missing them looks exactly
   like a store the cloud has not heard from yet.
-- **`env`** — `POS_EDGE_SYNC_KEY`, and `POS_EDGE_NATS_URL` when the event bus is reachable. Install it
-  as root, mode 0600, at `/etc/pos-edge/env`.
+- **`env`** — optional since [ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md):
+  `POS_EDGE_SYNC_KEY` only if you give the box a store key, and `POS_EDGE_NATS_URL` only if your cloud
+  runs the NATS stream for store events. A box with neither syncs and publishes with its device
+  credential. When present, install it as root, mode 0600, at `/etc/pos-edge/env`.
 
 **The `[nats]` values are fleet-wide, not per store** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md)
 Amendment 1): `stream = "POS_FLEET"`, `subject = "pos.fleet.events"`, identical on every box and
@@ -133,9 +135,11 @@ matching `cloud.toml`'s `[nats]`. A fork that renames them must rename them on *
 — `pos_cloud` binds one durable consumer to one named stream, so a mismatch is a fleet that publishes
 into a stream nobody reads, with no error anywhere.
 
-**The store key needs both `read_config` and `relay_orders`.** With only `read_config` a store looks
-healthy — configuration syncs, the dashboard shows it alive — while the order relay answers `403` on
-every poll, so orders placed in the cloud never reach the kitchen. The wizard pre-selects both.
+**A store key, if you issue one, needs both `read_config` and `relay_orders`.** With only
+`read_config` a store looks healthy — configuration syncs, the dashboard shows it alive — while the
+order relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The
+wizard pre-selects both. A box without a store key uses its device credential, which carries both
+and `publish_events` ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 
 **Two scopes were removed.** `read_events` and `manage_webhooks` existed in the cloud's `Scope` enum
 and gated **no route**; roadmap **Q5** deleted them. The issue route used to accept them, so a key

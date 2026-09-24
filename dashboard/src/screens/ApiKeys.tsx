@@ -54,6 +54,7 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "read_rollups", key: "scope.read_rollups" },
   { wire: "read_config", key: "scope.read_config" },
   { wire: "relay_orders", key: "scope.relay_orders" },
+  { wire: "publish_events", key: "scope.publish_events" },
   { wire: "place_orders", key: "scope.place_orders" },
   { wire: "manage_devices", key: "scope.manage_devices" },
 ];

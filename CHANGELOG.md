@@ -18,6 +18,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A box needs one code and nothing else**
+  ([ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md), plan step
+  1.2). The device credential activation mints now authenticates the box's `/sync` calls: config
+  pull, heartbeat, the order relay and OTA. It is bound to the box's own store, carries exactly
+  `read_config`, `relay_orders` and the new `publish_events`, and stops working when the device is
+  archived in the console. Events travel over HTTPS as well: the edge posts batches of up to 256
+  (4 MiB) to the new `POST /sync/stores/{store_id}/events`, after negotiating on
+  `POST /sync/stores/{store_id}/events/hello`. The cloud ingests them idempotently, answers only
+  once they are in its log, and refuses a whole batch if it names any other store. So a technician
+  no longer copies a store key into the setup window or the fleet's NATS token onto the box, and one
+  box can no longer publish as another store. The new `HttpLink` adapter in `cloud-sync-http` passes
+  the shared `MessageLink` contract suite. `publish_events` can also be granted to a store API key.
+  **Upgrade note:** a new scope identifier (`publish_events`) and two cloud routes. The key order on
+  the edge is: the keyring's sync key, then `POS_EDGE_SYNC_KEY`, then the device credential, so a box
+  that already has a store key keeps using it. Events go to NATS only when both the `[nats]` section
+  and `POS_EDGE_NATS_URL` are set; otherwise they go over HTTPS, so a box that had no stream starts
+  publishing once its cloud is upgraded. `pos-edge install` no longer passes `-AskSyncKey`; the
+  switch stays on the script.
+
 - **A counter store starts its own orders** ([ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md),
   finding F12). The counter screen has **New order**. It opens a tableless takeaway order, gives it
   the day's next queue number, and lands on the order screen a table uses, at `/order/:id`. Each line
@@ -112,6 +131,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A generated environment file no longer sets the store key to a sentence.** For a store with no
+  key the console wrote `POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here`, and systemd
+  keeps everything after the `=`, so the hint became the key and every `/sync` call was refused. The
+  line is now commented out, and the edge ignores a value that starts with `#`, so a box installed
+  from an old file falls through to its device credential.
 - **The till's bundle has one tag per representation.** The edge served an embedded asset gzip or
   plain under the same strong `ETag`, which RFC 9110 forbids, and a cache between a till and the edge
   could hand gzip bytes to a client that never asked for them. The tag is now weak, it is compared

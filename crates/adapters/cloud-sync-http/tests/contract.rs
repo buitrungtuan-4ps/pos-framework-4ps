@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The `CloudSync` contract suite, against `HttpCloudSync` over a stub transport.
+//! The `CloudSync` contract suite, against `HttpCloudSync` over a stub transport, and the
+//! `MessageLink` suite against `HttpLink` over the same kind of stub (ADR-0143, at the end).
 //!
 //! `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite; every implementation
 //! passes it"*. This is the `cloud-sync-http` half. The stub transport reproduces the cloud's exact
@@ -23,12 +24,20 @@
 
 use core::future::Future;
 
-use cloud_sync_http::{HttpCloudSync, HttpResponse, HttpTransport, TransportError};
-use pos_contract_tests::harness::{CloudSyncHarness, Setup};
+use core::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use cloud_sync_http::{HttpCloudSync, HttpLink, HttpResponse, HttpTransport, TransportError};
+use pos_contract_tests::fixtures;
+use pos_contract_tests::harness::{CloudSyncHarness, MessageLinkHarness, Setup};
+use pos_ports::message_link::MessageLink;
 use pos_ports::{Signature, UpdateReport};
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{DeviceId, StoreId};
+use pos_proto::protocol::{Hello, negotiate};
 use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
+use pos_proto::{MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION};
 
 /// The one activation code the stub cloud accepts.
 const VALID_CODE: &str = "AAAA-AAAA-AAAA";
@@ -319,4 +328,188 @@ fn block_on<F: Future>(future: F) -> F::Output {
 mod cloud_sync {
     use super::{HttpHarness, block_on};
     pos_contract_tests::cloud_sync_suite!(HttpHarness, block_on);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The `MessageLink` suite, against `HttpLink` over a stub of the cloud's event routes
+// (ADR-0143). The stub speaks the exact wire of `/sync/stores/{store_id}/events` and
+// `…/events/hello`: the negotiation from `pos-proto`, `{ "accepted": n }` for a batch, `403` on
+// another store's route, and `429` while it is pushing back. The real routes are tested in
+// `pos-cloud`.
+// ---------------------------------------------------------------------------------------------
+
+/// The store the stub's credential belongs to.
+fn publishing_store() -> StoreId {
+    StoreId::new(Ulid::from_u128(0x0E7E))
+}
+
+fn link_answer(status: u16, body: &serde_json::Value) -> HttpResponse {
+    HttpResponse {
+        status,
+        body: serde_json::to_vec(body).expect("the stub encodes its own JSON"),
+        ..HttpResponse::default()
+    }
+}
+
+/// The body a publish carries.
+#[derive(serde::Deserialize)]
+struct Batch {
+    events: Vec<EventEnvelope<RawPayload>>,
+}
+
+/// A stub cloud for the event link, reachable or severed, taking events or pushing back.
+struct LinkCloud {
+    severed: Arc<AtomicBool>,
+    full: Arc<AtomicBool>,
+}
+
+impl HttpTransport for LinkCloud {
+    async fn post_json(&self, path: &str, body: Vec<u8>) -> Result<HttpResponse, TransportError> {
+        if self.severed.load(Ordering::SeqCst) {
+            return Err(TransportError::new("the connection is gone"));
+        }
+        let store = publishing_store();
+        // Another store's route: the real cloud's `require_store` refuses the credential there.
+        if path.starts_with("/sync/stores/") && !path.starts_with(&format!("/sync/stores/{store}/"))
+        {
+            return Ok(link_answer(
+                403,
+                &serde_json::json!({ "code": "PERMISSION_DENIED" }),
+            ));
+        }
+        if path == format!("/sync/stores/{store}/events/hello") {
+            let hello: Hello = serde_json::from_slice(&body).expect("the adapter sends a hello");
+            if hello.store_id != store {
+                return Ok(link_answer(
+                    403,
+                    &serde_json::json!({ "code": "PERMISSION_DENIED" }),
+                ));
+            }
+            let outcome = negotiate(&hello, MIN_SUPPORTED_PROTOCOL_VERSION, PROTOCOL_VERSION);
+            return Ok(link_answer(
+                200,
+                &serde_json::to_value(outcome).expect("an outcome encodes"),
+            ));
+        }
+        if path == format!("/sync/stores/{store}/events") {
+            if self.full.load(Ordering::SeqCst) {
+                return Ok(link_answer(
+                    429,
+                    &serde_json::json!({ "code": "RESOURCE_EXHAUSTED" }),
+                ));
+            }
+            let batch: Batch = serde_json::from_slice(&body).expect("the adapter sends a batch");
+            if batch.events.len() > 256 || batch.events.iter().any(|event| event.store_id != store)
+            {
+                return Ok(link_answer(
+                    400,
+                    &serde_json::json!({ "code": "INVALID_ARGUMENT" }),
+                ));
+            }
+            return Ok(link_answer(
+                200,
+                &serde_json::json!({ "accepted": batch.events.len() }),
+            ));
+        }
+        Ok(link_answer(
+            404,
+            &serde_json::json!({ "code": "NOT_FOUND" }),
+        ))
+    }
+
+    async fn post_bytes(
+        &self,
+        _path: &str,
+        _content_type: &str,
+        _body: Vec<u8>,
+    ) -> Result<HttpResponse, TransportError> {
+        Ok(link_answer(
+            404,
+            &serde_json::json!({ "code": "NOT_FOUND" }),
+        ))
+    }
+}
+
+/// One harness per case, as the suite builds them: its switches reach the one stub its link holds.
+#[derive(Default)]
+struct LinkHarness {
+    severed: Arc<AtomicBool>,
+    full: Arc<AtomicBool>,
+}
+
+impl MessageLinkHarness for LinkHarness {
+    type Link = HttpLink<LinkCloud>;
+
+    async fn fresh(&self) -> Setup<Self::Link> {
+        Ok(HttpLink::new(
+            LinkCloud {
+                severed: Arc::clone(&self.severed),
+                full: Arc::clone(&self.full),
+            },
+            publishing_store(),
+        ))
+    }
+
+    async fn sever(&self, _link: &Self::Link) -> Setup<()> {
+        self.severed.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn fill(&self, link: &Self::Link) -> Setup<()> {
+        // The cloud starts pushing back, and the link learns it the only way it can: by being
+        // refused. The refusal is the point, so its result is not a setup failure.
+        self.full.store(true, Ordering::SeqCst);
+        let _refused = link
+            .publish(&fixtures::activations(publishing_store(), 900, 1))
+            .await;
+        Ok(())
+    }
+
+    fn store_id(&self) -> StoreId {
+        publishing_store()
+    }
+}
+
+mod message_link {
+    use super::{LinkHarness, block_on};
+    pos_contract_tests::message_link_suite!(LinkHarness::default(), block_on);
+}
+
+/// A batch larger than the cloud takes is cut to the first 256, and the answer is that prefix.
+#[test]
+fn a_long_backlog_goes_in_prefixes_the_cloud_accepts() {
+    block_on(async {
+        let harness = LinkHarness::default();
+        let link = harness.fresh().await.expect("a link");
+        link.handshake(&Hello::current(
+            publishing_store(),
+            ReleaseTag::new("v1.0.0"),
+        ))
+        .await
+        .expect("the hello is answered");
+        let backlog = fixtures::activations(publishing_store(), 1, 600);
+        let outcome = link.publish(&backlog).await.expect("the prefix lands");
+        assert_eq!(outcome.accepted, 256);
+    });
+}
+
+/// A refused credential is not a transient failure, and is not reported as one: a link for a store
+/// the credential does not hold is answered `403`, which reads as `permission_denied`.
+#[test]
+fn a_refused_credential_is_permission_denied() {
+    block_on(async {
+        let elsewhere = StoreId::new(Ulid::from_u128(0x0BAD));
+        let link = HttpLink::new(
+            LinkCloud {
+                severed: Arc::default(),
+                full: Arc::default(),
+            },
+            elsewhere,
+        );
+        let refused = link
+            .handshake(&Hello::current(elsewhere, ReleaseTag::new("v1.0.0")))
+            .await
+            .expect_err("another store's hello is refused");
+        assert_eq!(refused.status(), pos_proto::ErrorStatus::PermissionDenied);
+    });
 }

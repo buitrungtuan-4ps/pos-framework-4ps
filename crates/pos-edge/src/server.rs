@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
-use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
+use cloud_sync_http::{HttpCloudSync, HttpLink, TlsHttpTransport};
 use key_vault_keyring::{KeyringVault, OsKeyring};
 use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
@@ -896,8 +896,8 @@ where
     // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
     let vault = Arc::new(KeyringVault::new(OsKeyring::new()));
     // One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
-    // own bearer-carrying client (cloud_http), keyed by the scoped sync key rather than the device
-    // credential (the `/sync` routes verify the former today, ADR-0085/0086).
+    // own bearer-carrying client (cloud_http), keyed by a store key when one is set and by the device
+    // credential otherwise (ADR-0143).
     let transport = match TlsHttpTransport::new(cloud_url.as_str(), ACTIVATION_TIMEOUT) {
         Ok(transport) => transport,
         Err(error) => {
@@ -965,10 +965,10 @@ where
                     task: loops.heartbeat,
                 });
             }
-            // The event stream is a second rail with its own endpoint and its own credential, so it
-            // is spawned beside the `/sync` loops rather than inside them: a store with no sync key
-            // still ships the events it has committed (ADR-0087).
-            publisher = spawn_event_publish(edge, nats, shutdown_rx).await;
+            // The event rail is spawned beside the `/sync` loops rather than inside them: it has its
+            // own endpoint and presents the device credential whatever key the loops use
+            // (ADR-0087, ADR-0143).
+            publisher = spawn_event_publish(edge, nats, cloud_url, &*vault, shutdown_rx).await;
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
@@ -1079,21 +1079,50 @@ where
     });
 }
 
-/// The scoped `read_config` key the config-pull and heartbeat loops present: the vault first
-/// (ADR-0086), then `POS_EDGE_SYNC_KEY` from the environment as a headless bring-up override
-/// (ADR-0085). A stored value that is not valid UTF-8, or is blank, is treated as absent.
+/// The key the `/sync` loops present
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)): the
+/// vault's scoped sync key (ADR-0086), then `POS_EDGE_SYNC_KEY` as a headless bring-up override
+/// (ADR-0085), then the box's own device credential from activation, which the cloud accepts on
+/// `/sync` for the box's own store. So a box that was given a store key keeps using it, and one that
+/// was given nothing but its activation code syncs anyway.
 async fn resolve_sync_key<V: KeyVault>(vault: &V) -> Option<String> {
-    if let Ok(Some(secret)) = vault.load(SecretName::SyncKey).await
-        && let Ok(text) = core::str::from_utf8(secret.expose())
-    {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
+    choose_sync_key(vault, std::env::var(SYNC_KEY_ENV).ok()).await
+}
+
+/// [`resolve_sync_key`] with the environment's value passed in, so the order is testable without
+/// touching the process environment.
+async fn choose_sync_key<V: KeyVault>(vault: &V, from_env: Option<String>) -> Option<String> {
+    if let Some(key) = vault_text(vault, SecretName::SyncKey).await {
+        return Some(key);
+    }
+    if let Some(value) = from_env {
+        match usable_env_key(&value) {
+            Some(key) => return Some(key),
+            // Said without the value: whatever is there, it is in a file of secrets.
+            None if !value.trim().is_empty() => tracing::warn!(
+                "{SYNC_KEY_ENV} holds a comment rather than a key and is ignored; remove the line \
+                 from the environment file"
+            ),
+            None => {}
         }
     }
-    std::env::var(SYNC_KEY_ENV)
-        .ok()
-        .filter(|key| !key.trim().is_empty())
+    vault_text(vault, SecretName::DeviceCredential).await
+}
+
+/// A vault secret as trimmed text, or `None` when it is absent, unreadable, not UTF-8, or blank.
+async fn vault_text<V: KeyVault>(vault: &V, name: SecretName) -> Option<String> {
+    let secret = vault.load(name).await.ok().flatten()?;
+    let text = core::str::from_utf8(secret.expose()).ok()?.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
+/// An environment key worth presenting: not blank, and not a comment. The console's environment
+/// file once wrote `POS_EDGE_SYNC_KEY=  # issue a key…` for a store with no key, and systemd keeps
+/// everything after the `=`, so a box installed from it held a "key" that was a sentence, and that
+/// sentence would otherwise shadow the device credential behind it.
+fn usable_env_key(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty() && !trimmed.starts_with('#')).then(|| trimmed.to_owned())
 }
 
 /// What this box archives, and how often
@@ -1134,9 +1163,9 @@ struct CloudLoops {
 }
 
 /// Spawns the config-pull, heartbeat, and order-relay loops for an activated store, keyed by
-/// `sync_key`. A `None` key (neither in the vault nor the environment) is logged and skipped — the box
-/// is activated but has nothing to authenticate the `/sync` surface with, so it trades locally and
-/// awaits a provisioned key. The loops share the passed shutdown, so they drain with the server.
+/// `sync_key` ([`resolve_sync_key`]). A `None` key means not even the device credential could be read
+/// back: that is logged and skipped, and the box trades locally. The loops share the passed
+/// shutdown, so they drain with the server.
 ///
 /// `drained` is the one exception to sharing that shutdown: the heartbeat loop stops *ticking* with
 /// the others and then waits for this before sending its last report, so the report carries the
@@ -1173,7 +1202,8 @@ where
 {
     let Some(sync_key) = sync_key else {
         tracing::warn!(
-            "the store is activated but no scoped sync key is set (vault or {SYNC_KEY_ENV}); config-pull and heartbeat are idle"
+            "the store is activated but neither a sync key (vault or {SYNC_KEY_ENV}) nor its device \
+             credential could be read; config-pull and heartbeat are idle"
         );
         return None;
     };
@@ -1573,51 +1603,75 @@ where
     tracing::info!("over-the-air updates enabled");
 }
 
-/// Spawns the event-publish loop for an activated store, when a stream is configured
-/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
+/// Spawns the event-publish loop for an activated store
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md),
+/// [ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 ///
-/// Needs two things the operator supplies separately: the `[nats]` stream and subject from
-/// `config.toml` (not secrets, and they must match the cloud consumer's `stream`/`filter_subject`),
-/// and the server URL from [`NATS_URL_ENV`] — the one field that would carry a credential, so it
-/// stays out of `config.toml` exactly as the sync key does (ADR-0086). Either missing is logged and
-/// skipped: the store trades, and its outbox holds until a stream exists.
-async fn spawn_event_publish<S>(
+/// Two rails, chosen by configuration:
+///
+/// - **NATS**, when `config.toml` names a `[nats]` stream and subject *and* [`NATS_URL_ENV`] carries
+///   the server URL (the one field that would carry a credential, so it stays out of `config.toml`
+///   exactly as the sync key does, ADR-0086). This is how a deployment that runs a broker has always
+///   published.
+/// - **HTTPS**, otherwise: the cloud's own `/sync/stores/{store_id}/events`, presenting the box's
+///   device credential. Nothing to configure and no broker port open to the internet, and the cloud
+///   refuses a batch that names any store but this one.
+///
+/// The HTTPS rail presents the device credential even when a store key is set for the `/sync`
+/// loops, because only the device credential is certain to carry `publish_events`: a store key
+/// issued before that scope existed holds `read_config` and `relay_orders` alone.
+///
+/// Either way the store trades, and its outbox holds until the rail is up.
+async fn spawn_event_publish<S, V>(
     edge: &Arc<Edge<S>>,
     nats: Option<&NatsConfig>,
+    cloud_url: &url::Url,
+    vault: &V,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>>
+where
+    S: EventStore + Send + Sync + 'static,
+    V: KeyVault,
+{
+    let nats_url = std::env::var(NATS_URL_ENV)
+        .ok()
+        .filter(|url| !url.trim().is_empty());
+    match (nats, nats_url) {
+        (Some(nats), Some(url)) => {
+            if let Some(handle) = spawn_nats_publish(edge, nats, url.trim(), shutdown_rx).await {
+                return Some(handle);
+            }
+            tracing::warn!("falling back to publishing events over HTTPS to the cloud");
+        }
+        (Some(_), None) => tracing::info!(
+            "a [nats] stream is configured but {NATS_URL_ENV} is unset; publishing events over HTTPS \
+             to the cloud instead"
+        ),
+        (None, _) => {}
+    }
+    spawn_https_publish(edge, cloud_url, vault, shutdown_rx).await
+}
+
+/// The NATS rail: `None` only when the address in [`NATS_URL_ENV`] cannot be used at all.
+async fn spawn_nats_publish<S>(
+    edge: &Arc<Edge<S>>,
+    nats: &NatsConfig,
+    url: &str,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) -> Option<tokio::task::JoinHandle<()>>
 where
     S: EventStore + Send + Sync + 'static,
 {
-    let Some(nats) = nats else {
-        tracing::info!(
-            "no [nats] section; the outbox is not being published (the store still trades and keeps every event)"
-        );
-        return None;
-    };
-    let Some(url) = std::env::var(NATS_URL_ENV)
-        .ok()
-        .filter(|url| !url.trim().is_empty())
-    else {
-        tracing::warn!(
-            "a [nats] stream is configured but {NATS_URL_ENV} is unset; the outbox is not being published"
-        );
-        return None;
-    };
-
     let config = StreamConfig {
         stream: nats.stream.clone(),
         subject: nats.subject.clone(),
         max_messages: NATS_MAX_MESSAGES,
         max_bytes: NATS_MAX_BYTES,
     };
-    // Connecting is I/O and can fail on a box whose network is not up yet. That is not fatal: the
-    // events are durable in the outbox, so the box trades and the next boot (or the next slice's
-    // reconnect) picks them up.
     // A broker that is not reachable yet is not a failure here: the link connects in the
     // background, and the publisher reports the store offline until it does. Only an address that
     // cannot be used at all ends up in this arm.
-    let link = match NatsLink::connect(url.trim(), config).await {
+    let link = match NatsLink::connect(url, config).await {
         Ok(link) => link,
         Err(error) => {
             tracing::warn!(
@@ -1628,23 +1682,66 @@ where
             return None;
         }
     };
+    let handle = spawn_publisher(edge, link, shutdown_rx);
+    tracing::info!(
+        stream = %nats.stream,
+        subject = %nats.subject,
+        "event publish enabled over NATS: the outbox is draining to the cloud"
+    );
+    Some(handle)
+}
 
+/// The HTTPS rail, over the box's device credential.
+async fn spawn_https_publish<S, V>(
+    edge: &Arc<Edge<S>>,
+    cloud_url: &url::Url,
+    vault: &V,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>>
+where
+    S: EventStore + Send + Sync + 'static,
+    V: KeyVault,
+{
+    let Some(credential) = vault_text(vault, SecretName::DeviceCredential).await else {
+        tracing::warn!(
+            "no device credential could be read from the vault; the outbox is not being published \
+             (the store still trades and keeps every event)"
+        );
+        return None;
+    };
+    let client = match CloudHttpClient::new(cloud_url, credential) {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::error!(%error, "the event link could not be built; the outbox holds");
+            return None;
+        }
+    };
+    let handle = spawn_publisher(edge, HttpLink::new(client, edge.store_id()), shutdown_rx);
+    tracing::info!("event publish enabled over HTTPS: the outbox is draining to the cloud");
+    Some(handle)
+}
+
+/// Starts the publish loop over `link`.
+///
+/// The handle is kept, not dropped. A stop asks this loop for one last drain, and a drain nobody
+/// waits for is a drain that does not happen: `serve_until` returns as soon as `axum::serve` has
+/// finished, and the runtime it returns into stops polling every detached task. On a placement that
+/// is torn down rather than restarted, those unpublished events go with the volume
+/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+fn spawn_publisher<S, L>(
+    edge: &Arc<Edge<S>>,
+    link: L,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()>
+where
+    S: EventStore + Send + Sync + 'static,
+    L: pos_ports::message_link::MessageLink + 'static,
+{
     // The release the store is running, stamped at build time (R1b). Was `CARGO_PKG_VERSION`,
     // which is `0.0.0` in every artifact — so every store told the cloud the same thing and the
     // OTA progress model could not tell one release from another.
     let publisher = EventPublisher::new(Arc::clone(edge), link, crate::version::tag());
-    // The handle is kept, not dropped. A stop asks this loop for one last drain, and a drain nobody
-    // waits for is a drain that does not happen: `serve_until` returns as soon as `axum::serve` has
-    // finished, and the runtime it returns into stops polling every detached task. On a placement
-    // that is torn down rather than restarted, those unpublished events go with the volume
-    // ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
-    let handle = tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())));
-    tracing::info!(
-        stream = %nats.stream,
-        subject = %nats.subject,
-        "event publish enabled: the outbox is draining to the cloud"
-    );
-    Some(handle)
+    tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())))
 }
 
 /// Resolves when the shutdown flag flips true (or its sender drops) — one per background consumer.
@@ -1682,10 +1779,74 @@ pub async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
+    use pos_fakes::FakeKeyVault;
+    use pos_fakes::executor::run_ready;
+    use pos_ports::key_vault::{KeyVault as _, Secret, SecretName};
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
 
-    use super::system_device_id;
+    use super::{choose_sync_key, system_device_id, usable_env_key};
+
+    fn holding(secrets: &[(SecretName, &str)]) -> FakeKeyVault {
+        let vault = FakeKeyVault::new();
+        for (name, value) in secrets {
+            run_ready(vault.store(*name, &Secret::new(value.as_bytes().to_vec())))
+                .expect("the fake stores");
+        }
+        vault
+    }
+
+    /// A store key wins wherever it is set, and a box given nothing but its activation code syncs
+    /// with its device credential (ADR-0143).
+    #[test]
+    fn the_sync_key_falls_back_to_the_device_credential() {
+        let both = holding(&[
+            (SecretName::SyncKey, "pos_key_secret"),
+            (SecretName::DeviceCredential, "posdev_id_secret"),
+        ]);
+        assert_eq!(
+            run_ready(choose_sync_key(&both, Some("pos_env_secret".to_owned()))).as_deref(),
+            Some("pos_key_secret")
+        );
+        let credential_only = holding(&[(SecretName::DeviceCredential, "posdev_id_secret")]);
+        assert_eq!(
+            run_ready(choose_sync_key(
+                &credential_only,
+                Some("pos_env_secret".to_owned())
+            ))
+            .as_deref(),
+            Some("pos_env_secret")
+        );
+        assert_eq!(
+            run_ready(choose_sync_key(&credential_only, None)).as_deref(),
+            Some("posdev_id_secret")
+        );
+        assert_eq!(run_ready(choose_sync_key(&FakeKeyVault::new(), None)), None);
+    }
+
+    /// The hint an old console wrote after the `=` is not a key, and must not shadow the device
+    /// credential behind it.
+    #[test]
+    fn a_commented_environment_key_is_ignored() {
+        assert_eq!(
+            usable_env_key("  # issue a key in step 2, or paste one here"),
+            None
+        );
+        assert_eq!(usable_env_key("   "), None);
+        assert_eq!(
+            usable_env_key(" pos_id_secret ").as_deref(),
+            Some("pos_id_secret")
+        );
+        let credential_only = holding(&[(SecretName::DeviceCredential, "posdev_id_secret")]);
+        assert_eq!(
+            run_ready(choose_sync_key(
+                &credential_only,
+                Some("# issue a key in step 2".to_owned())
+            ))
+            .as_deref(),
+            Some("posdev_id_secret")
+        );
+    }
 
     #[test]
     fn the_system_device_id_is_stable_for_a_store() {

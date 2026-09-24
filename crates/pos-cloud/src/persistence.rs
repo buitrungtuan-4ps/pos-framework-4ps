@@ -1231,6 +1231,22 @@ impl ApiKeyStore for PostgresApiKeys {
             None => Ok(None),
         }
     }
+
+    async fn lookup_device(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+        let row = self
+            .fetch_device_credential(&id.to_string())
+            .await
+            .map_err(|error| ApiKeyStoreError::new(error.to_string()))?;
+        // An archived device's credential is refused exactly as an unknown one is (ADR-0143).
+        match row {
+            Some(row) if !row.archived => {
+                StoredApiKey::for_device(id, &row.tenant_id, &row.store_id, &row.secret_hash)
+                    .map(Some)
+                    .map_err(ApiKeyStoreError::new)
+            }
+            Some(_) | None => Ok(None),
+        }
+    }
 }
 
 impl ActivationCodeStore for PostgresActivationCodes {

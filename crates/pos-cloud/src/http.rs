@@ -601,6 +601,16 @@ where
             "/sync/stores/{store_id}/heartbeat",
             post(edge_heartbeat::<S, R, K, C, A, T, W>),
         )
+        .route(
+            "/sync/stores/{store_id}/events",
+            post(edge_publish_events::<S, R, K, C, A, T, W>).layer(
+                axum::extract::DefaultBodyLimit::max(MAX_PUBLISHED_EVENTS_BYTES),
+            ),
+        )
+        .route(
+            "/sync/stores/{store_id}/events/hello",
+            post(edge_events_hello::<S, R, K, C, A, T, W>),
+        )
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
         .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
@@ -23264,6 +23274,159 @@ where
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// The most envelopes one `POST /sync/stores/{store_id}/events` may carry
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+pub const MAX_PUBLISHED_EVENTS: usize = 256;
+
+/// The largest body that route reads, 4 MiB (ADR-0143). A bigger one is answered `413` before it is
+/// parsed.
+pub const MAX_PUBLISHED_EVENTS_BYTES: usize = 4 * 1024 * 1024;
+
+/// `POST /sync/stores/{store_id}/events`'s body: the store's committed events, oldest first.
+#[derive(Debug, Deserialize)]
+struct PublishedEvents {
+    events: Vec<EventEnvelope<RawPayload>>,
+}
+
+/// What a publish came to: how many envelopes, counted from the first, the cloud holds. Always the
+/// whole batch on success, since ingest commits all of it or none (ADR-0143).
+#[derive(Debug, Serialize)]
+struct PublishedEventsAccepted {
+    accepted: usize,
+}
+
+/// `POST /sync/stores/{store_id}/events` — a store publishes its own events over HTTPS
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+///
+/// Scope `publish_events`, which a box's device credential always carries, and the store in the
+/// path must be the credential's. **Every envelope must name that store**: a batch with any other
+/// store in it is refused whole, so no credential can write another shop's history. Ingest is the
+/// same idempotent, all-or-nothing [`Cloud::ingest`] the NATS cursor uses, so a batch published
+/// twice is stored once and the answer is the whole batch either way.
+async fn edge_publish_events<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    S: EventStore + Clone + Send + Sync + 'static,
+    S::Tx: Send,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let store_id = match publishing_store(&app, &headers, &store_id).await {
+        Ok(store_id) => store_id,
+        Err(refusal) => return refusal,
+    };
+    let batch = match serde_json::from_slice::<PublishedEvents>(&body) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("the body is not a batch of events: {error}"),
+                &[("events", "INVALID_VALUE")],
+            );
+        }
+    };
+    if batch.events.len() > MAX_PUBLISHED_EVENTS {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("a batch carries at most {MAX_PUBLISHED_EVENTS} events"),
+            &[("events", "TOO_MANY")],
+        );
+    }
+    if batch.events.iter().any(|event| event.store_id != store_id) {
+        return api_error(
+            ErrorStatus::PermissionDenied,
+            "every event in a batch must belong to the store it is published for",
+        );
+    }
+    match app.cloud.ingest(&batch.events).await {
+        Ok(_outcome) => (
+            StatusCode::OK,
+            Json(PublishedEventsAccepted {
+                accepted: batch.events.len(),
+            }),
+        )
+            .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// `POST /sync/stores/{store_id}/events/hello` — the protocol negotiation for the HTTPS event link
+/// ([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with
+/// the cloud's own window. Answers `200` with the [`HelloOutcome`](pos_proto::protocol::HelloOutcome)
+/// either way: a refusal is an answer, not an error, and the store keeps trading on it.
+async fn edge_events_hello<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let store_id = match publishing_store(&app, &headers, &store_id).await {
+        Ok(store_id) => store_id,
+        Err(refusal) => return refusal,
+    };
+    let hello = match serde_json::from_slice::<pos_proto::protocol::Hello>(&body) {
+        Ok(hello) => hello,
+        Err(error) => {
+            return api_error(
+                ErrorStatus::InvalidArgument,
+                format!("the body is not a hello: {error}"),
+            );
+        }
+    };
+    if hello.store_id != store_id {
+        return api_error(
+            ErrorStatus::PermissionDenied,
+            "the hello names a store other than the one it is sent for",
+        );
+    }
+    let outcome = pos_proto::protocol::negotiate(
+        &hello,
+        pos_proto::MIN_SUPPORTED_PROTOCOL_VERSION,
+        pos_proto::PROTOCOL_VERSION,
+    );
+    (StatusCode::OK, Json(outcome)).into_response()
+}
+
+/// The checks both event-link routes share: an authenticated caller holding `publish_events`, for
+/// the store named in the path, which must be the caller's own.
+async fn publishing_store<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    headers: &HeaderMap,
+    store_id: &str,
+) -> Result<StoreId, Response>
+where
+    K: ApiKeyStore + Send + Sync,
+    C: ClockSource + Send + Sync,
+{
+    let grant = authenticate(&app.keys, &app.clock, headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    require_scope(&grant, Scope::PublishEvents).map_err(IntoResponse::into_response)?;
+    let store_id = match parse_ulid_fields([("store_id", store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return Err(refusal),
+    };
+    require_store(&grant, store_id).map_err(IntoResponse::into_response)?;
+    Ok(store_id)
 }
 
 /// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).

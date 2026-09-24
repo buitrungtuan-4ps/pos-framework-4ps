@@ -29,7 +29,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::error::ErrorStatus;
 use pos_proto::ids::StoreId;
 
-use super::apikey::{ApiKeyStore, Grant, Scope, parse, verify};
+use super::apikey::{ApiKeyStore, CredentialKind, Grant, Scope, parse, verify};
 use crate::http::api_error;
 
 /// The authentication scheme this surface accepts.
@@ -61,10 +61,13 @@ where
         return Err(AuthDenied::Malformed);
     }
     let presented = parse(token.trim()).map_err(|_| AuthDenied::Invalid)?;
-    let stored = keys
-        .lookup(presented.id)
-        .await
-        .map_err(|_| AuthDenied::StoreUnavailable)?;
+    // A box's device credential is looked up in its own table and comes back as a store key with
+    // the box's scopes (ADR-0143); from here on the two are checked identically.
+    let stored = match presented.kind {
+        CredentialKind::ApiKey => keys.lookup(presented.id).await,
+        CredentialKind::Device => keys.lookup_device(presented.id).await,
+    }
+    .map_err(|_| AuthDenied::StoreUnavailable)?;
     // An unknown id is indistinguishable from a bad secret to the client — both are `Invalid`.
     let Some(stored) = stored else {
         return Err(AuthDenied::Invalid);
@@ -199,10 +202,12 @@ mod tests {
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
 
-    use super::{AuthDenied, authenticate, require_scope};
+    use super::{AuthDenied, authenticate, require_scope, require_store};
+    use crate::activation::mint_device_credential;
     use crate::auth::apikey::{
-        ApiKeyId, ApiKeyStore, ApiKeyStoreError, Scope, StoredApiKey, issue,
+        ApiKeyId, ApiKeyStore, ApiKeyStoreError, DEVICE_SCOPES, Scope, StoredApiKey, issue,
     };
+    use pos_proto::ids::StoreId;
 
     /// A low-entropy, obviously-fake secret so no real key material is committed.
     const FAKE_SECRET: &str = "fakesecretfortestsonly";
@@ -223,6 +228,8 @@ mod tests {
     #[derive(Default)]
     struct FakeKeys {
         rows: Mutex<HashMap<ApiKeyId, StoredApiKey>>,
+        /// Device credentials, a table of their own as in the real store (ADR-0143).
+        devices: Mutex<HashMap<ApiKeyId, StoredApiKey>>,
         down: bool,
     }
 
@@ -232,14 +239,23 @@ mod tests {
             rows.insert(stored.id, stored);
             Self {
                 rows: Mutex::new(rows),
-                down: false,
+                ..Self::default()
+            }
+        }
+
+        fn with_device(stored: StoredApiKey) -> Self {
+            let mut devices = HashMap::new();
+            devices.insert(stored.id, stored);
+            Self {
+                devices: Mutex::new(devices),
+                ..Self::default()
             }
         }
 
         fn unavailable() -> Self {
             Self {
-                rows: Mutex::new(HashMap::new()),
                 down: true,
+                ..Self::default()
             }
         }
     }
@@ -251,6 +267,42 @@ mod tests {
             }
             Ok(self.rows.lock().expect("lock").get(&id).cloned())
         }
+
+        async fn lookup_device(
+            &self,
+            id: ApiKeyId,
+        ) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+            if self.down {
+                return Err(ApiKeyStoreError::new("the store is down"));
+            }
+            Ok(self.devices.lock().expect("lock").get(&id).cloned())
+        }
+    }
+
+    /// A store that predates device credentials: it has only the trait's default `lookup_device`.
+    struct KeysOnly;
+
+    impl ApiKeyStore for KeysOnly {
+        async fn lookup(&self, _id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+            Ok(None)
+        }
+    }
+
+    fn store() -> StoreId {
+        StoreId::new(Ulid::from_u128(0x0005_708E))
+    }
+
+    /// A box's credential as activation mints it, and the store record the cloud rebuilds from it.
+    fn device_credential() -> (StoredApiKey, String) {
+        let (minted, token) = mint_device_credential(Ulid::from_u128(0x00DE_71CE), FAKE_SECRET);
+        let stored = StoredApiKey::for_device(
+            ApiKeyId::new(minted.id),
+            &tenant().to_string(),
+            &store().to_string(),
+            &minted.secret_hash(),
+        )
+        .expect("a well-formed device row");
+        (stored, token)
     }
 
     fn bearer(token: &str) -> HeaderMap {
@@ -360,6 +412,70 @@ mod tests {
             .expect("valid");
         let refused = require_scope(&grant, Scope::PlaceOrders).expect_err("not granted");
         assert_eq!(refused.into_response().status(), StatusCode::FORBIDDEN);
+    }
+
+    /// A box's own credential authenticates to its store, with exactly the box's scopes
+    /// (ADR-0143): enough to sync, and nothing a person or an integration does.
+    #[tokio::test]
+    async fn a_device_credential_authenticates_as_its_own_store() {
+        let (stored, token) = device_credential();
+        let keys = FakeKeys::with_device(stored);
+        let clock = FakeClock::new(at(100));
+
+        let grant = authenticate(&keys, &clock, &bearer(&token))
+            .await
+            .expect("the box's credential authenticates");
+        assert_eq!(grant.tenant(), tenant());
+        require_store(&grant, store()).expect("bound to its own store");
+        for scope in DEVICE_SCOPES {
+            require_scope(&grant, scope).expect("a box syncs, relays and publishes");
+        }
+        for scope in [Scope::ReadRollups, Scope::PlaceOrders, Scope::ManageDevices] {
+            assert!(
+                require_scope(&grant, scope).is_err(),
+                "a box credential carries no {scope:?}"
+            );
+        }
+        let elsewhere = StoreId::new(Ulid::from_u128(0x0BAD));
+        assert!(require_store(&grant, elsewhere).is_err());
+    }
+
+    /// The two tables never answer for each other: a device id presented as an API key, and a device
+    /// credential with a wrong secret, are both the ordinary refusal.
+    #[tokio::test]
+    async fn a_device_credential_is_only_ever_a_device_credential() {
+        let (stored, token) = device_credential();
+        let id = stored.id;
+        let keys = FakeKeys::with_device(stored);
+        let clock = FakeClock::new(at(100));
+
+        let as_api_key = token.replacen("posdev_", "pos_", 1);
+        assert_eq!(
+            authenticate(&keys, &clock, &bearer(&as_api_key)).await,
+            Err(AuthDenied::Invalid)
+        );
+        let forged = format!("posdev_{id}_wrongsecret");
+        assert_eq!(
+            authenticate(&keys, &clock, &bearer(&forged)).await,
+            Err(AuthDenied::Invalid)
+        );
+    }
+
+    /// A store that knows nothing of device credentials refuses every one: the safe direction for a
+    /// credential it cannot check. An archived box reads the same way, because the store answers
+    /// `None` for it.
+    #[tokio::test]
+    async fn a_store_without_device_credentials_refuses_them() {
+        let (_stored, token) = device_credential();
+        let clock = FakeClock::new(at(100));
+        assert_eq!(
+            authenticate(&KeysOnly, &clock, &bearer(&token)).await,
+            Err(AuthDenied::Invalid)
+        );
+        assert_eq!(
+            authenticate(&FakeKeys::default(), &clock, &bearer(&token)).await,
+            Err(AuthDenied::Invalid)
+        );
     }
 
     #[test]

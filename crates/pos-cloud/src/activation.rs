@@ -25,8 +25,7 @@ use pos_core::activation::{ActivationCode, CodeStatus};
 use pos_proto::ids::{DeviceId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
-/// The token prefix a device credential carries: `posdev_<id>_<secret>`.
-const CREDENTIAL_PREFIX: &str = "posdev_";
+use crate::auth::apikey::DEVICE_TOKEN_PREFIX;
 
 /// `SHA-256` of an activation code's canonical text — what the store keys on, never the code itself.
 ///
@@ -79,7 +78,7 @@ impl fmt::Debug for DeviceCredential {
 /// (`posdev_<id>_<secret>`) is the only time the secret is visible; only its hash is kept.
 #[must_use]
 pub fn mint_device_credential(id: Ulid, secret: &str) -> (DeviceCredential, String) {
-    let token = format!("{CREDENTIAL_PREFIX}{id}_{secret}");
+    let token = format!("{DEVICE_TOKEN_PREFIX}{id}_{secret}");
     let credential = DeviceCredential {
         id,
         secret_hash: hash_secret(secret),
