@@ -69,6 +69,21 @@ reads it through `option_env!` and `pos-edge` exposes no way to supply one at ru
 Keep **two** keys baked in where you can ([ADR-0047](adr/0047-minisign-verification.md)): retiring a
 compromised key otherwise needs a release that the compromised key itself must sign.
 
+**Windows code signing (Authenticode) is optional, and yours to choose**
+([ADR-0142](adr/0142-windows-signing-is-the-forks-choice.md)). It changes what Windows shows at the
+first double-click, never whether an update installs. Once the owner has added the step from
+[`release-runbook.md`](release-runbook.md#authenticode-signing-the-windows-binary-for-windows-itself)
+to `release.yml`, it reads:
+
+| Secret / variable | Required | What |
+|---|---|---|
+| `POS_SIGN_PFX_BASE64` (secret) | no | a `.pfx`, base64 — from a public CA, or made by `deploy/release/new-internal-signing-cert.ps1` |
+| `POS_SIGN_PFX_PASSWORD` (secret) | no | its password |
+| `POS_SIGN_COMMAND` (variable) | no | any signer's command line with `{file}` — for a key that cannot leave its hardware |
+| `POS_SIGN_REQUIRED` (variable) | no | `true` makes "no signing configured" a failure instead of a notice |
+
+None set: the Windows binary ships unsigned and the build summary says so.
+
 ### Mirror — `.github/workflows/mirror.yml`
 
 | Secret | Required | What |

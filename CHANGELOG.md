@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Windows code signing a fork can switch on — or leave off**
+  ([ADR-0142](docs/adr/0142-windows-signing-is-the-forks-choice.md)).
+  `deploy/release/sign-windows.ps1` Authenticode-signs the Windows binary with whatever the fork
+  configured. There are three modes: nothing (the build ships unsigned and says so), a `.pfx` from a
+  public CA or an internal one, or any signer's command line for a key held in hardware (an EV token,
+  Azure Trusted Signing, a cloud KMS). `POS_SIGN_REQUIRED=true` makes a missing certificate fail the
+  build. A fork with no public certificate can make an internal one
+  (`deploy/release/new-internal-signing-cert.ps1`) and have its store PCs trust it
+  (`deploy/edge/trust-internal-signing-cert.ps1`, or Group Policy / Intune). The script must run
+  before minisign, because Authenticode rewrites the executable. **Not wired into `release.yml`
+  yet:** an agent may not edit a release workflow, so the runbook carries the exact step for the
+  owner to add. The Windows CI job now parses these scripts under both PowerShell editions.
 - **The console hands out the Windows setup file**
   ([ADR-0141](docs/adr/0141-the-console-hands-out-the-installer-by-name.md)). The Stores screen's
   *Move to a new box* drawer and the new-store wizard offer **Download the setup file**, and

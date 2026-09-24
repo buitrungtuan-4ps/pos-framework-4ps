@@ -220,7 +220,33 @@ const lf = (text) => text.replace(/\r\n/gu, "\n");
 // `deploy/`), and REFUSED under `--emit`. `--emit` exists solely to hand these files to the
 // Windows job's PowerShell parser, so a run that cannot find them has failed at its only purpose —
 // and that is what stops the skip from quietly becoming universal the day a path moves.
-const missingTemplates = TEMPLATES.filter((template) => !existsSync(template.path));
+/**
+ * PowerShell scripts under `deploy/` that nothing generates — written by hand, so there is no
+ * generator to match, but they run elevated or in the release pipeline all the same. They get the
+ * two checks that do not need a generator: the byte-order mark here, and both PowerShell parsers on
+ * the Windows runner, which parses every `.ps1` this script writes under `--emit`.
+ */
+const HAND_WRITTEN = [
+  {
+    path: new URL("../../deploy/release/sign-windows.ps1", import.meta.url),
+    name: "deploy/release/sign-windows.ps1",
+    emit: "release-sign-windows.ps1",
+  },
+  {
+    path: new URL("../../deploy/release/new-internal-signing-cert.ps1", import.meta.url),
+    name: "deploy/release/new-internal-signing-cert.ps1",
+    emit: "release-new-internal-signing-cert.ps1",
+  },
+  {
+    path: new URL("../../deploy/edge/trust-internal-signing-cert.ps1", import.meta.url),
+    name: "deploy/edge/trust-internal-signing-cert.ps1",
+    emit: "edge-trust-internal-signing-cert.ps1",
+  },
+];
+
+const missingTemplates = [...TEMPLATES, ...HAND_WRITTEN].filter(
+  (template) => !existsSync(template.path),
+);
 if (missingTemplates.length > 0 && emitFlag !== -1) {
   console.error(
     `✗ --emit needs the checked-in templates and cannot find ${missingTemplates
@@ -269,6 +295,20 @@ for (const template of templatesChecked ? TEMPLATES : []) {
   // drift.
   if (emitFlag !== -1) {
     writeFileSync(join(outDir, template.emit), onDisk, "utf8");
+  }
+}
+
+for (const script of templatesChecked ? HAND_WRITTEN : []) {
+  const onDisk = readFileSync(script.path, "utf8");
+  try {
+    checkPowerShellBom(onDisk, script.name);
+    console.log(`✓ ${script.name} carries its byte-order mark`);
+  } catch (error) {
+    console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
+    failures += 1;
+  }
+  if (emitFlag !== -1) {
+    writeFileSync(join(outDir, script.emit), onDisk, "utf8");
   }
 }
 
