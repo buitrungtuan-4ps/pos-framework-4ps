@@ -1,9 +1,11 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
-import { ApiError, api } from "../api/client";
-import type { MintedCode, PairedDevice } from "../api/types";
+import { api } from "../api/client";
+import type { MintedCode, PairedDevice, PrinterEntry } from "../api/types";
+import { QrCode } from "../components/QrCode";
 import { PageHeader } from "../components/ui";
-import { locale, t } from "../i18n";
+import { type MessageKey, locale, t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -39,6 +41,35 @@ function pairingUrl(code: string): string {
   return `${window.location.origin}/pair?code=${code}`;
 }
 
+// Whether this screen was opened by a loopback address — the store PC's own browser at
+// `localhost`. The link it builds then points a phone at the phone itself, so the QR would scan and
+// go nowhere; the screen says to open it by the PC's LAN address instead.
+function onLoopback(): boolean {
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
+}
+
+// What a test page's outcome tells a manager, in the words the pay screen uses for a receipt —
+// except success, which is a test page rather than a receipt.
+function testPrintKey(outcome: string): MessageKey {
+  switch (outcome) {
+    case "PRINTED":
+      return "devices.test_printed";
+    case "NO_PRINTER":
+      return "pay.print_no_printer";
+    case "UNPRINTABLE_TEXT":
+      return "pay.print_unprintable";
+    case "QUEUED_TO_AGENT":
+      return "pay.print_queued";
+    case "PRINT_AGENT_UNAVAILABLE":
+      return "pay.print_agent_unavailable";
+    case "PRINT_QUEUE_FULL":
+      return "pay.print_queue_full";
+    default:
+      return "pay.print_unavailable";
+  }
+}
+
 export function Devices() {
   const [devices, setDevices] = createSignal<readonly PairedDevice[]>([]);
   const [durable, setDurable] = createSignal(true);
@@ -47,6 +78,9 @@ export function Devices() {
   const [confirming, setConfirming] = createSignal<string | null>(null);
   const [confirmAll, setConfirmAll] = createSignal("");
   const [minted, setMinted] = createSignal<MintedCode | null>(null);
+  const [printers, setPrinters] = createSignal<readonly PrinterEntry[]>([]);
+  // The last test page's outcome, per printer.
+  const [tested, setTested] = createSignal<Record<string, string>>({});
 
   const load = async () => {
     try {
@@ -55,11 +89,32 @@ export function Devices() {
       setDurable(state.durable);
       setError(null);
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
-  onMount(() => void load());
+  onMount(() => {
+    void load();
+    // Forgiving: an edge that predates the route, or a store with nothing published, lists none.
+    void api
+      .printers()
+      .then(setPrinters)
+      .catch(() => setPrinters([]));
+  });
+
+  // Print a page on one printer (manager only — the edge refuses anyone else, and says so).
+  const testPrint = async (deviceId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const outcome = await api.testPrinter(deviceId);
+      setTested({ ...tested(), [deviceId]: outcome.print });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   // Retire one device, or every device when `deviceId` is null. A failure is shown rather than
   // swallowed: a `503` means the durable registry could not be written, so the device may still be
@@ -74,7 +129,7 @@ export function Devices() {
       setConfirmAll("");
       await load();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -94,7 +149,7 @@ export function Devices() {
       setMinted(await api.mintPairingCode());
     } catch (caught) {
       setMinted(null);
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -201,7 +256,17 @@ export function Devices() {
                 {t("devices.add_expires", { moment: pairedAt(code().expires_at_ms) })}
               </p>
               <p class="mt-1 text-sm text-ink-muted">{t("devices.add_open")}</p>
-              <p class="select-all break-all font-mono text-xs text-ink-muted">
+              {/* The link as a QR code, so the tablet being added scans it rather than typing an
+                  address, a port and six digits against a five-minute clock (ADR-0139). */}
+              <div class="mt-3">
+                <QrCode text={pairingUrl(code().code)} label={t("devices.add_qr")} />
+              </div>
+              <Show when={onLoopback()}>
+                <p class="mt-2 rounded-token border border-awaiting px-3 py-2 text-sm text-ink" role="status">
+                  {t("devices.add_qr_loopback")}
+                </p>
+              </Show>
+              <p class="mt-2 select-all break-all font-mono text-xs text-ink-muted">
                 {pairingUrl(code().code)}
               </p>
               <p class="mt-2 text-sm text-ink-muted">{t("devices.add_replaced")}</p>
@@ -216,6 +281,40 @@ export function Devices() {
             </div>
           )}
         </Show>
+      </div>
+
+      <div class="mt-6 rounded-token border border-line p-3">
+        <p class="font-semibold text-ink">{t("devices.printers_title")}</p>
+        <p class="mt-1 text-sm text-ink-muted">{t("devices.printers_hint")}</p>
+        <ul class="mt-2 flex flex-col gap-2">
+          <For
+            each={printers()}
+            fallback={<li class="text-sm text-ink-muted">{t("devices.printers_none")}</li>}
+          >
+            {(printer) => (
+              <li class="flex flex-wrap items-center justify-between gap-2">
+                <span class="text-ink">{printer.name}</span>
+                <span class="flex flex-wrap items-center gap-2">
+                  <Show when={tested()[printer.device_id]}>
+                    {(outcome) => (
+                      <span class="text-sm text-ink-muted" role="status" data-outcome="test-print">
+                        {t(testPrintKey(outcome()))}
+                      </span>
+                    )}
+                  </Show>
+                  <button
+                    type="button"
+                    class="min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
+                    disabled={busy()}
+                    onClick={() => void testPrint(printer.device_id)}
+                  >
+                    {t("devices.test_print")}
+                  </button>
+                </span>
+              </li>
+            )}
+          </For>
+        </ul>
       </div>
 
       <div class="mt-6 rounded-token border border-danger p-3">

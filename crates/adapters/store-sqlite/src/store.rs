@@ -532,8 +532,16 @@ impl SqliteStore {
 fn open_connection(path: &Path) -> Result<Connection, PortError> {
     let mut connection = Connection::open(path).map_err(open_error)?;
     connection
+        // `page_size` first, because it only takes effect on a database that has no pages yet: a
+        // new store's file. `events` is a WITHOUT ROWID table, whose rows live in an index b-tree
+        // that keeps only about 1,000 bytes of a row on a 4 KiB page — and an event row, envelope
+        // and chain hashes together, is just over that, so nearly every event took a whole overflow
+        // page of its own (~4.7 KB on disk for ~0.9 KB of data, measured). At 8 KiB a row keeps
+        // about 2,000 bytes locally and the same log is a quarter of the size (finding F5). An
+        // existing store keeps the page size its file was created with; SQLite ignores the pragma.
         .execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA page_size = 8192;
+             PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;",
@@ -589,7 +597,16 @@ impl SqliteStore {
         // trading, sixteen at a year — and every sale queued behind it would wait. Chunked, the
         // worst a bill can be delayed is one chunk, and the chain is still checked link by link
         // across the whole log: `ChainCursor` carries the hash across each boundary.
-        let mut cursor = ChainCursor::start();
+        // From the retention checkpoint when there is one (ADR-0145): the records before it were
+        // deleted on purpose, and the first kept record must link to the last deleted one.
+        let checkpoint = self
+            .ask(PortName::EventStore, move |reply| {
+                Command::ChainCheckpoint { store_id, reply }
+            })
+            .await?;
+        let mut cursor = checkpoint.map_or_else(ChainCursor::start, |(seq, hash)| {
+            ChainCursor::resume(seq, hash)
+        });
         loop {
             let chunk = self
                 .ask(PortName::EventStore, {
@@ -609,6 +626,50 @@ impl SqliteStore {
         }
     }
 }
+
+impl SqliteStore {
+    /// Deletes this store's events that are synced and older than `before`, oldest first, and
+    /// returns how many went ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+    ///
+    /// Inherent, like [`Self::verify_chain`]: it is housekeeping a store does to itself, not a
+    /// capability the port's callers need, and no other adapter keeps a chained log to prune.
+    ///
+    /// `before` is the caller's whole judgement of age *and* of what is still open. This method
+    /// adds the two rules only the store can apply: an event the link has not acknowledged stays,
+    /// and the chain head stays. Deletion is a prefix in commit order, in chunks of
+    /// [`PRUNE_CHUNK`], each its own transaction on the writer thread, so a sale waits at most one
+    /// chunk; the checkpoint moves in the same transaction as each delete.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the store cannot be reached; whatever was deleted before the
+    /// failure stays deleted, with its checkpoint.
+    pub async fn prune_events(
+        &self,
+        store_id: StoreId,
+        before: Timestamp,
+    ) -> Result<u64, PortError> {
+        let mut total: u64 = 0;
+        loop {
+            let chunk = self
+                .ask(PortName::EventStore, move |reply| Command::PruneEvents {
+                    store_id,
+                    before,
+                    limit: PRUNE_CHUNK,
+                    reply,
+                })
+                .await?;
+            total = total.saturating_add(chunk.deleted);
+            if !chunk.more {
+                return Ok(total);
+            }
+        }
+    }
+}
+
+/// How many events one retention chunk deletes before handing the writer thread back: about the
+/// cost of one ordinary write, as [`CHAIN_CHUNK`] is for the chain walk.
+const PRUNE_CHUNK: u32 = 2_000;
 
 impl EventStore for SqliteStore {
     async fn append(

@@ -64,13 +64,21 @@ async fn app() -> (Router, String) {
 /// The same router, with a print dispatcher layered in and the given devices published — the shape
 /// `serve` composes ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 async fn app_with(printing: Option<(Arc<Printers>, PublishedDevices)>) -> (Router, String) {
+    app_with_permissions(printing, PermissionSet::default()).await
+}
+
+/// [`app_with`], signing in somebody granted `permissions` — a manager, for the routes that need one.
+async fn app_with_permissions(
+    printing: Option<(Arc<Printers>, PublishedDevices)>,
+    permissions: PermissionSet,
+) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
         STAFF_CODE,
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
-            permissions: PermissionSet::default(),
+            permissions,
             discount_ceiling: None,
             pin_phc: Some(hash_of(STAFF_PIN)),
         },
@@ -155,6 +163,31 @@ async fn send(
         .to_bytes();
     let json = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, json)
+}
+
+/// [`send`], keeping the `pos-error-reason` header a refusal carries (ADR-0137).
+async fn send_for_reason(
+    app: Router,
+    token: &str,
+    method: &str,
+    uri: &str,
+    body: Option<Value>,
+) -> (StatusCode, Option<String>) {
+    let body = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
+    let request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .body(body)
+        .expect("request builds");
+    let response = app.oneshot(request).await.expect("router responds");
+    let reason = response
+        .headers()
+        .get("pos-error-reason")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    (response.status(), reason)
 }
 
 fn vnd(minor: i64) -> Money {
@@ -526,4 +559,234 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     assert_eq!(closed["expected_amount"], json!(vnd(500_000)));
     assert_eq!(closed["variance"], json!(vnd(0)));
     assert_eq!(closed["print_shift_report"], true);
+}
+
+#[tokio::test]
+async fn the_open_shift_is_readable_by_a_device_that_reloads() {
+    let (app, token) = app().await;
+
+    // Nothing open is the ordinary morning state, and it is an answer, not an error.
+    let (status, none) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(none, Value::Null);
+
+    let (_, opened) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    let shift_id = opened["shift_id"].as_str().expect("a shift id").to_owned();
+
+    // A reload reads the shift another request opened: same id, same state, and blind.
+    let (status, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(current["shift_id"], shift_id.as_str());
+    assert_eq!(current["state"], "SHIFT_STATE_OPEN");
+    assert!(
+        current.get("expected_amount").is_none(),
+        "the read is blind"
+    );
+
+    let (_, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/count"),
+        Some(json!({ "counted_minor": 480_000 })),
+    )
+    .await;
+    let (_, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(current["state"], "SHIFT_STATE_COUNTED");
+    assert_eq!(current["counted_amount"], json!(vnd(480_000)));
+    assert!(
+        current.get("expected_amount").is_none() && current.get("variance").is_none(),
+        "a counted shift is still blind until it closes"
+    );
+
+    let (_, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
+    let (_, after) = send(app, &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(after, Value::Null, "a closed shift is not the current one");
+}
+
+#[tokio::test]
+async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
+    let (app, token) = app().await;
+    let open = || Some(json!({ "opening_float": vnd(500_000) }));
+
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", "/api/shifts", open()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(reason, None, "a success carries no reason");
+
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", "/api/shifts", open()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("SHIFT_ALREADY_OPEN"));
+
+    // A path segment that is not a ULID is the caller's mistake, and says so the same way.
+    let (status, reason) =
+        send_for_reason(app, &token, "POST", "/api/shifts/not-a-ulid/close", None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(reason.as_deref(), Some("INVALID_ARGUMENT"));
+}
+
+#[tokio::test]
+async fn the_status_bar_reads_the_outbox_and_the_cloud_link() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(701));
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, sync) = send(app, &token, "GET", "/api/sync", None).await;
+    assert_eq!(status, StatusCode::OK);
+    // This store has no cloud, so every event it committed is still waiting — and that is a
+    // warning at most, never a refusal (ADR-0137).
+    assert!(sync["outbox_depth"].as_u64().expect("a depth") >= 1);
+    assert_eq!(sync["outbox_planned_depth"], 100_000);
+    assert_eq!(sync["outbox_level"], "OUTBOX_LEVEL_NORMAL");
+    // Nothing has tried to reach a cloud, which is not the same as having failed to.
+    assert_eq!(sync["cloud_link"], "CLOUD_LINK_UNSPECIFIED");
+    assert!(sync.get("last_sync_time").is_none());
+}
+
+#[tokio::test]
+async fn a_fired_line_tells_a_reloaded_board_which_station_it_went_to() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(702));
+    let station = StationId::new(Ulid::from_u128(9));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (_, added) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let line_id = added["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+
+    // Still on the pad: no station yet, and the field is omitted rather than null.
+    let (_, live) = send(app.clone(), &token, "GET", "/api/orders/live", None).await;
+    assert!(live[0]["lines"][0].get("station_id").is_none());
+
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/lines/{line_id}/fire"),
+        Some(json!({ "station_id": station })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, live) = send(app, &token, "GET", "/api/orders/live", None).await;
+    assert_eq!(live[0]["lines"][0]["station_id"], json!(station));
+}
+
+fn counter_printer() -> PublishedDevice {
+    PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9100)),
+        kind: DeviceKind::Printer.into(),
+        connection: DeviceConnection::Network.into(),
+        address: "192.0.2.10:9100".to_owned(),
+        name: DisplayName::new("Counter"),
+        station_id: None,
+        agent_device_id: None,
+    }
+}
+
+#[tokio::test]
+async fn a_manager_prints_a_test_page_on_a_published_printer() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with_permissions(
+        Some((printers, PublishedDevices::new(vec![counter_printer()]))),
+        PermissionSet::default().with(pos_core::permission::Permission::ManageDevices),
+    )
+    .await;
+
+    let (status, listed) = send(app.clone(), &token, "GET", "/api/printers", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["name"], "Counter");
+    let printer = listed[0]["device_id"].as_str().expect("an id").to_owned();
+
+    let (status, outcome) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/printers/{printer}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(outcome["print"], "PRINTED");
+    assert!(
+        !recorder.written.lock().expect("recorder").is_empty(),
+        "bytes reached the printer's transport"
+    );
+
+    // A printer this store never published is not guessed at.
+    let unknown = DeviceId::new(Ulid::from_u128(0x9999));
+    let (_, missing) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/printers/{unknown}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(missing["print"], "NO_PRINTER");
+}
+
+#[tokio::test]
+async fn a_test_page_needs_a_manager() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer()]),
+    )))
+    .await;
+    let printer = counter_printer().device_id;
+    let (status, reason) = send_for_reason(
+        app,
+        &token,
+        "POST",
+        &format!("/api/printers/{printer}/test"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reason.as_deref(), Some("PERMISSION_DENIED"));
+    assert!(
+        recorder.written.lock().expect("recorder").is_empty(),
+        "no paper for a refusal"
+    );
 }

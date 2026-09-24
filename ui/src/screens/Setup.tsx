@@ -1,9 +1,10 @@
 import { Match, Switch, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
-import { ApiError, api, deviceToken } from "../api/client";
+import { api, deviceToken } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 
 // Activating the store server: the operator reads the `XXXX-XXXX-XXXX` code off the box's setup sheet
 // and enters it here. The edge exchanges it with the cloud once, keeps the device credential it gets
@@ -41,7 +42,15 @@ function symbolCount(formatted: string): number {
 
 // What the box says about itself, resolved once on mount. `unavailable` is the LAN-only store server
 // (or a keyring that cannot be read) — neither is an error the operator can fix from here.
-type Standing = "checking" | "needed" | "activated" | "unavailable";
+type Standing = "checking" | "needed" | "restarting" | "activated" | "unavailable";
+
+// How long to wait for the store server to come back after activating, and how often to ask. It
+// restarts itself so its cloud sync starts with the new credential (ADR-0140); a store PC is back in
+// a few seconds, and one still not answering after a minute is reported rather than waited on.
+const RESTART_POLL_MS = 1_000;
+const RESTART_GIVE_UP_MS = 60_000;
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function Setup() {
   const [params] = useSearchParams();
@@ -64,12 +73,28 @@ export function Setup() {
     setBusy(true);
     try {
       await api.activate(code());
+      // The box restarts itself now, so its cloud sync starts with the credential it was just given.
+      // Wait for it to answer again before moving on, rather than dropping the operator on a pairing
+      // screen whose first request would fail while it is down.
+      setStanding("restarting");
+      const deadline = Date.now() + RESTART_GIVE_UP_MS;
+      await pause(RESTART_POLL_MS);
+      while (Date.now() < deadline) {
+        const back = await api.activation().then(
+          (state) => state.activated,
+          () => false,
+        );
+        if (back) {
+          break;
+        }
+        await pause(RESTART_POLL_MS);
+      }
       setStanding("activated");
       // The store is now known to the cloud; this browser still needs its own device token before it
       // may send a command (ADR-0084), unless it already holds one.
       navigate(deviceToken() === null ? "/pair" : "/", { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }
@@ -82,6 +107,13 @@ export function Setup() {
       <Switch>
         <Match when={standing() === "checking"}>
           <p class="text-ink-muted">{t("setup.checking")}</p>
+        </Match>
+
+        <Match when={standing() === "restarting"}>
+          <div class="rounded-token border border-line bg-surface p-4" role="status">
+            <p class="font-semibold text-ok">{t("setup.activated")}</p>
+            <p class="mt-1 text-ink-muted">{t("setup.restarting")}</p>
+          </div>
         </Match>
 
         <Match when={standing() === "activated"}>

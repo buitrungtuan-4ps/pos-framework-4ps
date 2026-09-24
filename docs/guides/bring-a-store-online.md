@@ -148,6 +148,56 @@ If you have no wizard-generated copy — a store the console did not create — 
 [`deploy/edge/install-pos-edge.ps1`](../../deploy/edge/install-pos-edge.ps1), which is the same
 script taking the store's values as parameters.
 
+### One file, double-clicked (Windows)
+
+The binary carries that same script ([ADR-0140](../adr/0140-a-store-pc-installs-itself-from-one-file.md)).
+The console hands it out already named for its store and cloud
+([ADR-0141](../adr/0141-the-console-hands-out-the-installer-by-name.md)): the Stores screen's **Move
+to a new box** drawer and the last step of the new-store wizard both offer **Download the setup
+file**. It starts from the version the store's rollout targets, or you type the version your stores
+run. The link appears once the cloud holds a Windows build of that version; if it does not, fetch the
+release on the OTA screen first. The file is the release's own `pos-edge.exe`, byte for byte, named
+
+```
+pos-edge-setup_<cloud host>_<store ULID>.exe        e.g. pos-edge-setup_pos.example.vn_01J9ZQ3M6V4Q1ZB2Y7H8K5N0PX.exe
+pos-edge-setup_<cloud host>@<port>_<store ULID>.exe for a cloud on a port other than 443
+```
+
+— which is also how to name a release binary by hand when there is no console to hand. Copy it onto
+the machine and double-click it. It asks for administrator rights (the UAC prompt), runs the script
+with those values in a window that stays open, and opens this box's **`/setup`** page when the service
+is up, for Step 3. Or, from an administrator prompt with any file name:
+`pos-edge.exe install --store <ULID> --cloud https://<cloud host>`.
+
+**The activation code is the only secret you handle.** The credential it mints authenticates the
+box's config sync, heartbeat, order relay and event publishing, for this store only
+([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so there is no
+store key to paste and no broker token to copy. A store key still works if you give the box one
+(`-SyncKey`, or the script's `-AskSyncKey` prompt when you run it yourself), and then the `/sync`
+loops use it instead. The console will not offer the file when it was opened over plain http, because
+the file tells the store to dial the cloud over `https`, the only way a store dials it. Windows
+SmartScreen warns on the file unless your fork signs it
+([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)).
+
+### A box with no store yet: claim it
+
+A box can also be installed **without** a store, from one image for every store
+([ADR-0148](../adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)). It has no
+`config.toml`, so on first boot it runs `pos-edge claim --cloud https://<cloud host>` instead of
+serving:
+
+1. The box shows an eight-character code, `XXXX-XXXX`, in its log and on a page at
+   `http://127.0.0.1:8080/` that its own screen can show.
+2. In the console, open **Activation → Claim a box**, type the code (case and dashes do not matter)
+   and choose the device this box becomes. You need `console.devices.manage`.
+3. Within a few seconds the box collects its device credential, keeps it in the keyring, writes
+   `config.toml` for that store and exits. Start the store server; that credential is all it needs to
+   sync, so Step 3 below is already done.
+
+A code lasts an hour and works once; an unused code is replaced by a new one on the box. Run the claim
+**as the service's own user**, because the keyring is per user on Linux: a credential kept by `root`
+is one a service running as `pos` never finds.
+
 ### By hand (a host you manage yourself)
 
 The step-by-step for both platforms is in
@@ -241,8 +291,9 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 2. **Issue a code.** A `XXXX-XXXX-XXXX` activation code appears **once**.
 3. On any device on the store's LAN, open the store server's address in a browser. An unactivated box
    lands straight on **`/setup`**; type the code there. The **store server** — not the browser —
-   exchanges it with the cloud for a credential and keeps it in its own OS keyring. From then on the
-   store is activated and its config, heartbeat and order-relay loops run. A spent code is refused
+   exchanges it with the cloud for a credential and keeps it in its own OS keyring, then restarts
+   itself — the screen says so and waits — so that its config, heartbeat and order-relay loops start
+   with the new credential; they run at boot behind the activation gate. A spent code is refused
    ([ADR-0050](../adr/0050-activation-code-exchange.md)). The screen folds the ambiguous glyphs
    (`I`/`L` → `1`, `O` → `0`) and groups the symbols as printed, so a typo is caught on the counter
    rather than after a round-trip.
@@ -282,7 +333,7 @@ keeping the last-known-good if a version is rejected
 | **People** | the staff roster and what each role may do | **Yes** — nobody can sign in without it |
 | **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
 | **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
-| **Store settings** | country, currency, timezone, business-date cutoff | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)) |
+| **Store settings** | country, currency, timezone, business-date cutoff; the receipt's seller identity; and how many days the store PC keeps synced events (90 unless set, [ADR-0145](../adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)) | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)); the retention can stay at its default |
 | **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
 | **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
 | **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
@@ -322,7 +373,16 @@ a table, ring up an item. **Unplug the network — it keeps working.**
 > redeeming it deletes the file. For the **second and every later** device you do not restart
 > anything: on a till that is already paired, with a **manager signed in**, open **Devices** in the
 > top bar and choose *Get a pairing code*. The six digits appear on screen, along with the URL to
-> open on the new tablet ([ADR-0118](../adr/0118-one-credential-per-box-and-the-cloud-learns.md)).
+> open on the new tablet and the same URL as a **QR code** for its camera
+> ([ADR-0118](../adr/0118-one-credential-per-box-and-the-cloud-learns.md),
+> [ADR-0139](../adr/0139-the-till-draws-the-pairing-code-as-a-qr.md)). Open Devices by the store
+> PC's network address rather than `localhost` — the link is built from the address the screen was
+> opened at, and the screen says so if that address is one a phone cannot reach.
+>
+> The same screen lists the **printers** this store's configuration publishes, with *Print a test
+> page* on each (manager only). The page names the printer and goes out the way a receipt does —
+> directly, or through the terminal that owns it — and says whether this PC has the fonts to print
+> Vietnamese.
 >
 > That code replaces whatever was live, including the boot one — the store never holds two at once.
 > It needs the `ManageDevices` permission, so a waiter's tap cannot admit hardware; if the button

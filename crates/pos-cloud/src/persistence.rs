@@ -39,6 +39,7 @@ use store_postgres::{
     ScheduledPublishRow, StationRow, StoreRow, TableRow, TaskHealthRow, TaxRateRow, TenantRow,
     VoucherRow,
 };
+use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
@@ -97,6 +98,7 @@ use crate::catalog::{
     ItemSubcategoryId, LayoutButton, Menu, MenuId, MenuPlacement, MenuSection, MenuSectionId,
     ModifierGroup, ModifierGroupId, TaxClass,
 };
+use crate::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
 use crate::cloud::{StoreOwner, StoreOwners};
 use crate::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
@@ -1230,6 +1232,102 @@ impl ApiKeyStore for PostgresApiKeys {
             }
             None => Ok(None),
         }
+    }
+
+    async fn lookup_device(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+        let row = self
+            .fetch_device_credential(&id.to_string())
+            .await
+            .map_err(|error| ApiKeyStoreError::new(error.to_string()))?;
+        // An archived device's credential is refused exactly as an unknown one is (ADR-0143).
+        match row {
+            Some(row) if !row.archived => {
+                StoredApiKey::for_device(id, &row.tenant_id, &row.store_id, &row.secret_hash)
+                    .map(Some)
+                    .map_err(ApiKeyStoreError::new)
+            }
+            Some(_) | None => Ok(None),
+        }
+    }
+}
+
+impl ClaimStore for PostgresClaims {
+    async fn open(
+        &self,
+        claim_id: Ulid,
+        user_code_hash: [u8; 32],
+        secret_hash: [u8; 32],
+        expires_at: Timestamp,
+    ) -> Result<(), ClaimStoreError> {
+        self.open(
+            &claim_id.to_string(),
+            &user_code_hash,
+            &secret_hash,
+            expires_at.as_milliseconds_since_epoch(),
+        )
+        .await
+        .map_err(|error| ClaimStoreError::new(error.to_string()))
+    }
+
+    async fn bind(
+        &self,
+        user_code_hash: [u8; 32],
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+        now: Timestamp,
+    ) -> Result<BindOutcome, ClaimStoreError> {
+        let slot = ClaimSlotRow {
+            tenant_id: tenant_id.to_string(),
+            store_id: store_id.to_string(),
+            device_id: device_id.to_string(),
+        };
+        let outcome = self
+            .bind(&user_code_hash, &slot, now.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| ClaimStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            ClaimBindRow::Bound => BindOutcome::Bound,
+            ClaimBindRow::Unknown => BindOutcome::Unknown,
+            ClaimBindRow::Expired => BindOutcome::Expired,
+            ClaimBindRow::AlreadyBound => BindOutcome::AlreadyBound,
+        })
+    }
+
+    async fn collect(
+        &self,
+        claim_id: Ulid,
+        secret_hash: [u8; 32],
+        credential: &DeviceCredential,
+        now: Timestamp,
+    ) -> Result<CollectOutcome, ClaimStoreError> {
+        let outcome = self
+            .collect(
+                &claim_id.to_string(),
+                &secret_hash,
+                &credential.id.to_string(),
+                &credential.secret_hash(),
+                now.as_milliseconds_since_epoch(),
+            )
+            .await
+            .map_err(|error| ClaimStoreError::new(error.to_string()))?;
+        Ok(match outcome {
+            ClaimCollectRow::Collected(slot) => {
+                let parse = |what: &str, text: &str| {
+                    text.parse::<Ulid>().map_err(|_| {
+                        ClaimStoreError::new(format!("claim {claim_id}: {what} is not a ULID"))
+                    })
+                };
+                CollectOutcome::Collected {
+                    tenant_id: TenantId::new(parse("tenant id", &slot.tenant_id)?),
+                    store_id: StoreId::new(parse("store id", &slot.store_id)?),
+                    device_id: DeviceId::new(parse("device id", &slot.device_id)?),
+                }
+            }
+            ClaimCollectRow::Pending => CollectOutcome::Pending,
+            ClaimCollectRow::Expired => CollectOutcome::Expired,
+            ClaimCollectRow::Refused => CollectOutcome::Refused,
+        })
     }
 }
 

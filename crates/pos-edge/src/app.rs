@@ -33,7 +33,7 @@ use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
 use pos_core::lease::LeaseGeneration;
 use pos_core::machines::{Bill, BillTrigger};
-use pos_core::menu::PricedLine;
+use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_core::state_machine::StateMachine;
@@ -82,6 +82,7 @@ use crate::idgen::EdgeIdGenerator;
 use crate::lease_state::CurrentStanding;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
+use crate::sync_status::{OUTBOX_PLANNED_DEPTH, OutboxLevel, SyncReport, SyncStatus};
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap
 /// seconds and no daylight saving: a retention window is a duration, not a calendar walk, and being
@@ -279,6 +280,14 @@ impl StaffRoster {
     }
 }
 
+/// The range a store's [`EdgeSession::event_log_days`] may take
+/// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+///
+/// Thirty days at least, so a typo cannot have a store forget last month; ten years at most, so a
+/// stray zero cannot keep a log forever. The cloud refuses a publish outside it, and the edge
+/// ignores one that arrives anyway, keeping what it had.
+pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u16> = 30..=3650;
+
 /// The session defaults a decision reads — normally the store's synced configuration
 /// ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)). Held here so the decision spine
 /// is config-driven; the values arrive from the cloud config tree in P7.
@@ -345,6 +354,14 @@ pub struct EdgeSession {
     /// Defaults to a year, the same figure `LocalePack::default` carries, so a store that has synced
     /// no locale still forgets.
     pub retention_days: u16,
+    /// How many days the edge keeps a **synced** event before retention may delete it
+    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+    ///
+    /// Per store, from the cloud's `retention` node, within [`EVENT_LOG_DAYS`]; 90 until one
+    /// arrives, the figure the documents have always promised. It is a floor, never a deadline: an
+    /// event the link has not acknowledged, or one an open order still needs, stays whatever this
+    /// says. Not [`Self::retention_days`], which is how long *personal data* lives, set by law.
+    pub event_log_days: u16,
     /// How this store writes a number: its decimal mark, its group mark, and how many digits go in a
     /// group ([ADR-0136](../../../docs/adr/0136-a-store-publishes-how-it-writes-numbers.md)).
     ///
@@ -560,6 +577,7 @@ impl EdgeSession {
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,
+            event_log_days: 90,
             // The common convention — `1,234.5` — and not Vietnam's, deliberately: the bootstrap is
             // what an unsynced box of unknown country uses, and `pos-proto`'s own default test says
             // the same. A store that syncs a locale node replaces it.
@@ -870,6 +888,34 @@ pub enum AppError {
     /// time the kitchen reads the ticket — the line was priced without the size it was sold at.
     #[error("the modifiers on that line break the item's selection rules")]
     ModifierSelectionInvalid,
+    /// The store does not accept orders on that sales channel (ADR-0146): the counter asked to open
+    /// an order on a channel its published `channels` node leaves out.
+    #[error("this store does not accept orders on that sales channel")]
+    ChannelNotAccepted,
+    /// The item, or one of its modifiers, is not in the store's price book or is 86'd right now,
+    /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
+    #[error("that item cannot be sold right now")]
+    ItemNotSellable,
+}
+
+impl AppError {
+    /// Why the price book could not price a line, as a refusal (ADR-0146). A missing rate is the
+    /// same configuration fault the bill reports, so it keeps that token.
+    fn from_reprice(error: RepriceError) -> Self {
+        match error {
+            RepriceError::MissingRate {
+                tax_class_id,
+                sales_channel,
+            } => Self::Domain(DomainError::TaxRateNotConfigured {
+                tax_class_id: tax_class_id.to_string(),
+                sales_channel: pos_proto::WireEnum::as_wire(sales_channel).to_owned(),
+            }),
+            RepriceError::Money(error) => Self::Domain(DomainError::Money(error)),
+            // An unknown or 86'd item, and — `RepriceError` being non-exhaustive — any reason this
+            // build has not learned: the line cannot be priced, and a refusal is the safe answer.
+            _ => Self::ItemNotSellable,
+        }
+    }
 }
 
 /// A manager's step-up authorisation for one act (`docs/pos-spec.md` §9, §11.4).
@@ -957,6 +1003,33 @@ pub struct LineDraft {
     pub modifier_menu_item_ids: Vec<MenuItemId>,
     /// Whether a guest note was written — its text never enters the log.
     pub note_present: bool,
+}
+
+/// What a till sends to add a line to an order by its id (ADR-0146): the guest's choice, and no
+/// price. The edge prices it from its own price book at the order's channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderLineChoice {
+    /// The item.
+    pub menu_item_id: MenuItemId,
+    /// How many.
+    pub quantity: Quantity,
+    /// The chosen modifiers, each a price-book item.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Seat, when seats are enabled.
+    pub seat: Option<u16>,
+    /// Course, when courses are enabled.
+    pub course_id: Option<CourseId>,
+    /// Whether the line carries a free-text note (the note itself never enters an event).
+    pub note_present: bool,
+}
+
+/// A counter order the till has just opened (ADR-0146).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CounterOrderOpened {
+    /// The new order.
+    pub order_id: OrderId,
+    /// The trading day it opened on, which the queue number is counted within.
+    pub business_date: BusinessDate,
 }
 
 /// What a line looks like to a caller after a command.
@@ -1201,6 +1274,9 @@ pub struct LiveOrderLine {
     /// third to go missing: a till that reloaded mid-service would show every line uncoursed, so the
     /// course controls would offer to send starters that the screen no longer knew were starters.
     pub course_id: Option<CourseId>,
+    /// The station it was fired to, `None` while it is still on the pad — what lets a kitchen
+    /// board show one station its own tickets and bump them to the right place.
+    pub station_id: Option<StationId>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -1242,6 +1318,16 @@ pub struct ShiftView {
     pub variance: Option<Money>,
     /// Whether closing asked for the shift report to print, for the caller to run after commit.
     pub print_shift_report: bool,
+}
+
+/// One live order as [`Edge::live_orders`] copies it out of the projection, before the lock is
+/// released and the view is assembled.
+struct LiveSnapshot {
+    order_id: OrderId,
+    table_id: Option<TableId>,
+    bill_id: Option<BillId>,
+    /// Each line with its id and whether a station has bumped it.
+    lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
 
 /// What the projection remembers about one order line, so a fire can be decided and its consumption
@@ -1296,6 +1382,10 @@ struct LineRecord {
     /// most needs to know a ticket has been waiting eleven minutes, and one that started counting
     /// from its own start-up would report every ticket as new.
     fired_time: Option<Timestamp>,
+    /// The station the line was fired to, or `None` while it is still on the pad — from the same
+    /// event as [`Self::fired_time`], so a kitchen board that reloads still shows each station only
+    /// its own tickets.
+    station_id: Option<StationId>,
 }
 
 impl From<SalesOrderLineAdded> for LineRecord {
@@ -1319,6 +1409,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             // An added line has not been fired, so there is no time to record yet. The fold on
             // `sales.order_line.fired` fills it from that event's own envelope.
             fired_time: None,
+            station_id: None,
         }
     }
 }
@@ -1495,9 +1586,15 @@ struct Projection {
     /// discarded, and that goods-in has something to seed.
     stock: StockProjection,
     bills: HashMap<BillId, BillRecord>,
-    /// The bill open on each order, so a second bill on one order is refused (ADR-0093). See
-    /// [`Projection::bill_for_order`] for why this has to be explicit.
-    order_bills: HashMap<OrderId, BillId>,
+    /// Every bill each order has had, oldest first, so a second bill on one order is refused
+    /// (ADR-0093). See [`Projection::bill_for_order`] for why this has to be explicit.
+    ///
+    /// A list, because one order can have several: the parts of a split, the bill a cashier opens
+    /// again after voiding the wrong one (ADR-0128). This was a single pointer to the last bill
+    /// opened, and nothing moved it when that bill was voided, merged away, or settled while a
+    /// sibling part still owed. That stranded a table whose bill was voided, refused every split
+    /// part's settle after the first, and kept a paid order on the live list after a merge.
+    order_bill_ids: HashMap<OrderId, Vec<BillId>>,
     shifts: HashMap<ShiftId, ShiftRecord>,
     /// The one shift currently trading or counted, if any — the drawer cash lands on it, and every
     /// event minted while it is set carries its id. Cleared when the shift closes.
@@ -1506,6 +1603,27 @@ struct Projection {
     /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
     /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.
     bumped_lines: HashSet<OrderLineId>,
+    /// Each order's lines, in id order: the index every order-scoped read walks.
+    ///
+    /// Until it existed those reads filtered `lines` — every line the store had sold since it was
+    /// installed — so a store got slower with age, and did it holding the lock every sale takes. At
+    /// thirty thousand settled orders `GET /api/orders/live` took ~60 ms and an add-line from a
+    /// second device waited behind it for as long (finding F2). Written only by
+    /// [`Self::add_line`]; a line never changes order, so nothing else has to keep it in step.
+    ///
+    /// Id order rather than insertion order because every reader sorted by id — the bill's rounding
+    /// residual and the receipt's row order depend on it — and the two differ after a restart whose
+    /// clock stepped back.
+    order_lines: HashMap<OrderId, Vec<OrderLineId>>,
+    /// The orders still owing money — [`Self::open_orders`]'s rule, held exactly rather than
+    /// recomputed by a scan: at least one line, no bill or a bill that has not settled, and not
+    /// refused by staff.
+    ///
+    /// Recomputed for one order by [`Self::refresh_live`] whenever an input to that rule changes —
+    /// a line added, a bill opened, a bill's state moved, a staff decision — and never simply
+    /// inserted on the first line and removed on settle: voiding an order's only bill puts it
+    /// back, so an order can leave the set and come back.
+    live: BTreeSet<OrderId>,
 }
 
 impl Projection {
@@ -1564,8 +1682,49 @@ impl Projection {
     }
 
     /// Records what a member of staff decided about a guest's submission (ADR-0116).
+    ///
+    /// A refusal also ends the order's hold on the floor, because a refused guest order is not a
+    /// live order (ADR-0116 decision 5): it leaves the live list, and the table it named no longer
+    /// points at it. Left pointing at it, the table would bill the refused order and take the next
+    /// line onto it; left `Occupied` with no order, it would refuse every move a waiter has.
+    ///
+    /// The table goes back to the order it held before the guest's arrived, if one is still
+    /// owing there (a guest's order takes the table over when it opens), and is freed otherwise.
     fn record_staff_decision(&mut self, order_id: OrderId, decision: StaffDecision) {
         self.staff_decisions.insert(order_id, decision);
+        self.refresh_live(order_id);
+        if decision == StaffDecision::Rejected
+            && let Some(table_id) = self.table_for_order(order_id)
+        {
+            let displaced = self.live.iter().rev().copied().find(|other| {
+                self.orders
+                    .get(other)
+                    .is_some_and(|origin| origin.table_id == Some(table_id))
+            });
+            if let Some(other) = displaced {
+                self.open_order(table_id, other);
+                let state = if self.latest_bill_in(other, BillState::Open).is_some() {
+                    TableState::AwaitingPayment
+                } else {
+                    TableState::Occupied
+                };
+                self.set_table(table_id, state);
+            } else {
+                self.table_orders.remove(&table_id);
+                if self.table_state(table_id) == TableState::Occupied {
+                    self.set_table(table_id, TableState::Free);
+                }
+            }
+        }
+    }
+
+    /// Seats a guest's own order at the table it names, as a QR order does in place of a waiter's
+    /// seat. Live and on rebuild through this one method: a guest order's log carries no
+    /// `sales.table.opened`, only the table on its `sales.order.opened`, and a rebuild that did not
+    /// read it there brought the table back free with the order stranded off it.
+    fn seat_guest_order(&mut self, table_id: TableId, order_id: OrderId) {
+        self.set_table(table_id, TableState::Occupied);
+        self.open_order(table_id, order_id);
     }
 
     /// What staff decided about an order, or `None` while it is still theirs to decide.
@@ -1622,7 +1781,53 @@ impl Projection {
     }
 
     fn add_line(&mut self, line_id: OrderLineId, record: LineRecord) {
-        self.lines.insert(line_id, record);
+        let order_id = record.order_id;
+        // Indexed only when the line is new: a rebuild can run over a projection that already holds
+        // it, and a second copy of an id would sell the line twice on the bill.
+        if self.lines.insert(line_id, record).is_none() {
+            let ids = self.order_lines.entry(order_id).or_default();
+            if let Err(at) = ids.binary_search(&line_id) {
+                ids.insert(at, line_id);
+            }
+        }
+        self.refresh_live(order_id);
+    }
+
+    /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
+    fn refresh_live(&mut self, order_id: OrderId) {
+        let has_lines = self
+            .order_lines
+            .get(&order_id)
+            .is_some_and(|ids| !ids.is_empty());
+        let settled = self
+            .bill_for_order(order_id)
+            .and_then(|bill_id| self.bills.get(&bill_id))
+            .is_some_and(|bill| bill.state == BillState::Settled);
+        let refused = self.staff_decision(order_id) == Some(StaffDecision::Rejected);
+        if has_lines && !settled && !refused {
+            self.live.insert(order_id);
+        } else {
+            self.live.remove(&order_id);
+        }
+    }
+
+    /// The ids of an order's lines, in id order, from the index.
+    fn line_ids_for_order(&self, order_id: OrderId) -> &[OrderLineId] {
+        self.order_lines.get(&order_id).map_or(&[], Vec::as_slice)
+    }
+
+    /// An order's lines that satisfy `keep`, each with its id, in id order.
+    fn lines_where(
+        &self,
+        order_id: OrderId,
+        keep: impl Fn(&LineRecord) -> bool,
+    ) -> Vec<(OrderLineId, LineRecord)> {
+        self.line_ids_for_order(order_id)
+            .iter()
+            .filter_map(|id| self.lines.get(id).map(|record| (*id, record)))
+            .filter(|(_, record)| keep(record))
+            .map(|(id, record)| (id, record.clone()))
+            .collect()
     }
 
     fn line(&self, line_id: OrderLineId) -> Option<LineRecord> {
@@ -1671,9 +1876,15 @@ impl Projection {
     /// The value is `SalesOrderLineFired::fire_time` — the domain's own field, minted once per
     /// command — so the live write and the replay of that same command agree by construction rather
     /// than by two clocks happening to match.
-    fn set_fired_time(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+    fn set_fired_time(
+        &mut self,
+        line_id: OrderLineId,
+        fired_time: Timestamp,
+        station_id: StationId,
+    ) {
         if let Some(record) = self.lines.get_mut(&line_id) {
             record.fired_time = Some(fired_time);
+            record.station_id = Some(station_id);
         }
     }
 
@@ -1684,9 +1895,9 @@ impl Projection {
     /// event *is* the fire — so it says so in one call, which also keeps [`Self::fold`] inside the
     /// hundred lines clippy allows it. That limit is worth keeping: the fold is one match over every
     /// event type this edge knows, and it earns its length one arm at a time.
-    fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp) {
+    fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp, station_id: StationId) {
         self.set_line_state(line_id, OrderLineState::Fired);
-        self.set_fired_time(line_id, fired_time);
+        self.set_fired_time(line_id, fired_time, station_id);
     }
 
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
@@ -1717,32 +1928,101 @@ impl Projection {
     /// screen rebuilding after a restart has no other way to learn one: the ids reach a device on
     /// the fan-out, and a device that was not running when the line was added never saw it.
     fn identified_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
-        let mut lines: Vec<(OrderLineId, LineRecord)> = self
-            .lines
-            .iter()
-            .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, record)| (*id, record.clone()))
-            .collect();
-        lines.sort_by_key(|(id, _)| *id);
-        lines
+        self.lines_where(order_id, |_| true)
     }
 
     /// Records a bill and indexes it by the order it bills.
     fn open_bill_record(&mut self, bill_id: BillId, record: BillRecord) {
-        self.order_bills.insert(record.order_id, bill_id);
+        let order_id = record.order_id;
+        // Indexed only when new, as a line is: a rebuild can fold a bill the projection holds.
+        let ids = self.order_bill_ids.entry(order_id).or_default();
+        if !ids.contains(&bill_id) {
+            ids.push(bill_id);
+        }
         self.bills.insert(bill_id, record);
+        self.refresh_live(order_id);
     }
 
-    /// The bill already open on an order, if any.
+    /// The newest of an order's bills that is in `state`.
+    fn latest_bill_in(&self, order_id: OrderId, state: BillState) -> Option<BillId> {
+        self.order_bill_ids
+            .get(&order_id)?
+            .iter()
+            .rev()
+            .copied()
+            .find(|bill_id| {
+                self.bills
+                    .get(bill_id)
+                    .is_some_and(|bill| bill.state == state)
+            })
+    }
+
+    /// The bill an order is being charged on: its newest open bill, or if none is open its newest
+    /// settled one. `None` when it never had a bill, or every bill it had was voided or folded into
+    /// another, which leaves it owing and free to bill again.
     ///
-    /// This index is what keeps one order to one bill now that a bill is keyed on an order rather
-    /// than a table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
+    /// This is what keeps one order to one bill now that a bill is keyed on an order rather than a
+    /// table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
     /// accident: a table can only be `Occupied` once, so `decide_table(RequestBill)` refused the
     /// second request on its way through, and nothing had to say so. An order key has no state
     /// machine behind it, and dropping the rule silently would be expensive — two open bills on one
     /// order means two receipt numbers and a guest charged twice for one meal.
+    ///
+    /// Open before settled, so an order with one split part paid and another still owing is
+    /// still owing, whichever part was opened last.
     fn bill_for_order(&self, order_id: OrderId) -> Option<BillId> {
-        self.order_bills.get(&order_id).copied()
+        self.latest_bill_in(order_id, BillState::Open)
+            .or_else(|| self.latest_bill_in(order_id, BillState::Settled))
+    }
+
+    /// Settles a bill, and moves its table on when nothing else on the order still owes.
+    ///
+    /// Only then: the parts of a split share one table, and moving it to `NeedsCleaning` on the
+    /// first part's settle left every other part refused by the table machine, with no way to take
+    /// the rest of the money. Decided here, under the projection's lock after the commit, so two
+    /// tills settling the last two parts at once cannot each see the other still open.
+    fn settle_bill_record(&mut self, bill_id: BillId) {
+        self.set_bill_state(bill_id, BillState::Settled);
+        let Some((order_id, Some(table_id))) = self
+            .bills
+            .get(&bill_id)
+            .map(|bill| (bill.order_id, bill.table_id))
+        else {
+            return;
+        };
+        if self.latest_bill_in(order_id, BillState::Open).is_none() {
+            self.set_table(table_id, TableState::NeedsCleaning);
+        }
+    }
+
+    /// Voids a bill, and gives its table back when nothing else on the order still owes.
+    ///
+    /// A void cancels the bill, not the meal: the lines are still there, and a cashier who voided
+    /// the wrong bill opens another on the same table. So the table leaves `AwaitingPayment`: to
+    /// `Occupied` when nothing was paid, or to `NeedsCleaning` when a sibling part was, because
+    /// that meal is finished and the voided part's lines were forgiven with it. Before this, the
+    /// table stayed `AwaitingPayment` for good, a state only a settle leaves, and a voided bill
+    /// cannot settle.
+    fn void_bill_record(&mut self, bill_id: BillId) {
+        self.set_bill_state(bill_id, BillState::Voided);
+        let Some((order_id, Some(table_id))) = self
+            .bills
+            .get(&bill_id)
+            .map(|bill| (bill.order_id, bill.table_id))
+        else {
+            return;
+        };
+        if self.table_state(table_id) != TableState::AwaitingPayment
+            || self.latest_bill_in(order_id, BillState::Open).is_some()
+        {
+            return;
+        }
+        let next = if self.latest_bill_in(order_id, BillState::Settled).is_some() {
+            TableState::NeedsCleaning
+        } else {
+            TableState::Occupied
+        };
+        self.set_table(table_id, next);
     }
 
     /// Every **counter** order still owing money, in id order (so the counter list is stable across
@@ -1774,20 +2054,46 @@ impl Projection {
     /// "Still owing" is [`Self::open_counter_orders`]'s rule, which this one now supplies: no bill,
     /// or a bill that has not settled. A settled order is finished and drops out, which is what
     /// bounds this list — it is the store's live trading, not a log.
+    ///
+    /// Read from [`Self::live`], which holds exactly this rule, rather than by scanning every line
+    /// the store has ever sold (F2).
     fn open_orders(&self) -> Vec<OrderId> {
-        let mut orders: Vec<OrderId> = self
-            .lines
-            .values()
-            .map(|record| record.order_id)
-            .filter(|order_id| {
-                self.bill_for_order(*order_id)
-                    .and_then(|bill_id| self.bill(bill_id))
-                    .is_none_or(|bill| bill.state != BillState::Settled)
-            })
-            .collect();
-        orders.sort_unstable();
-        orders.dedup();
-        orders
+        self.live.iter().copied().collect()
+    }
+
+    /// When the oldest business still open began, in milliseconds since the epoch, or `None` when
+    /// nothing is open (ADR-0145): an order still owing, an open bill, a table that is not free, a
+    /// guest order awaiting staff, the open shift.
+    ///
+    /// Read from the ids, not from stored times: every one of these is a ULID minted when it
+    /// opened, so its high bits are the moment it began, and every event that belongs to it came
+    /// after. Retention deletes nothing from that moment on, so a rebuild still finds everything the
+    /// open work needs.
+    fn oldest_open_work(&self, session: &EdgeSession) -> Option<u64> {
+        let live = self.live.first().map(|order_id| order_id.as_ulid());
+        let bills = self
+            .bills
+            .iter()
+            .filter(|(_, bill)| bill.state == BillState::Open)
+            .map(|(bill_id, _)| bill_id.as_ulid());
+        let tables = self
+            .tables
+            .iter()
+            .filter(|(_, state)| **state != TableState::Free)
+            .filter_map(|(table_id, _)| self.table_orders.get(table_id))
+            .map(|order_id| order_id.as_ulid());
+        let held = self
+            .orders_awaiting_staff_confirmation(session)
+            .first()
+            .map(|order_id| order_id.as_ulid());
+        let shift = self.open_shift.map(ShiftId::as_ulid);
+        live.into_iter()
+            .chain(bills)
+            .chain(tables)
+            .chain(held)
+            .chain(shift)
+            .map(Ulid::timestamp_ms)
+            .min()
     }
 
     /// The lines on an order that have not been sent yet, each with the id it is sent by, in id
@@ -1797,16 +2103,7 @@ impl Projection {
     /// because "unfired" is a projection fact: [`OrderLineState::Added`] is the only state a fire is
     /// legal from, and the decision refuses the rest anyway.
     fn unfired_lines_for_order(&self, order_id: OrderId) -> Vec<(OrderLineId, LineRecord)> {
-        let mut lines: Vec<(OrderLineId, LineRecord)> = self
-            .lines
-            .iter()
-            .filter(|(_, record)| {
-                record.order_id == order_id && record.state == OrderLineState::Added
-            })
-            .map(|(id, record)| (*id, record.clone()))
-            .collect();
-        lines.sort_by_key(|(id, _)| *id);
-        lines
+        self.lines_where(order_id, |record| record.state == OrderLineState::Added)
     }
 
     /// Applies a new quantity and extended total to a line the order still holds.
@@ -1836,16 +2133,25 @@ impl Projection {
     /// is the order the merge semantics fix (ADR-0029) and a partition has to be comparable against
     /// something stable.
     fn sold_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
-        let mut ids: Vec<OrderLineId> = self
-            .lines
+        self.line_ids_for_order(order_id)
             .iter()
-            .filter(|(_, record)| {
-                record.order_id == order_id && record.state != OrderLineState::Voided
+            .copied()
+            .filter(|id| {
+                self.lines
+                    .get(id)
+                    .is_some_and(|record| record.state != OrderLineState::Voided)
             })
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort_unstable();
-        ids
+            .collect()
+    }
+
+    /// The lines a bill covers: the ones it names, or — for a bill that names none, opened before
+    /// ADR-0128 recorded them — every unvoided line on its order, which is what such a bill meant.
+    fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
+        if bill.order_line_ids.is_empty() {
+            self.sold_line_ids(bill.order_id)
+        } else {
+            bill.order_line_ids.clone()
+        }
     }
 
     /// Records a reduction against a bill. Additive, because two discounts on one bill are two
@@ -1875,9 +2181,12 @@ impl Projection {
     }
 
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
-        if let Some(record) = self.bills.get_mut(&bill_id) {
-            record.state = state;
-        }
+        let Some(record) = self.bills.get_mut(&bill_id) else {
+            return;
+        };
+        record.state = state;
+        let order_id = record.order_id;
+        self.refresh_live(order_id);
     }
 
     /// Replaces what a bill covers — the target of a merge, taking the absorbed bills' lines.
@@ -1948,6 +2257,10 @@ pub struct Edge<S> {
     /// that refuse on it and the response header that reports it are all reading the same value.
     /// `Active` until a pull says otherwise, which is every box that has never been issued a lease.
     standing: Arc<CurrentStanding>,
+    /// What the status bar says about the cloud link and the outbox
+    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Written by the
+    /// outbox drain and the heartbeat, read by `GET /api/sync`.
+    sync: SyncStatus,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -2033,9 +2346,9 @@ impl<S> Edge<S> {
     /// Refuses a command that would **open** something new when a replacement machine has taken this
     /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
-    /// Called by the three commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
-    /// no others — `open_shift`, `seat_table` and `open_inbound_order`, which are exactly the three
-    /// sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
+    /// Called by the four commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
+    /// no others — `open_shift`, `seat_table`, `open_inbound_order` and `open_counter_order`, which
+    /// are exactly the sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
     /// its second round, gets its bill and is paid — because the order lives in *this* box's log and
     /// there is nowhere else for those guests to be served. What the box cannot do is start
     /// anything: the floor drains and does not refill.
@@ -2093,6 +2406,40 @@ impl<S: EventStore> Edge<S> {
             projection: Mutex::new(Projection::default()),
             receipts,
             standing: Arc::new(CurrentStanding::new()),
+            sync: SyncStatus::new(),
+        })
+    }
+
+    /// The cloud-link and outbox-depth cell the status bar reads
+    /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+    #[must_use]
+    pub const fn sync(&self) -> &SyncStatus {
+        &self.sync
+    }
+
+    /// What the status bar shows: how many events wait for the cloud, how worried to be about it,
+    /// and whether the cloud was reachable on the drain's last pass.
+    ///
+    /// The depth is reused for [`DEPTH_TTL`](crate::sync_status::DEPTH_TTL) so every device polling
+    /// at once costs the store one count.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the depth had to be measured and the store could not be read.
+    pub async fn sync_report(&self) -> Result<SyncReport, AppError> {
+        let now = tokio::time::Instant::now();
+        let depth = if let Some(depth) = self.sync.cached_depth(now) {
+            depth
+        } else {
+            let depth = self.store.outbox_depth(self.identity.store_id).await?;
+            self.sync.record_depth(depth, now);
+            depth
+        };
+        Ok(SyncReport {
+            outbox_depth: depth,
+            outbox_level: OutboxLevel::of(depth, OUTBOX_PLANNED_DEPTH),
+            cloud_link: self.sync.cloud_link(),
+            last_sync_time: self.sync.last_sync_time(),
         })
     }
 
@@ -2369,8 +2716,7 @@ impl<S: EventStore> Edge<S> {
             // A QR order names a table, so the floor shows it occupied and staff can open the bill;
             // a delivery or public-API order has none.
             if let Some(table_id) = table_id {
-                projection.set_table(table_id, TableState::Occupied);
-                projection.open_order(table_id, order_id);
+                projection.seat_guest_order(table_id, order_id);
             }
             // The channel this order actually came in on, so the bill is taxed at its rate rather
             // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
@@ -2412,15 +2758,7 @@ impl<S: EventStore> Edge<S> {
     /// A ULID sorts by mint time, so this is the order the lines were added in.
     #[must_use]
     pub fn order_line_ids(&self, order_id: OrderId) -> Vec<OrderLineId> {
-        let projection = self.lock_projection();
-        let mut ids: Vec<OrderLineId> = projection
-            .lines
-            .iter()
-            .filter(|(_, record)| record.order_id == order_id)
-            .map(|(id, _)| *id)
-            .collect();
-        ids.sort_unstable();
-        ids
+        self.lock_projection().line_ids_for_order(order_id).to_vec()
     }
 
     /// The lines and table of one waiting order, for the confirmation screen (ADR-0116).
@@ -2746,7 +3084,7 @@ impl<S: EventStore> Edge<S> {
         }
         self.append_and_publish(envelopes, messages).await?;
 
-        self.lock_projection().set_bill_state(bill_id, next_state);
+        self.lock_projection().void_bill_record(bill_id);
         Ok(next_state)
     }
 
@@ -3050,10 +3388,14 @@ impl<S: EventStore> Edge<S> {
         self.commit_and_publish(&ctx, &event).await?;
 
         {
+            // Resolved through the guard already held. `Edge::covered_lines` takes the lock itself,
+            // and calling it here re-locked a `std::sync::Mutex` on the thread holding it: for a
+            // bill that names no lines — every bill opened before ADR-0128 recorded them — that is
+            // a deadlock, and with the projection locked every till on the store hangs with it.
             let mut projection = self.lock_projection();
-            let mut lines = self.covered_lines(&target);
+            let mut lines = projection.covered_lines(&target);
             for (absorbed_id, record, next_state) in folded {
-                lines.extend(self.covered_lines(&record));
+                lines.extend(projection.covered_lines(&record));
                 projection.set_bill_state(absorbed_id, next_state);
             }
             lines.sort_unstable();
@@ -3070,11 +3412,7 @@ impl<S: EventStore> Edge<S> {
     /// because two readers disagreeing about what a bill covers is two different answers to what a
     /// guest owes.
     fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
-        if bill.order_line_ids.is_empty() {
-            self.lock_projection().sold_line_ids(bill.order_id)
-        } else {
-            bill.order_line_ids.clone()
-        }
+        self.lock_projection().covered_lines(bill)
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -3283,6 +3621,123 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .order_for_table(table_id)
             .ok_or(AppError::NoOpenOrder)?;
+        self.append_line(&ctx, order_id, draft).await
+    }
+
+    /// Opens a tableless order at the counter for the signed-in member of staff
+    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    ///
+    /// What a store without tables was missing: until now the only way a tableless order began was
+    /// the relay intake, so a kiosk could charge an order somebody else started and could not start
+    /// one. It records `sales.order.opened` with no table, on a channel the store accepts, and the
+    /// order is billable and settleable as every counter order has been since ADR-0093.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Superseded`] on a replaced box, [`AppError::ChannelNotAccepted`] for a channel the
+    /// store does not take, or [`AppError`] if the store cannot be written.
+    pub async fn open_counter_order(
+        &self,
+        actor: Actor,
+        channel: SalesChannel,
+    ) -> Result<CounterOrderOpened, AppError> {
+        // A replaced machine starts nothing (ADR-0123), exactly as it seats nobody.
+        self.refuse_if_superseded()?;
+        let ctx = self.decision_ctx(actor)?;
+        if !self.session().channel_enabled(channel) {
+            return Err(AppError::ChannelNotAccepted);
+        }
+        let order_id = self.next_order_id();
+        let opened = SalesOrderOpened {
+            order_id,
+            channel: Open::from_known(channel),
+            table_id: None,
+            guest_count: None,
+        };
+        self.commit_and_publish(&ctx, &opened).await?;
+        self.lock_projection()
+            .open_order_origin(order_id, Some(channel), None);
+        Ok(CounterOrderOpened {
+            order_id,
+            business_date: ctx.business_date,
+        })
+    }
+
+    /// Adds a line to an order by its id, **priced by the edge** at the order's own channel
+    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    ///
+    /// The table path records the prices the device copied from the menu, which is priced for the
+    /// session's channel. A takeaway order carrying dine-in prices but taxed at the takeaway rate
+    /// would be a receipt that does not add up, so this path looks the item up itself, as the order
+    /// intake does, and the device sends only what the guest chose.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownOrder`] for an order this edge never saw open, [`AppError::OrderRejected`]
+    /// for one staff refused, [`AppError::BillAlreadyOpen`] once a bill is open on it (that bill
+    /// would not cover the line), [`AppError::ItemNotSellable`] if the price book cannot price it,
+    /// [`AppError::ModifierSelectionInvalid`], [`AppError::Domain`] for a seat on a store without
+    /// seats, or [`AppError`] if the store cannot be written.
+    pub async fn add_line_to_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        choice: OrderLineChoice,
+    ) -> Result<LineView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        if choice.seat.is_some() {
+            ctx.require_capability(Capability::Seats)?;
+        }
+        let session = self.session();
+        let (origin, bill, refused) = {
+            let projection = self.lock_projection();
+            (
+                projection.order_origin(order_id),
+                projection.bill_for_order(order_id),
+                projection.staff_decision(order_id) == Some(StaffDecision::Rejected),
+            )
+        };
+        let origin = origin.ok_or(AppError::UnknownOrder)?;
+        if refused {
+            return Err(AppError::OrderRejected);
+        }
+        if bill.is_some() {
+            return Err(AppError::BillAlreadyOpen);
+        }
+        let channel = origin.channel.unwrap_or(session.sales_channel);
+        let requested = RequestedLine {
+            menu_item_id: choice.menu_item_id,
+            quantity: choice.quantity,
+            modifier_menu_item_ids: choice.modifier_menu_item_ids,
+            quoted_unit_price: None,
+        };
+        let priced = reprice_line(&session.menu, &session.tax_rates, channel, &requested)
+            .map_err(AppError::from_reprice)?;
+        let draft = LineDraft {
+            menu_item_id: priced.menu_item_id,
+            display_name: priced.display_name,
+            quantity: priced.quantity,
+            unit_price: priced.unit_price,
+            line_total: priced.line_total,
+            tax_class_id: priced.tax_class_id,
+            tax_rate: priced.tax_rate,
+            seat: choice.seat,
+            course_id: choice.course_id,
+            modifier_menu_item_ids: priced.modifier_menu_item_ids,
+            note_present: choice.note_present,
+        };
+        Self::check_modifiers(&session, &draft)?;
+        self.append_line(&ctx, order_id, draft).await
+    }
+
+    /// Records a line on an order and folds it into the projection: the shared tail of the table
+    /// path and the order path.
+    async fn append_line(
+        &self,
+        ctx: &DecisionCtx,
+        order_id: OrderId,
+        draft: LineDraft,
+    ) -> Result<LineView, AppError> {
         let order_line_id = OrderLineId::new(self.next_ulid());
 
         let payload = SalesOrderLineAdded {
@@ -3300,7 +3755,7 @@ impl<S: EventStore> Edge<S> {
             modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             note_present: draft.note_present,
         };
-        self.commit_and_publish(&ctx, &payload).await?;
+        self.commit_and_publish(ctx, &payload).await?;
 
         // From the event, for the reason the order-in path above says.
         self.lock_projection()
@@ -3398,7 +3853,7 @@ impl<S: EventStore> Edge<S> {
             projection.set_line_state(order_line_id, decision.next_state);
             // The same `ctx.now` the event carries, so a board reading the projection and a board
             // rebuilt from the log show the same age.
-            projection.set_fired_time(order_line_id, ctx.now);
+            projection.set_fired_time(order_line_id, ctx.now, station_id);
             // §8: stock leaves at fire, not at payment. Folded here rather than discarded — see
             // `Projection::stock` for what this figure is and is not yet.
             projection.consume(&decision.stock_movements);
@@ -3572,6 +4027,35 @@ impl<S: EventStore> Edge<S> {
         Ok(views)
     }
 
+    /// The instant before which retention may delete a synced event
+    /// ([ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)):
+    /// the store's [`EdgeSession::event_log_days`] ago, or a day before the oldest business still
+    /// open, whichever is earlier.
+    ///
+    /// The day's margin is for a clock that stepped: an event stamped a little before the order it
+    /// belongs to opened must still survive. The store adds the two rules only it can apply (keep
+    /// what is unsynced, keep the chain head); this is everything the projection knows.
+    ///
+    /// # Panics
+    ///
+    /// If the projection lock is poisoned — unreachable, as its critical section only reads.
+    #[must_use]
+    pub fn retention_horizon(&self, now: Timestamp) -> Timestamp {
+        const DAY_MS: i64 = 86_400_000;
+        let session = self.session();
+        let now_ms = now.as_milliseconds_since_epoch();
+        let aged = now_ms.saturating_sub(i64::from(session.event_log_days).saturating_mul(DAY_MS));
+        let open = self
+            .lock_projection()
+            .oldest_open_work(&session)
+            .map_or(i64::MAX, |began| {
+                i64::try_from(began)
+                    .unwrap_or(i64::MAX)
+                    .saturating_sub(DAY_MS)
+            });
+        Timestamp::from_milliseconds_since_epoch(aged.min(open).max(0)).unwrap_or(Timestamp::EPOCH)
+    }
+
     /// Every open order with its lines — what a device reads to rebuild its screens.
     ///
     /// The gap this closes: a device learns lines from the fan-out, and the fan-out carries what
@@ -3594,18 +4078,39 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub fn live_orders(&self) -> Vec<LiveOrderView> {
         let session = self.session();
-        let projection = self.lock_projection();
-        projection
-            .open_orders()
+        // Copied out under one guard, so the answer is one consistent moment across every order,
+        // and assembled after it is released: the menu lookups and the allocation are the slow part,
+        // and every sale waits on this lock (F2).
+        let snapshot: Vec<LiveSnapshot> = {
+            let projection = self.lock_projection();
+            projection
+                .open_orders()
+                .into_iter()
+                .map(|order_id| LiveSnapshot {
+                    order_id,
+                    table_id: projection.table_for_order(order_id),
+                    bill_id: projection.bill_for_order(order_id),
+                    lines: projection
+                        .identified_lines_for_order(order_id)
+                        .into_iter()
+                        .map(|(id, record)| {
+                            let bumped = projection.bumped_lines.contains(&id);
+                            (id, record, bumped)
+                        })
+                        .collect(),
+                })
+                .collect()
+        };
+        snapshot
             .into_iter()
-            .map(|order_id| LiveOrderView {
-                order_id,
-                table_id: projection.table_for_order(order_id),
-                bill_id: projection.bill_for_order(order_id),
-                lines: projection
-                    .identified_lines_for_order(order_id)
+            .map(|order| LiveOrderView {
+                order_id: order.order_id,
+                table_id: order.table_id,
+                bill_id: order.bill_id,
+                lines: order
+                    .lines
                     .into_iter()
-                    .map(|(order_line_id, record)| LiveOrderLine {
+                    .map(|(order_line_id, record, bumped)| LiveOrderLine {
                         order_line_id,
                         display_name: session.menu.get(record.menu_item_id).map_or_else(
                             || DisplayName::new(record.menu_item_id.to_string()),
@@ -3614,11 +4119,12 @@ impl<S: EventStore> Edge<S> {
                         quantity: record.quantity,
                         line_total: record.line_total,
                         state: record.state,
-                        bumped: projection.bumped_lines.contains(&order_line_id),
+                        bumped,
                         fired_time: record.fired_time,
-                        modifier_menu_item_ids: record.modifier_menu_item_ids.clone(),
+                        modifier_menu_item_ids: record.modifier_menu_item_ids,
                         seat: record.seat,
                         course_id: record.course_id,
+                        station_id: record.station_id,
                     })
                     .collect(),
             })
@@ -3838,7 +4344,7 @@ impl<S: EventStore> Edge<S> {
                 projection.set_line_state(order_line_id, decision.next_state);
                 // Per line, as the single-line path does, and from the same `ctx.now` those lines'
                 // events carry: one "send to kitchen" fires its lines together, so they age together.
-                projection.set_fired_time(order_line_id, ctx.now);
+                projection.set_fired_time(order_line_id, ctx.now, station_id);
                 // §8: stock leaves at fire, not at payment — per line, as the single-line path does.
                 projection.consume(&decision.stock_movements);
                 views.push(LineView {
@@ -4100,15 +4606,12 @@ impl<S: EventStore> Edge<S> {
 
         // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
         // order has no table, so there is no floor move to prove and no tables capability to
-        // require (ADR-0093) — settling is ordinary cashier work either way.
-        let table_decision = match bill.table_id {
-            Some(table_id) => Some(decide_table(
-                self.table_state(table_id),
-                TableCommand::Settle,
-                &ctx,
-            )?),
-            None => None,
-        };
+        // require (ADR-0093) — settling is ordinary cashier work either way. The answer is
+        // discarded: whether the table actually moves depends on whether this is the order's last
+        // open bill, which only the projection can say once the settle has committed.
+        if let Some(table_id) = bill.table_id {
+            let _legal = decide_table(self.table_state(table_id), TableCommand::Settle, &ctx)?;
+        }
 
         // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
         // open shift's blind-close roll-up. Summed before the payments move into the command.
@@ -4184,21 +4687,20 @@ impl<S: EventStore> Edge<S> {
             self.fanout.publish(message);
         }
 
-        {
+        let table_state = {
             let mut projection = self.lock_projection();
-            projection.set_bill_state(bill_id, bill_decision.next_state);
-            if let (Some(table_id), Some(decision)) = (bill.table_id, table_decision.as_ref()) {
-                projection.set_table(table_id, decision.next_state);
-            }
+            projection.settle_bill_record(bill_id);
             projection.collect_cash(cash_taken)?;
-        }
+            bill.table_id
+                .map(|table_id| projection.table_state(table_id))
+        };
         Ok(BillView {
             bill_id,
             state: bill_decision.next_state,
             receipt_number: Some(receipt_number),
             total_due: Some(totals.total_due),
             totals: Some(totals.clone()),
-            table_state: table_decision.map(|decision| decision.next_state),
+            table_state,
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
             lines: Self::receipt_lines(&order.lines),
         })
@@ -4324,6 +4826,26 @@ impl<S: EventStore> Edge<S> {
             state: ShiftState::Open,
             expected_amount: None,
             counted_amount: None,
+            variance: None,
+            print_shift_report: false,
+        })
+    }
+
+    /// The shift trading now, as a device may see it: its id, its state and — once counted — the
+    /// count the cashier entered. `None` when no shift is open.
+    ///
+    /// Blind (§11.1): neither the expected amount nor the variance is in the view, whatever the
+    /// shift's state, because a count entered after reading the expectation is not a blind count.
+    #[must_use]
+    pub fn current_shift(&self) -> Option<ShiftView> {
+        let projection = self.lock_projection();
+        let shift_id = projection.open_shift?;
+        let record = projection.shift(shift_id)?;
+        Some(ShiftView {
+            shift_id,
+            state: record.state,
+            expected_amount: None,
+            counted_amount: record.counted,
             variance: None,
             print_shift_report: false,
         })
@@ -4590,13 +5112,7 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_bill_state(event.bill_id, BillState::Settled);
-                if let Some(table_id) = projection
-                    .bill(event.bill_id)
-                    .and_then(|record| record.table_id)
-                {
-                    projection.set_table(table_id, TableState::NeedsCleaning);
-                }
+                projection.settle_bill_record(event.bill_id);
             }
             // Unreachable: `fold` delegates only the three arms above.
             _ => {}
@@ -4621,7 +5137,26 @@ impl<S: EventStore> Edge<S> {
             projection.set_line_state(event.order_line_id, OrderLineState::Voided);
         } else {
             let event: BillingBillVoided = envelope.data.decode().map_err(AppError::Encode)?;
-            projection.set_bill_state(event.bill_id, BillState::Voided);
+            projection.void_bill_record(event.bill_id);
+        }
+        Ok(())
+    }
+
+    /// The `sales.order.opened` arm of [`Self::fold`], lifted out to keep that function inside its
+    /// line budget.
+    fn fold_order_opened(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesOrderOpened = envelope.data.decode().map_err(AppError::Encode)?;
+        // An unrecognised channel from a newer sender is recorded as "no answer" rather
+        // than failing the whole replay: a box that cannot rebuild does not trade, and a
+        // guessed variant would tax a bill at a rate nobody chose.
+        projection.open_order_origin(event.order_id, event.channel.require().ok(), event.table_id);
+        // A waiter's order already sat down on its `sales.table.opened`; a guest's has no
+        // other record of its table (`seat_guest_order`). Seating either twice is a no-op.
+        if let Some(table_id) = event.table_id {
+            projection.seat_guest_order(table_id, event.order_id);
         }
         Ok(())
     }
@@ -4639,17 +5174,7 @@ impl<S: EventStore> Edge<S> {
                 projection.set_table(event.table_id, TableState::Occupied);
                 projection.open_order(event.table_id, event.order_id);
             }
-            EventType::SalesOrderOpened => {
-                let event: SalesOrderOpened = envelope.data.decode().map_err(AppError::Encode)?;
-                // An unrecognised channel from a newer sender is recorded as "no answer" rather
-                // than failing the whole replay: a box that cannot rebuild does not trade, and a
-                // guessed variant would tax a bill at a rate nobody chose.
-                projection.open_order_origin(
-                    event.order_id,
-                    event.channel.require().ok(),
-                    event.table_id,
-                );
-            }
+            EventType::SalesOrderOpened => Self::fold_order_opened(projection, envelope)?,
             EventType::SalesOrderConfirmedByStaff | EventType::SalesOrderRejectedByStaff => {
                 Self::fold_staff_decision(projection, envelope, known)?;
             }
@@ -4665,7 +5190,7 @@ impl<S: EventStore> Edge<S> {
             EventType::SalesOrderLineFired => {
                 let event: SalesOrderLineFired =
                     envelope.data.decode().map_err(AppError::Encode)?;
-                projection.fold_fired(event.order_line_id, event.fire_time);
+                projection.fold_fired(event.order_line_id, event.fire_time, event.station_id);
             }
             EventType::SalesOrderLineUpdated => {
                 let event: SalesOrderLineUpdated =
@@ -5042,6 +5567,13 @@ impl<S: EventStore> Edge<S> {
             connectivity: session.connectivity,
             currency: session.currency,
         })
+    }
+
+    /// A fresh id for a print job no event stands behind — a manager's test page. Other jobs take
+    /// the id of the event that caused them, which is what makes a retried print idempotent.
+    #[must_use]
+    pub fn print_job_id(&self) -> pos_proto::ids::EventId {
+        pos_proto::ids::EventId::new(self.next_ulid())
     }
 
     fn next_ulid(&self) -> Ulid {
@@ -6810,5 +7342,245 @@ mod tests {
                 .await
                 .expect("opens the next shift");
         });
+    }
+
+    // ---- the order index (F2) ---------------------------------------------------------------
+
+    /// What the index replaced: every line the store holds, filtered to one order, in id order.
+    fn lines_by_scan(projection: &super::Projection, order_id: OrderId) -> Vec<super::OrderLineId> {
+        let mut ids: Vec<super::OrderLineId> = projection
+            .lines
+            .iter()
+            .filter(|(_, record)| record.order_id == order_id)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// What the live set replaced: every order with a line and no settled bill, by a full scan.
+    fn open_orders_by_scan(projection: &super::Projection) -> Vec<OrderId> {
+        let mut orders: Vec<OrderId> = projection
+            .lines
+            .values()
+            .map(|record| record.order_id)
+            .filter(|order_id| {
+                projection
+                    .bill_for_order(*order_id)
+                    .and_then(|bill_id| projection.bill(bill_id))
+                    .is_none_or(|bill| bill.state != BillState::Settled)
+            })
+            .collect();
+        orders.sort_unstable();
+        orders.dedup();
+        orders
+    }
+
+    /// The index and the live set agree with the scans they replaced.
+    fn assert_index_agrees(edge: &Edge<FakeStore>, step: &str) {
+        let projection = edge.lock_projection();
+        assert_eq!(
+            projection.open_orders(),
+            open_orders_by_scan(&projection),
+            "live orders after {step}"
+        );
+        let mut every_order: Vec<OrderId> = projection
+            .lines
+            .values()
+            .map(|record| record.order_id)
+            .collect();
+        every_order.sort_unstable();
+        every_order.dedup();
+        for order_id in every_order {
+            let indexed: Vec<super::OrderLineId> = projection
+                .identified_lines_for_order(order_id)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect();
+            assert_eq!(
+                indexed,
+                lines_by_scan(&projection, order_id),
+                "lines after {step}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_order_index_agrees_with_a_scan_through_a_whole_service() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let (a, b) = (
+                TableId::new(Ulid::from_u128(401)),
+                TableId::new(Ulid::from_u128(402)),
+            );
+
+            edge.seat_table(actor(), a, None).await.expect("seats a");
+            let mut on_a = Vec::new();
+            for _ in 0..4 {
+                on_a.push(
+                    edge.add_line(actor(), a, a_line())
+                        .await
+                        .expect("adds")
+                        .order_line_id,
+                );
+            }
+            assert_index_agrees(&edge, "four lines on a");
+            let order_a = edge
+                .lock_projection()
+                .order_for_table(a)
+                .expect("a has an order");
+
+            edge.seat_table(actor(), b, None).await.expect("seats b");
+            edge.add_line(actor(), b, a_line())
+                .await
+                .expect("adds to b");
+            assert_index_agrees(&edge, "a second table");
+
+            let bill = edge.open_bill(actor(), a).await.expect("opens a's bill");
+            assert_index_agrees(&edge, "a bill opened");
+
+            let parts = edge
+                .split_bill(
+                    actor(),
+                    bill.bill_id,
+                    vec![vec![on_a[0], on_a[1]], vec![on_a[2], on_a[3]]],
+                )
+                .await
+                .expect("splits");
+            assert_index_agrees(&edge, "a split");
+
+            edge.merge_bills(actor(), parts[0], vec![parts[1]])
+                .await
+                .expect("merges back");
+            assert_index_agrees(&edge, "a merge");
+
+            edge.settle_bill(actor(), parts[0], vec![cash(660_000)], None)
+                .await
+                .expect("settles a");
+            assert_index_agrees(&edge, "a settle");
+            // And a count: a split merged back and settled is finished. The single bill pointer
+            // this replaced named the absorbed part, so the paid order stayed live.
+            assert!(
+                !edge.lock_projection().open_orders().contains(&order_a),
+                "a's order is paid"
+            );
+
+            edge.clean_table(actor(), a).await.expect("cleans a");
+            edge.seat_table(actor(), a, None).await.expect("re-seats a");
+            edge.add_line(actor(), a, a_line())
+                .await
+                .expect("a new order on a");
+            assert_index_agrees(&edge, "a re-seat");
+        });
+    }
+
+    #[test]
+    fn a_settled_history_does_not_grow_the_live_set() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(410));
+            for _ in 0..50 {
+                edge.seat_table(actor(), table, None).await.expect("seats");
+                edge.add_line(actor(), table, a_line()).await.expect("adds");
+                let bill = edge.open_bill(actor(), table).await.expect("bills");
+                edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
+                    .await
+                    .expect("settles");
+                edge.clean_table(actor(), table).await.expect("cleans");
+            }
+            edge.seat_table(actor(), table, None)
+                .await
+                .expect("seats the live one");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+
+            let projection = edge.lock_projection();
+            assert_eq!(
+                projection.live.len(),
+                1,
+                "fifty settled orders and one live one"
+            );
+            assert_eq!(
+                projection.order_lines.len(),
+                51,
+                "every order is still indexed"
+            );
+        });
+    }
+
+    #[test]
+    fn a_projection_rebuilt_twice_sells_each_line_once() {
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            let live = Edge::new(
+                store.clone(),
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(420));
+            live.seat_table(actor(), table, None).await.expect("seats");
+            for _ in 0..3 {
+                live.add_line(actor(), table, a_line()).await.expect("adds");
+            }
+
+            let restarted = Edge::new(
+                store,
+                identity(),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            restarted.rebuild().await.expect("rebuilds");
+            restarted.rebuild().await.expect("rebuilds again");
+
+            assert_eq!(restarted.live_orders(), live.live_orders());
+            assert_eq!(
+                restarted
+                    .live_orders()
+                    .first()
+                    .map(|order| order.lines.len()),
+                Some(3),
+                "no line is indexed twice"
+            );
+        });
+    }
+
+    /// A merge into a bill that names no lines — every bill opened before ADR-0128 recorded them —
+    /// used to re-lock the projection on the thread already holding it, and hang the store.
+    #[test]
+    fn merging_into_a_bill_that_names_no_lines_does_not_hang_the_store() {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            pos_fakes::executor::run_ready(async {
+                let edge = edge();
+                let table = TableId::new(Ulid::from_u128(430));
+                edge.seat_table(actor(), table, None).await.expect("seats");
+                let mut lines = Vec::new();
+                for _ in 0..2 {
+                    lines.push(
+                        edge.add_line(actor(), table, a_line())
+                            .await
+                            .expect("adds")
+                            .order_line_id,
+                    );
+                }
+                let bill = edge.open_bill(actor(), table).await.expect("bills");
+                let parts = edge
+                    .split_bill(actor(), bill.bill_id, vec![vec![lines[0]], vec![lines[1]]])
+                    .await
+                    .expect("splits");
+                // The shape a pre-ADR-0128 bill rebuilds to: no lines named.
+                if let Some(record) = edge.lock_projection().bills.get_mut(&parts[0]) {
+                    record.order_line_ids.clear();
+                }
+                let merged = edge.merge_bills(actor(), parts[0], vec![parts[1]]).await;
+                let _ = done.send(merged.is_ok());
+            });
+        });
+        let merged = finished
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the merge returned rather than deadlocking on the projection lock");
+        assert!(merged, "the merge succeeds");
     }
 }

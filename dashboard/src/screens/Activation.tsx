@@ -71,6 +71,9 @@ export function Activation() {
   const editor = useEntityCrud<Device>();
   const archival = useEntityCrud<Device>();
   const issuing = useEntityCrud<never>();
+  // Claiming a box that shows a code (ADR-0148): its own lifecycle, so a slow bind never disables
+  // the roster or the issue form.
+  const claiming = useEntityCrud<never>();
   // Which device is being restored, so one slow restore disables that row's button only.
   const [restoring, setRestoring] = createSignal("");
 
@@ -80,6 +83,8 @@ export function Activation() {
   // The issue form's field, and the code it produced. Nothing persists the code, here or anywhere.
   const [chosen, setChosen] = createSignal("");
   const [code, setCode] = createSignal("");
+  // The claim form's code, as the operator typed it; the cloud reads it case- and dash-blind.
+  const [claimCode, setClaimCode] = createSignal("");
 
   // Every edit here is conditional on the version the row was read at (ADR-0094), so a refusal owes
   // the reader a reload and a sentence of its own; `withStaleReload` carries both.
@@ -211,6 +216,30 @@ export function Activation() {
     });
   };
 
+  const openClaim = () => {
+    setClaimCode("");
+    setChosen(chosen() || activatable()[0]?.device_id || "");
+    claiming.create();
+  };
+
+  const claim = () => {
+    if (!claimCode().trim()) {
+      claiming.refuse(t("activation.claimCodeRequired"));
+      return;
+    }
+    if (!chosen()) {
+      claiming.refuse(t("activation.deviceRequired"));
+      return;
+    }
+    void claiming
+      .run(() => api.bindClaim(tenantId(), storeId(), chosen(), claimCode().trim()))
+      .then((bound) => {
+        if (bound) {
+          toast.ok(t("activation.claimed"));
+        }
+      });
+  };
+
   const columns = (): Column<Device>[] => [
     {
       key: "name",
@@ -259,6 +288,13 @@ export function Activation() {
                 onClick={openIssue}
               >
                 {t("action.issue")}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={activatable().length === 0}
+                onClick={openClaim}
+              >
+                {t("activation.claimBox")}
               </Button>
             </div>
           }
@@ -351,6 +387,33 @@ export function Activation() {
           <p class="mb-3 text-sm text-ink-muted">{t("activation.oneCodeHint")}</p>
           {/* An archived device is off the roster: it is still in the table, where it can be
               restored, but it is not offered a fresh activation code. */}
+          <SelectField
+            label={t("activation.deviceSelect")}
+            value={chosen()}
+            options={activatable().map((device) => ({
+              value: device.device_id,
+              label: `${device.name} · ${kindLabel(device.kind)}`,
+            }))}
+            onChange={setChosen}
+            placeholder={t("activation.chooseDevice")}
+          />
+        </FormPanel>
+
+        <FormPanel
+          crud={claiming}
+          createTitle={t("activation.claimTitle")}
+          editTitle={t("activation.claimTitle")}
+          submitLabel={t("activation.claimBox")}
+          onSubmit={claim}
+          as="modal"
+        >
+          <p class="mb-3 text-sm text-ink-muted">{t("activation.claimHint")}</p>
+          <TextField
+            label={t("activation.claimCode")}
+            placeholder={t("activation.claimCodePlaceholder")}
+            value={claimCode()}
+            onInput={setClaimCode}
+          />
           <SelectField
             label={t("activation.deviceSelect")}
             value={chosen()}

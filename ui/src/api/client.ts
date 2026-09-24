@@ -11,6 +11,7 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
+  ClaimStatus,
   BillResponse,
   BumpRequest,
   BumpResponse,
@@ -29,13 +30,18 @@ import type {
   LocaleResponse,
   MenuResponse,
   MintedCode,
+  OpenedOrder,
   OpenShiftRequest,
+  OrderLineRequest,
   PairAccepted,
   PairingState,
+  PrinterEntry,
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
+  SyncResponse,
   TableResponse,
+  TestPrintResponse,
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
@@ -43,11 +49,16 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number;
+  // The stable token the edge names a refusal by (`pos-error-reason`, ADR-0137), or null for an edge
+  // too old to send one. The message is the edge's English sentence; this is what a screen
+  // translates.
+  readonly reason: string | null;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, reason: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.reason = reason;
   }
 
   // A refused command (illegal move, missing permission, underpaid bill) — the caller's fault, worth
@@ -116,7 +127,11 @@ async function request<T>(
       clearDeviceToken();
     }
     const text = await response.text().catch(() => "");
-    throw new ApiError(response.status, text.trim() || response.statusText);
+    throw new ApiError(
+      response.status,
+      text.trim() || response.statusText,
+      response.headers.get("pos-error-reason"),
+    );
   }
   return (await response.json()) as T;
 }
@@ -261,6 +276,10 @@ export const api = {
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
+  // The counter starts its own order (ADR-0146): a tableless takeaway order and its queue number.
+  openOrder: () => request<OpenedOrder>("POST", "/api/orders", {}),
+  addOrderLine: (orderId: string, line: OrderLineRequest) =>
+    request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 
   // What is open right now, with the line ids to act on it. The read a device has instead of the
   // fan-out events it was not running to hear: without it a reloaded till draws an empty order and
@@ -282,6 +301,14 @@ export const api = {
 
   openShift: (open: OpenShiftRequest) =>
     request<ShiftResponse>("POST", "/api/shifts", open),
+  // The shift open now, or null (F4): what lets a device that reloaded count and close it.
+  currentShift: () => request<ShiftResponse | null>("GET", "/api/shifts/current"),
+  // The cloud link and the outbox, for the status bar (ADR-0137).
+  sync: () => request<SyncResponse>("GET", "/api/sync"),
+  // The printers the store published, and a manager's test page on one.
+  printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
+  testPrinter: (deviceId: string) =>
+    request<TestPrintResponse>("POST", `/api/printers/${deviceId}/test`),
   countShift: (shiftId: string, count: CountShiftRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>
@@ -326,6 +353,10 @@ export const api = {
   // nothing to activate", not "the store is broken" — the caller carries on to the counter, which
   // trades offline regardless (ADR-0001).
   activation: () => request<ActivationStanding>("GET", "/api/activation"),
+
+  // What a box being claimed shows (ADR-0148): served by `pos-edge claim` alone, before the box has
+  // a store, a store server or a paired device. Unauthenticated, and loopback-only on the box.
+  claimStatus: () => request<ClaimStatus>("GET", "/api/claim"),
 
   // Exchange the activation code from the store's setup sheet for the box's device credential
   // (ADR-0050). Unauthenticated, like pairing: a fresh box holds no token yet. The credential stays

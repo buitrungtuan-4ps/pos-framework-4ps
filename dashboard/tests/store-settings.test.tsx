@@ -19,7 +19,7 @@
 //     whenever any node is published, so reading it made this screen claim the store's locale had
 //     just been published because somebody had saved a tax rate (Wave 4 · PR-6c-4).
 
-import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreSettings } from "../src/screens/StoreSettings";
@@ -86,6 +86,7 @@ const OTHER_NODE_AT = Date.UTC(2026, 5, 1);
 
 const effectiveConfig = vi.fn();
 const configNodes = vi.fn();
+const publishRetention = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
@@ -94,6 +95,7 @@ vi.mock("../src/api/client", () => ({
     configNodes: (...args: unknown[]) => configNodes(...args),
     publishLocale: vi.fn(),
     publishStoreProfile: vi.fn(),
+    publishRetention: (...args: unknown[]) => publishRetention(...args),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -167,6 +169,24 @@ describe("store settings", () => {
   it("treats a null rounding increment as published, because null is what 'do not round' is", async () => {
     await mount();
     expect(field("Cash rounding (minor units)")).toBe("");
+  });
+
+  it("shows the store's event retention, and 90 days when none is published (ADR-0145)", async () => {
+    await mount();
+    expect(field("Keep synced events for (days)")).toBe("90");
+
+    cleanup();
+    effectiveConfig.mockResolvedValue({ ...PUBLISHED, retention: { event_log_days: 180 } });
+    await mount();
+    expect(field("Keep synced events for (days)")).toBe("180");
+  });
+
+  it("publishes the retention as one number for this store", async () => {
+    publishRetention.mockResolvedValue({ config_version_id: "01VERSIONCCCCCCCCCCCCCCCCC" });
+    effectiveConfig.mockResolvedValue({ ...PUBLISHED, retention: { event_log_days: 120 } });
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: "Publish retention" }));
+    await waitFor(() => expect(publishRetention).toHaveBeenCalledWith(TENANT.id, STORE.id, 120));
   });
 
   it("dates the line from the locale node, not from whatever moved the tree last", async () => {

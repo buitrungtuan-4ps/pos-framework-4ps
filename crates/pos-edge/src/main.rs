@@ -12,7 +12,10 @@
 //! One flag: `--self-test`, which the over-the-air installer runs against a *staged* binary before
 //! swapping it in ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md) Amendment 1).
 //!
-//! One subcommand: `archive`, which seals, opens and checks a store archive
+//! Subcommands: `claim`, which a box installed with no store runs to claim itself
+//! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md));
+//! `install` ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)); and
+//! `archive`, which seals, opens and checks a store archive
 //! ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). It is here rather than in
 //! a tool of its own because the place a store archive is restored *to* is a till, and a till has
 //! this binary on it already. See [`archive`] for the shape.
@@ -52,6 +55,23 @@ fn main() -> Result<(), EdgeError> {
     // technician on a bench, not the store server starting up.
     if std::env::args().nth(1).as_deref() == Some(ARCHIVE_COMMAND) {
         return archive(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
+
+    // `claim`, run once on a box installed from the one image for every store: it shows a code,
+    // waits for the console to bind it, and writes this box's config.toml (ADR-0148).
+    if std::env::args().nth(1).as_deref() == Some(pos_edge::claim::CLAIM_COMMAND) {
+        return pos_edge::claim::run(&std::env::args().skip(2).collect::<Vec<_>>(), &path);
+    }
+
+    // And `install`, which sets this machine up as the store's service (ADR-0140) — asked for by
+    // name, or implied by a file the console named for its store (`pos-edge-setup_<cloud>_<store>`),
+    // which a technician double-clicks with no arguments at all. The installed copies are named
+    // `current` and `pos-edge.exe`, so the service itself never takes this path.
+    if std::env::args().nth(1).as_deref() == Some(pos_edge::setup::INSTALL_COMMAND) {
+        return pos_edge::setup::run(&std::env::args().skip(2).collect::<Vec<_>>());
+    }
+    if pos_edge::setup::launched_as_installer() {
+        return pos_edge::setup::run(&[]);
     }
 
     // On Windows, hand the main thread to the Service Control Manager when SCM is the one that
@@ -182,6 +202,11 @@ where
             }
         }
     });
+
+    // Retention (ADR-0145): once an hour, the events that are synced, old and needed by nothing
+    // still open are deleted. It waits ten minutes before its first sweep, so it never runs
+    // across the chain walk above.
+    pos_edge::retention::spawn(Arc::clone(&edge));
 
     serve_until(
         config,

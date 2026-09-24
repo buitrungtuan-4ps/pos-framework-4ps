@@ -6,6 +6,7 @@
 import { createStore, produce } from "solid-js/store";
 
 import { api } from "../api/client";
+import { adoptStoreLanguage } from "../i18n";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -15,11 +16,14 @@ import type {
   CourseResponse,
   DiscountResponse,
   LineRequest,
+  OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
   ModifierGroup,
   PaymentRequest,
   ReasonCodeEntry,
+  ShiftResponse,
+  SyncResponse,
 } from "../api/types";
 import {
   FALLBACK_NUMBER_FORMAT,
@@ -61,6 +65,15 @@ export interface OrderLine {
   // is on no course, which is every line on a store that has authored none — and a fire-by-course
   // never sweeps one up.
   courseId?: string;
+  // The kitchen station the line was fired to, from the firing event. Absent while it is on the pad,
+  // and on a line an older edge fired without saying — the board shows those under "all stations".
+  stationId?: string;
+}
+
+// A kitchen station the store published (`GET /api/floor`), for the board's station filter.
+export interface Station {
+  id: string;
+  name: string;
 }
 
 export interface TableCard {
@@ -178,7 +191,23 @@ interface StoreShape {
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
+  // The orders still owing money, table and counter alike: what the kitchen board works from. Read
+  // at boot from `GET /api/orders/live`, grown by a line on a new order, and shrunk by a settle.
+  //
+  // The board used to derive this from `tableOrder`, which never drops an order when its bill
+  // settles — only when the table is seated again — and holds no counter order at all. So a
+  // settled table's unbumped lines stayed on the board until somebody sat there, and a takeaway
+  // order the kitchen had to cook never appeared on it.
+  liveOrders: Record<string, boolean>;
+  // Which order each bill bills, so a settle — which names only the bill — can end its order.
+  billOrder: Record<string, string>;
+  // The kitchen stations the store published, for the board's filter.
+  stations: Station[];
   shift: ShiftInfo | null;
+  // The cloud link and the outbox (ADR-0137), polled by the status bar. Null until the first read,
+  // and on an edge that predates the route — the bar then says nothing about the cloud, which is
+  // what it said before.
+  sync: SyncResponse | null;
 }
 
 const tid = (code: string): string => code.padStart(26, "0");
@@ -231,7 +260,11 @@ const [state, setState] = createStore<StoreShape>({
   numberFormat: null,
   reasonCodes: [],
   bumped: {},
+  liveOrders: {},
+  billOrder: {},
+  stations: [],
   shift: null,
+  sync: null,
 });
 
 export { state };
@@ -320,6 +353,10 @@ export async function loadFloor(): Promise<void> {
       if (defaultStation !== undefined) {
         draft.defaultStation = defaultStation;
       }
+      draft.stations = (response.stations.stations ?? []).map((station) => ({
+        id: station.station_id,
+        name: station.name,
+      }));
     }),
   );
 }
@@ -355,7 +392,8 @@ export function openBillFor(tableId: string): string | undefined {
 // tax class — showed the guest one number and settled against another. The edge assembles this with
 // the same `billing::assemble` the settle path runs, so there is one calculation, in the domain.
 export async function loadCheck(tableId: string): Promise<CheckResponse> {
-  return api.check(tableId);
+  const walkIn = walkInOrder(tableId);
+  return walkIn === undefined ? api.check(tableId) : api.checkOrder(walkIn);
 }
 
 // ---- small payload readers (fan-out payloads are untyped JSON) --------------
@@ -424,12 +462,19 @@ export function fold(event: ServerEvent): void {
     case "sales.order_line.added": {
       const line = readLine(payload);
       if (line !== null) {
-        setState("lines", line.orderLineId, line);
+        setState(
+          produce((draft) => {
+            draft.lines[line.orderLineId] = line;
+            draft.liveOrders[line.orderId] = true;
+          }),
+        );
       }
       break;
     }
     case "sales.order_line.fired": {
       const lineId = str(payload, "order_line_id");
+      const firedAt = str(payload, "fire_time");
+      const station = str(payload, "station_id");
       if (lineId !== null && state.lines[lineId] !== undefined) {
         setState(
           produce((draft) => {
@@ -438,11 +483,13 @@ export function fold(event: ServerEvent): void {
               return;
             }
             line.state = "ORDER_LINE_STATE_FIRED";
-            // The fan-out carries a type and a payload and no envelope, so there is no edge time to
-            // read here. This device's clock is right to within the latency of the message that
-            // just arrived, and the next `/api/orders/live` read replaces it with the edge's — which
-            // is the value a board that reloads will count from.
-            line.firedTime = new Date().toISOString();
+            // The payload carries the edge's own `fire_time` — the value `/api/orders/live` serves
+            // and a board that reloads counts from — so two boards, and one board before and after a
+            // reload, agree. This device's clock is only the fallback for an event without it.
+            line.firedTime = firedAt ?? new Date().toISOString();
+            if (station !== null) {
+              line.stationId = station;
+            }
           }),
         );
       }
@@ -511,6 +558,9 @@ export function fold(event: ServerEvent): void {
     case "billing.bill.opened": {
       const bill = str(payload, "bill_id");
       const order = str(payload, "order_id");
+      if (bill !== null && order !== null) {
+        setState("billOrder", bill, order);
+      }
       const table = order !== null ? state.orderTable[order] : undefined;
       if (bill !== null && table !== undefined) {
         setState(
@@ -522,8 +572,48 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // The cash shift, so a shift opened, counted or closed on one device is the shift every other
+    // device shows (F4). Each carries its id under its own name — the payloads predate one field for
+    // it — and a counted event carries the count, never the expectation: the close is what reveals.
+    case "cash.shift.opened": {
+      const shiftId = str(payload, "opened_shift_id");
+      if (shiftId !== null) {
+        replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+      }
+      break;
+    }
+    case "cash.shift.counted": {
+      const shiftId = str(payload, "counted_shift_id");
+      const counted = asMoney(payload["counted_amount"]);
+      if (shiftId !== null) {
+        replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+      }
+      break;
+    }
+    case "cash.shift.closed": {
+      const shiftId = str(payload, "closed_shift_id");
+      const expected = asMoney(payload["expected_amount"]);
+      const counted = asMoney(payload["counted_amount"]);
+      const variance = asMoney(payload["variance"]);
+      if (shiftId !== null) {
+        replaceShift({
+          shiftId,
+          state: "SHIFT_STATE_CLOSED",
+          expected: expected ?? undefined,
+          counted: counted ?? undefined,
+          variance: variance ?? undefined,
+        });
+      }
+      break;
+    }
     case "billing.bill.settled": {
       const bill = str(payload, "bill_id");
+      const settledOrder = bill !== null ? state.billOrder[bill] : undefined;
+      if (settledOrder !== undefined) {
+        // Paid, so off the kitchen board: its unbumped lines no longer wait on a table that is
+        // being cleaned.
+        setState("liveOrders", settledOrder, false);
+      }
       if (bill !== null) {
         const table = Object.keys(state.openBill).find((key) => state.openBill[key] === bill);
         if (table !== undefined) {
@@ -597,6 +687,7 @@ export interface KitchenLine {
   orderLineId: string;
   orderId: string;
   name: string;
+  // The table's published label, or "" for a counter order, which sits on no table.
   tableLabel: string;
   // When the kitchen was asked for it, so the board can say how long it has been waiting. Absent
   // only for a line fired by an edge too old to send the field.
@@ -606,27 +697,93 @@ export interface KitchenLine {
   modifiers: string[];
 }
 
-// Every fired line still on an open order, newest tables last — what the kitchen and the pass work
-// from. A line whose table has been cleaned (its bill settled) drops out, because the order is done;
-// a line a station has bumped (`kitchen.ticket.bumped`) drops out too, so a KDS coming online after
-// the bump agrees the ticket is made rather than re-showing it.
+// Whether a line is one the kitchen still has to make: fired, on an order still owing money, and not
+// yet bumped by any station.
+function onTheBoard(line: OrderLine): boolean {
+  return (
+    line.state === "ORDER_LINE_STATE_FIRED" &&
+    state.liveOrders[line.orderId] === true &&
+    state.bumped[line.orderLineId] !== true
+  );
+}
+
+// Every fired line still on an open order — what the pass works from. A line whose order has
+// settled drops out, because the order is done; a line a station has bumped
+// (`kitchen.ticket.bumped`) drops out too, so a screen coming online after the bump agrees the
+// ticket is made rather than re-showing it. Counter orders are included: the kitchen cooks those too.
 export function firedLines(): KitchenLine[] {
-  const liveOrders = new Set(Object.values(state.tableOrder));
   return Object.values(state.lines)
-    .filter(
-      (line) =>
-        line.state === "ORDER_LINE_STATE_FIRED" &&
-        liveOrders.has(line.orderId) &&
-        state.bumped[line.orderLineId] !== true,
-    )
+    .filter(onTheBoard)
     .map((line) => ({
       orderLineId: line.orderLineId,
       orderId: line.orderId,
       name: line.name,
-      tableLabel: tableLabel(state.orderTable[line.orderId] ?? ""),
+      tableLabel: orderTableLabel(line.orderId),
       modifiers: modifierNames(line),
       firedTime: line.firedTime,
     }));
+}
+
+// The table an order sits on, by its published label, or "" for a counter order.
+export function orderTableLabel(orderId: string): string {
+  const table = state.orderTable[orderId];
+  return table === undefined ? "" : tableLabel(table);
+}
+
+// One ticket on the kitchen board: an order's fired lines for one station and one course — what a
+// cook makes together and bumps with one tap (`docs/ui-ux.md` §2: "cards by order and course").
+export interface KitchenTicket {
+  // Stable for as long as the ticket exists, so the board can keep its card rather than rebuild it.
+  key: string;
+  orderId: string;
+  stationId?: string;
+  // The table's published label, or "" for a counter order.
+  tableLabel: string;
+  // Its lines, in id order — the order they were typed.
+  lineIds: string[];
+  // When its oldest line was fired: what the ticket's age counts from.
+  firedTime?: string;
+}
+
+function firedEarlier(candidate: string | undefined, held: string | undefined): boolean {
+  if (candidate === undefined) {
+    return false;
+  }
+  return held === undefined || Date.parse(candidate) < Date.parse(held);
+}
+
+// The kitchen board's tickets, oldest first — the one a cook should pick up next is the first one.
+// Undated tickets (fired by an edge too old to say when) go last, and ties break on the key so the
+// board does not reshuffle between two reads of the same state.
+export function kitchenTickets(): KitchenTicket[] {
+  const tickets = new Map<string, KitchenTicket>();
+  for (const line of Object.values(state.lines)) {
+    if (!onTheBoard(line)) {
+      continue;
+    }
+    const key = `${line.orderId}|${line.stationId ?? ""}|${line.courseId ?? ""}`;
+    let ticket = tickets.get(key);
+    if (ticket === undefined) {
+      ticket = {
+        key,
+        orderId: line.orderId,
+        stationId: line.stationId,
+        tableLabel: orderTableLabel(line.orderId),
+        lineIds: [],
+        firedTime: line.firedTime,
+      };
+      tickets.set(key, ticket);
+    }
+    ticket.lineIds.push(line.orderLineId);
+    if (firedEarlier(line.firedTime, ticket.firedTime)) {
+      ticket.firedTime = line.firedTime;
+    }
+  }
+  const age = (ticket: KitchenTicket) =>
+    ticket.firedTime === undefined ? Number.POSITIVE_INFINITY : Date.parse(ticket.firedTime);
+  return [...tickets.values()]
+    .map((ticket) => ({ ...ticket, lineIds: ticket.lineIds.sort() }))
+    .sort((a, b) => age(a) - age(b) || a.key.localeCompare(b.key));
 }
 
 // Table counts by state, for the Today summary.
@@ -689,6 +846,10 @@ export async function addItem(
   if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
     throw new Error(`${item.display_name} is not sellable`);
   }
+  const walkIn = walkInOrder(tableId);
+  if (walkIn !== undefined) {
+    return addItemToWalkIn(walkIn, tableId, item, modifiers);
+  }
   const line: LineRequest = {
     menu_item_id: item.menu_item_id,
     display_name: item.display_name,
@@ -728,6 +889,75 @@ export async function addItem(
         lineTotal: item.unit_price,
         state: response.state,
         seat: line.seat,
+        modifierMenuItemIds: modifiers,
+        courseId: line.course_id,
+      };
+    }),
+  );
+}
+
+// ---- counter orders the till starts itself (ADR-0146) ----------------------
+
+// The key a walk-in order is held under in `tableOrder`, beside the real tables. A walk-in sits on no
+// table, but the order screen and every helper it reads are keyed by one; giving the order a key of
+// its own lets them all work on it unchanged, and the prefix keeps it from ever meeting a real table
+// id, which is a ULID.
+const WALK_IN = "walkin:";
+
+export function walkInKey(orderId: string): string {
+  return WALK_IN + orderId;
+}
+
+/** The order behind a walk-in key, or `undefined` for a real table. */
+export function walkInOrder(key: string): string | undefined {
+  return key.startsWith(WALK_IN) ? key.slice(WALK_IN.length) : undefined;
+}
+
+/** Holds an order under its walk-in key, so the order screen can reach it after a reload. */
+export function holdWalkIn(orderId: string): void {
+  if (state.tableOrder[walkInKey(orderId)] === undefined) {
+    setState("tableOrder", walkInKey(orderId), orderId);
+  }
+}
+
+/**
+ * Opens a tableless order at the counter and returns its id (ADR-0146). The edge records it, gives
+ * it the day's next queue number, and prices every line added to it at the order's own channel.
+ */
+export async function startWalkIn(): Promise<string> {
+  const opened = await api.openOrder();
+  holdWalkIn(opened.order_id);
+  return opened.order_id;
+}
+
+// A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
+// line drawn here carries the menu's price until the order screen next reads the check, which is the
+// edge's figure; the counter's price book is the one the edge prices from, so the two agree.
+async function addItemToWalkIn(
+  orderId: string,
+  key: string,
+  item: MenuItemResponse,
+  modifiers: string[],
+): Promise<void> {
+  const line: OrderLineRequest = {
+    menu_item_id: item.menu_item_id,
+    quantity: { milli: 1000 },
+    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
+    modifier_menu_item_ids: modifiers,
+    note_present: false,
+  };
+  const response = await api.addOrderLine(orderId, line);
+  setState(
+    produce((draft) => {
+      draft.tableOrder[key] = response.order_id;
+      draft.lines[response.order_line_id] = {
+        orderLineId: response.order_line_id,
+        orderId: response.order_id,
+        name: item.display_name,
+        quantityMilli: 1000,
+        lineTotal: item.unit_price,
+        state: response.state,
+        seat: undefined,
         modifierMenuItemIds: modifiers,
         courseId: line.course_id,
       };
@@ -908,6 +1138,7 @@ export async function loadLocale(): Promise<void> {
     setState("cashRoundingIncrement", response.cash_rounding_increment);
     setState("currencyExponent", response.currency_exponent);
     setState("numberFormat", response.number_format);
+    adoptStoreLanguage(response.display_language);
   } catch {
     // Keep whatever is loaded; the next boot or reload tries again.
   }
@@ -970,7 +1201,13 @@ export async function loadLiveOrders(): Promise<void> {
   }
   setState(
     produce((draft) => {
+      // The answer is the whole live set, so it replaces the one held rather than merging into it:
+      // an order this device thought open and the edge no longer lists has been settled.
+      draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
       for (const order of orders) {
+        if (order.bill_id !== undefined) {
+          draft.billOrder[order.bill_id] = order.order_id;
+        }
         if (order.table_id !== undefined) {
           draft.tableOrder[order.table_id] = order.order_id;
           draft.orderTable[order.order_id] = order.table_id;
@@ -996,6 +1233,7 @@ export async function loadLiveOrders(): Promise<void> {
             // `?? undefined` for an edge that predates the field as much as for a line not yet
             // fired: both mean the board has no age to show, and it draws the same row either way.
             firedTime: line.fired_time ?? undefined,
+            stationId: line.station_id ?? undefined,
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;
@@ -1027,7 +1265,55 @@ export async function loadStore(): Promise<void> {
     loadLocale(),
     loadReasonCodes(),
     loadLiveOrders(),
+    loadShift(),
   ]);
+}
+
+// The shift open on this store right now (F4).
+//
+// A shift used to live only in the browser that opened it: a reload, a second till or a tablet that
+// restarted mid-shift drew "No shift open" and offered to open one, the edge refused because one was
+// open, and nothing on screen could count or close it. Forgiving like the other loaders — an edge
+// that predates the route, or a blip, leaves whatever is held.
+export async function loadShift(): Promise<void> {
+  let response: ShiftResponse | null;
+  try {
+    response = await api.currentShift();
+  } catch {
+    return;
+  }
+  replaceShift(
+    response === null
+      ? null
+      : { shiftId: response.shift_id, state: response.state, counted: response.counted_amount },
+  );
+}
+
+// Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
+// closed one would keep the closed one's variance on screen; naming every field is what replaces it.
+function replaceShift(info: ShiftInfo | null): void {
+  setState(
+    "shift",
+    info === null
+      ? null
+      : {
+          shiftId: info.shiftId,
+          state: info.state,
+          expected: info.expected,
+          counted: info.counted,
+          variance: info.variance,
+        },
+  );
+}
+
+// The cloud link and the outbox, for the status bar (ADR-0137). A failed read keeps the last one:
+// a bar that blanked on every blip would flicker exactly when the network is worst.
+export async function loadSync(): Promise<void> {
+  try {
+    setState("sync", await api.sync());
+  } catch {
+    // Keep the last reading; the next poll tries again.
+  }
 }
 
 // Sends every unsent line on this table's order in one act — the operator's own unit of work.
@@ -1171,10 +1457,16 @@ export async function voidBill(
 // A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`
 // event and fans it out, so every KDS folds the same prepared set; the line drops off this screen at
 // once and stays off when its own event returns.
-export async function bump(orderId: string, orderLineIds: string[]): Promise<void> {
+// Bumps lines as made. `stationId` is the station the ticket was fired to, where the board knows it;
+// the store's default station otherwise, which is what every bump sent before lines carried one.
+export async function bump(
+  orderId: string,
+  orderLineIds: string[],
+  stationId?: string,
+): Promise<void> {
   await api.bumpTicket({
     order_id: orderId,
-    station_id: state.defaultStation,
+    station_id: stationId ?? state.defaultStation,
     order_line_ids: orderLineIds,
   });
   setState(

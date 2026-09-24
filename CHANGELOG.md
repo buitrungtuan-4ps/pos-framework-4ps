@@ -16,6 +16,296 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **A box installed with no store claims itself** with `pos-edge claim --cloud <url>`
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
+  4.1, edge half). It opens a claim, shows the code in its log and on a page at
+  `http://127.0.0.1:8080/` drawn by the till UI's new `/claim` screen (in English and Vietnamese),
+  replaces a code that expires unused, and once the console binds it keeps the device credential in
+  the keyring and writes `config.toml` for the claimed store, atomically. A box that already has a
+  `config.toml` is left alone. The claim client is `HttpClaim` in `cloud-sync-http`.
+
+- **The cloud can claim a box that shows a code**
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
+  4.1, cloud half). A box installed with no store opens a claim with `POST /claim` and gets a claim
+  id, an eight-character code to show (`XXXX-XXXX`), and a 256-bit secret it keeps. On
+  **Activation → Claim a box**, a console user with `console.devices.manage` types the code and
+  picks the device it becomes (`POST /admin/claims/bind`, audited as `device.claim`). The box then
+  collects its device credential exactly once with `POST /claim/{claim_id}/collect`: `202` until the
+  code is bound, then the slot and the credential, minted in the same transaction that marks the
+  claim collected. A code lasts an hour and binds once, and only hashes of the code and the secret are
+  stored. Opening a claim shares `/activate`'s budget; polling has its own. The edge's `pos-edge claim`
+  lands next. **Upgrade note:** migration `0069_device_claims.sql` adds the `device_claims` table, and
+  three routes are added.
+
+- **A box needs one code and nothing else**
+  ([ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md), plan step
+  1.2). The device credential activation mints now authenticates the box's `/sync` calls: config
+  pull, heartbeat, the order relay and OTA. It is bound to the box's own store, carries exactly
+  `read_config`, `relay_orders` and the new `publish_events`, and stops working when the device is
+  archived in the console. Events travel over HTTPS as well: the edge posts batches of up to 256
+  (4 MiB) to the new `POST /sync/stores/{store_id}/events`, after negotiating on
+  `POST /sync/stores/{store_id}/events/hello`. The cloud ingests them idempotently, answers only
+  once they are in its log, and refuses a whole batch if it names any other store. So a technician
+  no longer copies a store key into the setup window or the fleet's NATS token onto the box, and one
+  box can no longer publish as another store. The new `HttpLink` adapter in `cloud-sync-http` passes
+  the shared `MessageLink` contract suite. `publish_events` can also be granted to a store API key.
+  **Upgrade note:** a new scope identifier (`publish_events`) and two cloud routes. The key order on
+  the edge is: the keyring's sync key, then `POS_EDGE_SYNC_KEY`, then the device credential, so a box
+  that already has a store key keeps using it. Events go to NATS only when both the `[nats]` section
+  and `POS_EDGE_NATS_URL` are set; otherwise they go over HTTPS, so a box that had no stream starts
+  publishing once its cloud is upgraded. `pos-edge install` no longer passes `-AskSyncKey`; the
+  switch stays on the script.
+
+- **A counter store starts its own orders** ([ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md),
+  finding F12). The counter screen has **New order**. It opens a tableless takeaway order, gives it
+  the day's next queue number, and lands on the order screen a table uses, at `/order/:id`. Each line
+  is priced **by the edge** at the order's own channel through `POST /api/orders/{id}/lines`, so a
+  takeaway line carries the takeaway rate, not the dine-in rate the till's menu is priced at. A line
+  is refused once a bill is open, because that bill would not cover it. **Take payment** returns to
+  the counter with that order's pad open. Until now a store without tables could charge only orders
+  started elsewhere. The three counter charge flows are now replayed in the browser gate, where
+  before they were skipped for want of an order to charge. **Upgrade note:** two edge routes are
+  added (`POST /api/orders`, `POST /api/orders/{id}/lines`), plus two refusal tokens,
+  `CHANNEL_NOT_ACCEPTED` and `ITEM_NOT_SELLABLE`.
+- **The edge forgets what it no longer needs, and only that**
+  ([ADR-0145](docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). The documents
+  promised each store kept 90 days of events, but nothing ever deleted one, so the database and the
+  start-up replay grew for as long as a store traded. Once an hour the edge now deletes an event
+  only when three things are true:
+  - the event link has acknowledged it;
+  - it is older than the store's retention: 90 days unless the console's **Store settings → Event
+    log** publishes another figure (30–3650) as the store's `retention` node, through
+    `GET`/`PUT /admin/config/retention` (`console.config.publish` to change it);
+  - nothing still open began before it: an order still owing, an open bill, a table that is not
+    free, a guest order awaiting staff, or the open shift.
+
+  A store that is offline keeps everything, however old. The newest chained record always stays,
+  deletion takes a prefix in commit order, and a checkpoint moves with it, so the kept log still
+  verifies link by link. The 90-day promise covers this event log, including the audit events in it.
+  It is not the retention of personal data, which ADR-0107 handles separately. **Upgrade note:**
+  migration 0015 adds a `chain_checkpoint` table. On a store older than 90 days, the first sweep, ten
+  minutes after boot, works through the backlog in chunks of 2,000 events, each its own short
+  transaction, so trading carries on beside it. The file stops growing rather than shrinking.
+- **Windows code signing a fork can switch on — or leave off**
+  ([ADR-0142](docs/adr/0142-windows-signing-is-the-forks-choice.md)).
+  `deploy/release/sign-windows.ps1` Authenticode-signs the Windows binary with whatever the fork
+  configured. There are three modes: nothing (the build ships unsigned and says so), a `.pfx` from a
+  public CA or an internal one, or any signer's command line for a key held in hardware (an EV token,
+  Azure Trusted Signing, a cloud KMS). `POS_SIGN_REQUIRED=true` makes a missing certificate fail the
+  build. A fork with no public certificate can make an internal one
+  (`deploy/release/new-internal-signing-cert.ps1`) and have its store PCs trust it
+  (`deploy/edge/trust-internal-signing-cert.ps1`, or Group Policy / Intune). The script must run
+  before minisign, because Authenticode rewrites the executable. **Not wired into `release.yml`
+  yet:** an agent may not edit a release workflow, so the runbook carries the exact step for the
+  owner to add. The Windows CI job now parses these scripts under both PowerShell editions.
+- **The console hands out the Windows setup file**
+  ([ADR-0141](docs/adr/0141-the-console-hands-out-the-installer-by-name.md)). The Stores screen's
+  *Move to a new box* drawer and the new-store wizard offer **Download the setup file**, and
+  `GET /admin/ota/releases/{release}/installer?store_id=&cloud=` serves the hosted release's own
+  Windows executable, byte for byte, named `pos-edge-setup_<cloud>_<store>.exe` so a double-click
+  installs that store. It needs `console.data.read`. The console starts from the version the store's
+  rollout targets and shows the link only once the cloud holds a Windows build of it. When the console
+  was opened over plain http it says why it cannot offer one instead: the file tells the store to dial
+  `https`, and a file name always means `https`, `localhost` included — the edge's cloud transport
+  dials nothing else ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)
+  Correction 1). The setup
+  window now **asks for the store key** (the script's new `-AskSyncKey` switch, passed by
+  `pos-edge install`), so a store installed this way syncs as soon as it is activated. The key is
+  pasted into the elevated window and goes only into the service's registry key; Enter skips it.
+  **Upgrade note:** `install-pos-edge.ps1` gains an optional `-AskSyncKey` switch; a script run
+  without it behaves exactly as before.
+- **A Windows store PC installs itself from one file**
+  ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)). `pos-edge install`
+  runs the `install-pos-edge.ps1` the console generates — compiled into the binary, so it is the
+  same script CI parses — with values it works out itself: from `--store <ULID> --cloud <URL>`, or
+  from a file named `pos-edge-setup_<cloud host>[@<port>]_<store ULID>.exe`, which installs when
+  double-clicked with no arguments. It asks for administrator rights (UAC), keeps its window open,
+  and opens `/setup` when the service is up. Any other file name runs as a server, as before. The
+  script gains an `-OpenSetup` switch for this; nothing else in it changes. **No store key travels
+  in the file**, so such a store sells, pairs and activates, and config sync and the order relay
+  refuse until a key is installed — the script's behaviour without `-SyncKey`.
+- **The pairing link is a QR code** on the Devices screen
+  ([ADR-0139](docs/adr/0139-the-till-draws-the-pairing-code-as-a-qr.md)), so the tablet being added
+  scans it instead of typing an address, a port and six digits against a five-minute clock. Drawn
+  as SVG by `qrcode-generator` (MIT, no dependencies), loaded only by that screen (a 7 KB gzipped
+  chunk). The screen warns when it was opened at `localhost`, whose link a phone cannot follow.
+- **Printers can be tested from the till.** `GET /api/printers` lists the printers the store's
+  configuration publishes and `POST /api/printers/{device_id}/test` prints a page naming the printer
+  — through the same dispatch a receipt takes, direct or through its agent — and says whether the PC
+  has fonts for Vietnamese. Test pages need `ManageDevices`. The Devices screen lists the printers
+  with a *Print a test page* button each.
+
+### Security
+
+- **`/activate` is rate-limited.** The unauthenticated code exchange had no limit at all, although
+  `docs/pos-spec.md` §16 says activation codes are rate-limited: nothing but the size of the code
+  space stood between a script and a guessing run, and every guess cost a database lookup. Each
+  client now gets 10 exchanges per 10 minutes, on a budget of its own, so a busy store's `/sync`
+  polling cannot spend it; the eleventh answers `429` with `Retry-After`.
+- **A code issued for another store is refused before it is spent.** The edge now sends the store it
+  was installed for with its code, and the cloud refuses a mismatch with the same answer as an
+  unknown code. A technician who typed the wrong shop's code used to get that shop's device, which
+  surfaced only when `/sync` refused every call, with the code already spent. **Upgrade note:** the
+  body of `POST /activate` gains an optional `store_id`; an older edge that omits it is not checked.
+
+### Fixed
+
+- **A generated environment file no longer sets the store key to a sentence.** For a store with no
+  key the console wrote `POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here`, and systemd
+  keeps everything after the `=`, so the hint became the key and every `/sync` call was refused. The
+  line is now commented out, and the edge ignores a value that starts with `#`, so a box installed
+  from an old file falls through to its device credential.
+- **The till's bundle has one tag per representation.** The edge served an embedded asset gzip or
+  plain under the same strong `ETag`, which RFC 9110 forbids, and a cache between a till and the edge
+  could hand gzip bytes to a client that never asked for them. The tag is now weak, it is compared
+  weakly (so a tablet holding the old tag still revalidates rather than downloading the bundle again),
+  and `Vary: accept-encoding` is sent on the `200` and the `304` alike.
+- **Receipt fonts no longer fill the edge's memory** (finding F14). On a Windows PC the edge held
+  about 60 MB of CJK, Devanagari, Thai and Arabic faces for a shop that prints Vietnamese. Once a box
+  has synced its menu it keeps only faces that add a character the store prints: Latin and
+  Vietnamese always, plus what the menu, floor and receipt header use. A file too big to fit under
+  the ceiling is no longer read, a skipped file is no longer copied, and the plain sans-serif
+  families are tried first so ordinary text is not drawn in whatever display face sorts first.
+- **A voided bill gives its table back.** Voiding a bill left its table `AWAITING_PAYMENT` for good,
+  a state only a settle leaves, and a voided bill cannot settle, so the table could never be billed,
+  cleaned or seated again, and re-billing the order was refused as `BILL_ALREADY_OPEN`. The table now
+  goes back to `OCCUPIED` and the order bills again; when another part of a split was already paid,
+  the table goes on to `NEEDS_CLEANING` instead.
+- **Every part of a split bill can be paid.** The first part's settle moved the shared table to
+  `NEEDS_CLEANING`, and every other part was then refused (`TRANSITION_REFUSED`). The table now
+  waits for the last part.
+- **A split merged back and paid leaves the live list.** The order pointed at the last part opened,
+  which the merge absorbed, so a paid order stayed on every till's live list. The edge now keeps
+  every bill an order has had and asks which is still open.
+- **A refused guest order leaves the live list and its table.** It stayed live for good, and the
+  table kept pointing at it, so the next bill on that table charged for the refused order. The
+  table now goes back to the order it held before the guest's arrived, or is freed.
+- **A guest's QR order keeps its table across a restart.** Its log names the table only on
+  `sales.order.opened`, which the rebuild did not read for that, so after a restart the table showed
+  free and the order sat on the counter list.
+- **The status bar names the cash shift in the operator's language.** It spliced the wire token into
+  a translated template, so a Vietnamese till read "Ca open"; each state now has its own sentence
+  ("Đang mở ca", "Ca đã kiểm đếm", "Ca đã đóng").
+- **`/setup` says why an activation failed, in the operator's language.** The activation routes
+  answered with a bare English sentence and no `pos-error-reason` token, so the first screen a
+  technician meets showed "the activation service is unavailable" to a Vietnamese shop. Every
+  refusal now carries a token — `ACTIVATION_REFUSED` (whatever the cloud's reason, so a refused code
+  still reveals nothing), `ACTIVATION_CODE_MALFORMED`, `ALREADY_ACTIVATED`, `ACTIVATION_WRONG_STATE`,
+  `ACTIVATION_UNAVAILABLE` — and the till translates each with a next step.
+- **A store that boots before its internet does ships its sales once the line comes back.** The
+  edge's event-stream link failed its connect when the broker was unreachable at boot — the normal
+  case after a power cut, when the PC comes up before the router — and the edge then started no
+  publisher at all: the store kept trading and shipped nothing to the cloud until somebody restarted
+  it, while the status bar, never having measured the link, said nothing. The link now connects in
+  the background (`retry_on_initial_connect`), so the publisher runs from boot: the status bar reads
+  *Offline — selling normally* while the line is down and the outbox drains when it returns. A
+  handshake that fails because the link is not up yet is retried after 15 seconds; only a cloud that
+  answers with no common protocol version still waits five minutes.
+- **A store activated while it runs starts syncing.** The cloud loops start at boot behind the
+  activation gate, so a box activated at `/setup` sat unsynced until somebody restarted it, which the
+  bring-up guide never said to do. A successful activation now asks for the graceful restart an
+  installed update uses; `/setup` says the box is restarting and waits for it before moving on.
+
+### Fixed
+
+- **The store no longer gets slower with every order it has ever sold** (finding F2). The edge's
+  in-memory projection answered every order-scoped read — the live orders a device reads on each
+  reload, wake and `resync`, the lines of an order, what a bill covers — by scanning every line
+  since the store was installed, holding the lock every sale takes. At 30,000 settled orders
+  `GET /api/orders/live` took ~65 ms (p95) and an add-line from a second device waited behind it
+  for ~61 ms. The projection now keeps each order's lines in an index and the owing orders in a
+  set maintained exactly, and assembles the live-orders answer after releasing the lock: 1.05 ms
+  and 0.84 ms on the same history over SQLite. Nothing is evicted yet, so memory and the startup
+  replay still grow with age; that needs its own record.
+- **Merging into a bill that names no lines no longer hangs the whole store.** `merge_bills`
+  re-locked the projection on the thread already holding it whenever a bill covered "every
+  unvoided line" (every bill opened before ADR-0128), which deadlocked the lock every request
+  takes. It now resolves those lines through the guard it holds; a regression test runs the merge
+  on its own thread with a timeout.
+- **The kitchen board shows counter orders, and drops a ticket when its order settles.** It
+  derived "still open" from the table map, which holds no counter order and keeps a table's old
+  order until the table is seated again — so a takeaway the kitchen had to cook never appeared,
+  and a settled table's unbumped lines lingered.
+
+### Changed
+
+- **The kitchen board draws tickets, oldest first, and can be one station's board.** One card per
+  order, station and course — what a cook makes together — aged from its oldest line, bumped with
+  one tap to the station it was fired to, and showing the quantity. Lines now carry the station
+  they were fired to (the fan-out already did; `GET /api/orders/live` now does too, as
+  `station_id`), so a store with several stations gets station tabs and `/kds?station=<id>`. Cards
+  are keyed by ticket and read their lines from the store, so a change redraws one card instead of
+  the whole board (a bump on a 600-line board rebuilt ~18,000 DOM nodes). The pass groups by order,
+  so two counter orders are no longer merged under one empty label.
+- **The edge gzips its answers** ([ADR-0138](docs/adr/0138-the-edge-compresses-what-it-sends.md)):
+  `/api/*` and the embedded assets above 1 KB, for a client that sends `Accept-Encoding: gzip`, never
+  `/ws`. A busy large store's boot reads — menu, floor, layout, live orders — drop from ~513 KB to
+  ~39 KB (−92%, 120 tables with 89 seated), and the page itself from ~229 KB to ~65 KB. Adds
+  `async-compression` and two codec crates through `tower-http`'s `compression-gzip`; `flate2` was
+  already in the tree.
+- **The till works on a phone.** The status bar folds its destinations and settings behind a Menu
+  button below tablet width (they took four rows, a third of the screen); an order line wraps its
+  controls under the item name instead of squeezing it a word per line; a placed floor reflows into
+  two columns rather than panning a room two and a half tables wide.
+- **The order screen shows one menu category at a time** when the console arranged more than one,
+  picked from a row of tabs (a large store's 17 categories and 386 items were one column 23,000 px
+  tall). Search is unchanged.
+- **A new store's database is created with 8 KiB pages.** An event row is just over what a 4 KiB
+  page keeps locally for the `WITHOUT ROWID` log, so nearly every event took an overflow page of its
+  own: ~4.7 KB of disk per event at 4 KiB, ~1.2 KB at 8 KiB. And migration `0014` indexes the
+  unchained rows, which the chain anchor (every shift close) and the startup walk counted by reading
+  the whole log. **Upgrade note:** migration `0014_unchained_events_index` is additive (one partial
+  index) and rollback-safe. An existing store keeps the page size its file was created with until
+  the file is rebuilt with `VACUUM`, which is an operational step, not a migration.
+- **`just bench`** runs the edge's performance budgets (`crates/pos-edge/tests/perf_budget.rs`) at a
+  large history in a release build — live orders p95 < 20 ms, add-line p95 < 5 ms, add-line under
+  concurrent reads p95 < 10 ms at 30,000 settled orders. Ignored by `just test`.
+
+### Changed
+
+- **A deep outbox no longer stops a store from selling**
+  ([ADR-0137](docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Both event stores refused
+  every append once 10,000 events were waiting for the cloud — less than a day offline at a busy
+  store — and the till answered `503 the store is unavailable` to every seat, line, fire, settle
+  and shift open from then on, with nothing in the log and a green status bar. The refusal is gone
+  from `store-sqlite` and `pos-fakes` alike, and so is the `SELECT COUNT(*)` it ran inside every
+  sale's transaction. The outbox is bounded by the disk, as the event log always was.
+  - **The till says so instead.** `GET /api/sync` (new) reports the outbox depth, its level against
+    a planned depth of 100,000 events, and what the outbox drain last saw of the cloud; the status
+    bar reads it every 15 seconds and shows *"Offline — selling normally"* with the waiting count,
+    amber from half the planned depth and red from four fifths — `docs/ui-ux.md` §4 as written.
+  - **The box's log says so too:** one `WARN` when the outbox crosses half and four fifths of the
+    plan, one `ERROR` past it, one `INFO` when it drains back under half. The heartbeat's depth read
+    feeds the same grading, so a store nobody is watching still logs the day it went quiet.
+  - **Upgrade note:** the adapters' public `OUTBOX_CAPACITY` constants are removed; nothing in the
+    workspace read them. No migration, no protocol change.
+- **A refusal carries a reason a till can translate.** Every domain refusal the edge answers now
+  has a `pos-error-reason` header — `SHIFT_ALREADY_OPEN`, `STORE_UNAVAILABLE`,
+  `APPROVAL_REQUIRED`, … — beside its unchanged English body, and the till shows the operator a
+  sentence in their language with a next step instead of the log line. A token the till has no
+  sentence for, or an older edge, still shows the English. Exposed across origins with the other
+  two edge headers (ADR-0111). **Upgrade note:** none; the body is unchanged.
+
+### Fixed
+
+- **A reloaded till can count and close the open shift.** The shift lived only in the browser that
+  opened it: a reload, a second till or a tablet that restarted mid-shift showed "No shift open",
+  offered to open one, and was refused because one was. `GET /api/shifts/current` (new) returns the
+  open shift — blind, never the expected amount — the till reads it at boot, and it folds the
+  `cash.shift.*` events so every device shows the same shift.
+- **The order screen's header names the table.** It cut the leading zeros off the table's id, so a
+  published table read "Table 69" over Table 1 while the floor, the kitchen board and the pass all
+  said 1. It now uses the published label.
+- **The till remembers its language.** Every reload came back in English; the choice is now kept
+  per device, and a device that has never chosen starts in the store's published display language,
+  which `GET /api/locale` now carries as `display_language`.
+- **Toppings no longer sell as standalone items.** With no button layout published, the flat menu
+  drew every modifier choice ("Size — 30cm", "Extra cheese") as its own button beside the pizzas.
+  Items that are only ever a choice inside a modifier group are left out of that grid; search still
+  finds them.
+
 ### Changed
 
 - **`intl-messageformat` moves to v12** in both `ui/` and `dashboard/`. A major version of the

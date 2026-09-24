@@ -1,7 +1,6 @@
 import { For, Show, createSignal } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
@@ -16,6 +15,7 @@ import {
   type TableCard,
 } from "../state/store";
 import { Takeaway } from "./Takeaway";
+import { errorMessage } from "../lib/errors";
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -83,7 +83,7 @@ export function Floor() {
         navigate(`/table/${tableId}`);
       }
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
@@ -94,15 +94,20 @@ export function Floor() {
     return (
       <button
         type="button"
-        class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left"
+        class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left tablet:[grid-column:var(--table-column,auto)] tablet:[grid-row:var(--table-row,auto)]"
         // `pos_proto::display::GridPosition` counts from zero; CSS grid lines count from one. The
         // `+ 1` is that conversion and nothing else — without it every table shifts up and left, and
         // the table the editor put in the top-left corner lands on line 0, which CSS ignores.
+        //
+        // Carried as custom properties and applied only from a tablet up (F7): on a phone a placed
+        // room is a pan across columns at least 9rem wide, two and a half tables to a screen, so a
+        // phone reflows it into two columns — the shape this screen's header comment always said a
+        // phone gets.
         style={
           table.position
             ? {
-                "grid-column": String(table.position.column + 1),
-                "grid-row": String(table.position.row + 1),
+                "--table-column": String(table.position.column + 1),
+                "--table-row": String(table.position.row + 1),
               }
             : undefined
         }
@@ -139,7 +144,7 @@ export function Floor() {
       <div
         class={
           areaIsPlaced(group)
-            ? "grid gap-3 overflow-x-auto [grid-auto-columns:minmax(9rem,1fr)] [grid-auto-flow:dense]"
+            ? "grid grid-cols-2 gap-3 tablet:grid-cols-none tablet:overflow-x-auto tablet:[grid-auto-columns:minmax(9rem,1fr)] tablet:[grid-auto-flow:dense]"
             : "grid grid-cols-2 gap-3 tablet:grid-cols-3 terminal:grid-cols-4"
         }
       >

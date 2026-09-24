@@ -1,16 +1,16 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
-import { useNavigate, useParams } from "@solidjs/router";
+import { useLocation, useNavigate, useParams } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
 import { fold, matches } from "../lib/search";
-import type { LayoutButton, MenuItemResponse, ModifierGroup } from "../api/types";
+import type { LayoutButton, LayoutCategory, MenuItemResponse, ModifierGroup } from "../api/types";
 import {
   addItem,
   chooseSeat,
   groupsFor,
+  holdWalkIn,
   modifiersSatisfied,
   fireCourse,
   fireOrder,
@@ -24,13 +24,16 @@ import {
   seatFor,
   seatsEnabled,
   state,
+  tableLabel,
   tableState,
   unfiredLinesForTable,
   unsentCoursesForTable,
   voidLine,
+  walkInKey,
   type OrderLine,
   formatAmount,
 } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
@@ -43,15 +46,31 @@ const VOID_LINE = "REASON_ACTION_VOID_LINE";
 export function Order() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [error, setError] = createSignal<string | null>(null);
-  const label = () => params.id.replace(/^0+/, "") || params.id;
+  // A walk-in order the counter started (ADR-0146), at `/order/:id`, rather than a table's. It sits
+  // on no table, so it is held under a key of its own and every table-keyed read below works on it
+  // unchanged; only the header, the way back and the way to pay differ.
+  const walkIn = () => location.pathname.startsWith("/order/");
+  const key = () => (walkIn() ? walkInKey(params.id) : params.id);
+  if (walkIn()) {
+    holdWalkIn(params.id);
+  }
+  // The table's published label — the number the floor, the kitchen board and the pass all show
+  // (F6). Cutting leading zeros off the id is what this used to do, which was right for the
+  // bootstrap floor's `01`…`12` and wrong for every published table: a ULID lost its zeros and the
+  // header read "Table 69" over Table 1. Only a table the floor does not know yet falls back to it.
+  const label = () => {
+    const published = tableLabel(params.id);
+    return published !== params.id ? published : params.id.replace(/^0+/, "") || params.id;
+  };
 
   const guard = async (run: () => Promise<void>) => {
     setError(null);
     try {
       await run();
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 
@@ -66,20 +85,20 @@ export function Order() {
   // Written below `params` deliberately: a `createMemo` runs when it is created, so one placed above
   // the `const`s it reads dies in their temporal dead zone and takes the screen down (`.jules/bolt.md`).
   const priceable = createMemo(() =>
-    linesForTable(params.id)
+    linesForTable(key())
       .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
       .join(","),
   );
-  const [check] = createResource(priceable, () => loadCheck(params.id));
+  const [check] = createResource(priceable, () => loadCheck(key()));
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
   // be a row count they made themselves (`docs/ui-ux.md` §3).
-  const unfired = () => unfiredLinesForTable(params.id);
+  const unfired = () => unfiredLinesForTable(key());
 
   // The courses with food still waiting, in the store's service order. Empty on a store with courses
   // off, which is what keeps the row off those tills entirely rather than drawing an empty heading.
-  const unsentCourses = () => unsentCoursesForTable(params.id);
+  const unsentCourses = () => unsentCoursesForTable(key());
 
   // How many the store said this table seats, from the published floor plan. Zero means the plan
   // recorded no capacity, and a picker with no seats in it is worse than none — so the control only
@@ -87,8 +106,14 @@ export function Order() {
   const seatCount = () => floorTables().find((table) => table.id === params.id)?.seats ?? 0;
   const showSeats = () => seatsEnabled() && seatCount() > 0;
 
+  // A walk-in is paid on the counter screen, whose pad charges any counter order; it opens this
+  // order's bill there, so a bill is never left open on an order nobody went on to pay.
   const takePayment = () =>
     guard(async () => {
+      if (walkIn()) {
+        navigate(`/counter?charge=${params.id}`);
+        return;
+      }
       await openBill(params.id);
       navigate(`/table/${params.id}/pay`);
     });
@@ -145,6 +170,15 @@ export function Order() {
     () => new Map(state.menu.map((item) => [item.menu_item_id, item])),
   );
 
+  // The flat fallback's items: the price book without the ones that are only ever a choice inside a
+  // modifier group (F11). With no layout published, "Size — 30cm" and "Extra cheese" drew as buttons
+  // of their own beside the pizzas, and a topping could be sold alone with nothing to go on. Search
+  // still finds them — an operator who types a name gets what the price book holds.
+  const headlineItems = createMemo(() => {
+    const choices = new Set(state.modifierGroups.flatMap((group) => group.member_menu_item_ids));
+    return state.menu.filter((item) => !choices.has(item.menu_item_id));
+  });
+
   // Layout names the item; the price book prices it; the two meet only at the id (ADR-0066).
   // Uses O(1) hash map lookup instead of O(N) state.menu.some(...).
   const priced = (button: LayoutButton) => menuItemMap().has(button.menu_item_id);
@@ -159,6 +193,23 @@ export function Order() {
         category.subcategories.some((subcategory) => subcategory.buttons.some(priced)),
     ),
   );
+
+  // Which category the grid shows, when the console arranged more than one (F15). A large store's
+  // plan drew every category at once — 17 categories and 386 items in one column 23,000px tall and
+  // ten thousand DOM nodes — so a new server had to scroll a long way or know the name to type. One
+  // category at a time, picked from a row of tabs, is what a cashier scans; the first is shown until
+  // another is picked, and a pick that no longer exists (the plan was republished) falls back to it.
+  const [pickedCategory, setPickedCategory] = createSignal<string | null>(null);
+  const shownCategories = createMemo(() => {
+    const all = arranged();
+    if (all.length <= 1) {
+      return all;
+    }
+    const picked = all.find((category) => category.display_category_id === pickedCategory());
+    return [picked ?? all[0]].filter((category) => category !== undefined);
+  });
+  const isShown = (category: LayoutCategory) =>
+    shownCategories().some((shown) => shown.display_category_id === category.display_category_id);
 
   // What the operator has typed into the menu box. Empty means the grid, which is what the screen
   // has always shown; a query replaces it with the matches, flat, because a category heading over a
@@ -226,7 +277,7 @@ export function Order() {
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
     if (groupsFor(item).length === 0) {
-      void guard(() => addItem(params.id, item));
+      void guard(() => addItem(key(), item));
       return;
     }
     setError(null);
@@ -263,7 +314,7 @@ export function Order() {
   // a `409` off a guest's eyeline.
   const confirmItem = (item: MenuItemResponse) =>
     guard(async () => {
-      await addItem(params.id, item, chosen());
+      await addItem(key(), item, chosen());
       closeChoosing();
     });
 
@@ -312,14 +363,16 @@ export function Order() {
           wider than a phone: a grid item's `min-width` is `auto`, not `0`. */}
       <div class="min-w-0">
         <div class="mb-3 flex items-center gap-3">
-          <a href="/" class="text-sm text-ink-muted no-underline">
-            {t("common.back_floor")}
+          <a href={walkIn() ? "/counter" : "/"} class="text-sm text-ink-muted no-underline">
+            {walkIn() ? t("common.back_counter") : t("common.back_floor")}
           </a>
-          {/* Seating a table ends here, on this table's order screen (ADR-0109). */}
+          {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
           <h1 class="text-lg font-semibold" data-outcome="order-open">
-            {t("common.table", { label: label() })}
+            {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
           </h1>
-          <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
+          <Show when={!walkIn()}>
+            <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
+          </Show>
         </div>
 
         <Show when={error()}>
@@ -332,18 +385,21 @@ export function Order() {
 
         <ul class="flex flex-col gap-2">
           <For
-            each={linesForTable(params.id)}
+            each={linesForTable(key())}
             fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
           >
             {(line) => (
               <li
-                class="flex items-center gap-3 rounded-token border border-line bg-surface p-3"
+                class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-token border border-line bg-surface p-3 tablet:flex-nowrap"
                 data-outcome="line-added"
               >
                 {/* A voided line stays on the order, struck through. Removing the row would make a
                     mis-tapped void invisible to the person who made it — the guest is not charged
                     either way, and seeing what was cancelled is how the mistake gets noticed. */}
-                <span class="flex min-w-0 flex-1 flex-col">
+                {/* The name takes the whole first row on a phone and the controls wrap under it
+                    (F7): squeezed into one row at 390px the name broke a word per line, the seat
+                    chip sat on top of it and the stepper ran off the right edge. */}
+                <span class="flex min-w-0 basis-full flex-col tablet:basis-auto tablet:flex-1">
                   <span classList={{ "line-through text-ink-muted": voided(line) }}>
                     {line.name}
                   </span>
@@ -714,7 +770,7 @@ export function Order() {
                         type="button"
                         class="min-h-touch flex-1 rounded-token border border-primary px-3 text-base font-semibold text-ink"
                         data-step="fireCourse"
-                        onClick={() => void guard(() => fireCourse(params.id, course.course_id))}
+                        onClick={() => void guard(() => fireCourse(key(), course.course_id))}
                       >
                         {t("order.send_course_count", {
                           course: course.display_name,
@@ -733,7 +789,7 @@ export function Order() {
             class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
             disabled={unfired().length === 0}
             data-step="fireOrder"
-            onClick={() => void guard(() => fireOrder(params.id))}
+            onClick={() => void guard(() => fireOrder(key()))}
           >
             {unfired().length === 0
               ? t("order.send")
@@ -787,7 +843,7 @@ export function Order() {
             fallback={
               <div class="grid grid-cols-2 gap-2 terminal:grid-cols-1">
                 <For
-                  each={state.menu}
+                  each={headlineItems()}
                   fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
                 >
                   {(item) => sellButton(item, item.display_name)}
@@ -795,7 +851,32 @@ export function Order() {
               </div>
             }
           >
-            <For each={arranged()}>
+            <Show when={arranged().length > 1}>
+              <div
+                class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1"
+                role="tablist"
+                aria-label={t("order.categories")}
+              >
+                <For each={arranged()}>
+                  {(category) => (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={isShown(category)}
+                      class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
+                      classList={{
+                        "border-primary bg-selected text-selected-ink font-semibold": isShown(category),
+                        "border-line bg-surface text-ink": !isShown(category),
+                      }}
+                      onClick={() => setPickedCategory(category.display_category_id)}
+                    >
+                      {category.name}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <For each={shownCategories()}>
               {(category) => (
                 <section class="mb-4">
                   <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">

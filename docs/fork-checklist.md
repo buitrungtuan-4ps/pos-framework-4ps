@@ -69,6 +69,21 @@ reads it through `option_env!` and `pos-edge` exposes no way to supply one at ru
 Keep **two** keys baked in where you can ([ADR-0047](adr/0047-minisign-verification.md)): retiring a
 compromised key otherwise needs a release that the compromised key itself must sign.
 
+**Windows code signing (Authenticode) is optional, and yours to choose**
+([ADR-0142](adr/0142-windows-signing-is-the-forks-choice.md)). It changes what Windows shows at the
+first double-click, never whether an update installs. Once the owner has added the step from
+[`release-runbook.md`](release-runbook.md#authenticode-signing-the-windows-binary-for-windows-itself)
+to `release.yml`, it reads:
+
+| Secret / variable | Required | What |
+|---|---|---|
+| `POS_SIGN_PFX_BASE64` (secret) | no | a `.pfx`, base64 — from a public CA, or made by `deploy/release/new-internal-signing-cert.ps1` |
+| `POS_SIGN_PFX_PASSWORD` (secret) | no | its password |
+| `POS_SIGN_COMMAND` (variable) | no | any signer's command line with `{file}` — for a key that cannot leave its hardware |
+| `POS_SIGN_REQUIRED` (variable) | no | `true` makes "no signing configured" a failure instead of a notice |
+
+None set: the Windows binary ships unsigned and the build summary says so.
+
 ### Mirror — `.github/workflows/mirror.yml`
 
 | Secret | Required | What |
@@ -109,8 +124,10 @@ The console's guided new-store wizard produces both files an operator carries to
   outbox grows for as long as it runs. The wizard now always emits both — it emitted neither at
   first, and each omission was invisible from the console, because a store missing them looks exactly
   like a store the cloud has not heard from yet.
-- **`env`** — `POS_EDGE_SYNC_KEY`, and `POS_EDGE_NATS_URL` when the event bus is reachable. Install it
-  as root, mode 0600, at `/etc/pos-edge/env`.
+- **`env`** — optional since [ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md):
+  `POS_EDGE_SYNC_KEY` only if you give the box a store key, and `POS_EDGE_NATS_URL` only if your cloud
+  runs the NATS stream for store events. A box with neither syncs and publishes with its device
+  credential. When present, install it as root, mode 0600, at `/etc/pos-edge/env`.
 
 **The `[nats]` values are fleet-wide, not per store** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md)
 Amendment 1): `stream = "POS_FLEET"`, `subject = "pos.fleet.events"`, identical on every box and
@@ -118,9 +135,11 @@ matching `cloud.toml`'s `[nats]`. A fork that renames them must rename them on *
 — `pos_cloud` binds one durable consumer to one named stream, so a mismatch is a fleet that publishes
 into a stream nobody reads, with no error anywhere.
 
-**The store key needs both `read_config` and `relay_orders`.** With only `read_config` a store looks
-healthy — configuration syncs, the dashboard shows it alive — while the order relay answers `403` on
-every poll, so orders placed in the cloud never reach the kitchen. The wizard pre-selects both.
+**A store key, if you issue one, needs both `read_config` and `relay_orders`.** With only
+`read_config` a store looks healthy — configuration syncs, the dashboard shows it alive — while the
+order relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The
+wizard pre-selects both. A box without a store key uses its device credential, which carries both
+and `publish_events` ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 
 **Two scopes were removed.** `read_events` and `manage_webhooks` existed in the cloud's `Scope` enum
 and gated **no route**; roadmap **Q5** deleted them. The issue route used to accept them, so a key

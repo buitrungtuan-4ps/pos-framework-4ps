@@ -32,6 +32,23 @@ export interface LineResponse {
   state: string;
 }
 
+// A line added to a counter order by its id (ADR-0146): what the guest chose and no price, because
+// the edge prices it at the order's own channel.
+export interface OrderLineRequest {
+  menu_item_id: string;
+  quantity: Quantity;
+  modifier_menu_item_ids: string[];
+  course_id?: string;
+  note_present: boolean;
+}
+
+// A counter order the till has just opened, with the number the guest will be called by.
+export interface OpenedOrder {
+  order_id: string;
+  queue_number: number;
+  business_date: string;
+}
+
 // How many a line should now be. A quantity and no money: the edge holds the unit price the device
 // captured when the line was added and extends the line itself, so a till cannot quote a total that
 // does not follow from the price it showed.
@@ -73,6 +90,9 @@ export interface LiveLine {
   // that has authored no courses. Optional for `modifier_menu_item_ids`'s reason as well: an edge
   // built before the field sends none.
   course_id?: string;
+  // The kitchen station it was fired to. Absent while it is on the pad, and from an edge older than
+  // the field.
+  station_id?: string;
 }
 
 // One open order, table or counter.
@@ -417,6 +437,27 @@ export interface LocaleResponse {
    * out, and the one it used to invent was `en-US` for every store in every country.
    */
   number_format: NumberFormat;
+  /**
+   * The store's display language (a BCP 47 tag), absent when it has set none. A device that has
+   * never picked a language starts in this one rather than in English.
+   */
+  display_language?: string;
+}
+
+/**
+ * The cloud link and the outbox, from `GET /api/sync` (ADR-0137). What the status bar needs to say
+ * "Offline — selling normally" and how many events are waiting. No level refuses a sale.
+ */
+export interface SyncResponse {
+  outbox_depth: number;
+  outbox_planned_depth: number;
+  outbox_level:
+    | "OUTBOX_LEVEL_NORMAL"
+    | "OUTBOX_LEVEL_ELEVATED"
+    | "OUTBOX_LEVEL_HIGH"
+    | "OUTBOX_LEVEL_BEYOND";
+  cloud_link: "CLOUD_LINK_UNSPECIFIED" | "CLOUD_LINK_ONLINE" | "CLOUD_LINK_OFFLINE";
+  last_sync_time?: string;
 }
 
 /** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */
@@ -529,4 +570,27 @@ export interface ActivateAccepted {
 
 export interface ActivationStanding {
   activated: boolean;
+}
+
+/**
+ * What a box being claimed shows, from `GET /api/claim` (ADR-0148). Served only by `pos-edge claim`,
+ * on the box's own screen, before it belongs to any store.
+ */
+export type ClaimStatus =
+  | { state: "CONNECTING"; cloud: string }
+  | { state: "WAITING"; user_code: string; expires_at_ms: number; cloud: string }
+  | { state: "UNREACHABLE"; cloud: string }
+  | { state: "CLAIMED"; store_id: string };
+
+/** One printer the store published, from `GET /api/printers`. */
+export interface PrinterEntry {
+  device_id: string;
+  name: string;
+  /** The station it serves; absent for the receipt printer. */
+  station_id?: string;
+}
+
+/** What came of a test page — the same tokens a receipt's print reports. */
+export interface TestPrintResponse {
+  print: string;
 }

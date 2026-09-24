@@ -52,8 +52,9 @@ for an integrator:
 | `place_orders` | `POST /v1/orders` and `GET /v1/orders` — the public order intake |
 | `read_rollups` | `GET /v1/stores/{store_id}/rollups/daily` — per-store daily activity |
 
-The remaining scopes (`read_config`, `relay_orders`, `manage_devices`) are **store** credentials — a
-shop's own box holds them to pull its configuration and its queued orders. An integrator has no use
+The remaining scopes (`read_config`, `relay_orders`, `publish_events`, `manage_devices`) are
+**store** credentials — a shop's own box holds them to pull its configuration and its queued orders
+and to publish its events. An integrator has no use
 for them and should not be given them.
 
 Ask only for what you use. A key with `place_orders` alone cannot read a single figure, which is the

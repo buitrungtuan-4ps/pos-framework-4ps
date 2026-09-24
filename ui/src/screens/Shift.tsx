@@ -1,6 +1,5 @@
 import { Show, createSignal } from "solid-js";
 
-import { ApiError } from "../api/client";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
@@ -14,6 +13,7 @@ import {
   state,
   storeCurrency,
 } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // The cash shift: open with a float, enter the blind count (the screen shows nothing about what is
 // expected), then close to reveal the variance. The blindness is the control — counting before the
@@ -31,7 +31,7 @@ export function Shift() {
       await action();
       setAmount("");
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     }
   };
 

@@ -47,6 +47,7 @@ use pos_cloud::catalog::{
     ItemCategory, ItemListFilter, ItemSort, ItemSubcategory, LayoutButton, Menu, MenuId,
     MenuPlacement, MenuSection, ModifierGroup, TaxClass,
 };
+use pos_cloud::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
 use pos_cloud::cloud::AdmittedDevice;
 use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
@@ -209,10 +210,12 @@ impl RollupStore for FakeRollups {
     }
 }
 
-/// The API-key store the bearer check consults, keyed by the public id.
+/// The API-key store the bearer check consults, keyed by the public id. Device credentials live in
+/// a table of their own, as in the real store (ADR-0143).
 #[derive(Clone, Default)]
 struct FakeKeys {
     rows: Arc<Mutex<HashMap<ApiKeyId, StoredApiKey>>>,
+    devices: Arc<Mutex<HashMap<ApiKeyId, StoredApiKey>>>,
 }
 
 impl FakeKeys {
@@ -225,6 +228,26 @@ impl ApiKeyStore for FakeKeys {
     async fn lookup(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
         Ok(self.rows.lock().expect("lock").get(&id).cloned())
     }
+
+    async fn lookup_device(&self, id: ApiKeyId) -> Result<Option<StoredApiKey>, ApiKeyStoreError> {
+        Ok(self.devices.lock().expect("lock").get(&id).cloned())
+    }
+}
+
+/// Mints a box's device credential for `store` the way activation does, and returns the
+/// `posdev_…` token the box would present (ADR-0143).
+fn issue_device_credential(keys: &FakeKeys, tenant_id: TenantId, store: StoreId) -> String {
+    let id = Ulid::from_u128(0x00DE_71CE);
+    let (minted, token) = pos_cloud::activation::mint_device_credential(id, FAKE_SECRET);
+    let stored = StoredApiKey::for_device(
+        ApiKeyId::new(minted.id),
+        &tenant_id.to_string(),
+        &store.to_string(),
+        &minted.secret_hash(),
+    )
+    .expect("a well-formed device row");
+    keys.devices.lock().expect("lock").insert(stored.id, stored);
+    token
 }
 
 impl ApiKeyAdminStore for FakeKeys {
@@ -3234,6 +3257,152 @@ async fn config_sync_records_store_liveness() {
     );
 }
 
+/// A box publishes its own events with nothing but its device credential (ADR-0143): the hello is
+/// negotiated on the cloud's side, the whole batch lands, and a replay lands nothing new.
+#[tokio::test]
+async fn a_box_publishes_its_events_with_its_device_credential() {
+    let keys = FakeKeys::default();
+    let store = FakeStore::new();
+    let router = http::router(app_all(
+        Cloud::new(store.clone()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let token = issue_device_credential(&keys, tenant(), store_id());
+    let store_ulid = store_id().as_ulid().to_string();
+
+    let hello =
+        pos_proto::protocol::Hello::current(store_id(), pos_proto::text::ReleaseTag::new("v1.0.0"));
+    let answered = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{store_ulid}/events/hello"),
+            &serde_json::to_value(&hello).expect("a hello encodes"),
+            &token,
+        ))
+        .await
+        .expect("route the hello");
+    assert_eq!(answered.status(), StatusCode::OK);
+    let outcome: pos_proto::protocol::HelloOutcome =
+        serde_json::from_value(json_body(answered).await).expect("an outcome");
+    assert_eq!(
+        outcome,
+        pos_proto::protocol::HelloOutcome::Accepted {
+            protocol_version: pos_proto::PROTOCOL_VERSION
+        }
+    );
+
+    let uri = format!("/sync/stores/{store_ulid}/events");
+    let batch = serde_json::json!({ "events": fixtures::activations(store_id(), 1, 5) });
+    for attempt in ["first", "replay"] {
+        let published = router
+            .clone()
+            .oneshot(post_json_bearer(&uri, &batch, &token))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK, "{attempt}");
+        assert_eq!(
+            json_body(published).await,
+            serde_json::json!({ "accepted": 5 }),
+            "{attempt}: the whole batch is held"
+        );
+    }
+    let held = store
+        .read(&EventQuery::first(
+            store_id(),
+            core::num::NonZeroU32::new(100).expect("positive"),
+        ))
+        .await
+        .expect("read the log");
+    assert_eq!(held.len(), 5, "the replay stored nothing twice");
+}
+
+/// No credential writes another shop's history (ADR-0143). A batch with any other store in it is
+/// refused whole; so is a path naming another store, a store key without `publish_events`, and a
+/// batch over the limit. A store key that holds the scope publishes, for a fork that prefers keys.
+#[tokio::test]
+async fn publishing_is_confined_to_the_credential_s_own_store() {
+    let keys = FakeKeys::default();
+    let store = FakeStore::new();
+    let router = http::router(app_all(
+        Cloud::new(store.clone()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let token = issue_device_credential(&keys, tenant(), store_id());
+    let store_ulid = store_id().as_ulid().to_string();
+    let uri = format!("/sync/stores/{store_ulid}/events");
+    let elsewhere = StoreId::new(Ulid::from_u128(0x000E_15E1)); // another shop
+
+    let mut mixed = fixtures::activations(store_id(), 1, 3);
+    mixed.extend(fixtures::activations(elsewhere, 10, 1));
+    let refused = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &uri,
+            &serde_json::json!({ "events": mixed }),
+            &token,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+
+    let other_path = router
+        .clone()
+        .oneshot(post_json_bearer(
+            &format!("/sync/stores/{}/events", elsewhere.as_ulid()),
+            &serde_json::json!({ "events": fixtures::activations(elsewhere, 20, 1) }),
+            &token,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(other_path.status(), StatusCode::FORBIDDEN);
+
+    let legacy = issue_store_key(
+        &keys,
+        tenant(),
+        store_id(),
+        &[Scope::ReadConfig, Scope::RelayOrders],
+    );
+    let batch = serde_json::json!({ "events": fixtures::activations(store_id(), 30, 2) });
+    let unscoped = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &batch, &legacy))
+        .await
+        .expect("route");
+    assert_eq!(unscoped.status(), StatusCode::FORBIDDEN);
+
+    let too_many = serde_json::json!({ "events": fixtures::activations(store_id(), 100, 257) });
+    let oversized = router
+        .clone()
+        .oneshot(post_json_bearer(&uri, &too_many, &token))
+        .await
+        .expect("route");
+    assert_eq!(oversized.status(), StatusCode::BAD_REQUEST);
+
+    let held = store
+        .read(&EventQuery::first(
+            store_id(),
+            core::num::NonZeroU32::new(1_000).expect("positive"),
+        ))
+        .await
+        .expect("read the log");
+    assert!(held.is_empty(), "nothing refused was stored");
+
+    let keyed = issue_store_key(&keys, tenant(), store_id(), &[Scope::PublishEvents]);
+    let published = router
+        .oneshot(post_json_bearer(&uri, &batch, &keyed))
+        .await
+        .expect("route");
+    assert_eq!(published.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn heartbeat_records_liveness_and_needs_the_read_config_scope() {
     // A lightweight heartbeat (ADR-0068 slice 2) records the store's contact without a config pull,
@@ -5733,6 +5902,368 @@ async fn the_activation_exchange_is_single_use_and_gives_no_oracle() {
         .await
         .expect("route the malformed code");
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+}
+
+/// A code issued for another store is refused **unspent**, with the generic refusal.
+///
+/// A technician who types the wrong shop's code into a box got that shop's device, and nothing said
+/// so until `/sync` refused every call, by which time the code was spent. The edge now names the
+/// store it was installed for; the cloud refuses a mismatch before consuming anything.
+#[tokio::test]
+async fn a_code_for_another_store_is_refused_and_left_unspent() {
+    let code = ActivationCode::from_entropy([17; pos_core::activation::PAYLOAD_LEN]);
+    let device = DeviceId::new(Ulid::from_u128(0xBEEF));
+    let activations = FakeActivations::with_issued(hash_code(&code), tenant(), store_id(), device);
+    let router = http::activation_router(activations.clone(), FakeAdmin::default(), clock());
+    let exchange = |store: String| {
+        let router = router.clone();
+        let code = code.as_str().to_owned();
+        async move {
+            router
+                .oneshot(post_json(
+                    "/activate",
+                    &serde_json::json!({ "code": code, "store_id": store }),
+                ))
+                .await
+                .expect("route the exchange")
+        }
+    };
+
+    let elsewhere = StoreId::new(Ulid::from_u128(0x0E15_E1E4)).to_string();
+    let refused = exchange(elsewhere).await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let body: serde_json::Value =
+        serde_json::from_slice(&body_bytes(refused).await).expect("the envelope");
+    assert_eq!(
+        body["error"]["message"], "activation refused",
+        "the generic refusal"
+    );
+    assert_eq!(activations.minted(), 0, "nothing was minted");
+
+    let granted = exchange(store_id().to_string()).await;
+    assert_eq!(
+        granted.status(),
+        StatusCode::CREATED,
+        "the code was not spent"
+    );
+    assert_eq!(activations.minted(), 1);
+
+    let malformed = exchange("not-a-ulid".to_owned()).await;
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+}
+
+// --- Claiming a box installed with no store (ADR-0148) ------------------------------------------
+
+/// One claim as the table keeps it: hashes, expiry, the slot once bound, and whether collected.
+#[derive(Clone)]
+struct FakeClaim {
+    code_hash: [u8; 32],
+    secret_hash: [u8; 32],
+    expires_at: Timestamp,
+    slot: Option<(TenantId, StoreId, DeviceId)>,
+    collected: bool,
+}
+
+/// The claim store, keyed by claim id, with the table's once-only rules.
+#[derive(Clone, Default)]
+struct FakeClaims {
+    rows: Arc<Mutex<HashMap<Ulid, FakeClaim>>>,
+}
+
+impl ClaimStore for FakeClaims {
+    async fn open(
+        &self,
+        claim_id: Ulid,
+        user_code_hash: [u8; 32],
+        secret_hash: [u8; 32],
+        expires_at: Timestamp,
+    ) -> Result<(), ClaimStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if rows.values().any(|row| row.code_hash == user_code_hash) {
+            return Err(ClaimStoreError::new("the code is taken"));
+        }
+        rows.insert(
+            claim_id,
+            FakeClaim {
+                code_hash: user_code_hash,
+                secret_hash,
+                expires_at,
+                slot: None,
+                collected: false,
+            },
+        );
+        Ok(())
+    }
+
+    async fn bind(
+        &self,
+        user_code_hash: [u8; 32],
+        tenant_id: TenantId,
+        store_id: StoreId,
+        device_id: DeviceId,
+        now: Timestamp,
+    ) -> Result<BindOutcome, ClaimStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows
+            .values_mut()
+            .find(|row| row.code_hash == user_code_hash)
+        else {
+            return Ok(BindOutcome::Unknown);
+        };
+        Ok(if row.slot.is_some() {
+            BindOutcome::AlreadyBound
+        } else if row.expires_at <= now {
+            BindOutcome::Expired
+        } else {
+            row.slot = Some((tenant_id, store_id, device_id));
+            BindOutcome::Bound
+        })
+    }
+
+    async fn collect(
+        &self,
+        claim_id: Ulid,
+        secret_hash: [u8; 32],
+        _credential: &DeviceCredential,
+        now: Timestamp,
+    ) -> Result<CollectOutcome, ClaimStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows
+            .get_mut(&claim_id)
+            .filter(|row| row.secret_hash == secret_hash)
+        else {
+            return Ok(CollectOutcome::Refused);
+        };
+        Ok(match row.slot {
+            _ if row.collected => CollectOutcome::Refused,
+            _ if row.expires_at <= now => CollectOutcome::Expired,
+            None => CollectOutcome::Pending,
+            Some((tenant_id, store_id, device_id)) => {
+                row.collected = true;
+                CollectOutcome::Collected {
+                    tenant_id,
+                    store_id,
+                    device_id,
+                }
+            }
+        })
+    }
+}
+
+/// What `POST /claim` handed the box: its claim id, the code it shows, and its secret.
+async fn open_a_claim(router: &axum::Router) -> (String, String, String) {
+    let opened = router
+        .clone()
+        .oneshot(post_json("/claim", &serde_json::json!({})))
+        .await
+        .expect("route the open");
+    assert_eq!(opened.status(), StatusCode::CREATED);
+    let body = json_body(opened).await;
+    assert_eq!(body["expires_in_secs"], 3600);
+    assert_eq!(body["poll_interval_secs"], 5);
+    let field = |name: &str| body[name].as_str().expect("a string").to_owned();
+    (field("claim_id"), field("user_code"), field("secret"))
+}
+
+fn bind_body(user_code: &str, device: DeviceId) -> serde_json::Value {
+    serde_json::json!({
+        "user_code": user_code,
+        "tenant_id": tenant().to_string(),
+        "store_id": store_id().to_string(),
+        "device_id": device.to_string(),
+    })
+}
+
+/// A box shows its code, a console user binds it, and the box collects its credential exactly once
+/// (ADR-0148). Nobody else collects it: a wrong secret and a second collection are one refusal.
+#[tokio::test]
+async fn a_box_is_claimed_by_its_code_and_collects_its_credential_once() {
+    let admin = provisioned_admin();
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let router = http::claim_router(
+        FakeClaims::default(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let (claim_id, user_code, secret) = open_a_claim(&router).await;
+    assert_eq!(user_code.len(), 9, "shown as XXXX-XXXX");
+    assert_eq!(secret.len(), 64, "256 bits of hex");
+    let device = DeviceId::new(Ulid::from_u128(0x00C1_A1ED));
+    let collect = |secret: String| {
+        let router = router.clone();
+        let uri = format!("/claim/{claim_id}/collect");
+        async move {
+            router
+                .oneshot(post_json(&uri, &serde_json::json!({ "secret": secret })))
+                .await
+                .expect("route the collection")
+        }
+    };
+
+    assert_eq!(
+        collect(secret.clone()).await.status(),
+        StatusCode::ACCEPTED,
+        "nobody has bound it yet"
+    );
+    assert_eq!(
+        collect("0".repeat(64)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let bind = |body: serde_json::Value, cookie: Option<String>| {
+        let router = router.clone();
+        async move {
+            let request = match cookie {
+                Some(cookie) => post_with_cookie("/admin/claims/bind", &body, &cookie),
+                None => post_json("/admin/claims/bind", &body),
+            };
+            router.oneshot(request).await.expect("route the bind")
+        }
+    };
+    assert_eq!(
+        bind(bind_body(&user_code, device), None).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        bind(bind_body(&user_code, device), Some(viewer))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN,
+        "binding needs console.devices.manage"
+    );
+    assert_eq!(
+        bind(bind_body("NOT-A-CODE!", device), Some(ops.clone()))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        bind(bind_body("ZZZZ-ZZZZ", device), Some(ops.clone()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Typed the way a person types it: lower case, no dash.
+    let typed = user_code.replace('-', "").to_lowercase();
+    assert_eq!(
+        bind(bind_body(&typed, device), Some(ops.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let again = bind(bind_body(&user_code, device), Some(ops)).await;
+    assert_eq!(again.status(), StatusCode::CONFLICT, "a code binds once");
+
+    let collected = collect(secret.clone()).await;
+    assert_eq!(collected.status(), StatusCode::OK);
+    let body = json_body(collected).await;
+    assert_eq!(body["tenant_id"], tenant().to_string());
+    assert_eq!(body["store_id"], store_id().to_string());
+    assert_eq!(body["device_id"], device.to_string());
+    assert!(
+        body["credential"]
+            .as_str()
+            .expect("a credential")
+            .starts_with("posdev_")
+    );
+
+    assert_eq!(
+        collect(secret).await.status(),
+        StatusCode::FORBIDDEN,
+        "collected once"
+    );
+}
+
+/// After its hour a claim can be neither bound nor collected, and each says so.
+#[tokio::test]
+async fn an_expired_claim_can_neither_be_bound_nor_collected() {
+    let admin = provisioned_admin();
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let clock = clock();
+    let router = http::claim_router(
+        FakeClaims::default(),
+        admin,
+        clock.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    // Opened a second before the admin's session began, so the claim's hour ends while the session
+    // (seeded for the hour from `NOW_MS`) is still live.
+    clock.set(Timestamp::from_milliseconds_since_epoch(NOW_MS - 1_000).expect("valid"));
+    let (claim_id, user_code, secret) = open_a_claim(&router).await;
+    clock.set(Timestamp::from_milliseconds_since_epoch(NOW_MS + 3_599_000).expect("valid"));
+
+    let bound = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/claims/bind",
+            &bind_body(&user_code, DeviceId::new(Ulid::from_u128(7))),
+            &ops,
+        ))
+        .await
+        .expect("route the bind");
+    assert_eq!(bound.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(bound).await["error"]["details"][0]["reason"],
+        "EXPIRED"
+    );
+
+    let collected = router
+        .oneshot(post_json(
+            &format!("/claim/{claim_id}/collect"),
+            &serde_json::json!({ "secret": secret }),
+        ))
+        .await
+        .expect("route the collection");
+    assert_eq!(collected.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(collected).await["error"]["details"][0]["reason"],
+        "EXPIRED"
+    );
+}
+
+/// The unauthenticated code exchange has a budget per client (`docs/pos-spec.md` §16). It had
+/// none, so nothing but the size of the code space stood between a script and a guessing run.
+#[tokio::test]
+async fn the_code_exchange_is_refused_once_a_client_is_over_its_budget() {
+    let state = app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    );
+    let throttle = state.sync_throttle();
+    let router =
+        http::activation_router(FakeActivations::default(), FakeAdmin::default(), clock()).layer(
+            axum::middleware::from_fn_with_state(throttle, http::throttle_sync),
+        );
+    let guess = |n: u8| {
+        let router = router.clone();
+        async move {
+            let code = ActivationCode::from_entropy([n; pos_core::activation::PAYLOAD_LEN]);
+            router
+                .oneshot(post_json(
+                    "/activate",
+                    &serde_json::json!({ "code": code.as_str() }),
+                ))
+                .await
+                .expect("route the guess")
+                .status()
+        }
+    };
+    for n in 0..10 {
+        assert_eq!(
+            guess(n).await,
+            StatusCode::FORBIDDEN,
+            "guess {n} is looked up"
+        );
+    }
+    assert_eq!(
+        guess(10).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the eleventh is not"
+    );
 }
 
 // --- The AIP-193 error envelope (roadmap v3 Q3a, ADR-0026 §27) ----------------------------------
@@ -19193,6 +19724,80 @@ async fn a_closed_set_refusal_names_the_field_and_a_stable_reason() {
     assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
 }
 
+/// A store's event retention is published as its `retention` node and read back (ADR-0145), and a
+/// figure outside 30..=3650 days is refused, naming the field.
+#[tokio::test]
+async fn a_store_s_event_retention_is_published_within_its_range() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let publish = |days: u32| {
+        put_with_cookie(
+            "/admin/config/retention",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "event_log_days": days,
+            }),
+            &cookie,
+        )
+    };
+
+    let published = router
+        .clone()
+        .oneshot(publish(45))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/retention?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                store_id().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(json_body(read).await["event_log_days"], 45);
+
+    for refused in [29, 3_651] {
+        let response = router
+            .clone()
+            .oneshot(publish(refused))
+            .await
+            .expect("route the publish");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused} days");
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["details"][0]["field"], "event_log_days");
+        assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    }
+}
+
+/// The cloud's bounds on `event_log_days` are the edge's. The two crates share no dependency, so
+/// this pins the numbers here and the edge's own test pins them there.
+#[test]
+fn the_cloud_bounds_event_retention_as_the_edge_does() {
+    assert_eq!(http::EVENT_LOG_DAYS, 30..=3650);
+}
+
 /// A range refusal about two fields names only the one actually out of range.
 ///
 /// `"open_hour and close_hour must be in 0..=23"` had the same over-naming the ULID refusals did,
@@ -20729,6 +21334,174 @@ async fn a_malformed_upload_is_refused_naming_the_field() {
             "the refusal names {field}"
         );
     }
+}
+
+/// The Windows build the one-file installer is served from — the target the release workflow builds.
+const WINDOWS_TARGET: &str = "x86_64-pc-windows-msvc";
+
+/// Asks for a store's one-file installer.
+fn installer_request(release: &str, query: &str, cookie: &str) -> Request<Body> {
+    get_with_cookie(
+        &format!("/admin/ota/releases/{release}/installer?{query}"),
+        cookie,
+    )
+}
+
+/// The console's download: a hosted Windows release, byte for byte, under the name the edge reads as
+/// "install this store, dialling this cloud" (ADR-0140, ADR-0141). The bytes are untouched — that is
+/// what keeps their signature verifying — so the store and the cloud travel only in the name.
+#[tokio::test]
+async fn a_hosted_windows_release_downloads_as_the_stores_installer() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let binary = b"the windows pos-edge".to_vec();
+    let uploaded = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            WINDOWS_TARGET,
+            binary.clone(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+    // No `arch`: the Windows build is the default, because it is the only kind of installer.
+    let served = router
+        .oneshot(installer_request(
+            "1.5.0",
+            &format!("store_id={}&cloud=Cloud.Example.com:8443", store_id()),
+            &cookie,
+        ))
+        .await
+        .expect("route the download");
+    assert_eq!(served.status(), StatusCode::OK);
+    assert_eq!(
+        served
+            .headers()
+            .get("content-disposition")
+            .and_then(|value| value.to_str().ok()),
+        Some(
+            format!(
+                "attachment; filename=\"pos-edge-setup_cloud.example.com@8443_{}.exe\"",
+                store_id()
+            )
+            .as_str()
+        )
+    );
+    let downloaded = axum::body::to_bytes(served.into_body(), usize::MAX)
+        .await
+        .expect("read the body");
+    assert_eq!(downloaded.as_ref(), binary.as_slice());
+}
+
+/// Every refusal names its field, and each is one a person at the console can act on: a store id
+/// that is not one, a cloud address the edge could not read back out of a file name, and a Linux
+/// build — which installs with the generated script instead.
+#[tokio::test]
+async fn an_installer_request_is_refused_naming_the_field() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let store = store_id();
+
+    for (release, query, field) in [
+        (
+            "1.5.0!",
+            format!("store_id={store}&cloud=pos.example.vn"),
+            "release",
+        ),
+        ("1.5.0", "cloud=pos.example.vn".to_owned(), "store_id"),
+        (
+            "1.5.0",
+            "store_id=nope&cloud=pos.example.vn".to_owned(),
+            "store_id",
+        ),
+        ("1.5.0", format!("store_id={store}"), "cloud"),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos_example.vn"),
+            "cloud",
+        ),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos.example.vn:0"),
+            "cloud",
+        ),
+        (
+            "1.5.0",
+            format!("store_id={store}&cloud=pos.example.vn&arch={TEST_TARGET}"),
+            "arch",
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(installer_request(release, &query, &cookie))
+            .await
+            .expect("route the request");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{release} {query}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "{release} {query} names {field}"
+        );
+    }
+}
+
+/// A release the cloud holds only for Linux has no installer: a `404` that says what to do, rather
+/// than a file that would never have run.
+#[tokio::test]
+async fn a_release_not_hosted_for_windows_has_no_installer() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let uploaded = router
+        .clone()
+        .oneshot(upload_request(
+            "1.5.0",
+            TEST_TARGET,
+            b"the linux pos-edge".to_vec(),
+            &minisig_line(),
+            &cookie,
+        ))
+        .await
+        .expect("route the upload");
+    assert_eq!(uploaded.status(), StatusCode::CREATED);
+
+    let missing = router
+        .oneshot(installer_request(
+            "1.5.0",
+            &format!("store_id={}&cloud=pos.example.vn", store_id()),
+            &cookie,
+        ))
+        .await
+        .expect("route the request");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let body = json_body(missing).await;
+    assert_eq!(body["error"]["details"][0]["field"], "release");
+}
+
+/// Reading what the cloud hosts is a console read, and a signed-out request is not one.
+#[tokio::test]
+async fn an_installer_needs_a_console_session() {
+    let (router, _keys) = release_app(provisioned_admin());
+    let refused = router
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/admin/ota/releases/1.5.0/installer?store_id={}&cloud=pos.example.vn",
+                    store_id()
+                ))
+                .body(Body::empty())
+                .expect("build the request"),
+        )
+        .await
+        .expect("route the request");
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// Re-running a release step is not an error, and changing a release's bytes is: a version a ring has

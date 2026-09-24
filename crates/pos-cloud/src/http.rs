@@ -153,6 +153,10 @@ use crate::catalog::{
     ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu, would_cycle};
+use crate::claim::{
+    BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
+    hash_claim_secret, hash_user_code,
+};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config::InternalSecret;
 use crate::config_tree::{
@@ -196,8 +200,8 @@ use pos_core::lease::LeaseGeneration;
 use crate::anchor::{AnchorConflict, AnchorLedger};
 use crate::ota::{
     ArtifactKind, ArtifactStore, ArtifactStoreError, MAX_ARTIFACT_BYTES, MINISIGN_SIGNATURE_LEN,
-    RecordOutcome, ReleaseArtifact, TargetTriple, admit_artifact, artifact_key,
-    validate_release_tag,
+    RecordOutcome, ReleaseArtifact, TargetTriple, WINDOWS_TARGET, admit_artifact, artifact_key,
+    installer_file_name, validate_release_tag,
 };
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
@@ -513,6 +517,11 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     {
         SyncThrottle {
             limiter: self.sync_rate_limiter.clone(),
+            activate_limiter: SlidingRateLimiter::new(ACTIVATE_MAX_ATTEMPTS, ACTIVATE_WINDOW_SECS),
+            collect_limiter: SlidingRateLimiter::new(
+                CLAIM_COLLECT_MAX_POLLS,
+                CLAIM_COLLECT_WINDOW_SECS,
+            ),
             trusted_proxy_hops: self.trusted_proxy_hops,
             clock: self.clock.clone(),
         }
@@ -599,6 +608,16 @@ where
         .route(
             "/sync/stores/{store_id}/heartbeat",
             post(edge_heartbeat::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/sync/stores/{store_id}/events",
+            post(edge_publish_events::<S, R, K, C, A, T, W>).layer(
+                axum::extract::DefaultBodyLimit::max(MAX_PUBLISHED_EVENTS_BYTES),
+            ),
+        )
+        .route(
+            "/sync/stores/{store_id}/events/hello",
+            post(edge_events_hello::<S, R, K, C, A, T, W>),
         )
         .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
         .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
@@ -1916,7 +1935,8 @@ struct HostedArtifactResponse {
     recorded_at_ms: i64,
 }
 
-/// Builds the `/admin` release sub-router — the half that puts an artifact *into* the cloud.
+/// Builds the `/admin` release sub-router — the half that puts an artifact *into* the cloud, and
+/// hands a Windows store its one-file installer back out of it.
 ///
 /// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`]: without an
 /// object store there is nowhere for the bytes to go, and a route that always answers `503` is worse
@@ -1948,6 +1968,10 @@ where
         .route(
             "/admin/ota/releases/{release}",
             get(admin_list_ota_release::<B, L, A, C>),
+        )
+        .route(
+            "/admin/ota/releases/{release}/installer",
+            get(admin_download_installer::<B, L, A, C>),
         )
         .layer(axum::extract::DefaultBodyLimit::max(MAX_ARTIFACT_BYTES))
         .with_state(OtaReleaseAdminState {
@@ -2315,6 +2339,166 @@ where
             service_unavailable("the release registry")
         }
     }
+}
+
+/// Which store a one-file installer is for and which cloud it dials — both written into its file
+/// name — and, optionally, which Windows build.
+///
+/// Every field is optional to serde so that a missing one is refused in the API's own envelope,
+/// naming the field, rather than as axum's bare query rejection.
+#[derive(Debug, Clone, Deserialize)]
+struct InstallerQuery {
+    #[serde(default)]
+    store_id: Option<String>,
+    /// The cloud as a browser shows it: `host` or `host:port`.
+    #[serde(default)]
+    cloud: Option<String>,
+    /// A Windows target triple; absent means [`WINDOWS_TARGET`].
+    #[serde(default)]
+    arch: Option<String>,
+}
+
+/// Checks everything about an installer request that can be judged from the request alone, and
+/// composes the file name.
+///
+/// # Errors
+///
+/// The [`Response`] to send: a `400` naming `release`, `store_id`, `cloud` or `arch`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the route returns, the same \
+              shape the other route helpers carry"
+)]
+fn parse_installer_request(
+    release: &str,
+    query: &InstallerQuery,
+) -> Result<(TargetTriple, String), Response> {
+    if let Err(error) = validate_release_tag(release) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("release: {error}"),
+            &[("release", "not usable as a storage key")],
+        ));
+    }
+    let [store_id] = parse_ulid_fields([("store_id", query.store_id.as_deref().unwrap_or(""))])?;
+    let file_name =
+        installer_file_name(query.cloud.as_deref().unwrap_or(""), StoreId::new(store_id)).map_err(
+            |error| {
+                api_error_with_details(
+                    ErrorStatus::InvalidArgument,
+                    format!("cloud: {error}"),
+                    &[("cloud", "cannot be written into the installer's name")],
+                )
+            },
+        )?;
+    let target =
+        TargetTriple::parse(query.arch.as_deref().unwrap_or(WINDOWS_TARGET)).map_err(|error| {
+            api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("arch: {error}"),
+                &[("arch", "not a target triple")],
+            )
+        })?;
+    if !target.is_windows() {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!(
+                "arch: {target} is not a Windows build — the one-file installer is Windows-only, \
+                 and a Linux store runs the install-pos-edge.sh the console generates"
+            ),
+            &[("arch", "not a Windows target")],
+        ));
+    }
+    Ok((target, file_name))
+}
+
+/// `GET /admin/ota/releases/{release}/installer?store_id=&cloud=` — a hosted release's Windows
+/// executable, named as that store's one-file installer
+/// ([ADR-0141](../../../docs/adr/0141-the-console-hands-out-the-installer-by-name.md)).
+///
+/// **The bytes are the release's own.** Nothing is appended or rewritten: the store and the cloud
+/// travel in the file *name*, which is what lets the minisign signature over these bytes keep
+/// verifying, and what makes the file safe to hand out — the name carries a store id and a host,
+/// neither of them a secret, and the credential still arrives only through activation.
+///
+/// **`console.data.read`**, like the list beside it: this reads what the cloud hosts. It writes
+/// nothing and provisions nothing — a box it installs is unactivated until somebody with
+/// `console.devices.manage` mints it a code.
+///
+/// **The cloud's host comes from the caller**, not from the `Host` header. The console passes the
+/// address its own browser is showing, the same value it writes into every generated installer;
+/// behind a reverse proxy the `Host` a handler sees can be the upstream's, and a file naming
+/// `127.0.0.1` would install a store that dials itself.
+///
+/// Buffered, as the store-facing serve route is ([`read_artifact_blobs`]): a download is a person
+/// at a console, one file at a time.
+async fn admin_download_installer<B, L, A, C>(
+    State(state): State<OtaReleaseAdminState<B, L, A, C>>,
+    headers: HeaderMap,
+    Path(release): Path<String>,
+    Query(query): Query<InstallerQuery>,
+) -> Response
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    L: ArtifactStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (target, file_name) = match parse_installer_request(&release, &query) {
+        Ok(parsed) => parsed,
+        Err(refusal) => return refusal,
+    };
+    match state.releases.find_artifact(&release, &target).await {
+        Ok(Some(_hosted)) => {}
+        Ok(None) => {
+            return api_error_with_details(
+                ErrorStatus::NotFound,
+                format!(
+                    "release {release} is not hosted for {target} — put it in the cloud from the \
+                     OTA screen first"
+                ),
+                &[("release", "not hosted for this target")],
+            );
+        }
+        Err(error) => {
+            tracing::error!(%error, "reading the release registry for an installer failed");
+            return service_unavailable("the release registry");
+        }
+    }
+    let Ok(key) = artifact_key(&release, &target, ArtifactKind::Binary) else {
+        // Unreachable: the tag validated and the triple parsed, and those are the only inputs.
+        return api_error(
+            ErrorStatus::Internal,
+            "the release's storage key could not be built",
+        );
+    };
+    let bytes = match read_one_artifact_blob(&state.blobs, &key, "artifact").await {
+        Ok(bytes) => bytes,
+        Err(refusal) => return refusal,
+    };
+    (
+        [
+            (CONTENT_TYPE, "application/octet-stream".to_owned()),
+            // The name is composed only from a validated host, port and ULID, so it holds nothing a
+            // quoted-string would need escaped.
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{file_name}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -8008,6 +8192,10 @@ where
             get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
         )
         .route(
+            "/admin/config/retention",
+            get(admin_read_retention::<Cfg, A, C>).put(admin_publish_retention::<Cfg, A, C>),
+        )
+        .route(
             "/admin/config/vendors",
             get(admin_read_vendors::<Cfg, A, C>).put(admin_publish_vendors::<Cfg, A, C>),
         )
@@ -8506,6 +8694,104 @@ where
         "qr",
         "config.qr.publish",
         node,
+    )
+    .await
+}
+
+/// The range a store's `event_log_days` may take (ADR-0145). The edge holds the same bounds as
+/// `pos_edge::EVENT_LOG_DAYS` and ignores a value outside them; the two crates share no dependency,
+/// so each side's test pins the numbers and a change to one fails until the other agrees.
+pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u32> = 30..=3650;
+
+/// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
+/// (ADR-0145).
+#[derive(Debug, Clone, Deserialize)]
+struct PublishRetentionRequest {
+    tenant_id: String,
+    store_id: String,
+    event_log_days: u32,
+}
+
+/// A super-admin reads a store's current `retention` node, or `null` (the edge then keeps 90 days).
+async fn admin_read_retention<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "retention").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes how many days a store keeps a synced event, as its `retention` node
+/// (ADR-0145). Outside [`EVENT_LOG_DAYS`] is refused, naming the field: a store whose log would
+/// age out in a week, or never, is a typo rather than a policy.
+async fn admin_publish_retention<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishRetentionRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    if !EVENT_LOG_DAYS.contains(&request.event_log_days) {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "event_log_days must be between 30 and 3650",
+            &[("event_log_days", "OUT_OF_RANGE")],
+        );
+    }
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "retention",
+        "config.retention.publish",
+        serde_json::json!({ "event_log_days": request.event_log_days }),
     )
     .await
 }
@@ -22103,6 +22389,10 @@ struct RevokeActivationResponse {
 struct ExchangeRequest {
     /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
     code: String,
+    /// The store the box was installed for, from its `config.toml`. A code issued for another store
+    /// is refused before it is spent. Optional, because an edge older than the field sends none.
+    #[serde(default)]
+    store_id: Option<String>,
 }
 
 /// The device's minted credential and the device id it was activated as — shown once.
@@ -22229,6 +22519,18 @@ where
             &[("code", "MALFORMED")],
         );
     };
+    let claimed_store = match request.store_id.as_deref().map(str::parse::<StoreId>) {
+        None => None,
+        Some(Ok(store_id)) => Some(store_id),
+        // Says nothing about the code, which has not been looked at yet.
+        Some(Err(_)) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "the store id is malformed",
+                &[("store_id", "MALFORMED")],
+            );
+        }
+    };
     let code_hash = hash_code(&code);
     let issued = match state.activations.lookup(code_hash).await {
         Ok(Some(issued)) => issued,
@@ -22236,6 +22538,13 @@ where
         Ok(None) => return activation_refused(),
         Err(error) => return activation_error_response(&error),
     };
+    // A code for another store is refused **unspent**, so the technician who typed the wrong shop's
+    // code can still use it on the right box. The same refusal as an unknown code: whoever holds a
+    // valid code learns nothing from naming a store that they could not learn by leaving it out.
+    if claimed_store.is_some_and(|store_id| store_id != issued.store_id) {
+        tracing::info!("activation refused: the code was issued for another store");
+        return activation_refused();
+    }
     match redeem(issued.status) {
         Redemption::Reject(reason) => {
             // The reason is for the server's log; the device sees one generic refusal.
@@ -22291,6 +22600,307 @@ fn mint_activation_code() -> Option<ActivationCode> {
     let mut entropy = [0_u8; pos_core::activation::PAYLOAD_LEN];
     getrandom::fill(&mut entropy).ok()?;
     Some(ActivationCode::from_entropy(entropy))
+}
+
+// --- Device claims (`/claim`, `/claim/{claim_id}/collect`, `/admin/claims/bind`) ------------------
+
+/// How often a box waiting to be claimed should ask whether it has been, in seconds.
+const CLAIM_POLL_INTERVAL_SECS: u64 = 5;
+
+/// The collaborators the claim routes need, stated independently of [`CloudApp`].
+#[derive(Clone)]
+struct ClaimState<Cl, A, C> {
+    claims: Cl,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the claim sub-router
+/// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+///
+/// A box installed with no store opens a claim on `/claim` and polls `/claim/{claim_id}/collect`.
+/// Neither is authenticated, as `/activate` is not: the box has no credential yet. `/claim` shares
+/// `/activate`'s small budget and collection has one sized for polling ([`throttle_sync`]). A console
+/// user with `console.devices.manage` binds a code to a device slot on `/admin/claims/bind`, which is
+/// audited.
+pub fn claim_router<Cl, A, C>(
+    claims: Cl,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(CLAIM_PATH, post(open_claim::<Cl, A, C>))
+        .route("/claim/{claim_id}/collect", post(collect_claim::<Cl, A, C>))
+        .route("/admin/claims/bind", post(admin_bind_claim::<Cl, A, C>))
+        .with_state(ClaimState {
+            claims,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// What `POST /claim` answers. The box shows `user_code` and keeps `secret` to itself.
+#[derive(Debug, Serialize)]
+struct OpenedClaim {
+    claim_id: String,
+    /// The code to show, as `XXXX-XXXX`.
+    user_code: String,
+    /// 256 bits, as hex. Shown nowhere; presented only to collect.
+    secret: String,
+    expires_in_secs: i64,
+    poll_interval_secs: u64,
+}
+
+/// A box opens a claim. Unauthenticated: the box has nothing to authenticate with yet.
+async fn open_claim<Cl, A, C>(State(state): State<ClaimState<Cl, A, C>>) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    let (Some(claim_id), Some(secret), Some(code), Ok(expires_at)) = (
+        mint_ulid(now_ms),
+        random_hex_32(),
+        mint_user_code(),
+        pos_proto::time::Timestamp::from_milliseconds_since_epoch(
+            now_ms.saturating_add(CLAIM_TTL_MS),
+        ),
+    ) else {
+        tracing::error!("could not read OS entropy to open a claim");
+        return service_unavailable("claim");
+    };
+    match state
+        .claims
+        .open(
+            claim_id,
+            hash_user_code(&code),
+            hash_claim_secret(&secret),
+            expires_at,
+        )
+        .await
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(OpenedClaim {
+                claim_id: claim_id.to_string(),
+                user_code: code.display(),
+                secret,
+                expires_in_secs: CLAIM_TTL_MS / 1000,
+                poll_interval_secs: CLAIM_POLL_INTERVAL_SECS,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be opened");
+            service_unavailable("claim")
+        }
+    }
+}
+
+/// A box presents its secret to collect.
+#[derive(Debug, Deserialize)]
+struct CollectClaimRequest {
+    secret: String,
+}
+
+/// What a collection answers once: the box's slot and its device credential.
+#[derive(Debug, Serialize)]
+struct CollectedClaim {
+    tenant_id: String,
+    store_id: String,
+    device_id: String,
+    /// The `posdev_<id>_<secret>` token, shown this once; only its hash is kept.
+    credential: String,
+}
+
+/// A box polls for its credential. `202` while nobody has bound the code, the credential once it
+/// has, `409` with reason `EXPIRED` when the hour is over, and one `403` for everything else.
+async fn collect_claim<Cl, A, C>(
+    State(state): State<ClaimState<Cl, A, C>>,
+    Path(claim_id): Path<String>,
+    Json(request): Json<CollectClaimRequest>,
+) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let claim_id = match parse_ulid_fields([("claim_id", &claim_id)]) {
+        Ok([claim_id]) => claim_id,
+        Err(refusal) => return refusal,
+    };
+    let now = state.clock.now();
+    let (Some(credential_id), Some(credential_secret)) = (
+        mint_ulid(now.as_milliseconds_since_epoch()),
+        random_hex_32(),
+    ) else {
+        tracing::error!("could not read OS entropy to mint a device credential");
+        return service_unavailable("claim");
+    };
+    let (credential, token) = mint_device_credential(credential_id, &credential_secret);
+    match state
+        .claims
+        .collect(
+            claim_id,
+            hash_claim_secret(&request.secret),
+            &credential,
+            now,
+        )
+        .await
+    {
+        Ok(CollectOutcome::Collected {
+            tenant_id,
+            store_id,
+            device_id,
+        }) => (
+            StatusCode::OK,
+            Json(CollectedClaim {
+                tenant_id: tenant_id.to_string(),
+                store_id: store_id.to_string(),
+                device_id: device_id.to_string(),
+                credential: token,
+            }),
+        )
+            .into_response(),
+        Ok(CollectOutcome::Pending) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "PENDING" })),
+        )
+            .into_response(),
+        Ok(CollectOutcome::Expired) => api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "this claim has expired; open a new one",
+            &[("claim_id", "EXPIRED")],
+        ),
+        Ok(CollectOutcome::Refused) => api_error(
+            ErrorStatus::PermissionDenied,
+            "this claim cannot be collected",
+        ),
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be collected");
+            service_unavailable("claim")
+        }
+    }
+}
+
+/// A console user binds the code a box shows to a device slot.
+#[derive(Debug, Deserialize)]
+struct BindClaimRequest {
+    user_code: String,
+    tenant_id: String,
+    store_id: String,
+    device_id: String,
+}
+
+/// Binds a claim. Needs `console.devices.manage`, and is audited as `device.claim`.
+async fn admin_bind_claim<Cl, A, C>(
+    State(state): State<ClaimState<Cl, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<BindClaimRequest>,
+) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id, device_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("device_id", &request.device_id),
+    ]) {
+        Ok([tenant_id, store_id, device_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            DeviceId::new(device_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    let Some(code) = UserCode::parse(&request.user_code) else {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a claim code is eight letters and digits, as the box shows it",
+            &[("user_code", "INVALID_VALUE")],
+        );
+    };
+    let outcome = match state
+        .claims
+        .bind(
+            hash_user_code(&code),
+            tenant_id,
+            store_id,
+            device_id,
+            state.clock.now(),
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be bound");
+            return service_unavailable("claim");
+        }
+    };
+    match outcome {
+        BindOutcome::Bound => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device.claim",
+                "device",
+                &device_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "store_id": store_id.to_string(),
+                    "device_id": device_id.to_string(),
+                })),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        BindOutcome::Unknown => api_error_with_details(
+            ErrorStatus::NotFound,
+            "no box is waiting with that code",
+            &[("user_code", "NOT_FOUND")],
+        ),
+        BindOutcome::Expired => api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "that code has expired; the box shows a new one",
+            &[("user_code", "EXPIRED")],
+        ),
+        BindOutcome::AlreadyBound => api_error_with_details(
+            ErrorStatus::AlreadyExists,
+            "that code has already been used",
+            &[("user_code", "ALREADY_BOUND")],
+        ),
+    }
+}
+
+/// Draws a user code from OS entropy, or `None` if the entropy source is unavailable.
+fn mint_user_code() -> Option<UserCode> {
+    let mut entropy = [0_u8; USER_CODE_ENTROPY];
+    getrandom::fill(&mut entropy).ok()?;
+    Some(UserCode::from_entropy(entropy))
 }
 
 // --- Translation grid (`/admin/translations`) ---------------------------------------------------
@@ -22975,6 +23585,159 @@ where
     }
 }
 
+/// The most envelopes one `POST /sync/stores/{store_id}/events` may carry
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+pub const MAX_PUBLISHED_EVENTS: usize = 256;
+
+/// The largest body that route reads, 4 MiB (ADR-0143). A bigger one is answered `413` before it is
+/// parsed.
+pub const MAX_PUBLISHED_EVENTS_BYTES: usize = 4 * 1024 * 1024;
+
+/// `POST /sync/stores/{store_id}/events`'s body: the store's committed events, oldest first.
+#[derive(Debug, Deserialize)]
+struct PublishedEvents {
+    events: Vec<EventEnvelope<RawPayload>>,
+}
+
+/// What a publish came to: how many envelopes, counted from the first, the cloud holds. Always the
+/// whole batch on success, since ingest commits all of it or none (ADR-0143).
+#[derive(Debug, Serialize)]
+struct PublishedEventsAccepted {
+    accepted: usize,
+}
+
+/// `POST /sync/stores/{store_id}/events` — a store publishes its own events over HTTPS
+/// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+///
+/// Scope `publish_events`, which a box's device credential always carries, and the store in the
+/// path must be the credential's. **Every envelope must name that store**: a batch with any other
+/// store in it is refused whole, so no credential can write another shop's history. Ingest is the
+/// same idempotent, all-or-nothing [`Cloud::ingest`] the NATS cursor uses, so a batch published
+/// twice is stored once and the answer is the whole batch either way.
+async fn edge_publish_events<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    S: EventStore + Clone + Send + Sync + 'static,
+    S::Tx: Send,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let store_id = match publishing_store(&app, &headers, &store_id).await {
+        Ok(store_id) => store_id,
+        Err(refusal) => return refusal,
+    };
+    let batch = match serde_json::from_slice::<PublishedEvents>(&body) {
+        Ok(batch) => batch,
+        Err(error) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("the body is not a batch of events: {error}"),
+                &[("events", "INVALID_VALUE")],
+            );
+        }
+    };
+    if batch.events.len() > MAX_PUBLISHED_EVENTS {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("a batch carries at most {MAX_PUBLISHED_EVENTS} events"),
+            &[("events", "TOO_MANY")],
+        );
+    }
+    if batch.events.iter().any(|event| event.store_id != store_id) {
+        return api_error(
+            ErrorStatus::PermissionDenied,
+            "every event in a batch must belong to the store it is published for",
+        );
+    }
+    match app.cloud.ingest(&batch.events).await {
+        Ok(_outcome) => (
+            StatusCode::OK,
+            Json(PublishedEventsAccepted {
+                accepted: batch.events.len(),
+            }),
+        )
+            .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// `POST /sync/stores/{store_id}/events/hello` — the protocol negotiation for the HTTPS event link
+/// ([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with
+/// the cloud's own window. Answers `200` with the [`HelloOutcome`](pos_proto::protocol::HelloOutcome)
+/// either way: a refusal is an answer, not an error, and the store keeps trading on it.
+async fn edge_events_hello<S, R, K, C, A, T, W>(
+    State(app): State<CloudApp<S, R, K, C, A, T, W>>,
+    headers: HeaderMap,
+    Path(store_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Response
+where
+    S: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    K: ApiKeyStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    T: Clone + Send + Sync + 'static,
+    W: Clone + Send + Sync + 'static,
+{
+    let store_id = match publishing_store(&app, &headers, &store_id).await {
+        Ok(store_id) => store_id,
+        Err(refusal) => return refusal,
+    };
+    let hello = match serde_json::from_slice::<pos_proto::protocol::Hello>(&body) {
+        Ok(hello) => hello,
+        Err(error) => {
+            return api_error(
+                ErrorStatus::InvalidArgument,
+                format!("the body is not a hello: {error}"),
+            );
+        }
+    };
+    if hello.store_id != store_id {
+        return api_error(
+            ErrorStatus::PermissionDenied,
+            "the hello names a store other than the one it is sent for",
+        );
+    }
+    let outcome = pos_proto::protocol::negotiate(
+        &hello,
+        pos_proto::MIN_SUPPORTED_PROTOCOL_VERSION,
+        pos_proto::PROTOCOL_VERSION,
+    );
+    (StatusCode::OK, Json(outcome)).into_response()
+}
+
+/// The checks both event-link routes share: an authenticated caller holding `publish_events`, for
+/// the store named in the path, which must be the caller's own.
+async fn publishing_store<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    headers: &HeaderMap,
+    store_id: &str,
+) -> Result<StoreId, Response>
+where
+    K: ApiKeyStore + Send + Sync,
+    C: ClockSource + Send + Sync,
+{
+    let grant = authenticate(&app.keys, &app.clock, headers)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    require_scope(&grant, Scope::PublishEvents).map_err(IntoResponse::into_response)?;
+    let store_id = match parse_ulid_fields([("store_id", store_id)]) {
+        Ok([store_id]) => StoreId::new(store_id),
+        Err(refusal) => return Err(refusal),
+    };
+    require_store(&grant, store_id).map_err(IntoResponse::into_response)?;
+    Ok(store_id)
+}
+
 /// What a heartbeat may carry beyond "I am here" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).
 ///
 /// Every field is optional and the whole body is optional, because the body is younger than the
@@ -23233,6 +23996,33 @@ pub(crate) fn too_many_requests(message: &str, retry_after_secs: u64) -> Respons
     response
 }
 
+/// The one route [`throttle_sync`] guards on its own, much smaller budget: the unauthenticated code
+/// exchange (`docs/pos-spec.md` §16, "device activation codes … are rate-limited"). It had no limit
+/// at all, so nothing but the code space stood between a script and a guessing run, and every guess
+/// cost a database lookup.
+const ACTIVATE_PATH: &str = "/activate";
+
+/// Code exchanges allowed per client within [`ACTIVATE_WINDOW_SECS`]. A technician mistypes a code
+/// a few times; a box activates once. Ten leaves room for the first and none for a guessing run.
+const ACTIVATE_MAX_ATTEMPTS: usize = 10;
+
+/// The sliding window [`ACTIVATE_MAX_ATTEMPTS`] counts over, in seconds.
+const ACTIVATE_WINDOW_SECS: u64 = 600;
+
+/// Opening a claim ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md))
+/// shares [`ACTIVATE_PATH`]'s budget: both are how an unauthenticated box first asks for anything.
+const CLAIM_PATH: &str = "/claim";
+
+/// Collection polls sit under this prefix, and get [`CLAIM_COLLECT_MAX_POLLS`] of their own.
+const CLAIM_COLLECT_PREFIX: &str = "/claim/";
+
+/// Collection polls allowed per client within [`CLAIM_COLLECT_WINDOW_SECS`]: one every five seconds,
+/// with room for a second box claimed from the same shop.
+const CLAIM_COLLECT_MAX_POLLS: usize = 120;
+
+/// The sliding window [`CLAIM_COLLECT_MAX_POLLS`] counts over, in seconds.
+const CLAIM_COLLECT_WINDOW_SECS: u64 = 300;
+
 /// The prefix [`throttle_sync`] guards. Every store-facing route sits under it (ADR-0097 moved the
 /// two that did not), so one prefix check covers config-pull, the heartbeat, the update report, the
 /// artifact fetch, the device proposals and the order relay.
@@ -23262,19 +24052,29 @@ pub async fn throttle_sync<C>(
 where
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if !request.uri().path().starts_with(SYNC_PREFIX) {
+    let path = request.uri().path();
+    let (limiter, refusal) = if path.starts_with(SYNC_PREFIX) {
+        (
+            &throttle.limiter,
+            "too many requests to the store sync surface; try again later",
+        )
+    } else if path == ACTIVATE_PATH || path == CLAIM_PATH {
+        (
+            &throttle.activate_limiter,
+            "too many activation attempts; try again later",
+        )
+    } else if path.starts_with(CLAIM_COLLECT_PREFIX) {
+        (
+            &throttle.collect_limiter,
+            "too many claim polls; try again later",
+        )
+    } else {
         return next.run(request).await;
-    }
+    };
     let ip = client_ip(request.headers(), throttle.trusted_proxy_hops);
     let keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
-    if let Err(retry_after_secs) = throttle
-        .limiter
-        .check_and_record(&keys, throttle.clock.now())
-    {
-        return too_many_requests(
-            "too many requests to the store sync surface; try again later",
-            retry_after_secs,
-        );
+    if let Err(retry_after_secs) = limiter.check_and_record(&keys, throttle.clock.now()) {
+        return too_many_requests(refusal, retry_after_secs);
     }
     next.run(request).await
 }
@@ -23287,6 +24087,12 @@ where
 #[derive(Clone, Debug)]
 pub struct SyncThrottle<C> {
     limiter: SlidingRateLimiter,
+    /// `/activate`'s own budget, independent of `/sync`'s so a busy store's polling cannot lock a
+    /// technician out of activating the next box.
+    activate_limiter: SlidingRateLimiter,
+    /// The claim-collection polls' budget, apart from the rest so a box waiting to be claimed cannot
+    /// spend a technician's activation attempts.
+    collect_limiter: SlidingRateLimiter,
     trusted_proxy_hops: usize,
     clock: C,
 }

@@ -330,21 +330,29 @@ token, and one crossing a WAN in clear text is one given away.
 With `cloud_url` set the edge serves the activation routes (`POST /api/activate`), keeps the device
 credential in the OS credential store (Credential Manager on Windows, the kernel keyring on Linux —
 [ADR-0086](../../docs/adr/0086-edge-keyvault-and-activation.md)), and — once activated — runs the
-config-pull, heartbeat, and order-relay loops. Those loops authenticate with the store's scoped key,
-read from the keyring (`sync_key`) or, as a headless bring-up override, from `POS_EDGE_SYNC_KEY`
-(the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in `config.toml`, never
-committed). Without `cloud_url` the edge runs LAN-only, exactly as before.
+config-pull, heartbeat, and order-relay loops. **The device credential is all they need**
+([ADR-0143](../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)): the
+cloud accepts it on `/sync` for the box's own store, with exactly `read_config`, `relay_orders` and
+`publish_events`, and archiving the device in the console revokes it. A store key still takes
+precedence when one is set, read from the keyring (`sync_key`) or, as a headless bring-up override,
+from `POS_EDGE_SYNC_KEY` (the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in
+`config.toml`, never committed); a value there that starts with `#` is a leftover hint, not a key, and
+is ignored. Without `cloud_url` the edge runs LAN-only, exactly as before.
 
-**Publishing the store's events** takes one more pair of settings
+**Publishing the store's events** needs no settings: the edge posts them to the cloud's
+`/sync/stores/{store_id}/events` over HTTPS with its device credential, and the cloud refuses a batch
+that names any other store (ADR-0143). The store trades either way, and its outbox holds every event
+until the cloud has acknowledged it, which is also what happens while the cloud is down.
+
+A deployment that runs NATS can publish there instead
 ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): a `[nats]` section in
 `config.toml` naming the `stream` and `subject` — which must match the cloud consumer's `stream` and
 `filter_subject` — and the server URL in `POS_EDGE_NATS_URL`, from the same mode-0600 env file. The
-URL is the field that would carry a credential, which is why it is not in `config.toml`. With either
-missing the edge logs it and publishes nothing: the store trades and its outbox holds every event
-until a stream exists, which is also what happens while the cloud is down.
+URL is the field that would carry a credential, which is why it is not in `config.toml`. With both
+set the edge publishes to NATS; with either missing, or an unusable URL, it publishes over HTTPS.
 
-The console's new-store wizard generates the `[nats]` section, so on a provisioned box the section is
-already right and only the URL is left to fill in. Both of its values are the **fleet's**, identical
+The console's new-store wizard generates the `[nats]` section, so on a provisioned box that uses NATS
+the section is already right and only the URL is left to fill in. Both of its values are the **fleet's**, identical
 on every store — `stream = "POS_FLEET"`, `subject = "pos.fleet.events"` ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)
 Amendment 1). Per-store streams look tidier and do not work: `pos_cloud` binds one durable consumer
 to one named stream, so it would ingest one store and ignore the rest.
@@ -355,13 +363,15 @@ the token belongs in the userinfo exactly as shown, recovered on the cloud box w
 `sudo sed -n 's/  token: //p' deploy/secrets/nats.conf`. It is one secret for the whole fleet, which
 is why the console does not put it in the file for you.
 
-**The store key needs two scopes**, `read_config` **and** `relay_orders`
+**A store key, if you give the box one, needs two scopes**, `read_config` **and** `relay_orders`
 ([ADR-0087](../../docs/adr/0087-edge-relay-and-event-publish.md)): the first for config-pull and the
 heartbeat, the second for the order relay, which pulls the store's cloud-placed orders and acks each
 outcome. A key issued with `read_config` alone leaves the relay dark — the symptom is a repeated
 `the cloud refused the order pull with status 403` in the edge log, every five seconds. Nothing else
 is affected: the counter trades, config syncs, and the orders stay parked in the cloud until the
-scope is granted.
+scope is granted. A box with no store key uses its device credential, which carries both; the event
+link always presents the device credential, so a key never needs `publish_events` for the edge's
+own sake.
 
 ## Printing: fonts, and the cable
 
@@ -398,8 +408,17 @@ font_directories = ["/opt/pos-edge/fonts"]
 font_size_dots   = 24   # printer dots per em; 24 is a comfortable receipt body at 203 dpi
 ```
 
-Directories are scanned recursively, in order, and that order is the fallback order: the face for
-ordinary Latin text goes first.
+Directories are scanned recursively, in order, and that order is the fallback order. Within a
+directory the plain sans-serif families (DejaVu Sans, Noto Sans, Arial, Segoe UI, Tahoma, Liberation
+Sans) are tried first, so ordinary text is not drawn in whatever display face happens to sort first.
+
+**Only the scripts the store prints are kept.** Once the box has synced its menu, a face is loaded only
+if it adds a character the store can put on paper: Latin and Vietnamese always, plus whatever the menu,
+floor, stations, reasons and receipt header use. A Vietnamese shop on a Windows PC holds a few
+megabytes of fonts rather than the 60 MB of CJK, Devanagari, Thai and Arabic faces `C:\Windows\Fonts`
+offers. A box that has never synced keeps everything, as it cannot yet say what it prints. A new
+script added to the menu later prints after the edge next restarts (an update restarts it); until then
+the start-up line lists it under `cannot_print`.
 
 **Check it worked.** The edge logs one line at start-up naming what it can print:
 

@@ -31,14 +31,22 @@
     The cloud's origin, e.g. https://cloud.example.com.
 
 .PARAMETER SyncKey
-    The store's scoped API key (read_config + relay_orders). Omit to install without one:
-    the store trades, and config sync and the order relay refuse until a key is installed.
+    Optional: a store API key (read_config + relay_orders) for the sync loops to present.
+    Omit it and the box syncs with the device credential its activation code mints.
 
 .PARAMETER BindPort
     The port the edge listens on. Defaults to 8787.
 
 .PARAMETER Root
     Where the store's state lives.
+
+.PARAMETER OpenSetup
+    Open this box's activation screen in the browser when the service is up. The one-file
+    installer (pos-edge install, ADR-0140) passes it; a remote shell has no browser to open.
+
+.PARAMETER AskSyncKey
+    With no -SyncKey, ask for a store key in this window. Nothing passes it any more: the
+    device credential is enough (ADR-0143). A script run unattended must not stop to ask.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\install-pos-edge.ps1 `
@@ -58,6 +66,10 @@ param(
     [string] $SyncKey = '',
 
     [string] $BindPort = '8787',
+
+    [switch] $OpenSetup,
+
+    [switch] $AskSyncKey,
 
     [string] $Root = 'C:\ProgramData\pos-edge'
 )
@@ -217,23 +229,27 @@ $environment = @(
     "POS_EDGE_PAIRING_FILE=$pairingPath",
     'RUST_LOG=info'
 )
-# The scoped store key (read_config + relay_orders). The keyring is the better home for it
-# (ADR-0086) and this is the headless bring-up override, exactly as POS_EDGE_SYNC_KEY is on
-# Linux. Without one the store still trades; config sync and the order relay refuse.
-if ($SyncKey) {
-    $environment += "POS_EDGE_SYNC_KEY=$SyncKey"
-} else {
-    Write-Warning 'no -SyncKey given: config sync and the order relay will refuse until one is installed'
+# Asked for only when -AskSyncKey is given: pasted into this elevated window, the key goes only
+# into the service's registry key below — never onto the network, and never into shell history.
+if (-not $SyncKey -and $AskSyncKey) {
+    $entered = Read-Host -Prompt 'Paste the store key from the console, or press Enter to skip' -AsSecureString
+    $SyncKey = [System.Net.NetworkCredential]::new('', $entered).Password.Trim()
 }
 
-# The event-bus URL is deliberately absent. Unlike the store key it is ONE secret shared by the
-# whole fleet, held on the cloud box, so the console cannot fill it in without spreading it across
-# every machine in the estate. Recover it on the cloud box, then add it here and restart:
+# An optional store key (read_config + relay_orders). The keyring is the better home for it
+# (ADR-0086) and this is the headless bring-up override, exactly as POS_EDGE_SYNC_KEY is on
+# Linux. Without one the box syncs with its device credential once it is activated (ADR-0143).
+if ($SyncKey) {
+    $environment += "POS_EDGE_SYNC_KEY=$SyncKey"
+}
+
+# Without an event-bus URL the box publishes its events over HTTPS to the cloud with its device
+# credential. Add one only if your cloud runs the NATS stream for store events. It is ONE secret
+# shared by the whole fleet, held on the cloud box, so the console cannot fill it in without
+# spreading it across every machine in the estate. Recover it on the cloud box, then add it here
+# and restart:
 #
 #   $env = 'POS_EDGE_NATS_URL=tls://:<that token>@<your cloud host>:4222'
-#
-# Until it is set the edge logs that POS_EDGE_NATS_URL is unset and the outbox holds — the store
-# trades either way.
 
 $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$service"
 New-ItemProperty -Path $key -Name 'Environment' -PropertyType MultiString -Value $environment -Force | Out-Null
@@ -285,3 +301,11 @@ if (Test-Path -LiteralPath $pairingPath) {
     Write-Host "The pairing URL is not there yet. Read $pairingPath in a moment, or $logPath for why the service did not get that far; the address is http://<this box>:$BindPort/."
 }
 if ($SyncKey) { Write-Host 'The store key is now in the service registry key. Clear it from your shell history.' }
+
+# The next step is activation, on this box's own screen (ADR-0050). The one-file installer asks
+# for it; a technician on a remote shell has no browser here, so it is a switch, not a default.
+if ($OpenSetup) {
+    $setupUrl = "http://localhost:$BindPort/setup"
+    Write-Host "Next: activate this store at $setupUrl with the code from the console."
+    try { Start-Process $setupUrl } catch { Write-Host "Open $setupUrl in a browser on this PC." }
+}

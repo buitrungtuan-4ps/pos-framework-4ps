@@ -8,6 +8,10 @@
 //! the row's columns as an [`ApiKeyRow`] of plain types; `pos-cloud` implements its `ApiKeyStore`
 //! seam over this type, rebuilding its `StoredApiKey` from the row and then verifying the presented
 //! secret against `secret_hash` in constant time. Only the hash is stored, never the secret.
+//!
+//! A box's device credential (`posdev_<id>_<secret>`, minted by activation into
+//! `device_credentials`) is fetched here too, joined to the device registry so that archiving the
+//! device ends it ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 
 use deadpool_postgres::Pool;
 
@@ -34,6 +38,23 @@ pub struct ApiKeyRow {
     pub revoked: bool,
     /// When the key expires, in milliseconds since the Unix epoch, if ever.
     pub expires_at_ms: Option<i64>,
+}
+
+/// One device-credential row, as plain types, with whether its device is archived.
+///
+/// `pos-cloud` converts a live one into a store-bound key carrying the box's scopes, and treats an
+/// archived one as absent (ADR-0143).
+#[derive(Clone, Debug)]
+pub struct DeviceCredentialRow {
+    /// The tenant the box belongs to.
+    pub tenant_id: String,
+    /// The store the box was activated for.
+    pub store_id: String,
+    /// `SHA-256(secret)` — 32 bytes.
+    pub secret_hash: Vec<u8>,
+    /// Whether the credential's device is archived in the registry. A credential whose device has
+    /// no registry row is not archived: activation does not require one.
+    pub archived: bool,
 }
 
 /// One row of a key listing — metadata only, never the secret hash.
@@ -89,6 +110,37 @@ impl PostgresApiKeys {
             scopes: row.get(3),
             revoked: row.get(4),
             expires_at_ms: row.get(5),
+        }))
+    }
+
+    /// Fetches the device credential with the public `id` (a ULID string), or `None` if there is no
+    /// such credential. Whether its device is archived comes back on the row, so the one read answers
+    /// both questions and an archived box is refused as an unknown one is.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_device_credential(
+        &self,
+        id: &str,
+    ) -> Result<Option<DeviceCredentialRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT dc.tenant_id, dc.store_id, dc.secret_hash, \
+                        COALESCE(d.status = 'archived', false) \
+                 FROM device_credentials dc \
+                 LEFT JOIN devices d ON d.device_id = dc.device_id AND d.tenant_id = dc.tenant_id \
+                 WHERE dc.id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| DeviceCredentialRow {
+            tenant_id: row.get(0),
+            store_id: row.get(1),
+            secret_hash: row.get(2),
+            archived: row.get(3),
         }))
     }
 

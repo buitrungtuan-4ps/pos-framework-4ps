@@ -41,6 +41,25 @@ use pos_proto::ulid::Ulid;
 /// this repo's own `secrets` CI job).
 pub const TOKEN_PREFIX: &str = "pos_";
 
+/// The prefix of a store box's device credential, the token activation mints
+/// ([ADR-0051](../../../docs/adr/0051-device-credential-provisioning.md)), which authenticates the
+/// box's own `/sync` calls ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+/// Never confused with [`TOKEN_PREFIX`]: the fourth character differs.
+pub const DEVICE_TOKEN_PREFIX: &str = "posdev_";
+
+/// The scopes a device credential carries: exactly what a store box does with the cloud, and
+/// nothing a person or an integration does (ADR-0143).
+pub const DEVICE_SCOPES: [Scope; 3] = [Scope::ReadConfig, Scope::RelayOrders, Scope::PublishEvents];
+
+/// Which kind of credential a presented token is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialKind {
+    /// An API key an admin issued: `pos_<id>_<secret>`.
+    ApiKey,
+    /// A box's device credential from activation: `posdev_<id>_<secret>`.
+    Device,
+}
+
 /// A capability an API key may be granted. Deny-by-default: a key holds a set of these and authorises
 /// nothing outside it. The set grows with the public API.
 ///
@@ -81,6 +100,10 @@ pub enum Scope {
     /// (`/sync/stores/{id}/orders`) ([ADR-0061](../../../docs/adr/0061-order-relay.md)). The credential
     /// a first-party store holds to receive relayed orders, alongside `read_config`.
     RelayOrders,
+    /// Publish the store's own events (`POST /sync/stores/{id}/events`)
+    /// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+    /// A device credential always carries it; a store API key only when an admin grants it.
+    PublishEvents,
 }
 
 impl Scope {
@@ -94,6 +117,7 @@ impl Scope {
             Self::ManageDevices => "manage_devices",
             Self::PlaceOrders => "place_orders",
             Self::RelayOrders => "relay_orders",
+            Self::PublishEvents => "publish_events",
         }
     }
 
@@ -110,6 +134,7 @@ impl Scope {
             "manage_devices" => Some(Self::ManageDevices),
             "place_orders" => Some(Self::PlaceOrders),
             "relay_orders" => Some(Self::RelayOrders),
+            "publish_events" => Some(Self::PublishEvents),
             _ => None,
         }
     }
@@ -146,6 +171,8 @@ impl fmt::Display for ApiKeyId {
 pub struct PresentedKey {
     /// The public id, used to look the stored key up.
     pub id: ApiKeyId,
+    /// Which table the id is looked up in.
+    pub kind: CredentialKind,
     secret: String,
 }
 
@@ -154,21 +181,28 @@ impl fmt::Debug for PresentedKey {
         formatter
             .debug_struct("PresentedKey")
             .field("id", &self.id)
+            .field("kind", &self.kind)
             .field("secret", &"<redacted>")
             .finish()
     }
 }
 
-/// Parses a `pos_<id>_<secret>` token.
+/// Parses a `pos_<id>_<secret>` API key or a `posdev_<id>_<secret>` device credential.
 ///
 /// # Errors
 ///
 /// [`ApiKeyError::Malformed`] if the prefix, the id, or the secret is missing or the id is not a
 /// ULID.
 pub fn parse(token: &str) -> Result<PresentedKey, ApiKeyError> {
-    let body = token
-        .strip_prefix(TOKEN_PREFIX)
-        .ok_or(ApiKeyError::Malformed)?;
+    let (kind, body) = match token.strip_prefix(DEVICE_TOKEN_PREFIX) {
+        Some(body) => (CredentialKind::Device, body),
+        None => (
+            CredentialKind::ApiKey,
+            token
+                .strip_prefix(TOKEN_PREFIX)
+                .ok_or(ApiKeyError::Malformed)?,
+        ),
+    };
     // A ULID is Crockford base32 and a secret carries no underscore, so the first `_` splits them.
     let (id, secret) = body.split_once('_').ok_or(ApiKeyError::Malformed)?;
     if secret.is_empty() {
@@ -177,6 +211,7 @@ pub fn parse(token: &str) -> Result<PresentedKey, ApiKeyError> {
     let ulid = id.parse::<Ulid>().map_err(|_| ApiKeyError::Malformed)?;
     Ok(PresentedKey {
         id: ApiKeyId::new(ulid),
+        kind,
         secret: secret.to_owned(),
     })
 }
@@ -277,6 +312,39 @@ impl StoredApiKey {
             scopes,
             revoked,
             expires_at,
+        })
+    }
+
+    /// Rebuilds a box's device credential as a store key: bound to its store, carrying exactly
+    /// [`DEVICE_SCOPES`], never expiring (ADR-0143). Archiving the device is what ends it, and the
+    /// adapter answers `None` for an archived one before this is ever called.
+    ///
+    /// # Errors
+    ///
+    /// A human-readable message if either id is not a ULID or `secret_hash` is not 32 bytes.
+    pub fn for_device(
+        id: ApiKeyId,
+        tenant_id: &str,
+        store_id: &str,
+        secret_hash: &[u8],
+    ) -> Result<Self, String> {
+        let tenant_id: TenantId = tenant_id
+            .parse()
+            .map_err(|_| format!("device credential {id}: tenant id is not a ULID"))?;
+        let store_id: StoreId = store_id
+            .parse()
+            .map_err(|_| format!("device credential {id}: store id is not a ULID"))?;
+        let secret_hash: [u8; 32] = secret_hash
+            .try_into()
+            .map_err(|_| format!("device credential {id}: secret hash is not 32 bytes"))?;
+        Ok(Self {
+            id,
+            tenant_id,
+            store_id: Some(store_id),
+            secret_hash,
+            scopes: DEVICE_SCOPES.into_iter().collect(),
+            revoked: false,
+            expires_at: None,
         })
     }
 
@@ -434,6 +502,23 @@ pub trait ApiKeyStore {
         &self,
         id: ApiKeyId,
     ) -> impl Future<Output = Result<Option<StoredApiKey>, ApiKeyStoreError>> + Send;
+
+    /// Fetches the device credential with `id` as a store key ([`StoredApiKey::for_device`]), or
+    /// `None` if there is no such credential **or its device is archived** (ADR-0143).
+    ///
+    /// Defaults to `None`, so a store that knows nothing of device credentials refuses every one:
+    /// the safe direction for a credential this build cannot check.
+    ///
+    /// # Errors
+    ///
+    /// [`ApiKeyStoreError`] only if the store itself could not be read.
+    fn lookup_device(
+        &self,
+        id: ApiKeyId,
+    ) -> impl Future<Output = Result<Option<StoredApiKey>, ApiKeyStoreError>> + Send {
+        let _ = id;
+        core::future::ready(Ok(None))
+    }
 }
 
 /// The write side of the API-key store: provisioning, listing, and revoking keys
@@ -520,11 +605,14 @@ fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiKeyError, ApiKeyId, Scope, StoredApiKey, issue, parse, verify};
+    use super::{
+        ApiKeyError, ApiKeyId, CredentialKind, DEVICE_SCOPES, Scope, StoredApiKey, issue, parse,
+        verify,
+    };
 
     use std::collections::BTreeSet;
 
-    use pos_proto::ids::TenantId;
+    use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::time::Timestamp;
     use pos_proto::ulid::Ulid;
 
@@ -603,6 +691,7 @@ mod tests {
             Scope::ManageDevices,
             Scope::PlaceOrders,
             Scope::RelayOrders,
+            Scope::PublishEvents,
         ] {
             assert_eq!(Scope::from_wire(scope.as_wire()), Some(scope));
         }
@@ -697,6 +786,54 @@ mod tests {
             parse("pos_not-a-ulid_secret").unwrap_err(),
             ApiKeyError::Malformed,
             "the id must be a ULID"
+        );
+    }
+
+    /// A box's `posdev_` credential parses as a device credential and a `pos_` key as an API key, so
+    /// each is looked up in its own table (ADR-0143). The prefixes cannot shadow each other.
+    #[test]
+    fn a_device_credential_and_an_api_key_parse_apart() {
+        let id = Ulid::from_u128(0x00DE_71CE);
+        let device = parse(&format!("posdev_{id}_secret")).expect("a device credential parses");
+        assert_eq!(device.kind, CredentialKind::Device);
+        assert_eq!(device.id, ApiKeyId::new(id));
+        let key = parse(&format!("pos_{id}_secret")).expect("an API key parses");
+        assert_eq!(key.kind, CredentialKind::ApiKey);
+        assert_eq!(parse("posdev_").unwrap_err(), ApiKeyError::Malformed);
+    }
+
+    /// A device row rebuilds as a key bound to its store, carrying exactly the box's scopes and
+    /// never expiring; a malformed row is an error, not a guess.
+    #[test]
+    fn a_device_row_rebuilds_as_a_store_key() {
+        let stored = StoredApiKey::for_device(
+            ApiKeyId::new(Ulid::from_u128(9)),
+            &Ulid::from_u128(1).to_string(),
+            &Ulid::from_u128(2).to_string(),
+            &[7_u8; 32],
+        )
+        .expect("the row rebuilds");
+        assert_eq!(stored.store_id, Some(StoreId::new(Ulid::from_u128(2))));
+        assert_eq!(stored.scopes, DEVICE_SCOPES.into_iter().collect());
+        assert!(!stored.revoked);
+        assert_eq!(stored.expires_at_ms(), None);
+        assert!(
+            StoredApiKey::for_device(
+                ApiKeyId::new(Ulid::from_u128(9)),
+                "not-a-ulid",
+                &Ulid::from_u128(2).to_string(),
+                &[7_u8; 32],
+            )
+            .is_err()
+        );
+        assert!(
+            StoredApiKey::for_device(
+                ApiKeyId::new(Ulid::from_u128(9)),
+                &Ulid::from_u128(1).to_string(),
+                &Ulid::from_u128(2).to_string(),
+                &[7_u8; 31],
+            )
+            .is_err()
         );
     }
 

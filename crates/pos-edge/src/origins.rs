@@ -162,10 +162,10 @@ fn permitted(origin: &HeaderValue, headers: &HeaderMap, allowed: &Origins) -> bo
 ///   layer: an intermediary caches a response holding one origin's `Allow-Origin` and serves it to
 ///   another. `tower_http` sets it for a predicate policy; the test pins it so a later simplification
 ///   to a static origin cannot quietly drop it.
-/// - **`pos-edge-version` and `pos-lease-standing` are exposed.** A cross-origin response's headers
-///   are unreadable by the page unless the server names them, so without this the version handshake
-///   and the replaced-machine banner (ADR-0123) would be headers the one caller they exist for could
-///   never see.
+/// - **`pos-edge-version`, `pos-lease-standing` and `pos-error-reason` are exposed.** A cross-origin
+///   response's headers are unreadable by the page unless the server names them, so without this the
+///   version handshake, the replaced-machine banner (ADR-0123) and a translated refusal (ADR-0137)
+///   would be headers the one caller they exist for could never see.
 pub fn cors_layer(allowed: &Arc<Origins>) -> CorsLayer {
     let allowed = Arc::clone(allowed);
     CorsLayer::new()
@@ -182,6 +182,7 @@ pub fn cors_layer(allowed: &Arc<Origins>) -> CorsLayer {
         .expose_headers([
             crate::http::EDGE_VERSION_HEADER,
             crate::http::LEASE_STANDING_HEADER,
+            crate::http::ERROR_REASON_HEADER,
         ])
         .max_age(PREFLIGHT_MAX_AGE)
 }

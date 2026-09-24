@@ -29,7 +29,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{Open, OrderLineState, SalesChannel};
+use pos_proto::{Open, OrderLineState, SalesChannel, TableState};
 
 fn actor() -> Actor {
     Actor {
@@ -345,5 +345,107 @@ fn the_queue_lists_only_what_is_waiting() {
             vec![second],
             "and it leaves the queue"
         );
+    });
+}
+
+/// A refused guest order is **not a live order** (ADR-0116 decision 5): it leaves every till's
+/// live list and gives its table back. It stayed on the list for good, and the table kept
+/// pointing at it, so the next bill on that table billed the refused order.
+#[test]
+fn a_refused_order_leaves_the_live_list_and_frees_its_table() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), session());
+        let (order_id, _) = a_guest_order(&edge).await;
+        assert_eq!(edge.table_state(table()), TableState::Occupied);
+
+        edge.reject_inbound_order(actor(), order_id, a_reject_reason())
+            .await
+            .expect("staff refuse the order");
+
+        assert!(edge.live_orders().is_empty());
+        assert_eq!(edge.table_state(table()), TableState::Free);
+        let rebuilt = edge_over(store, session());
+        rebuilt.rebuild().await.expect("rebuilds from the log");
+        assert!(rebuilt.live_orders().is_empty());
+        assert_eq!(rebuilt.table_state(table()), TableState::Free);
+        rebuilt
+            .seat_table(actor(), table(), None)
+            .await
+            .expect("and the table seats its next party");
+    });
+}
+
+/// A guest's order keeps its table **across a restart**. Its log has no `sales.table.opened`, only
+/// the table on `sales.order.opened`, and a rebuild that did not read it there brought the table
+/// back free with the order stranded on the counter list.
+#[test]
+fn a_guest_order_keeps_its_table_across_a_restart() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let order_id = {
+            let edge = edge_over(store.clone(), session());
+            a_guest_order(&edge).await.0
+        };
+
+        let edge = edge_over(store, session());
+        edge.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(edge.table_state(table()), TableState::Occupied);
+        let live = edge.live_orders();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].order_id, order_id);
+        assert_eq!(live[0].table_id, Some(table()));
+    });
+}
+
+/// A guest's order sent to a table a waiter already seated takes the table over when it opens.
+/// Refusing it hands the table **back to the waiter's order**, which is still owed, rather than
+/// freeing a table with people eating at it.
+#[test]
+fn refusing_a_guest_order_hands_the_table_back_to_the_waiters_order() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), session());
+        edge.seat_table(actor(), table(), None)
+            .await
+            .expect("a waiter seats the table");
+        let priced = a_priced_line();
+        edge.add_line(
+            actor(),
+            table(),
+            pos_edge::LineDraft {
+                menu_item_id: priced.menu_item_id,
+                display_name: priced.display_name,
+                quantity: priced.quantity,
+                unit_price: priced.unit_price,
+                line_total: priced.line_total,
+                tax_class_id: priced.tax_class_id,
+                tax_rate: priced.tax_rate,
+                seat: None,
+                course_id: None,
+                modifier_menu_item_ids: Vec::new(),
+                note_present: false,
+            },
+        )
+        .await
+        .expect("and takes a line");
+        let waiters = edge.live_orders()[0].order_id;
+        let (guests, _) = a_guest_order(&edge).await;
+
+        edge.reject_inbound_order(actor(), guests, a_reject_reason())
+            .await
+            .expect("staff refuse the guest's order");
+
+        for (when, edge) in [
+            ("live", edge),
+            ("after a restart", edge_over(store, session())),
+        ] {
+            edge.rebuild().await.expect("rebuilds from the log");
+            assert_eq!(edge.table_state(table()), TableState::Occupied, "{when}");
+            let live = edge.live_orders();
+            assert_eq!(live.len(), 1, "{when}");
+            assert_eq!(live[0].order_id, waiters, "{when}");
+            assert_eq!(live[0].table_id, Some(table()), "{when}");
+        }
     });
 }

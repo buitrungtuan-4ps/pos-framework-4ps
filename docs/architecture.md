@@ -35,7 +35,7 @@ Four containers on a single VPS: `pos_cloud`, PostgreSQL, NATS, Garage (S3-compa
 
 | Concern | Implementation |
 |---|---|
-| Transport | **NATS JetStream.** Stores dial out only, which solves 4G and CGNAT without port forwarding or VPNs. Durable, disk-backed, acknowledged delivery. |
+| Transport | Stores dial out only, which solves 4G and CGNAT without port forwarding or VPNs. Events travel over **HTTPS** to the cloud's `/sync` surface by default, authenticated by the box's own device credential and acknowledged only once ingested ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)); a deployment that runs **NATS JetStream** can publish there instead. |
 | Database | **PostgreSQL**, partitioned by `store_id`, row-level security per tenant, JSONB for flexible payloads, and **rollup tables** so every dashboard query is a small aggregate read (<10 ms). |
 | Objects | **Garage** (or MinIO) for backups and OTA artifacts. |
 | TLS | Caddy obtains and renews Let's Encrypt certificates. Later this is absorbed into `pos_cloud` via `rustls-acme`, removing a process. |
@@ -55,7 +55,7 @@ Employee PINs sync down as hashes so login works offline. Printers and displays 
 ### 3.2 Synchronisation
 
 ```
-sale ──► SQLite txn + outbox ──► NATS JetStream ──► cloud ingest (idempotent by ULID)
+sale ──► SQLite txn + outbox ──► HTTPS /sync (or NATS JetStream) ──► cloud ingest (idempotent by ULID)
                                                         │
                                                         ├─► store partition (raw events)
                                                         └─► rollup tables ──► dashboards
@@ -65,7 +65,7 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 
 ## 4. Fleet operations
 
-**Provisioning.** Creating a store yields a one-time activation code. The installer exchanges it for long-lived credentials stored in the OS keystore (TPM/DPAPI on Windows, keyring on Linux). No secrets ship inside installers.
+**Provisioning.** Creating a store yields a one-time activation code. The installer exchanges it for long-lived credentials stored in the OS keystore (TPM/DPAPI on Windows, keyring on Linux). No secrets ship inside installers. That one credential is all a box needs: it authenticates config sync, the heartbeat, the order relay and event publishing, for the box's own store only, and archiving the device in the console revokes it ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 
 **Single-active lease.** Exactly one server may be active per store. A replacement machine takes the lease; if the old machine returns from the dead it becomes read-only. This prevents split-brain and duplicate receipt numbers.
 
@@ -81,7 +81,7 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 |---|---|---|
 | `EventStore` | Append and read events, outbox | SQLite / PostgreSQL |
 | `ConfigStore` | Config snapshots and deltas | SQLite (edge-local) — see note |
-| `MessageLink` | Durable store↔cloud channel | NATS JetStream |
+| `MessageLink` | Durable store↔cloud channel | HTTPS to `/sync` (`cloud-sync-http`), or NATS JetStream |
 | `BlobStore` | Large objects (backups, artifacts) | Garage / MinIO |
 | `MetricsSink` | Numeric telemetry | VictoriaMetrics |
 | `Signer` / `KeyVault` | Signature verification, key storage | minisign, OS keystore |
@@ -171,7 +171,7 @@ A tiny slug→country directory (no PII) lets the home cell issue a **301 redire
 
 A weekly job restores a random store backup *and* the cloud database to a scratch instance and verifies totals. A backup never restored is not a backup.
 
-**Cloud can be rebuilt from the stores.** Each store retains 90 days of events, so a cloud data loss within that window is recoverable: an internal command resets a cursor and asks edges to replay from a given ULID. This is the strongest recovery property in the system and it costs almost nothing, because the data is already there.
+**Cloud can be rebuilt from the stores.** Each store keeps an event until it is synced **and** older than the store's retention: 90 days by default, set per store in the cloud ([ADR-0145](adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). It never deletes an event the link has not acknowledged, or one an order still open depends on. So a cloud data loss within that window is recoverable from the stores. **What is missing** is the other half: an internal command that resets a cursor and asks the edges to replay from a given ULID. The data is there, but nothing yet asks for it.
 
 **Resource limits are mandatory configuration**, not good intentions:
 

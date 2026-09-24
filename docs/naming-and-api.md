@@ -94,6 +94,7 @@ convention the cloud actually implements.
 | `pos-signature-time` | Signing timestamp, Unix seconds (replay window ±5 minutes) |
 | `pos-delivery-id` | Webhook idempotency key: the page being delivered, stable across retries |
 | `pos-edge-version` | **Response** header on every edge `/api/*` answer: the release that replied ([ADR-0111](adr/0111-a-second-origin-may-address-the-edge.md)). Not `PROTOCOL_VERSION`, which is the edge↔cloud wire language and is §11's axis — an app is not on that wire |
+| `pos-error-reason` | **Response** header on an edge `/api/*` refusal: a stable `UPPER_SNAKE_CASE` token naming which refusal it was (`SHIFT_ALREADY_OPEN`, `STORE_UNAVAILABLE`, …), beside the unchanged plain-text body ([ADR-0137](adr/0137-a-deep-outbox-warns-and-never-refuses.md)). AIP-193's `reason`, in a header because the edge's error bodies predate the JSON shape. A till translates the token; a token keeps its meaning once shipped |
 
 HTTP header names use hyphens by convention — this is HTTP, not a violation of the snake_case rule.
 They carry no `X-` prefix: [RFC 6648](https://www.rfc-editor.org/rfc/rfc6648) deprecated it for new

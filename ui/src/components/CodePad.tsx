@@ -1,6 +1,6 @@
 // The on-screen keyboard a till needs to let somebody start their shift.
 //
-// `docs/ui-ux.md` §85 has asked for "a shared component for numeric and text entry on touch
+// `docs/ui-ux.md` §2 has asked for "a shared component for numeric and text entry on touch
 // devices without a physical keyboard" since it was written. `Keypad` built the numeric half, for
 // cash. This is the other half, and the screen that needed it most had nothing: **sign-in**.
 //

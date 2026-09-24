@@ -38,6 +38,7 @@ pub mod app;
 pub mod auth;
 pub mod backup;
 pub mod backup_client;
+pub mod claim;
 pub mod clock;
 pub mod cloud_http;
 pub mod config;
@@ -69,9 +70,12 @@ pub mod printing;
 pub mod queue;
 pub mod receipt;
 pub mod relay_client;
+pub mod retention;
 pub mod server;
+pub mod setup;
 pub mod sntp;
 pub mod state;
+pub mod sync_status;
 pub mod telemetry;
 pub mod trusted_keys;
 pub mod version;
@@ -79,8 +83,9 @@ pub mod version;
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
-    AppError, Approval, BillView, Edge, EdgeSession, FiredLine, InboundOrderOpened, LineDraft,
-    LineView, ReceiptLine, ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
+    AppError, Approval, BillView, CounterOrderOpened, EVENT_LOG_DAYS, Edge, EdgeSession, FiredLine,
+    InboundOrderOpened, LineDraft, LineView, OrderLineChoice, ReceiptLine, ShiftView, StaffAuth,
+    StaffRoster, StoreIdentity, TableView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
 pub use backup::{ArchiveError, ArchiveKey};

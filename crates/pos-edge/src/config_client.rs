@@ -424,6 +424,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.qr_staff_confirmation_required = required;
     }
+    // The `retention` node (ADR-0145): how many days this store keeps a synced event. Outside the
+    // range, or absent, leaves the value it had, so a malformed publish never shortens a log.
+    if let Some(days) = document
+        .get("retention")
+        .and_then(|node| node.get("event_log_days"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|days| u16::try_from(days).ok())
+        .filter(|days| crate::app::EVENT_LOG_DAYS.contains(days))
+    {
+        session.event_log_days = days;
+    }
     // The `locale` node the locale publish writes (ADR-0074, Track M4): the store's currency, timezone,
     // and business-date cutoff. Until M4 these were hardcoded to VND/UTC/04:00 in the edge bootstrap.
     // Each field applies only if it parses, so a malformed timezone leaves the running clock alone
@@ -1536,6 +1547,41 @@ mod tests {
         // A publish with no `qr` node leaves the prior value untouched (never-blank).
         let unchanged = session_from_config(&off, &serde_json::json!({ "other": true }));
         assert!(!unchanged.qr_staff_confirmation_required);
+    }
+
+    #[test]
+    fn the_edge_bounds_event_retention_as_the_cloud_does() {
+        // `pos_cloud::http::EVENT_LOG_DAYS` holds the same numbers, pinned by its own test.
+        assert_eq!(crate::app::EVENT_LOG_DAYS, 30..=3650);
+    }
+
+    #[test]
+    fn a_retention_node_sets_how_long_a_synced_event_is_kept() {
+        // Ninety days until a store says otherwise (ADR-0145).
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.event_log_days, 90);
+
+        let set = session_from_config(
+            &base,
+            &serde_json::json!({ "retention": { "event_log_days": 45 } }),
+        );
+        assert_eq!(set.event_log_days, 45);
+
+        // Outside 30..=3650, or not a number: refused, and the value the store had stays.
+        for refused in [
+            serde_json::json!(10),
+            serde_json::json!(4_000),
+            serde_json::json!(-1),
+            serde_json::json!("90"),
+        ] {
+            let kept = session_from_config(
+                &set,
+                &serde_json::json!({ "retention": { "event_log_days": refused } }),
+            );
+            assert_eq!(kept.event_log_days, 45, "{refused} must not apply");
+        }
+        let absent = session_from_config(&set, &serde_json::json!({ "other": true }));
+        assert_eq!(absent.event_log_days, 45);
     }
 
     #[test]

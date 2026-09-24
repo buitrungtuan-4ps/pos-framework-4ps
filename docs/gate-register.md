@@ -66,7 +66,7 @@ enforces it: `trusted_keys()` takes no arguments and the parser is private.
 
 | # | Gate | Blocks | Recorded in |
 |---|---|---|---|
-| H14 | **Issue the store key with both `read_config` and `relay_orders`** | Orders. With only `read_config` the store looks **healthy** — configuration syncs, the fleet view shows it alive — while the relay answers `403` on every poll and cloud-placed orders never reach the kitchen. The wizard pre-selects both; a hand-issued key can still get it wrong | [`fork-checklist.md`](fork-checklist.md) §3 |
+| H14 | **If a store key is issued, give it both `read_config` and `relay_orders`** | Orders. With only `read_config` the store looks **healthy** — configuration syncs, the fleet view shows it alive — while the relay answers `403` on every poll and cloud-placed orders never reach the kitchen. The wizard pre-selects both; a hand-issued key can still get it wrong. A box with no store key syncs with its device credential, which carries both ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)) | [`fork-checklist.md`](fork-checklist.md) §3 |
 | H15 | **Install the `env` file as root, mode 0600** at `/etc/pos-edge/env` | Nothing visibly. It carries the store's sync key and the broker token in cleartext | [`fork-checklist.md`](fork-checklist.md) §3 · [ADR-0086](adr/0086-edge-keyvault-and-activation.md) |
 
 ## 5. Privacy and legal — before a real customer's data is processed

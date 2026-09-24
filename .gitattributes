@@ -6,3 +6,5 @@ deploy/edge/install-pos-edge.ps1 text eol=lf
 deploy/edge/pos-edge.service     text eol=lf
 deploy/edge/install-pos-print-agent.ps1 text eol=lf
 deploy/edge/pos-print-agent.service     text eol=lf
+deploy/edge/trust-internal-signing-cert.ps1 text eol=lf
+deploy/release/*.ps1             text eol=lf

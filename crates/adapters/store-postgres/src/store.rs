@@ -257,6 +257,10 @@ const MIGRATION_0067: &str = include_str!("../migrations/0067_chain_anchors.sql"
 /// but not the sentence an operator approved.
 const MIGRATION_0068: &str = include_str!("../migrations/0068_scheduled_publish_timezone.sql");
 
+/// The claims a box installed with no store opens, and a console user binds to a device slot
+/// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+const MIGRATION_0069: &str = include_str!("../migrations/0069_device_claims.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -588,6 +592,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0068)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0069)
+            .await
             .map_err(unavailable)
     }
 
@@ -624,6 +632,13 @@ impl PostgresStore {
     #[must_use]
     pub fn activation_codes(&self) -> crate::activation::PostgresActivationCodes {
         crate::activation::PostgresActivationCodes::new(self.pool.clone())
+    }
+
+    /// The device-claim store over this pool
+    /// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+    #[must_use]
+    pub fn claims(&self) -> crate::claims::PostgresClaims {
+        crate::claims::PostgresClaims::new(self.pool.clone())
     }
 
     /// The super-admin credential and session store over this pool ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).

@@ -22,13 +22,13 @@
 //   the flow already available. Preconditions live in `PRECONDITIONS` below, keyed by task, and are
 //   deliberately not in the declaration: they are how the harness reaches the starting line, not
 //   part of the map.
-// * **A skipped flow says why, and the set is checked.** Three counter tasks cannot run against the
-//   on-fakes example, because a counter order arrives over the relay from a cloud the example does
-//   not have. Two void tasks cannot run for a different reason: the manager's badge and PIN are
-//   typed into fields that appear mid-flow, and this harness types only in a precondition — before
-//   the first tap. All five carry `unreplayable` in the declaration, and the last test in this file
-//   asserts the skipped set is exactly that set — so coverage cannot quietly shrink by one flow at
-//   a time.
+// * **A skipped flow says why, and the set is checked.** Two void tasks and the discount cannot run:
+//   the manager's badge and PIN are typed into fields that appear mid-flow, and this harness types
+//   only in a precondition — before the first tap. Each carries `unreplayable` in the declaration,
+//   and the last test in this file asserts the skipped set is exactly that set — so coverage cannot
+//   quietly shrink by one flow at a time. (The three counter charges used to be skipped too, because
+//   a counter order could only arrive over a relay the example does not run; since the counter
+//   starts its own orders (ADR-0146), each sets one up as a cashier would.)
 
 import { expect, test } from "@playwright/test";
 
@@ -93,6 +93,22 @@ async function seatTable(page) {
   await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
 }
 
+/** Starts a walk-in at the counter and lands on its order screen (ADR-0146). */
+async function startWalkIn(page) {
+  await navigateTo(page, "/counter");
+  await page.locator('[data-step="newOrder"]').click();
+  await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+}
+
+/** A walk-in with one line, back on the counter list where it waits to be charged. */
+async function aWalkInToCharge(page) {
+  await startWalkIn(page);
+  await addItem(page);
+  await page.locator('a[href="/counter"]').first().click();
+  await page.waitForURL((url) => url.pathname === "/counter");
+  await expect(page.locator('[data-step="charge"]').first()).toBeVisible();
+}
+
 /** Adds the first item on the order screen's menu. */
 async function addItem(page) {
   await page.locator('[data-step="onItem"]').first().click();
@@ -144,6 +160,14 @@ async function openShift(page) {
 // floor, which is where signing in leaves the device.
 const PRECONDITIONS = {
   "Add an item to an open order": seatTable,
+  // A counter order used to arrive only over the relay, which the on-fakes example does not run, so
+  // the three counter charges were skipped. The counter now starts its own (ADR-0146), so each one
+  // sets its order up the way a cashier would.
+  "Start a counter order for a walk-in guest": (page) => navigateTo(page, "/counter"),
+  "Add an item to a counter order": startWalkIn,
+  "Charge a counter (takeaway) order in cash": aWalkInToCharge,
+  "Charge a counter order by card": aWalkInToCharge,
+  "Charge a counter order in cash, taking a tip": aWalkInToCharge,
   "Change how many of a line": async (page) => {
     await seatTable(page);
     await addItem(page);
@@ -992,7 +1016,7 @@ test("a cashier with no keyboard can enter a float on the keypad", async ({ page
 // A shift starts on a terminal with no keyboard of any kind.
 //
 // The float keypad above closed this for cash. It did not close it for the screen that comes first.
-// `docs/ui-ux.md` §85 asks for "a shared component for numeric and text entry on touch devices
+// `docs/ui-ux.md` §2 asks for "a shared component for numeric and text entry on touch devices
 // without a physical keyboard"; only the numeric half existed, and sign-in needs the other one. The
 // badge code is free text — the console's own placeholder for it reads `e.g. A01` — so on a fixed
 // terminal whose on-screen keyboard is switched off, `inputmode` asked the platform for a keyboard
@@ -1074,9 +1098,6 @@ test("a shift starts with no keyboard at all — badge code and PIN typed on the
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
-      "Charge a counter (takeaway) order in cash",
-      "Charge a counter order by card",
-      "Charge a counter order in cash, taking a tip",
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",

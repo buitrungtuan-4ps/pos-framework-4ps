@@ -51,7 +51,8 @@ anywhere except the two bootstrap exchanges, which are single-use by constructio
 | Surface | Gate | Where |
 | --- | --- | --- |
 | `/v1/*` (integrator API) | Bearer API key → tenant + scopes | `auth/apikey.rs`, `auth/bearer.rs` |
-| `/sync/*` (store rails) | The same bearer, additionally **bound to one store** | `require_store`, production-readiness **S1** |
+| `/sync/*` (store rails) | The same bearer, additionally **bound to one store**; or the box's own device credential, bound to its store with exactly `read_config`, `relay_orders` and `publish_events`, and dead once the device is archived ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)) | `require_store`, production-readiness **S1** |
+| `POST /claim`, `POST /claim/{claim_id}/collect` | None: a box with no store opens a claim and collects it with a secret only it holds ([ADR-0148](adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)); binding it needs `console.devices.manage` on `/admin/claims/bind` | `claim.rs` |
 | `/admin/*` (console) | Session cookie → admin identity → **per-route permission** | `auth/session.rs`, `auth/console_rbac.rs` — 180 `require_permission` call sites |
 | `/internal/*` (ingest) | A shared secret in a header, ≥32 chars, refused at boot if short | [ADR-0097](adr/0097-internal-route-authentication.md), `config.rs` |
 | `/health` | None, by design — a liveness probe with no data in it | `health.rs` |
@@ -82,6 +83,10 @@ redemption.
 | API key | A CSPRNG secret; only its **SHA-256** is stored, shown once | Per-tenant limiter on `/v1/orders`, per-connection on `/sync` |
 | Staff PIN | **Argon2id**, 4–8 digits | Per-device attempt lockout at the edge — the PIN's defence is the cost plus the lockout, never the digit count |
 | Device token (till) | A 128-bit CSPRNG value; only its **SHA-256** reaches disk or the process map ([ADR-0091](adr/0091-durable-edge-auth-state.md)) | Retirable per device (**O1**) |
+| Activation code | Twelve characters from OS entropy; only its **SHA-256** is stored, single-use ([ADR-0050](adr/0050-activation-code-exchange.md)) | 10 exchanges per client per 10 minutes on `/activate`, checked before the code is looked up. A code for another store is refused unspent, with the same answer as an unknown one |
+| Device credential (box) | `posdev_` + a 256-bit CSPRNG secret; only its **SHA-256** is stored, shown once ([ADR-0051](adr/0051-device-credential-provisioning.md)) | Per-connection on `/sync`; archiving the device refuses it ([ADR-0143](adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)) |
+| Claim code | Eight characters (40 bits) from OS entropy; only its **SHA-256** is stored; binds once, within an hour, and only from a console session with `console.devices.manage` ([ADR-0148](adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)) | Opening a claim shares `/activate`'s 10 per client per 10 minutes |
+| Claim secret | 256 bits from OS entropy, never shown; only its **SHA-256** is stored; collects once | 120 polls per client per 5 minutes on `/claim/{claim_id}/collect`; a wrong secret, an unknown claim and a collected one get the same answer |
 | Pairing code | Six digits, five-minute TTL, in memory only | 10 consecutive failures shut the endpoint for 60s, checked *before* the code table is read (**S4**) |
 | Store sync key | OS keyring, or a mode-0600 env file — **never** `config.toml` | Scoped to one store (**S1**) |
 | Artefact signing key | **Never on a runner or a VPS** — offline custody (gate **H1**/**H3**) | n/a |

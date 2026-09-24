@@ -30,9 +30,11 @@ pub mod menu;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
+mod printers;
 pub mod qr;
 pub mod reason_codes;
 pub mod shifts;
+mod sync;
 pub mod tables;
 pub mod ws;
 
@@ -46,9 +48,12 @@ use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{NotForContentType, Predicate as _, SizeAbove};
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
+use pos_core::error::DomainError;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::ulid::Ulid;
@@ -73,6 +78,18 @@ pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-
 /// One of `active`, `superseded` or `invalid`. `crate::origins` exposes it across an origin for the
 /// same reason it exposes the version: a cross-origin page cannot read a header nobody listed.
 pub(crate) const LEASE_STANDING_HEADER: HeaderName = HeaderName::from_static("pos-lease-standing");
+
+/// The header a refused or failed domain command carries beside its plain-text reason: a stable,
+/// `UPPER_SNAKE_CASE` token naming *which* refusal it was
+/// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+///
+/// The body stays the English sentence it always was, so nothing that reads it changes. The token is
+/// what a till translates: an operator working in Vietnamese was shown *"the store is unavailable"*
+/// or *"the command was refused: …"* verbatim, with no next step, because the only thing the screen
+/// had to go on was a sentence written for a log. The vocabulary is AIP-193's `reason` — the
+/// machine-readable half of an error — carried in a header because the edge's error bodies predate
+/// the JSON shape and changing them would break every caller that shows them.
+pub(crate) const ERROR_REASON_HEADER: HeaderName = HeaderName::from_static("pos-error-reason");
 
 /// Stamps [`EDGE_VERSION_HEADER`] on every `/api/*` response.
 ///
@@ -278,6 +295,32 @@ pub fn time_out_for(app: Router, budget: Duration) -> Router {
     ))
 }
 
+/// The smallest body worth compressing, in bytes. Below this a refusal or a one-line answer gains
+/// nothing a gzip header and a deflate stream do not cost back.
+pub const COMPRESS_ABOVE: u64 = 1024;
+
+/// Gzips a response for a client that asks, when it is large enough to be worth it
+/// ([ADR-0138](../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
+///
+/// The menu, the floor and the live orders are re-read on every reload, wake and `resync`, and on
+/// a large store they are about half a megabyte a time uncompressed, over the shop's own Wi-Fi. gzip
+/// takes them down by roughly 90%.
+///
+/// Negotiated: a client that sends no `Accept-Encoding: gzip` — a print agent, a `curl` in a runbook
+/// — gets exactly the bytes it got before. A `/ws` upgrade is a `101` with no body, so the size floor
+/// never lets it through; images and event streams are excluded by content type. Applied by the
+/// caller to the fully merged application, for the reason [`stamp_version`] is.
+pub fn compress(app: Router) -> Router {
+    app.layer(
+        CompressionLayer::new().compress_when(
+            SizeAbove::new(COMPRESS_ABOVE)
+                .and(NotForContentType::GRPC)
+                .and(NotForContentType::IMAGES)
+                .and(NotForContentType::SSE),
+        ),
+    )
+}
+
 /// Stamps the release and the lease standing onto every `/api/*` answer this application gives.
 ///
 /// Applied by the caller, to the **fully merged** application, and that is not a style preference.
@@ -419,10 +462,19 @@ where
         // that are already captured, and a prompt here would be paid for on every table.
         .route("/api/bills/{id}/split", post(bills::split::<S>))
         .route("/api/bills/{id}/merge", post(bills::merge::<S>))
-        // The cash shift: open, blind count, close.
+        // The cash shift: open, blind count, close — and the one that is open, so a device that
+        // reloads mid-shift can still count and close it rather than offering to open another.
+        .route("/api/shifts/current", get(shifts::current::<S>))
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
+        // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
+        // normally" and how many events are waiting.
+        .route("/api/sync", get(sync::read::<S>))
+        // The published printers, and a manager's test page on one — how a new store learns a
+        // printer is wired before a guest's receipt tells it.
+        .route("/api/printers", get(printers::list::<S>))
+        .route("/api/printers/{id}/test", post(printers::test::<S>))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&sessions),
             auth::require_signed_in,
@@ -496,7 +548,66 @@ pub(crate) fn parse_ulid(id: &str) -> Option<Ulid> {
 
 /// The `400` for a path segment that is not a ULID.
 pub(crate) fn bad_request(what: &'static str) -> Response {
-    (StatusCode::BAD_REQUEST, what).into_response()
+    refusal(StatusCode::BAD_REQUEST, "INVALID_ARGUMENT", what.to_owned())
+}
+
+/// A refusal: the status, the stable [`ERROR_REASON_HEADER`] token, and the English sentence.
+fn refusal(status: StatusCode, reason: &'static str, message: String) -> Response {
+    (
+        status,
+        [(ERROR_REASON_HEADER, HeaderValue::from_static(reason))],
+        message,
+    )
+        .into_response()
+}
+
+/// The stable token for a failure kind — what a device translates, where the body is what a log
+/// reads. One per [`AppError`] variant, and one per [`DomainError`] rule, so a till can tell "the
+/// bill is underpaid" from "you may not do that" without parsing English.
+///
+/// A token, once shipped, keeps its meaning: a till built against it translates it, and renaming it
+/// would silently turn a translated message back into an English one. Add; never rename.
+pub(crate) fn error_reason(error: &AppError) -> &'static str {
+    match error {
+        AppError::Domain(inner) => match inner {
+            DomainError::Money(_) => "MONEY_INVALID",
+            DomainError::Transition(_) => "TRANSITION_REFUSED",
+            DomainError::PaymentsDoNotSumToTotal { .. } => "PAYMENTS_DO_NOT_SUM_TO_TOTAL",
+            DomainError::NegativeChange => "NEGATIVE_CHANGE",
+            DomainError::ReductionExceedsBill { .. } => "REDUCTION_EXCEEDS_BILL",
+            DomainError::NotAPartition { .. } => "SPLIT_NOT_A_PARTITION",
+            DomainError::TaxRateNotConfigured { .. } => "TAX_RATE_NOT_CONFIGURED",
+            DomainError::Empty { .. } => "EMPTY",
+            DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
+            DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",
+            // `DomainError` is non-exhaustive: a rule added later reads as a refusal until it is
+            // given a token of its own.
+            _ => "COMMAND_REFUSED",
+        },
+        AppError::NoOpenOrder => "NO_OPEN_ORDER",
+        AppError::UnknownLine => "UNKNOWN_LINE",
+        AppError::UnroutableLine => "UNROUTABLE_LINE",
+        AppError::UnknownOrder => "UNKNOWN_ORDER",
+        AppError::BillAlreadyOpen => "BILL_ALREADY_OPEN",
+        AppError::UnknownBill => "UNKNOWN_BILL",
+        AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
+        AppError::UnknownShift => "UNKNOWN_SHIFT",
+        AppError::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
+        AppError::AwaitingStaffConfirmation => "AWAITING_STAFF_CONFIRMATION",
+        AppError::OrderRejected => "ORDER_REJECTED",
+        AppError::NotAwaitingStaffConfirmation => "NOT_AWAITING_STAFF_CONFIRMATION",
+        AppError::ReasonCodeNotValid => "REASON_CODE_NOT_VALID",
+        AppError::VoidReasonNotValid => "VOID_REASON_NOT_VALID",
+        AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
+        AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
+        AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
+        AppError::AlreadyFired => "ALREADY_FIRED",
+        AppError::ApprovalRequired => "APPROVAL_REQUIRED",
+        AppError::ApprovalRefused => "APPROVAL_REFUSED",
+        AppError::Superseded => "SUPERSEDED",
+        AppError::Port(_) => "STORE_UNAVAILABLE",
+        AppError::Clock | AppError::Encode(_) => "INTERNAL",
+    }
 }
 
 /// Maps a refused or failed command to a status — the one place the edge decides which HTTP code a
@@ -507,8 +618,9 @@ pub(crate) fn bad_request(what: &'static str) -> Response {
 /// is `409 Conflict` rather than `500`. An unreachable store is `503`; a clock or encoding failure is
 /// the edge's own `500`.
 pub(crate) fn error_response(error: &AppError) -> Response {
+    let reason = error_reason(error);
     match error {
-        AppError::Domain(inner) => (StatusCode::CONFLICT, inner.to_string()).into_response(),
+        AppError::Domain(inner) => refusal(StatusCode::CONFLICT, reason, inner.to_string()),
         AppError::NoOpenOrder
         | AppError::UnknownLine
         | AppError::UnroutableLine
@@ -524,7 +636,9 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ReasonCodeNotValid
         | AppError::VoidReasonNotValid
         | AppError::ModifierSelectionInvalid
-        | AppError::AlreadyFired => (StatusCode::CONFLICT, error.to_string()).into_response(),
+        | AppError::ChannelNotAccepted
+        | AppError::ItemNotSellable
+        | AppError::AlreadyFired => refusal(StatusCode::CONFLICT, reason, error.to_string()),
         // A missing or refused manager PIN is an authorisation failure, not a state conflict: the
         // command is well-formed and applies to the record, and the only thing missing is the
         // authority to run it. `403` and not `401`, because the *caller* is authenticated — it is
@@ -536,15 +650,17 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         // which would say the caller asked at the wrong moment; not `503`, which would promise that
         // trying again helps. It does not: the way back is to re-provision this box.
         AppError::ApprovalRequired | AppError::ApprovalRefused | AppError::Superseded => {
-            (StatusCode::FORBIDDEN, error.to_string()).into_response()
+            refusal(StatusCode::FORBIDDEN, reason, error.to_string())
         }
-        AppError::Port(_) => {
-            (StatusCode::SERVICE_UNAVAILABLE, "the store is unavailable").into_response()
-        }
-        AppError::Clock | AppError::Encode(_) => (
+        AppError::Port(_) => refusal(
+            StatusCode::SERVICE_UNAVAILABLE,
+            reason,
+            "the store is unavailable".to_owned(),
+        ),
+        AppError::Clock | AppError::Encode(_) => refusal(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "the edge could not apply the command",
-        )
-            .into_response(),
+            reason,
+            "the edge could not apply the command".to_owned(),
+        ),
     }
 }

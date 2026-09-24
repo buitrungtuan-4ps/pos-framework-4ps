@@ -6,6 +6,7 @@ import { CodePad } from "../components/CodePad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { loadStore } from "../state/store";
+import { errorMessage } from "../lib/errors";
 
 // Staff sign-in on a paired device (S0b, ADR-0084). A paired device commands nothing until a real
 // employee signs in with their badge code and PIN; the edge verifies the PIN offline against the
@@ -91,7 +92,7 @@ export function SignIn() {
         navigate("/pair", { replace: true });
         return;
       }
-      setError(caught instanceof ApiError ? caught.message : t("common.store_error"));
+      setError(errorMessage(caught));
     } finally {
       setBusy(false);
     }

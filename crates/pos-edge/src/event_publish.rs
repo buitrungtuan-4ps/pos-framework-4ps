@@ -45,10 +45,12 @@ use std::sync::Arc;
 
 use pos_ports::event_store::{EventStore, OutboxPosition, OutboxRecord};
 use pos_ports::message_link::MessageLink;
+use pos_proto::ClockSource;
 use pos_proto::protocol::{Hello, HelloOutcome};
 use pos_proto::text::ReleaseTag;
 
 use crate::app::Edge;
+use crate::clock::SystemClock;
 
 /// How long to wait after draining everything before looking again. The outbox is local, so this is
 /// a cheap query; the interval keeps an idle store from spinning.
@@ -94,6 +96,32 @@ enum Drained {
     Published(usize),
     /// Records were read and the link accepted none of them. Nothing is lost; nothing moved.
     Stalled,
+}
+
+/// What one handshake came to — three outcomes, because the two failures want different waits.
+///
+/// A *refusal* is the cloud answering that it speaks no protocol version this build does, which a
+/// retry in seconds will not change. A *failure* is the link not answering at all — most often a box
+/// that booted before its router did — and that one is worth asking again soon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Handshake {
+    /// The cloud accepted a protocol version; the outbox can drain.
+    Accepted,
+    /// The cloud answered and speaks no version this build does.
+    Refused,
+    /// The link could not be reached.
+    Failed,
+}
+
+impl Handshake {
+    /// How long to wait before asking again, or `None` once the link is up.
+    const fn backoff(self) -> Option<Duration> {
+        match self {
+            Self::Accepted => None,
+            Self::Refused => Some(REFUSED_BACKOFF),
+            Self::Failed => Some(RETRY_BACKOFF),
+        }
+    }
 }
 
 /// The position to acknowledge through for an accepted prefix, and how many records that is.
@@ -157,12 +185,12 @@ where
     ///
     /// Returns `false` when the cloud refuses — no version in common — which is a condition to log
     /// and back off from, never to retry tightly and never to stop trading over.
-    async fn handshake(&self) -> bool {
+    async fn handshake(&self) -> Handshake {
         let hello = Hello::current(self.edge.store_id(), self.release.clone());
         match self.link.handshake(&hello).await {
             Ok(HelloOutcome::Accepted { protocol_version }) => {
                 tracing::info!(protocol_version, "event publish: link handshake accepted");
-                true
+                Handshake::Accepted
             }
             Ok(HelloOutcome::Refused {
                 minimum_supported,
@@ -175,11 +203,11 @@ where
                     "event publish: the cloud speaks no protocol version this build does; \
                      events stay in the outbox and the store keeps trading"
                 );
-                false
+                Handshake::Refused
             }
             Err(error) => {
                 tracing::warn!(%error, "event publish: the link handshake failed");
-                false
+                Handshake::Failed
             }
         }
     }
@@ -301,12 +329,16 @@ where
         let batch_size = usize::try_from(self.batch_size().get()).unwrap_or(usize::MAX);
         tokio::pin!(shutdown);
 
-        // The handshake is per connection, not per batch; a refusal is re-attempted only after the
-        // long backoff, so a version mismatch does not become a hot loop.
+        // The handshake is per connection, not per batch. A refusal is re-attempted only after the
+        // long backoff, so a version mismatch does not become a hot loop; a link that is simply not
+        // up yet — a box that booted before its internet did — is asked again at the ordinary
+        // retry interval, so the outbox starts draining soon after the line comes back rather than
+        // up to five minutes later.
         loop {
-            if self.handshake().await {
+            let Some(backoff) = self.handshake().await.backoff() else {
                 break;
-            }
+            };
+            self.edge.sync().mark_offline();
             tokio::select! {
                 () = &mut shutdown => {
                     // No link was ever negotiated, so there is nothing to drain over. Say what is
@@ -323,12 +355,22 @@ where
                     }
                     return;
                 }
-                () = tokio::time::sleep(REFUSED_BACKOFF) => {}
+                () = tokio::time::sleep(backoff) => {}
             }
         }
 
         loop {
-            let wait = match self.drain_once().await {
+            let pass = self.drain_once().await;
+            // What the status bar says about the cloud (ADR-0137). A stalled pass reached the far
+            // side and moved nothing, which is "offline" to the one person reading the bar: their
+            // sales are not reaching the cloud.
+            match &pass {
+                Ok(Drained::Empty | Drained::Published(_)) => {
+                    self.edge.sync().mark_online(SystemClock.now());
+                }
+                Ok(Drained::Stalled) | Err(_) => self.edge.sync().mark_offline(),
+            }
+            let wait = match pass {
                 // An empty outbox and a link taking nothing both mean this pass moved no records,
                 // so both idle. Only the stopping drain needs to tell them apart.
                 Ok(Drained::Empty | Drained::Stalled) => IDLE_INTERVAL,
@@ -361,7 +403,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{OutboxPosition, acknowledge_through};
+    use super::{Handshake, OutboxPosition, REFUSED_BACKOFF, RETRY_BACKOFF, acknowledge_through};
+
+    #[test]
+    fn a_link_that_is_not_up_yet_is_asked_again_sooner_than_a_refusal() {
+        // A box that boots before its router must start shipping soon after the line comes back;
+        // only a cloud that has answered "no common version" earns the long wait.
+        assert_eq!(Handshake::Accepted.backoff(), None);
+        assert_eq!(Handshake::Failed.backoff(), Some(RETRY_BACKOFF));
+        assert_eq!(Handshake::Refused.backoff(), Some(REFUSED_BACKOFF));
+        assert!(RETRY_BACKOFF < REFUSED_BACKOFF);
+    }
 
     #[test]
     fn a_whole_batch_acknowledges_through_its_last_record() {
