@@ -188,6 +188,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **An old store's database is rebuilt at 8 KiB pages, once** (finding F5, one of the ten known
+  defects). New stores have been created at 8 KiB pages, where an event takes ~1.2 KB of disk
+  instead of ~4.7 KB, but SQLite ignores the page size on a file that already has pages, so every
+  store created earlier stayed at 4 KiB and four times the size. The edge now rewrites such a file
+  with `VACUUM` before it opens the store, logging before and after. It needs free disk about the
+  size of the result and delays that one start by up to a minute on a large store; a rebuild that
+  fails leaves the database untouched and is retried next start. **Upgrade note:** the first start
+  of this release on a store created before 8 KiB pages takes longer than usual.
 - **Two deployment instructions that did not work.** `docs/release-runbook.md` verified an artifact
   with `minisign -P "$(cat minisign.pub)"`, which minisign refuses (`-P` takes the key line, not the
   file); it now uses `-p minisign.pub`. `deploy/edge/README.md` added the printer group to a user
