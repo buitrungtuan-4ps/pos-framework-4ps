@@ -376,6 +376,12 @@ const APPLIANCE = new URL("../../deploy/appliance/", import.meta.url);
  * @param {string} marker
  * @returns {string | null}
  */
+/** The deploy/edge files both installers embed, by the heredoc marker that carries each. */
+const VAULT_FILES = [
+  ["POS_EDGE_VAULT", "pos-edge-vault"],
+  ["POS_EDGE_VAULT_CONF", "pos-edge.service.d/vault.conf"],
+];
+
 function heredoc(text, marker) {
   const open = `<<'${marker}'\n`;
   const start = text.indexOf(open);
@@ -520,6 +526,27 @@ if (emitFlag === -1 && !existsSync(APPLIANCE)) {
           "  deploy/edge/pos-edge.service. That file is the source of truth: paste it into the heredoc.",
       );
       failures += 1;
+    }
+
+    // The vault helper and its drop-in (ADR-0151), carried by both installers.
+    for (const [marker, file] of VAULT_FILES) {
+      const source = lf(readFileSync(new URL(`../../deploy/edge/${file}`, import.meta.url), "utf8"));
+      const copies = [
+        ["deploy/appliance/provision.sh", heredoc(provision, marker)],
+        ["the console's Linux installer", heredoc(linuxInstaller(PLAIN), marker)],
+      ];
+      for (const [where, copy] of copies) {
+        if (copy === source) {
+          console.log(`✓ ${where} carries deploy/edge/${file} unchanged`);
+        } else {
+          console.error(
+            `✗ the ${marker} heredoc in ${where} no longer matches deploy/edge/${file}.\n` +
+              "  That file is the source of truth: paste it into provision.sh, and into VAULT_HELPER or\n" +
+              "  VAULT_DROPIN in dashboard/src/installers.mjs.",
+          );
+          failures += 1;
+        }
+      }
     }
 
     // The store and cloud of the `plain` case, written the way provision.sh writes them: no name,

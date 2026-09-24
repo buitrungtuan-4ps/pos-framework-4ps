@@ -13,7 +13,9 @@
 #      /usr/local/bin/pos-edge. Only once: a box that already has bin/current is running whatever it
 #      updated itself to, and re-laying slot-a would silently downgrade it;
 #   3. installs fonts-dejavu-core, without which receipts print ASCII only (deploy/edge/README.md);
-#   4. installs deploy/edge/pos-edge.service, unchanged;
+#   4. installs deploy/edge/pos-edge.service, unchanged, and, where systemd-creds is available,
+#      deploy/edge/pos-edge-vault with the unit drop-in that runs it, so the device credential is
+#      sealed and survives a reboot (ADR-0151). The key is sealed at the machine's first start;
 #   5. then EITHER, with --store, writes config.toml and enables and starts the edge; OR, without it,
 #      installs pos-edge-claim.service, which runs `pos-edge claim` on first boot so that the console
 #      picks the store (ADR-0148), then starts the edge. The second is how one image serves every
@@ -25,8 +27,9 @@
 # dashboard/src/installers.mjs) and deploy/edge/pos-edge.service documents: the same user, paths,
 # owners and modes. A second definition of where a store keeps its binary would be one the updater
 # does not find. dashboard/scripts/installer-syntax.mjs holds this file to that: the unit embedded
-# below must match deploy/edge/pos-edge.service, and the config.toml written here must match the
-# console's, or the dashboard build fails.
+# below must match deploy/edge/pos-edge.service, the vault helper and drop-in must match their files
+# in deploy/edge, and the config.toml written here must match the console's, or the dashboard build
+# fails.
 #
 # It never takes a secret on its command line, where every process on the box can read it. The
 # device credential arrives through activation or the claim; the env file is filled in by hand.
@@ -42,6 +45,7 @@ readonly BIN=$STATE/bin
 readonly RESCUE=/usr/local/bin/pos-edge
 readonly ETC=/etc/pos-edge
 readonly UNITS=/etc/systemd/system
+readonly VAULT_HELPER=/usr/local/libexec/pos-edge/pos-edge-vault
 # pos_edge's DEFAULT_BIND port (crates/pos-edge/src/config.rs).
 readonly DEFAULT_PORT=8787
 
@@ -379,6 +383,207 @@ install_edge_unit() {
   fi
 }
 
+# deploy/edge/pos-edge-vault and deploy/edge/pos-edge.service.d/vault.conf, verbatim, for a copy of
+# this script run outside a checkout (ADR-0151). As with the unit above, the files in the checkout
+# are the source of truth and installer-syntax.mjs fails the dashboard build when a copy drifts.
+vault_helper() {
+  cat <<'POS_EDGE_VAULT'
+#!/bin/sh
+# Copyright (c) 2026 Pizza 4P's. All rights reserved.
+# Proprietary and confidential. Internal use only. See LICENSE.
+#
+# pos-edge-vault — the root half of a Linux store box's sealed secrets (ADR-0151).
+#
+# The store runs as the unprivileged `pos` user and keeps its device credential sealed under a
+# vault key. Sealing that key needs systemd-creds, and systemd-creds needs root, so this script does
+# the two root steps and nothing else:
+#
+#   pos-edge-vault seal     Seals 32 random bytes as the vault key: with this machine's TPM2 and
+#                           systemd's host key together when it has a usable TPM2, with the host key
+#                           alone otherwise. A key that is already sealed and still unseals is kept,
+#                           so running it again changes nothing. A key that no longer unseals (a
+#                           cleared TPM, a disk moved from another machine) is replaced, and it and
+#                           the secrets sealed under it are moved aside, since nothing can open them
+#                           now; the box is then activated again. If the failure was one that passes,
+#                           moving both back undoes it. A seal that fails changes nothing.
+#   pos-edge-vault unseal   At every start of pos-edge, from its unit (ExecStartPre=-+). Decrypts
+#                           the vault key into /run/pos-edge-vault/vault-key, which the `pos` group
+#                           may read and only root may write. On a machine with no sealed key yet it
+#                           seals one first: that is how a box made from a generic image gets its own
+#                           key at its first boot, never one baked into the image. A key that exists
+#                           and does not unseal is left alone and reported: replacing it is `seal`'s
+#                           decision, made by a person, because a failure here may pass.
+#
+# It never reads a file the service wrote, and it renames the service's directory only as an entry
+# (mv -T), so the service cannot point it anywhere else. Installed to
+# /usr/local/libexec/pos-edge/pos-edge-vault, root-owned, by the installers; the copies they carry
+# must match this file, which dashboard/scripts/installer-syntax.mjs checks.
+
+set -eu
+
+SEALED=/etc/pos-edge/credstore/vault-key.cred
+NAME=pos-edge-vault-key
+RUNDIR=/run/pos-edge-vault
+SECRETS=/var/lib/pos-edge/vault
+GROUP=pos
+
+die() {
+  echo "pos-edge-vault: $*" >&2
+  exit 1
+}
+
+command -v systemd-creds >/dev/null 2>&1 ||
+  die "systemd-creds is not installed; it ships with systemd 250 and later"
+
+# One at a time: pos-edge-claim.service and pos-edge.service both run `unseal`, and two first-boot
+# seals racing would leave two keys.
+if command -v flock >/dev/null 2>&1; then
+  exec 9>/run/pos-edge-vault.lock
+  flock 9
+fi
+
+# Seals a new vault key into $SEALED.new and sets $how. Touches nothing else, so a failure leaves the
+# box as it was.
+seal_new_key() {
+  install -d -o root -g root -m 0700 "$(dirname "$SEALED")"
+  rm -f "$SEALED.new"
+  # The host key. Idempotent: an existing one is kept.
+  systemd-creds setup >/dev/null 2>&1 || true
+  # --tpm2-pcrs= binds the key to the TPM2 chip and not to the boot measurements, so a firmware
+  # update does not cost the store its activation. The threat this answers is a copied disk. A TPM2
+  # that will not seal is no reason to leave the box without a key, so the host key alone follows.
+  if systemd-creds has-tpm2 >/dev/null 2>&1 &&
+    (umask 077 && head -c 32 /dev/urandom |
+      systemd-creds encrypt --name="$NAME" --with-key=host+tpm2 --tpm2-pcrs= - "$SEALED.new"); then
+    how="with this machine's TPM2 and its host key"
+  elif (umask 077 && head -c 32 /dev/urandom |
+    systemd-creds encrypt --name="$NAME" --with-key=host - "$SEALED.new"); then
+    how="with the host key alone: this machine has no usable TPM2, so a copy of its disk can open it"
+  else
+    rm -f "$SEALED.new"
+    die "could not seal a vault key"
+  fi
+}
+
+# Puts the key seal_new_key made in place. Secrets sealed before it cannot open under it, so they
+# are moved aside, with the key they were sealed under when it is still there. The copy of the old
+# key in $RUNDIR goes too: `unseal` keeps a copy through a failure that passes only because it is
+# the same key.
+install_new_key() {
+  stamp=$(date +%Y%m%d%H%M%S)
+  # -T renames the entry itself and never moves into a directory, so a link the service left there
+  # cannot redirect root. The service's directory goes first: if that fails, nothing has changed.
+  if [ -e "$SECRETS" ] || [ -L "$SECRETS" ]; then
+    mv -f -T "$SECRETS" "$SECRETS.unopenable-$stamp"
+    echo "pos-edge-vault: moved the secrets sealed under the old key to" \
+      "$SECRETS.unopenable-$stamp; restart pos-edge, then activate this box again" >&2
+  fi
+  if [ -e "$SEALED" ]; then
+    mv -f -T "$SEALED" "$SEALED.unopenable-$stamp"
+  fi
+  rm -f "$RUNDIR/vault-key"
+  mv -f "$SEALED.new" "$SEALED"
+  echo "pos-edge-vault: sealed a vault key $how"
+}
+
+case "${1:-}" in
+seal)
+  if [ -e "$SEALED" ]; then
+    if systemd-creds decrypt --name="$NAME" "$SEALED" - >/dev/null 2>&1; then
+      echo "pos-edge-vault: the vault key is sealed and unseals on this machine"
+      exit 0
+    fi
+    echo "pos-edge-vault: the sealed vault key does not unseal on this machine; sealing a new one" >&2
+  fi
+  seal_new_key
+  install_new_key
+  ;;
+unseal)
+  if [ ! -e "$SEALED" ]; then
+    seal_new_key
+    install_new_key
+  fi
+  install -d -o root -g "$GROUP" -m 0750 "$RUNDIR"
+  if ! (umask 027 && systemd-creds decrypt --name="$NAME" "$SEALED" "$RUNDIR/vault-key.new"); then
+    # A copy unsealed earlier in this boot is of this same key, since install_new_key removes any
+    # other, so it stays: a failure that passes costs nothing. With no copy the store trades
+    # without cloud sync until this is fixed.
+    rm -f "$RUNDIR/vault-key.new"
+    die "the vault key did not unseal on this start; if it keeps failing, run" \
+      "'pos-edge-vault seal', restart pos-edge and activate this box again"
+  fi
+  chgrp "$GROUP" "$RUNDIR/vault-key.new"
+  chmod 0440 "$RUNDIR/vault-key.new"
+  mv -f "$RUNDIR/vault-key.new" "$RUNDIR/vault-key"
+  ;;
+*)
+  die "usage: pos-edge-vault seal | unseal"
+  ;;
+esac
+POS_EDGE_VAULT
+}
+
+vault_dropin() {
+  cat <<'POS_EDGE_VAULT_CONF'
+# Sealed secrets for a Linux store box (ADR-0151). Installed as
+# /etc/systemd/system/pos-edge.service.d/vault.conf, and on an appliance also as
+# pos-edge-claim.service.d/vault.conf, so the credential a first-boot claim collects is sealed too.
+# Without it the edge keeps its device credential in the kernel keyring, which a reboot empties. The
+# copies the installers carry must match this file (dashboard/scripts/installer-syntax.mjs).
+[Service]
+# "+" runs the helper as root, because systemd-creds is root-only; the service itself stays `pos`.
+# "-" lets the edge start if the key does not unseal: its vault then answers errors, so the counter
+# keeps trading and cloud sync waits, and the log says what to run.
+ExecStartPre=-+/usr/local/libexec/pos-edge/pos-edge-vault unseal
+Environment=POS_EDGE_VAULT_KEY=/run/pos-edge-vault/vault-key
+Environment=POS_EDGE_VAULT_DIR=/var/lib/pos-edge/vault
+POS_EDGE_VAULT_CONF
+}
+
+# Sealed secrets (ADR-0151): the root helper, and the drop-in that has it unseal the vault key before
+# the edge starts and before a first-boot claim, which is what collects the credential. On a running
+# system the key is sealed now, and the drop-ins go in only once it is: an edge whose drop-in cannot
+# get it a key answers vault errors instead of using the keyring. While an image is built in a
+# chroot nothing is sealed, since that would give every box made from the image the same host key,
+# or bind the key to the build machine's TPM2: the drop-ins go in, and each box seals its own key at
+# its first start.
+install_vault() {
+  local helper dropin unit
+  if ! command -v systemd-creds >/dev/null 2>&1; then
+    warn "no systemd-creds here (systemd 250 or later has it): the device credential stays in the kernel keyring, and a reboot means activating again"
+    return 0
+  fi
+  run install -d -o root -g root -m 0755 "$(dirname "$VAULT_HELPER")"
+  helper="$(script_dir)/../edge/pos-edge-vault"
+  if [ -f "$helper" ]; then
+    say "installing pos-edge-vault from this checkout (deploy/edge/pos-edge-vault)"
+    run install -o root -g root -m 0755 "$helper" "$VAULT_HELPER"
+  else
+    say "installing pos-edge-vault (the copy of deploy/edge/pos-edge-vault in this script)"
+    vault_helper | write_file "$VAULT_HELPER" 0755 root:root quiet
+  fi
+  if systemd_running; then
+    if ! run "$VAULT_HELPER" seal; then
+      warn "no vault key could be sealed: the device credential stays in the kernel keyring, and a reboot means activating again"
+      for unit in pos-edge pos-edge-claim; do
+        run rm -f "$UNITS/$unit.service.d/vault.conf"
+      done
+      return 0
+    fi
+  else
+    say "not sealing a vault key while building an image: each box seals its own at its first boot"
+  fi
+  dropin="$(script_dir)/../edge/pos-edge.service.d/vault.conf"
+  for unit in pos-edge pos-edge-claim; do
+    run install -d -o root -g root -m 0755 "$UNITS/$unit.service.d"
+    if [ -f "$dropin" ]; then
+      run install -o root -g root -m 0644 "$dropin" "$UNITS/$unit.service.d/vault.conf"
+    else
+      vault_dropin | write_file "$UNITS/$unit.service.d/vault.conf" 0644 root:root quiet
+    fi
+  done
+}
+
 # The env file the unit reads (EnvironmentFile=-/etc/pos-edge/env): written once, every line a
 # comment, so that whoever opens it finds what goes there. The console's installer writes the same
 # file with the store key in it; this script is never handed one.
@@ -388,9 +593,9 @@ env_template() {
 # Root-owned, mode 0600, never committed. Written by deploy/appliance/provision.sh with every line
 # commented out, and never overwritten by it afterwards.
 #
-# The scoped store key (read_config + relay_orders), as a headless bring-up override. Its durable
-# home is the OS keyring, which on headless Linux does not survive a reboot yet
-# (docs/gate-register.md, row P2); this line is the documented interim.
+# No store key is needed: the box syncs with the device credential its activation or claim mints,
+# sealed under the vault key where one is (ADR-0151). To use a store key (read_config +
+# relay_orders) instead, uncomment this line and paste the key after the =.
 # POS_EDGE_SYNC_KEY=
 #
 # Where the store publishes its committed events: tls://:<token>@<cloud host>:4222, where the token
@@ -724,7 +929,11 @@ activate_units() {
   fi
   if [ -f "$CONFIG" ] || [ -n "$STORE" ]; then
     if [ "$booted" = true ]; then
-      run systemctl enable --now pos-edge.service
+      # A restart, not `enable --now`: on a box already running, it applies the unit and the vault
+      # drop-in, and moves a credential still in the kernel keyring into the sealed store before the
+      # next reboot can empty the keyring (ADR-0151).
+      run systemctl enable pos-edge.service
+      run systemctl restart pos-edge.service
     else
       run systemctl enable pos-edge.service
     fi
@@ -806,6 +1015,7 @@ main() {
   install_binary
   apt_install fonts-dejavu-core
   install_edge_unit
+  install_vault
   install_env_file
   install_identity
   if [ "$KIOSK" = true ]; then

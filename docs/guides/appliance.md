@@ -292,11 +292,12 @@ if the embedded unit or `config.toml` drifts from its source.
 - **The Chromium snap under cage** on Ubuntu 24.04 is described here, not tested.
 - **The claim unit against the real `pos-edge claim`** under systemd. The command and its page are
   tested on their own (`crates/pos-edge/tests/claim.rs`), and the unit against a stand-in.
-- **`provision.sh` does not seal a vault key yet.** Until one is sealed
-  ([ADR-0151](../adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md); the steps
-  are in [`deploy/edge/README.md`](../../deploy/edge/README.md)), the device credential lives in the
-  Linux kernel keyring, which a reboot empties (row P2 of the [gate register](../gate-register.md)).
-  The store server keeps serving the counter without it,
+- **The sealed credential across a power cut on real hardware** (row P2 of the
+  [gate register](../gate-register.md)). `provision.sh` installs the vault helper and its drop-in
+  ([ADR-0151](../adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)), and each box
+  seals its own key at its first boot; that is proven in a container, not on a box. On a machine
+  without `systemd-creds` the device credential stays in the Linux kernel keyring, which a reboot
+  empties. The store server keeps serving the counter without it,
   because the activation gate withholds cloud sync and never local trading. But the till sends a
   freshly opened page to `/setup` until the box is activated again, and the kiosk opens a fresh page
   at every boot. A claimed box is re-activated the same way: issue it a code under **Activation**.

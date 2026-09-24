@@ -65,8 +65,11 @@ On Linux the edge keeps its device credential in the kernel keyring unless the s
 and the kernel keyring is empty after a reboot: a box that lost power comes back asking for a new
 activation code. With a vault key sealed by `systemd-creds` (the machine's TPM2 when it has one,
 systemd's host key otherwise) the edge seals its secrets under it in `/var/lib/pos-edge/vault`, and
-they survive. It needs systemd 250 or later, which Debian 12 and Ubuntu 24.04 have. The installers
-do not do this yet. As root, beside this file:
+they survive. It needs systemd 250 or later, which Debian 12 and Ubuntu 24.04 have. Both Linux
+installers (the console's `install-pos-edge.sh` and `deploy/appliance/provision.sh`) set it up; a
+box installed before them gains it when its installer runs again, which restarts the service and
+keeps the activation. An installer that cannot seal a key leaves the drop-in out and says so, and
+the box stays on the kernel keyring. By hand, as root, beside this file:
 
 ```
 install -d -o root -g root -m 0755 /usr/local/libexec/pos-edge
