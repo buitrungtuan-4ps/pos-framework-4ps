@@ -5,12 +5,13 @@
 //!
 //! # This port has no transaction, and cannot have one
 //!
-//! NATS is a separate system and no two-phase commit exists between it and SQLite. Any
-//! design that appears to publish transactionally is either losing events on a crash
-//! between commit and publish, or publishing them twice. That is not a limitation to work
-//! around — it is the reason the outbox exists, and it fixes the delivery guarantee at
-//! **at-least-once**: commit, publish, acknowledge, and a crash anywhere in that sequence
-//! replays. Consumers are idempotent by ULID, which
+//! The cloud is a separate system, reached over NATS (`link-nats`) or HTTPS (`cloud-sync-http`,
+//! [ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)),
+//! and no two-phase commit exists between it and SQLite. Any design that appears to publish
+//! transactionally is either losing events on a crash between commit and publish, or publishing
+//! them twice. That is not a limitation to work around — it is the reason the outbox exists, and
+//! it fixes the delivery guarantee at **at-least-once**: commit, publish, acknowledge, and a crash
+//! anywhere in that sequence replays. Consumers are idempotent by ULID, which
 //! [`crate::EventStore`]'s contract already requires. See
 //! [ADR-0026](../../../docs/adr/0026-port-shapes.md) §4.
 //!

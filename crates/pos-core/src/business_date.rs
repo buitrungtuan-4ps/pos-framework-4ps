@@ -170,6 +170,54 @@ pub fn derive_business_date(
     BusinessDate::from_ymd(date.year(), month, day).map_err(ClockError::from)
 }
 
+/// A wall-clock reading in a store's timezone, to the minute: what somebody in the shop reads off
+/// the clock on the wall.
+///
+/// For paper and screens only. Anything that adds or compares stays on [`Timestamp`], which has no
+/// daylight-saving gaps. `Display` writes `YYYY-MM-DD HH:MM`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalTime {
+    year: i16,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+}
+
+impl core::fmt::Display for LocalTime {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{:04}-{:02}-{:02} {:02}:{:02}",
+            self.year, self.month, self.day, self.hour, self.minute
+        )
+    }
+}
+
+/// The wall-clock time an instant reads in the store's timezone.
+///
+/// The safe direction (instant → civil), as in [`derive_business_date`]: an instant names exactly
+/// one civil time, so nothing needs disambiguating. No cutoff is applied, because this is the clock
+/// on the wall and not the trading day.
+///
+/// # Errors
+///
+/// [`ClockError::OutOfRange`] if the instant is outside the representable range — unreachable for a
+/// valid [`Timestamp`], surfaced rather than panicked on.
+pub fn local_time(instant: Timestamp, zone: &StoreTimeZone) -> Result<LocalTime, ClockError> {
+    let jiff_instant = jiff::Timestamp::from_millisecond(instant.as_milliseconds_since_epoch())
+        .map_err(|_| ClockError::OutOfRange)?;
+    let civil = jiff_instant.to_zoned(zone.0.clone()).datetime();
+    let part = |value: i8| u8::try_from(value).map_err(|_| ClockError::OutOfRange);
+    Ok(LocalTime {
+        year: civil.year(),
+        month: part(civil.month())?,
+        day: part(civil.day())?,
+        hour: part(civil.hour())?,
+        minute: part(civil.minute())?,
+    })
+}
+
 /// Resolves a local civil time (as its parts) to the instant it names in the store's timezone.
 ///
 /// For daypart windows and shift boundaries — the ambiguous direction. Applies
@@ -205,12 +253,40 @@ pub fn resolve_local_time(
 
 #[cfg(test)]
 mod tests {
-    use super::{ClockError, CutoffHour, StoreTimeZone, derive_business_date, resolve_local_time};
+    use super::{
+        ClockError, CutoffHour, StoreTimeZone, derive_business_date, local_time, resolve_local_time,
+    };
     use pos_proto::time::Timestamp;
 
     /// Builds an instant from an RFC 3339 string, for readable fixtures.
     fn at(rfc3339: &str) -> Timestamp {
         rfc3339.parse().expect("valid RFC 3339 in a test fixture")
+    }
+
+    #[test]
+    fn the_wall_clock_is_the_store_s_and_not_the_machine_s() {
+        // A store PC keeps UTC; the person reading a printed page in Ho Chi Minh City is seven
+        // hours ahead of it.
+        let saigon = StoreTimeZone::from_iana_name("Asia/Ho_Chi_Minh").expect("a real zone");
+        let reading = local_time(at("2026-09-24T05:40:59Z"), &saigon).expect("in range");
+        assert_eq!(
+            reading.to_string(),
+            "2026-09-24 12:40",
+            "to the minute, not rounded"
+        );
+
+        // Across midnight the date moves too, and no cutoff is applied: 01:30 is 01:30.
+        let late = local_time(at("2026-09-23T18:30:00Z"), &saigon).expect("in range");
+        assert_eq!(late.to_string(), "2026-09-24 01:30");
+    }
+
+    #[test]
+    fn the_wall_clock_follows_daylight_saving() {
+        let london = StoreTimeZone::from_iana_name("Europe/London").expect("a real zone");
+        let summer = local_time(at("2026-07-01T11:05:00Z"), &london).expect("in range");
+        let winter = local_time(at("2026-12-01T11:05:00Z"), &london).expect("in range");
+        assert_eq!(summer.to_string(), "2026-07-01 12:05", "BST is UTC+1");
+        assert_eq!(winter.to_string(), "2026-12-01 11:05", "GMT is UTC");
     }
 
     #[test]
