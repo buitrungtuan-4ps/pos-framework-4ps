@@ -26,7 +26,6 @@ use pos_edge::{Edge, EdgeSession, InMemoryReceipts, LineDraft, StoreIdentity};
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::SalesChannel;
 use pos_proto::ids::{
     BillId, DeviceId, EmployeeId, MenuItemId, OrderLineId, StoreId, TableId, TaxClassId,
 };
@@ -36,6 +35,7 @@ use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
+use pos_proto::{SalesChannel, TableState};
 
 /// Each line is 50,000 at 10%, so a bill's arithmetic is readable by eye.
 const UNIT_PRICE: i64 = 50_000;
@@ -120,6 +120,16 @@ async fn a_bill_of(edge: &Edge<FakeStore>, count: usize) -> (BillId, Vec<OrderLi
         .await
         .expect("opens the bill");
     (bill.bill_id, lines)
+}
+
+/// Cash for exactly `minor`.
+fn cash(minor: i64) -> Vec<pos_core::billing::Payment> {
+    vec![pos_core::billing::Payment {
+        method: pos_proto::PaymentMethod::Cash,
+        tendered: vnd(minor),
+        applied_to_bill: vnd(minor),
+        tip: Money::zero(CurrencyCode::VND),
+    }]
 }
 
 /// Every event type the store holds, in order.
@@ -372,5 +382,76 @@ fn a_split_is_rebuilt_from_the_log() {
             vnd(165_000),
             "and the three-line part"
         );
+    });
+}
+
+/// **Every part settles**, and the table waits for the last one.
+///
+/// Settling the first part used to move the shared table to `NEEDS_CLEANING`, and every other
+/// part was then refused by the table machine (`NEEDS_CLEANING` has no settle), so a table that
+/// split could take only one person's money. The order has to stay owing until the last part is
+/// paid, and a restart has to agree at every step.
+#[test]
+fn every_part_of_a_split_settles_and_the_table_waits_for_the_last() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        let (source, lines) = a_bill_of(&edge, 2).await;
+        let parts = edge
+            .split_bill(server(), source, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+
+        let first = edge
+            .settle_bill(server(), parts[0], cash(55_000), None)
+            .await
+            .expect("the first part settles");
+        assert_eq!(first.table_state, Some(TableState::AwaitingPayment));
+        assert_eq!(edge.live_orders().len(), 1, "half the table still owes");
+        let rebuilt = edge_over(store.clone());
+        rebuilt.rebuild().await.expect("replays the log");
+        assert_eq!(rebuilt.table_state(table()), TableState::AwaitingPayment);
+        assert_eq!(rebuilt.live_orders().len(), 1);
+
+        let last = edge
+            .settle_bill(server(), parts[1], cash(55_000), None)
+            .await
+            .expect("and so does the second");
+        assert_eq!(last.table_state, Some(TableState::NeedsCleaning));
+        assert!(edge.live_orders().is_empty(), "the whole table has paid");
+        let rebuilt = edge_over(store);
+        rebuilt.rebuild().await.expect("replays the log");
+        assert_eq!(rebuilt.table_state(table()), TableState::NeedsCleaning);
+        assert!(rebuilt.live_orders().is_empty());
+    });
+}
+
+/// A split merged back and settled is **finished**. The order pointed at the last part opened,
+/// which the merge absorbed, so the paid order stayed on every till's live list.
+#[test]
+fn a_split_merged_back_and_settled_leaves_the_live_list() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        let (source, lines) = a_bill_of(&edge, 2).await;
+        let parts = edge
+            .split_bill(server(), source, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+        edge.merge_bills(server(), parts[0], vec![parts[1]])
+            .await
+            .expect("merges back");
+
+        let settled = edge
+            .settle_bill(server(), parts[0], cash(110_000), None)
+            .await
+            .expect("settles the merged bill");
+        assert_eq!(settled.table_state, Some(TableState::NeedsCleaning));
+        assert!(edge.live_orders().is_empty());
+
+        let rebuilt = edge_over(store);
+        rebuilt.rebuild().await.expect("replays the log");
+        assert!(rebuilt.live_orders().is_empty());
+        assert_eq!(rebuilt.table_state(table()), TableState::NeedsCleaning);
     });
 }

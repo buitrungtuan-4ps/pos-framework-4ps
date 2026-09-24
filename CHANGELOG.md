@@ -69,6 +69,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A voided bill gives its table back.** Voiding a bill left its table `AWAITING_PAYMENT` for good,
+  a state only a settle leaves, and a voided bill cannot settle, so the table could never be billed,
+  cleaned or seated again, and re-billing the order was refused as `BILL_ALREADY_OPEN`. The table now
+  goes back to `OCCUPIED` and the order bills again; when another part of a split was already paid,
+  the table goes on to `NEEDS_CLEANING` instead.
+- **Every part of a split bill can be paid.** The first part's settle moved the shared table to
+  `NEEDS_CLEANING`, and every other part was then refused (`TRANSITION_REFUSED`). The table now
+  waits for the last part.
+- **A split merged back and paid leaves the live list.** The order pointed at the last part opened,
+  which the merge absorbed, so a paid order stayed on every till's live list. The edge now keeps
+  every bill an order has had and asks which is still open.
+- **A refused guest order leaves the live list and its table.** It stayed live for good, and the
+  table kept pointing at it, so the next bill on that table charged for the refused order. The
+  table now goes back to the order it held before the guest's arrived, or is freed.
+- **A guest's QR order keeps its table across a restart.** Its log names the table only on
+  `sales.order.opened`, which the rebuild did not read for that, so after a restart the table showed
+  free and the order sat on the counter list.
 - **The status bar names the cash shift in the operator's language.** It spliced the wire token into
   a translated template, so a Vietnamese till read "Ca open"; each state now has its own sentence
   ("Đang mở ca", "Ca đã kiểm đếm", "Ca đã đóng").

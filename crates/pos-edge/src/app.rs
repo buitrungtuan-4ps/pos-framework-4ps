@@ -1514,9 +1514,15 @@ struct Projection {
     /// discarded, and that goods-in has something to seed.
     stock: StockProjection,
     bills: HashMap<BillId, BillRecord>,
-    /// The bill open on each order, so a second bill on one order is refused (ADR-0093). See
-    /// [`Projection::bill_for_order`] for why this has to be explicit.
-    order_bills: HashMap<OrderId, BillId>,
+    /// Every bill each order has had, oldest first, so a second bill on one order is refused
+    /// (ADR-0093). See [`Projection::bill_for_order`] for why this has to be explicit.
+    ///
+    /// A list, because one order can have several: the parts of a split, the bill a cashier opens
+    /// again after voiding the wrong one (ADR-0128). This was a single pointer to the last bill
+    /// opened, and nothing moved it when that bill was voided, merged away, or settled while a
+    /// sibling part still owed. That stranded a table whose bill was voided, refused every split
+    /// part's settle after the first, and kept a paid order on the live list after a merge.
+    order_bill_ids: HashMap<OrderId, Vec<BillId>>,
     shifts: HashMap<ShiftId, ShiftRecord>,
     /// The one shift currently trading or counted, if any — the drawer cash lands on it, and every
     /// event minted while it is set carries its id. Cleared when the shift closes.
@@ -1538,12 +1544,13 @@ struct Projection {
     /// clock stepped back.
     order_lines: HashMap<OrderId, Vec<OrderLineId>>,
     /// The orders still owing money — [`Self::open_orders`]'s rule, held exactly rather than
-    /// recomputed by a scan: at least one line, and no bill or a bill that has not settled.
+    /// recomputed by a scan: at least one line, no bill or a bill that has not settled, and not
+    /// refused by staff.
     ///
     /// Recomputed for one order by [`Self::refresh_live`] whenever an input to that rule changes —
-    /// a line added, a bill opened, a bill's state moved — and never simply inserted on the first
-    /// line and removed on settle: a split points `order_bills` at its last part, so an order can
-    /// leave the set and come back.
+    /// a line added, a bill opened, a bill's state moved, a staff decision — and never simply
+    /// inserted on the first line and removed on settle: voiding an order's only bill puts it
+    /// back, so an order can leave the set and come back.
     live: BTreeSet<OrderId>,
 }
 
@@ -1603,8 +1610,49 @@ impl Projection {
     }
 
     /// Records what a member of staff decided about a guest's submission (ADR-0116).
+    ///
+    /// A refusal also ends the order's hold on the floor, because a refused guest order is not a
+    /// live order (ADR-0116 decision 5): it leaves the live list, and the table it named no longer
+    /// points at it. Left pointing at it, the table would bill the refused order and take the next
+    /// line onto it; left `Occupied` with no order, it would refuse every move a waiter has.
+    ///
+    /// The table goes back to the order it held before the guest's arrived, if one is still
+    /// owing there (a guest's order takes the table over when it opens), and is freed otherwise.
     fn record_staff_decision(&mut self, order_id: OrderId, decision: StaffDecision) {
         self.staff_decisions.insert(order_id, decision);
+        self.refresh_live(order_id);
+        if decision == StaffDecision::Rejected
+            && let Some(table_id) = self.table_for_order(order_id)
+        {
+            let displaced = self.live.iter().rev().copied().find(|other| {
+                self.orders
+                    .get(other)
+                    .is_some_and(|origin| origin.table_id == Some(table_id))
+            });
+            if let Some(other) = displaced {
+                self.open_order(table_id, other);
+                let state = if self.latest_bill_in(other, BillState::Open).is_some() {
+                    TableState::AwaitingPayment
+                } else {
+                    TableState::Occupied
+                };
+                self.set_table(table_id, state);
+            } else {
+                self.table_orders.remove(&table_id);
+                if self.table_state(table_id) == TableState::Occupied {
+                    self.set_table(table_id, TableState::Free);
+                }
+            }
+        }
+    }
+
+    /// Seats a guest's own order at the table it names, as a QR order does in place of a waiter's
+    /// seat. Live and on rebuild through this one method: a guest order's log carries no
+    /// `sales.table.opened`, only the table on its `sales.order.opened`, and a rebuild that did not
+    /// read it there brought the table back free with the order stranded off it.
+    fn seat_guest_order(&mut self, table_id: TableId, order_id: OrderId) {
+        self.set_table(table_id, TableState::Occupied);
+        self.open_order(table_id, order_id);
     }
 
     /// What staff decided about an order, or `None` while it is still theirs to decide.
@@ -1680,11 +1728,11 @@ impl Projection {
             .get(&order_id)
             .is_some_and(|ids| !ids.is_empty());
         let settled = self
-            .order_bills
-            .get(&order_id)
-            .and_then(|bill_id| self.bills.get(bill_id))
+            .bill_for_order(order_id)
+            .and_then(|bill_id| self.bills.get(&bill_id))
             .is_some_and(|bill| bill.state == BillState::Settled);
-        if has_lines && !settled {
+        let refused = self.staff_decision(order_id) == Some(StaffDecision::Rejected);
+        if has_lines && !settled && !refused {
             self.live.insert(order_id);
         } else {
             self.live.remove(&order_id);
@@ -1814,21 +1862,95 @@ impl Projection {
     /// Records a bill and indexes it by the order it bills.
     fn open_bill_record(&mut self, bill_id: BillId, record: BillRecord) {
         let order_id = record.order_id;
-        self.order_bills.insert(order_id, bill_id);
+        // Indexed only when new, as a line is: a rebuild can fold a bill the projection holds.
+        let ids = self.order_bill_ids.entry(order_id).or_default();
+        if !ids.contains(&bill_id) {
+            ids.push(bill_id);
+        }
         self.bills.insert(bill_id, record);
         self.refresh_live(order_id);
     }
 
-    /// The bill already open on an order, if any.
+    /// The newest of an order's bills that is in `state`.
+    fn latest_bill_in(&self, order_id: OrderId, state: BillState) -> Option<BillId> {
+        self.order_bill_ids
+            .get(&order_id)?
+            .iter()
+            .rev()
+            .copied()
+            .find(|bill_id| {
+                self.bills
+                    .get(bill_id)
+                    .is_some_and(|bill| bill.state == state)
+            })
+    }
+
+    /// The bill an order is being charged on: its newest open bill, or if none is open its newest
+    /// settled one. `None` when it never had a bill, or every bill it had was voided or folded into
+    /// another, which leaves it owing and free to bill again.
     ///
-    /// This index is what keeps one order to one bill now that a bill is keyed on an order rather
-    /// than a table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
+    /// This is what keeps one order to one bill now that a bill is keyed on an order rather than a
+    /// table ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)). It used to hold by
     /// accident: a table can only be `Occupied` once, so `decide_table(RequestBill)` refused the
     /// second request on its way through, and nothing had to say so. An order key has no state
     /// machine behind it, and dropping the rule silently would be expensive — two open bills on one
     /// order means two receipt numbers and a guest charged twice for one meal.
+    ///
+    /// Open before settled, so an order with one split part paid and another still owing is
+    /// still owing, whichever part was opened last.
     fn bill_for_order(&self, order_id: OrderId) -> Option<BillId> {
-        self.order_bills.get(&order_id).copied()
+        self.latest_bill_in(order_id, BillState::Open)
+            .or_else(|| self.latest_bill_in(order_id, BillState::Settled))
+    }
+
+    /// Settles a bill, and moves its table on when nothing else on the order still owes.
+    ///
+    /// Only then: the parts of a split share one table, and moving it to `NeedsCleaning` on the
+    /// first part's settle left every other part refused by the table machine, with no way to take
+    /// the rest of the money. Decided here, under the projection's lock after the commit, so two
+    /// tills settling the last two parts at once cannot each see the other still open.
+    fn settle_bill_record(&mut self, bill_id: BillId) {
+        self.set_bill_state(bill_id, BillState::Settled);
+        let Some((order_id, Some(table_id))) = self
+            .bills
+            .get(&bill_id)
+            .map(|bill| (bill.order_id, bill.table_id))
+        else {
+            return;
+        };
+        if self.latest_bill_in(order_id, BillState::Open).is_none() {
+            self.set_table(table_id, TableState::NeedsCleaning);
+        }
+    }
+
+    /// Voids a bill, and gives its table back when nothing else on the order still owes.
+    ///
+    /// A void cancels the bill, not the meal: the lines are still there, and a cashier who voided
+    /// the wrong bill opens another on the same table. So the table leaves `AwaitingPayment`: to
+    /// `Occupied` when nothing was paid, or to `NeedsCleaning` when a sibling part was, because
+    /// that meal is finished and the voided part's lines were forgiven with it. Before this, the
+    /// table stayed `AwaitingPayment` for good, a state only a settle leaves, and a voided bill
+    /// cannot settle.
+    fn void_bill_record(&mut self, bill_id: BillId) {
+        self.set_bill_state(bill_id, BillState::Voided);
+        let Some((order_id, Some(table_id))) = self
+            .bills
+            .get(&bill_id)
+            .map(|bill| (bill.order_id, bill.table_id))
+        else {
+            return;
+        };
+        if self.table_state(table_id) != TableState::AwaitingPayment
+            || self.latest_bill_in(order_id, BillState::Open).is_some()
+        {
+            return;
+        }
+        let next = if self.latest_bill_in(order_id, BillState::Settled).is_some() {
+            TableState::NeedsCleaning
+        } else {
+            TableState::Occupied
+        };
+        self.set_table(table_id, next);
     }
 
     /// Every **counter** order still owing money, in id order (so the counter list is stable across
@@ -2487,8 +2609,7 @@ impl<S: EventStore> Edge<S> {
             // A QR order names a table, so the floor shows it occupied and staff can open the bill;
             // a delivery or public-API order has none.
             if let Some(table_id) = table_id {
-                projection.set_table(table_id, TableState::Occupied);
-                projection.open_order(table_id, order_id);
+                projection.seat_guest_order(table_id, order_id);
             }
             // The channel this order actually came in on, so the bill is taxed at its rate rather
             // than the session's (B1.2). Recorded for a tableless order too — a delivery order has
@@ -2856,7 +2977,7 @@ impl<S: EventStore> Edge<S> {
         }
         self.append_and_publish(envelopes, messages).await?;
 
-        self.lock_projection().set_bill_state(bill_id, next_state);
+        self.lock_projection().void_bill_record(bill_id);
         Ok(next_state)
     }
 
@@ -4232,15 +4353,12 @@ impl<S: EventStore> Edge<S> {
 
         // The table cycles AwaitingPayment -> NeedsCleaning; prove that move is legal. A counter
         // order has no table, so there is no floor move to prove and no tables capability to
-        // require (ADR-0093) — settling is ordinary cashier work either way.
-        let table_decision = match bill.table_id {
-            Some(table_id) => Some(decide_table(
-                self.table_state(table_id),
-                TableCommand::Settle,
-                &ctx,
-            )?),
-            None => None,
-        };
+        // require (ADR-0093) — settling is ordinary cashier work either way. The answer is
+        // discarded: whether the table actually moves depends on whether this is the order's last
+        // open bill, which only the projection can say once the settle has committed.
+        if let Some(table_id) = bill.table_id {
+            let _legal = decide_table(self.table_state(table_id), TableCommand::Settle, &ctx)?;
+        }
 
         // The cash tenders (not card, not tips, not rounding) are what lands in the drawer for the
         // open shift's blind-close roll-up. Summed before the payments move into the command.
@@ -4316,21 +4434,20 @@ impl<S: EventStore> Edge<S> {
             self.fanout.publish(message);
         }
 
-        {
+        let table_state = {
             let mut projection = self.lock_projection();
-            projection.set_bill_state(bill_id, bill_decision.next_state);
-            if let (Some(table_id), Some(decision)) = (bill.table_id, table_decision.as_ref()) {
-                projection.set_table(table_id, decision.next_state);
-            }
+            projection.settle_bill_record(bill_id);
             projection.collect_cash(cash_taken)?;
-        }
+            bill.table_id
+                .map(|table_id| projection.table_state(table_id))
+        };
         Ok(BillView {
             bill_id,
             state: bill_decision.next_state,
             receipt_number: Some(receipt_number),
             total_due: Some(totals.total_due),
             totals: Some(totals.clone()),
-            table_state: table_decision.map(|decision| decision.next_state),
+            table_state,
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
             lines: Self::receipt_lines(&order.lines),
         })
@@ -4742,13 +4859,7 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_bill_state(event.bill_id, BillState::Settled);
-                if let Some(table_id) = projection
-                    .bill(event.bill_id)
-                    .and_then(|record| record.table_id)
-                {
-                    projection.set_table(table_id, TableState::NeedsCleaning);
-                }
+                projection.settle_bill_record(event.bill_id);
             }
             // Unreachable: `fold` delegates only the three arms above.
             _ => {}
@@ -4773,7 +4884,26 @@ impl<S: EventStore> Edge<S> {
             projection.set_line_state(event.order_line_id, OrderLineState::Voided);
         } else {
             let event: BillingBillVoided = envelope.data.decode().map_err(AppError::Encode)?;
-            projection.set_bill_state(event.bill_id, BillState::Voided);
+            projection.void_bill_record(event.bill_id);
+        }
+        Ok(())
+    }
+
+    /// The `sales.order.opened` arm of [`Self::fold`], lifted out to keep that function inside its
+    /// line budget.
+    fn fold_order_opened(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesOrderOpened = envelope.data.decode().map_err(AppError::Encode)?;
+        // An unrecognised channel from a newer sender is recorded as "no answer" rather
+        // than failing the whole replay: a box that cannot rebuild does not trade, and a
+        // guessed variant would tax a bill at a rate nobody chose.
+        projection.open_order_origin(event.order_id, event.channel.require().ok(), event.table_id);
+        // A waiter's order already sat down on its `sales.table.opened`; a guest's has no
+        // other record of its table (`seat_guest_order`). Seating either twice is a no-op.
+        if let Some(table_id) = event.table_id {
+            projection.seat_guest_order(table_id, event.order_id);
         }
         Ok(())
     }
@@ -4791,17 +4921,7 @@ impl<S: EventStore> Edge<S> {
                 projection.set_table(event.table_id, TableState::Occupied);
                 projection.open_order(event.table_id, event.order_id);
             }
-            EventType::SalesOrderOpened => {
-                let event: SalesOrderOpened = envelope.data.decode().map_err(AppError::Encode)?;
-                // An unrecognised channel from a newer sender is recorded as "no answer" rather
-                // than failing the whole replay: a box that cannot rebuild does not trade, and a
-                // guessed variant would tax a bill at a rate nobody chose.
-                projection.open_order_origin(
-                    event.order_id,
-                    event.channel.require().ok(),
-                    event.table_id,
-                );
-            }
+            EventType::SalesOrderOpened => Self::fold_order_opened(projection, envelope)?,
             EventType::SalesOrderConfirmedByStaff | EventType::SalesOrderRejectedByStaff => {
                 Self::fold_staff_decision(projection, envelope, known)?;
             }
@@ -7052,6 +7172,10 @@ mod tests {
                 );
             }
             assert_index_agrees(&edge, "four lines on a");
+            let order_a = edge
+                .lock_projection()
+                .order_for_table(a)
+                .expect("a has an order");
 
             edge.seat_table(actor(), b, None).await.expect("seats b");
             edge.add_line(actor(), b, a_line())
@@ -7080,10 +7204,13 @@ mod tests {
             edge.settle_bill(actor(), parts[0], vec![cash(660_000)], None)
                 .await
                 .expect("settles a");
-            // Agreement, not a count: after a split and a merge `order_bills` points at the
-            // absorbed part, so the scan this replaced also kept the order on the live list. That
-            // is a separate defect, and this index reproduces the rule rather than changing it.
             assert_index_agrees(&edge, "a settle");
+            // And a count: a split merged back and settled is finished. The single bill pointer
+            // this replaced named the absorbed part, so the paid order stayed live.
+            assert!(
+                !edge.lock_projection().open_orders().contains(&order_a),
+                "a's order is paid"
+            );
 
             edge.clean_table(actor(), a).await.expect("cleans a");
             edge.seat_table(actor(), a, None).await.expect("re-seats a");

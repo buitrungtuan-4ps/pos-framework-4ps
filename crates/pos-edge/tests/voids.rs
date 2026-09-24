@@ -39,7 +39,7 @@ use pos_proto::reason_codes::{
 };
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
-use pos_proto::{BillState, OrderLineState, SalesChannel};
+use pos_proto::{BillState, OrderLineState, SalesChannel, TableState};
 
 /// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
 const SALT: &[u8] = b"a-fixed-test-slt";
@@ -406,5 +406,55 @@ fn a_void_survives_a_restart() {
             .await;
         assert!(matches!(settle, Err(AppError::Domain(_))), "got {settle:?}");
         let _ = BillId::new(Ulid::from_u128(0));
+    });
+}
+
+/// A void cancels the bill, **not the meal**: the table goes back to occupied and the order bills
+/// again. The table used to stay `AWAITING_PAYMENT` for good, a state only a settle leaves, and a
+/// voided bill cannot settle, so a cashier who voided the wrong bill had a table nobody could
+/// bill, clean or seat again. A restart brought it back the same way.
+#[test]
+fn a_voided_bill_gives_the_table_back_and_the_order_bills_again() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        a_seated_line(&edge).await;
+        let first = edge
+            .open_bill(server(), table())
+            .await
+            .expect("opens a bill")
+            .bill_id;
+        edge.void_bill(server(), first, keyed_wrong(), Some(&approval()))
+            .await
+            .expect("the manager voids it");
+
+        assert_eq!(edge.table_state(table()), TableState::Occupied);
+        assert_eq!(edge.live_orders().len(), 1, "the meal is still owed");
+        let rebuilt = edge_over(store.clone());
+        rebuilt.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(rebuilt.table_state(table()), TableState::Occupied);
+        assert_eq!(rebuilt.live_orders().len(), 1);
+
+        let second = edge
+            .open_bill(server(), table())
+            .await
+            .expect("a fresh bill on the same table");
+        assert_ne!(second.bill_id, first);
+        let settled = edge
+            .settle_bill(
+                server(),
+                second.bill_id,
+                vec![pos_core::billing::Payment {
+                    method: pos_proto::PaymentMethod::Cash,
+                    tendered: vnd(165_000),
+                    applied_to_bill: vnd(165_000),
+                    tip: Money::zero(CurrencyCode::VND),
+                }],
+                None,
+            )
+            .await
+            .expect("and it settles");
+        assert_eq!(settled.table_state, Some(TableState::NeedsCleaning));
+        assert!(edge.live_orders().is_empty());
     });
 }
