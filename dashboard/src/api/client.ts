@@ -1433,6 +1433,14 @@ export const api = {
       store_id: storeId,
       ...guardrails,
     }),
+  // How many days a store's edge keeps a synced event (ADR-0145): one number, 30..=3650, published
+  // as the store's `retention` node. Absent, the edge keeps 90.
+  publishRetention: (tenantId: string, storeId: string, eventLogDays: number) =>
+    requestJson<PublishedConfig>("PUT", "/admin/config/retention", {
+      tenant_id: tenantId,
+      store_id: storeId,
+      event_log_days: eventLogDays,
+    }),
   readVendorPolicies: (tenantId: string, storeId: string) =>
     requestJson<{ policies: VendorPolicy[] } | null>(
       "GET",

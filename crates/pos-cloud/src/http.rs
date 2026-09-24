@@ -8174,6 +8174,10 @@ where
             get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
         )
         .route(
+            "/admin/config/retention",
+            get(admin_read_retention::<Cfg, A, C>).put(admin_publish_retention::<Cfg, A, C>),
+        )
+        .route(
             "/admin/config/vendors",
             get(admin_read_vendors::<Cfg, A, C>).put(admin_publish_vendors::<Cfg, A, C>),
         )
@@ -8672,6 +8676,104 @@ where
         "qr",
         "config.qr.publish",
         node,
+    )
+    .await
+}
+
+/// The range a store's `event_log_days` may take (ADR-0145). The edge holds the same bounds as
+/// `pos_edge::EVENT_LOG_DAYS` and ignores a value outside them; the two crates share no dependency,
+/// so each side's test pins the numbers and a change to one fails until the other agrees.
+pub const EVENT_LOG_DAYS: core::ops::RangeInclusive<u32> = 30..=3650;
+
+/// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
+/// (ADR-0145).
+#[derive(Debug, Clone, Deserialize)]
+struct PublishRetentionRequest {
+    tenant_id: String,
+    store_id: String,
+    event_log_days: u32,
+}
+
+/// A super-admin reads a store's current `retention` node, or `null` (the edge then keeps 90 days).
+async fn admin_read_retention<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ConfigNodeQuery>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    match read_store_node(&state.config_trees, tenant_id, store_id, "retention").await {
+        Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// A super-admin publishes how many days a store keeps a synced event, as its `retention` node
+/// (ADR-0145). Outside [`EVENT_LOG_DAYS`] is refused, naming the field: a store whose log would
+/// age out in a week, or never, is a typo rather than a policy.
+async fn admin_publish_retention<Cfg, A, C>(
+    State(state): State<ConfigChannelsState<Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PublishRetentionRequest>,
+) -> Response
+where
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    if !EVENT_LOG_DAYS.contains(&request.event_log_days) {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "event_log_days must be between 30 and 3650",
+            &[("event_log_days", "OUT_OF_RANGE")],
+        );
+    }
+    publish_store_settings_node(
+        &state,
+        &context,
+        tenant_id,
+        store_id,
+        "retention",
+        "config.retention.publish",
+        serde_json::json!({ "event_log_days": request.event_log_days }),
     )
     .await
 }

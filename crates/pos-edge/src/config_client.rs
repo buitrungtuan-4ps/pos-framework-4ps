@@ -1550,6 +1550,12 @@ mod tests {
     }
 
     #[test]
+    fn the_edge_bounds_event_retention_as_the_cloud_does() {
+        // `pos_cloud::http::EVENT_LOG_DAYS` holds the same numbers, pinned by its own test.
+        assert_eq!(crate::app::EVENT_LOG_DAYS, 30..=3650);
+    }
+
+    #[test]
     fn a_retention_node_sets_how_long_a_synced_event_is_kept() {
         // Ninety days until a store says otherwise (ADR-0145).
         let base = EdgeSession::bootstrap();
