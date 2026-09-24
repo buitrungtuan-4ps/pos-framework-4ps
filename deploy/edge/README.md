@@ -398,8 +398,17 @@ font_directories = ["/opt/pos-edge/fonts"]
 font_size_dots   = 24   # printer dots per em; 24 is a comfortable receipt body at 203 dpi
 ```
 
-Directories are scanned recursively, in order, and that order is the fallback order: the face for
-ordinary Latin text goes first.
+Directories are scanned recursively, in order, and that order is the fallback order. Within a
+directory the plain sans-serif families (DejaVu Sans, Noto Sans, Arial, Segoe UI, Tahoma, Liberation
+Sans) are tried first, so ordinary text is not drawn in whatever display face happens to sort first.
+
+**Only the scripts the store prints are kept.** Once the box has synced its menu, a face is loaded only
+if it adds a character the store can put on paper: Latin and Vietnamese always, plus whatever the menu,
+floor, stations, reasons and receipt header use. A Vietnamese shop on a Windows PC holds a few
+megabytes of fonts rather than the 60 MB of CJK, Devanagari, Thai and Arabic faces `C:\Windows\Fonts`
+offers. A box that has never synced keeps everything, as it cannot yet say what it prints. A new
+script added to the menu later prints after the edge next restarts (an update restarts it); until then
+the start-up line lists it under `cannot_print`.
 
 **Check it worked.** The edge logs one line at start-up naming what it can print:
 

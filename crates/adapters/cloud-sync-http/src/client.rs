@@ -102,10 +102,17 @@ impl<T> HttpCloudSync<T> {
     }
 }
 
-/// The activation request body: the operator's code, in any casing or spacing.
+/// The activation request body: the operator's code, in any casing or spacing, and the store this
+/// box was installed for.
+///
+/// `store_id` lets the cloud refuse a code issued for another store **before** spending it. Without
+/// it, a box installed for one shop activated with another shop's code, came up with the wrong
+/// device, and nothing said so until `/sync` refused every call. The cloud answers a mismatch with
+/// the same refusal as an unknown code, and a cloud that predates the field ignores it.
 #[derive(serde::Serialize)]
 struct ActivateRequest<'a> {
     code: &'a str,
+    store_id: String,
 }
 
 /// The activation response body: the device the credential authenticates as, and the credential.
@@ -149,6 +156,7 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
     async fn activate(&self, activation_code: &str) -> Result<ActivationGrant, PortError> {
         let body = serde_json::to_vec(&ActivateRequest {
             code: activation_code,
+            store_id: self.store_id.to_string(),
         })
         .map_err(|error| {
             PortError::internal(

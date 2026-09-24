@@ -513,6 +513,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     {
         SyncThrottle {
             limiter: self.sync_rate_limiter.clone(),
+            activate_limiter: SlidingRateLimiter::new(ACTIVATE_MAX_ATTEMPTS, ACTIVATE_WINDOW_SECS),
             trusted_proxy_hops: self.trusted_proxy_hops,
             clock: self.clock.clone(),
         }
@@ -22268,6 +22269,10 @@ struct RevokeActivationResponse {
 struct ExchangeRequest {
     /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
     code: String,
+    /// The store the box was installed for, from its `config.toml`. A code issued for another store
+    /// is refused before it is spent. Optional, because an edge older than the field sends none.
+    #[serde(default)]
+    store_id: Option<String>,
 }
 
 /// The device's minted credential and the device id it was activated as — shown once.
@@ -22394,6 +22399,18 @@ where
             &[("code", "MALFORMED")],
         );
     };
+    let claimed_store = match request.store_id.as_deref().map(str::parse::<StoreId>) {
+        None => None,
+        Some(Ok(store_id)) => Some(store_id),
+        // Says nothing about the code, which has not been looked at yet.
+        Some(Err(_)) => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "the store id is malformed",
+                &[("store_id", "MALFORMED")],
+            );
+        }
+    };
     let code_hash = hash_code(&code);
     let issued = match state.activations.lookup(code_hash).await {
         Ok(Some(issued)) => issued,
@@ -22401,6 +22418,13 @@ where
         Ok(None) => return activation_refused(),
         Err(error) => return activation_error_response(&error),
     };
+    // A code for another store is refused **unspent**, so the technician who typed the wrong shop's
+    // code can still use it on the right box. The same refusal as an unknown code: whoever holds a
+    // valid code learns nothing from naming a store that they could not learn by leaving it out.
+    if claimed_store.is_some_and(|store_id| store_id != issued.store_id) {
+        tracing::info!("activation refused: the code was issued for another store");
+        return activation_refused();
+    }
     match redeem(issued.status) {
         Redemption::Reject(reason) => {
             // The reason is for the server's log; the device sees one generic refusal.
@@ -23398,6 +23422,19 @@ pub(crate) fn too_many_requests(message: &str, retry_after_secs: u64) -> Respons
     response
 }
 
+/// The one route [`throttle_sync`] guards on its own, much smaller budget: the unauthenticated code
+/// exchange (`docs/pos-spec.md` §16, "device activation codes … are rate-limited"). It had no limit
+/// at all, so nothing but the code space stood between a script and a guessing run, and every guess
+/// cost a database lookup.
+const ACTIVATE_PATH: &str = "/activate";
+
+/// Code exchanges allowed per client within [`ACTIVATE_WINDOW_SECS`]. A technician mistypes a code
+/// a few times; a box activates once. Ten leaves room for the first and none for a guessing run.
+const ACTIVATE_MAX_ATTEMPTS: usize = 10;
+
+/// The sliding window [`ACTIVATE_MAX_ATTEMPTS`] counts over, in seconds.
+const ACTIVATE_WINDOW_SECS: u64 = 600;
+
 /// The prefix [`throttle_sync`] guards. Every store-facing route sits under it (ADR-0097 moved the
 /// two that did not), so one prefix check covers config-pull, the heartbeat, the update report, the
 /// artifact fetch, the device proposals and the order relay.
@@ -23427,19 +23464,24 @@ pub async fn throttle_sync<C>(
 where
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if !request.uri().path().starts_with(SYNC_PREFIX) {
+    let path = request.uri().path();
+    let (limiter, refusal) = if path.starts_with(SYNC_PREFIX) {
+        (
+            &throttle.limiter,
+            "too many requests to the store sync surface; try again later",
+        )
+    } else if path == ACTIVATE_PATH {
+        (
+            &throttle.activate_limiter,
+            "too many activation attempts; try again later",
+        )
+    } else {
         return next.run(request).await;
-    }
+    };
     let ip = client_ip(request.headers(), throttle.trusted_proxy_hops);
     let keys = [format!("ip:{}", ip.unwrap_or("unknown"))];
-    if let Err(retry_after_secs) = throttle
-        .limiter
-        .check_and_record(&keys, throttle.clock.now())
-    {
-        return too_many_requests(
-            "too many requests to the store sync surface; try again later",
-            retry_after_secs,
-        );
+    if let Err(retry_after_secs) = limiter.check_and_record(&keys, throttle.clock.now()) {
+        return too_many_requests(refusal, retry_after_secs);
     }
     next.run(request).await
 }
@@ -23452,6 +23494,9 @@ where
 #[derive(Clone, Debug)]
 pub struct SyncThrottle<C> {
     limiter: SlidingRateLimiter,
+    /// `/activate`'s own budget, independent of `/sync`'s so a busy store's polling cannot lock a
+    /// technician out of activating the next box.
+    activate_limiter: SlidingRateLimiter,
     trusted_proxy_hops: usize,
     clock: C,
 }

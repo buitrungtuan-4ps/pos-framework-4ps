@@ -82,6 +82,7 @@ redemption.
 | API key | A CSPRNG secret; only its **SHA-256** is stored, shown once | Per-tenant limiter on `/v1/orders`, per-connection on `/sync` |
 | Staff PIN | **Argon2id**, 4–8 digits | Per-device attempt lockout at the edge — the PIN's defence is the cost plus the lockout, never the digit count |
 | Device token (till) | A 128-bit CSPRNG value; only its **SHA-256** reaches disk or the process map ([ADR-0091](adr/0091-durable-edge-auth-state.md)) | Retirable per device (**O1**) |
+| Activation code | Twelve characters from OS entropy; only its **SHA-256** is stored, single-use ([ADR-0050](adr/0050-activation-code-exchange.md)) | 10 exchanges per client per 10 minutes on `/activate`, checked before the code is looked up. A code for another store is refused unspent, with the same answer as an unknown one |
 | Pairing code | Six digits, five-minute TTL, in memory only | 10 consecutive failures shut the endpoint for 60s, checked *before* the code table is read (**S4**) |
 | Store sync key | OS keyring, or a mode-0600 env file — **never** `config.toml` | Scoped to one store (**S1**) |
 | Artefact signing key | **Never on a runner or a VPS** — offline custody (gate **H1**/**H3**) | n/a |
