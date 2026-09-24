@@ -39,8 +39,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   PC (**Terminal**) it runs the print agent as a restarted sidecar with that terminal's token. Pages
   from the edge get no app commands. Measured on Ubuntu 24.04: a 4.4 MiB `.deb`, the till in about
   0.55 s from launch, 380–550 MiB resident while idle. Windows (WebView2, LTSC, the installer) is
-  documented, not yet run. Not built by CI yet: that is a `.github` change awaiting an owner. Guide:
+  documented, not yet run. CI builds it, Windows installer included (next entry). Guide:
   `docs/guides/pos-station.md`.
+
+- **CI builds POS Station, and runs the edge's performance budgets every night.**
+  `.github/workflows/station.yml` runs the app's fmt, clippy and tests on Linux and bundles the
+  Windows installer, on every pull request or push to `main` that touches the app, the print agent
+  or `sign-windows.ps1`, and on demand. The installer, unsigned, is kept as the run artifact
+  `pos-station-windows-unsigned` for 14 days, for trying on a real PC. `nightly.yml` gains `bench`:
+  the `perf_budget` tests in a release build, over the in-memory store and over SQLite, so a store
+  that starts slowing with age again fails a job. **Upgrade note:** none — CI only, no change to any
+  shipped artifact.
 
 - **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
   ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).
@@ -188,6 +197,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **POS Station recognises the store PC it runs on.** It looked for the PC's own edge at
+  `127.0.0.1:8080`, while the edge, every installer and the setup file bind `8787`. So on a store
+  PC installed the default way the app never chose Station mode: it opened the connect page, and a
+  pairing typed with the PC's LAN address made it a Terminal of its own edge, with the smaller
+  tray (no cloud link, outbox or printers, no notifications) and a print agent it had no use for.
+  It now looks at `127.0.0.1:8787`, and a Station test reads the edge's `DEFAULT_PORT` from its
+  source so the two cannot drift apart again. The connect page's examples show `8787` too. An edge
+  moved to another port is still a Station when it is paired as `127.0.0.1:<port>`. **Upgrade
+  note:** none. The Station is not released yet.
 - **A receipt says what each line was made with**
   ([ADR-0144](docs/adr/0144-a-line-records-the-names-of-its-modifiers.md), one of the ten known
   defects). A guest who ordered a 30 cm Margherita got a receipt that said "Margherita": the size's

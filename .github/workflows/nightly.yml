@@ -6,10 +6,11 @@ name: nightly
 # repository, so a dependency that was clean at merge time can become vulnerable
 # without anything here changing. A per-commit check would never notice.
 #
-# The rest — the simulator soak and the restore drill — arrive with the crates they
-# exercise (P12, P8). The restore drill matters more than it looks: a backup that
-# has never been restored is not a backup, and it is the drill, not the backup job,
-# that proves the five-minute machine replacement works.
+# The rest — the simulator soak, the restore drill and the edge's performance
+# budgets — arrive with the crates they exercise (P12, P8, finding F2). The restore
+# drill matters more than it looks: a backup that has never been restored is not a
+# backup, and it is the drill, not the backup job, that proves the five-minute
+# machine replacement works.
 
 on:
   schedule:
@@ -66,6 +67,24 @@ jobs:
         run: cargo test -p pos-simulator --locked
       - name: fleet simulator report
         run: cargo run -q -p pos-simulator
+
+  # The edge's hot-path budgets (`crates/pos-edge/tests/perf_budget.rs`, `just bench`): the live
+  # orders read and adding a line, quiet and under contention, at 30,000 settled orders of history.
+  # They are `#[ignore]`d in every commit's gate because a timing assertion in a debug build on a
+  # shared runner measures the runner; a release build once a night measures the code, and a store
+  # that has started getting slower with age again (finding F2) fails this job.
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+      - name: the edge's performance budgets, over the in-memory store
+        run: cargo test -p pos-edge --release --locked --test perf_budget -- --ignored --nocapture
+      - name: the same budgets over the real SQLite adapter
+        env:
+          POS_BENCH_STORE: sqlite
+        run: cargo test -p pos-edge --release --locked --test perf_budget -- --ignored --nocapture
 
   # Exercises the cloud-database restore path for real (P8, ADR-0046): seed a service Postgres,
   # then deploy/restore-drill.sh dumps it, restores into a throwaway database, and reconciles every

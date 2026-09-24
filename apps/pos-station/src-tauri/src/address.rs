@@ -5,9 +5,9 @@
 //!
 //! Three shapes arrive in the one field, and all three are real:
 //!
-//! - `192.168.1.10:8080` — the raw-IP form an operator reads off the edge (ADR-0030). No scheme
+//! - `192.168.1.10:8787` — the raw-IP form an operator reads off the edge (ADR-0030). No scheme
 //!   means `http`, because that form only ever names a box on the shop's own LAN.
-//! - `http://192.168.1.10:8080/pair?code=123456` — the pairing link, pasted or read from the QR.
+//! - `http://192.168.1.10:8787/pair?code=123456` — the pairing link, pasted or read from the QR.
 //!   The code comes with it, so the operator need not type it again.
 //! - `https://till.example/pair?code=123456` — ADR-0111's hosted form, which is `https` only.
 //!
@@ -29,16 +29,25 @@ pub(crate) struct EdgeOrigin {
 }
 
 /// The loopback address and port a store PC's own edge answers on, which is what selects Station
-/// mode (ADR-0147).
-pub(crate) const LOCAL_EDGE: &str = "127.0.0.1:8080";
+/// mode (ADR-0147): the edge's default port, `DEFAULT_PORT` in `crates/pos-edge/src/setup.rs`, which
+/// every installer binds unless told otherwise. An edge moved to another port is still found through
+/// its pairing: a device paired with a loopback address is a Station too.
+///
+/// This app is outside the workspace and cannot import that constant, so a test here reads it from
+/// the edge's source instead: the two once disagreed (8080 here), and every store PC installed the
+/// default way came up as a Terminal of its own edge.
+pub(crate) const LOCAL_EDGE: &str = "127.0.0.1:8787";
+
+/// The port of [`LOCAL_EDGE`].
+const LOCAL_EDGE_PORT: u16 = 8787;
 
 impl EdgeOrigin {
-    /// The store PC's own edge, `http://127.0.0.1:8080`.
+    /// The store PC's own edge, `http://127.0.0.1:8787`.
     pub(crate) fn local() -> Self {
         Self {
             secure: false,
             host: "127.0.0.1".to_owned(),
-            port: Some(8080),
+            port: Some(LOCAL_EDGE_PORT),
         }
     }
 
@@ -319,10 +328,22 @@ mod tests {
             assert!(!parse(input).unwrap().origin.is_loopback(), "{input}");
         }
         assert!(EdgeOrigin::local().is_loopback());
-        assert_eq!(EdgeOrigin::local().to_string(), "http://127.0.0.1:8080");
+        assert_eq!(EdgeOrigin::local().to_string(), "http://127.0.0.1:8787");
         assert_eq!(
             parse(super::LOCAL_EDGE).unwrap().origin,
             EdgeOrigin::local()
+        );
+    }
+
+    #[test]
+    fn the_local_edge_is_on_the_port_the_edge_listens_on_by_default() {
+        let edge_setup = include_str!("../../../../crates/pos-edge/src/setup.rs");
+        let declared = format!("pub const DEFAULT_PORT: u16 = {};", super::LOCAL_EDGE_PORT);
+        assert!(
+            edge_setup.contains(&declared),
+            "the edge's DEFAULT_PORT is not {}: move LOCAL_EDGE to the port the edge binds, or a \
+             store PC installed the default way is not recognised as a Station",
+            super::LOCAL_EDGE_PORT
         );
     }
 

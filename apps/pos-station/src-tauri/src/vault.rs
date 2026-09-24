@@ -4,7 +4,7 @@
 //! The device token in the operating system's credential store (ADR-0147, ADR-0111 §"The token goes
 //! where the operating system will keep it").
 //!
-//! One entry per edge: service `pos-station`, account the edge's origin (`http://192.168.1.10:8080`).
+//! One entry per edge: service `pos-station`, account the edge's origin (`http://192.168.1.10:8787`).
 //! The backends are the ones the workspace's `key-vault-keyring` adapter chose (ADR-0086): Windows
 //! Credential Manager, the macOS Keychain, and the Linux kernel keyring.
 //!

@@ -7,7 +7,7 @@
 //! The window loads the till from the edge's URL, so it is same-origin and always the version that
 //! edge serves; the app bundles only its connect and status pages. Pairing is native — the token goes
 //! to the OS credential store and reaches the till through an initialization script — and remote
-//! pages get no commands. On the store PC (the edge on `127.0.0.1:8080`) it adds a tray and
+//! pages get no commands. On the store PC (the edge on `127.0.0.1:8787`) it adds a tray and
 //! notifications; on another machine it runs the print agent as a sidecar. See
 //! `docs/guides/pos-station.md` for building, signing and the spike's measurements.
 
