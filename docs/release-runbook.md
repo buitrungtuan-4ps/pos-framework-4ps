@@ -169,6 +169,46 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    layout keeps trading and logs that it found none; [`deploy/edge/README.md`](../deploy/edge/README.md)
    has the migration.
 
+## Authenticode: signing the Windows binary for Windows itself
+
+Minisign is what the edge's updater checks. **Windows** checks something else — an Authenticode
+signature — at the first double-click, in the SmartScreen dialog and the UAC prompt
+([ADR-0142](adr/0142-windows-signing-is-the-forks-choice.md)). Whether a fork has a certificate is
+its own business, so one script reads the choice from the environment:
+[`deploy/release/sign-windows.ps1`](../deploy/release/sign-windows.ps1).
+
+**The step belongs in the `windows` job of `release.yml`, after "Build pos-edge for Windows" and
+before "Hand the unsigned binary to the signing job".** It is not wired yet: `AGENTS.md` §8 bars an
+agent from editing a release workflow, so this is the owner's one change to make:
+
+```yaml
+      - name: Authenticode-sign the Windows binary (ADR-0142)
+        shell: pwsh
+        env:
+          POS_SIGN_PFX_BASE64: ${{ secrets.POS_SIGN_PFX_BASE64 }}
+          POS_SIGN_PFX_PASSWORD: ${{ secrets.POS_SIGN_PFX_PASSWORD }}
+          POS_SIGN_COMMAND: ${{ vars.POS_SIGN_COMMAND }}
+          POS_SIGN_REQUIRED: ${{ vars.POS_SIGN_REQUIRED }}
+        run: ./deploy/release/sign-windows.ps1 -Path target/x86_64-pc-windows-msvc/release/pos-edge.exe
+```
+
+**The order is not negotiable.** Authenticode writes into the executable, so it must run before the
+Linux job's minisign step. Minisign over the pre-Authenticode bytes is a signature over a file that no
+longer exists, and every store would refuse the update. The step above sits in the job that runs
+first, which is what makes the order structural rather than remembered.
+
+Which mode a fork ends up in:
+
+| The fork has | Set | Result |
+|---|---|---|
+| nothing | nothing | ships **unsigned**; the build summary says so. SmartScreen warns on first run; updates are unaffected |
+| a certificate from a public CA, as a `.pfx` | `POS_SIGN_PFX_BASE64` + `POS_SIGN_PFX_PASSWORD` (secrets) | signed; SmartScreen reputation builds with downloads |
+| no public certificate, but a managed fleet | run `deploy/release/new-internal-signing-cert.ps1`, put the `.pfx` in the two secrets, push `pos-signing.cer` to the stores (Group Policy, Intune, or `deploy/edge/trust-internal-signing-cert.ps1`) | UAC names the fork; AppLocker/WDAC can allow by publisher. **No** SmartScreen reputation — that comes only from a public CA |
+| a key that cannot leave hardware (EV token, Azure Trusted Signing, cloud KMS) | `POS_SIGN_COMMAND` (variable), e.g. `jsign --storetype TRUSTEDSIGNING --keystore <endpoint> --storepass %AZURE_TOKEN% --alias <account>/<profile> {file}` | signed by whatever that command runs |
+
+Set `POS_SIGN_REQUIRED=true` (a variable) on the build that must never ship unsigned — the official
+release. A fork without a certificate leaves it unset and gets a notice instead of a failure.
+
 ## Verifying an artifact by hand
 
 ```
