@@ -188,6 +188,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A box being claimed shows its code and nothing else.** The claim page
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)) was drawn
+  inside the till: a status bar reading "connecting", the till's navigation and a sign-out button, on
+  a box that has no store, where `pos-edge claim` serves nothing but the page and `/api/claim`, so
+  every one of those led somewhere that failed. The round-two demo found it. The page now renders on
+  its own.
 - **An old store's database is rebuilt at 8 KiB pages, once** (finding F5, one of the ten known
   defects). New stores have been created at 8 KiB pages, where an event takes ~1.2 KB of disk
   instead of ~4.7 KB, but SQLite ignores the page size on a file that already has pages, so every
