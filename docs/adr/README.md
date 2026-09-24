@@ -157,5 +157,6 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0148](0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md) | An unclaimed box shows a code and the console claims it (RFC 8628): one generic image, a person picks the store, the box collects its credential once | Accepted |
 | [0149](0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md) | A spare box takes over by hand, and every lease bump publishes a receipt floor so a replacement never reuses a number the cloud has seen | Accepted |
 | [0150](0150-the-appliance-is-a-linux-image-that-claims-itself.md) | The appliance is a stock Linux install turned into a store box by one script, generic until claimed; Android stays a spike until it runs on a device | Accepted |
+| [0151](0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md) | A headless Linux box seals its secrets under a vault key systemd-creds keeps (TPM2 or host key), so an activation survives a reboot; a key that cannot be read is a vault error, never the keyring | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.

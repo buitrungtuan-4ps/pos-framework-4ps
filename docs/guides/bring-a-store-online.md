@@ -324,9 +324,12 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 >
 > The store's scoped key must carry **`relay_orders` as well as `read_config`**; with only the latter
 > the relay is dark and the edge logs a `403` on every pull — which is exactly the symptom *Reading the
-> boot log* above exists for, because the box otherwise looks healthy. One flagged gap remains: on a
-> **headless Linux** box the kernel keyring is not durable across a reboot, and the TPM-sealed
-> hardening is a tracked hardware handoff ([`gate-register.md`](../gate-register.md) row P2).
+> boot log* above exists for, because the box otherwise looks healthy. On a **headless Linux** box
+> the credential survives a reboot only once a vault key is sealed with `systemd-creds`
+> ([ADR-0151](../adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md); the steps
+> are in [`deploy/edge/README.md`](../../deploy/edge/README.md)). Without one it stays in the kernel
+> keyring, which a reboot empties. The proof on real hardware is
+> [`gate-register.md`](../gate-register.md) row P2.
 
 ## Step 4 — Publish the store's configuration
 
