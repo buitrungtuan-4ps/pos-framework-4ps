@@ -179,6 +179,25 @@ the file tells the store to dial the cloud over `https`, the only way a store di
 SmartScreen warns on the file unless your fork signs it
 ([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)).
 
+### A box with no store yet: claim it
+
+A box can also be installed **without** a store, from one image for every store
+([ADR-0148](../adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)). It has no
+`config.toml`, so on first boot it runs `pos-edge claim --cloud https://<cloud host>` instead of
+serving:
+
+1. The box shows an eight-character code, `XXXX-XXXX`, in its log and on a page at
+   `http://127.0.0.1:8080/` that its own screen can show.
+2. In the console, open **Activation → Claim a box**, type the code (case and dashes do not matter)
+   and choose the device this box becomes. You need `console.devices.manage`.
+3. Within a few seconds the box collects its device credential, keeps it in the keyring, writes
+   `config.toml` for that store and exits. Start the store server; that credential is all it needs to
+   sync, so Step 3 below is already done.
+
+A code lasts an hour and works once; an unused code is replaced by a new one on the box. Run the claim
+**as the service's own user**, because the keyring is per user on Linux: a credential kept by `root`
+is one a service running as `pos` never finds.
+
 ### By hand (a host you manage yourself)
 
 The step-by-step for both platforms is in

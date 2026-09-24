@@ -46,10 +46,12 @@
 
 #![forbid(unsafe_code)]
 
+mod claim;
 mod client;
 mod link;
 mod wire;
 
+pub use claim::{Collection, HttpClaim, OpenedClaim};
 pub use client::HttpCloudSync;
 pub use link::{HttpLink, MAX_BATCH, MAX_BODY_BYTES};
 pub use wire::{HttpResponse, HttpTransport, TlsHttpTransport, TransportError};

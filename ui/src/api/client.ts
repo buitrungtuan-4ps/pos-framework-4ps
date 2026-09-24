@@ -11,6 +11,7 @@ import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
   ActivateAccepted,
   ActivationStanding,
+  ClaimStatus,
   BillResponse,
   BumpRequest,
   BumpResponse,
@@ -352,6 +353,10 @@ export const api = {
   // nothing to activate", not "the store is broken" — the caller carries on to the counter, which
   // trades offline regardless (ADR-0001).
   activation: () => request<ActivationStanding>("GET", "/api/activation"),
+
+  // What a box being claimed shows (ADR-0148): served by `pos-edge claim` alone, before the box has
+  // a store, a store server or a paired device. Unauthenticated, and loopback-only on the box.
+  claimStatus: () => request<ClaimStatus>("GET", "/api/claim"),
 
   // Exchange the activation code from the store's setup sheet for the box's device credential
   // (ADR-0050). Unauthenticated, like pairing: a fresh box holds no token yet. The credential stays

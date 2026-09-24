@@ -18,6 +18,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A box installed with no store claims itself** with `pos-edge claim --cloud <url>`
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
+  4.1, edge half). It opens a claim, shows the code in its log and on a page at
+  `http://127.0.0.1:8080/` drawn by the till UI's new `/claim` screen (in English and Vietnamese),
+  replaces a code that expires unused, and once the console binds it keeps the device credential in
+  the keyring and writes `config.toml` for the claimed store, atomically. A box that already has a
+  `config.toml` is left alone. The claim client is `HttpClaim` in `cloud-sync-http`.
+
 - **The cloud can claim a box that shows a code**
   ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
   4.1, cloud half). A box installed with no store opens a claim with `POST /claim` and gets a claim

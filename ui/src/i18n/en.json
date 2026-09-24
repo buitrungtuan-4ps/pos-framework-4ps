@@ -1,5 +1,11 @@
 {
   "app.brand": "Pizza 4P's",
+  "claim.claimed": "Claimed. This box is now a store server; it starts in a moment.",
+  "claim.connecting": "Connecting to {cloud}…",
+  "claim.expires": "This code works for {minutes} more minutes. A new one appears when it expires.",
+  "claim.hint": "In the console at {cloud}, open Activation → Claim a box, type this code and choose the device this box becomes.",
+  "claim.title": "Claim this box",
+  "claim.unreachable": "Cannot reach {cloud}. Check the network cable or Wi-Fi; this box keeps trying.",
   "common.back_counter": "← Counter",
   "common.back_floor": "← Floor",
   "common.back_order": "← Order",
