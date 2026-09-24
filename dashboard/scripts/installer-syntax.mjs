@@ -9,7 +9,9 @@
 // Two halves, because no single runner can parse both languages:
 //
 //   * **Here**, on any machine with a POSIX shell: `sh -n` over the generated `install-pos-edge.sh`,
-//     and a TOML sanity pass over `config.toml`. Runs as part of `pnpm build`.
+//     and a TOML sanity pass over `config.toml`. Runs as part of `pnpm build`. The hand-written
+//     appliance scripts in `deploy/appliance/` (ADR-0150) get `bash -n` and `shellcheck` here too;
+//     see the end of this file.
 //   * **On the Windows CI runner**, which is the only place with a PowerShell parser: this script is
 //     invoked with `--emit <dir>` to write the artifacts out, and the workflow then parses the
 //     `.ps1` with `[System.Management.Automation.Language.Parser]`. `--emit` skips `sh -n`, since a
@@ -25,10 +27,18 @@
 // the same case, and this comment is the record of which half each mechanism covers.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { argv, exit } from "node:process";
+import { fileURLToPath } from "node:url";
 
 import {
   configToml,
@@ -338,9 +348,202 @@ for (const testCase of CASES) {
   }
 }
 
+// The Linux appliance (ADR-0150). Nothing generates these scripts, and they run as root on a store
+// box: `provision.sh` from a technician's shell or a cloud-init first boot, and the kiosk launcher it
+// installs on every boot after that. So each one is parsed by its own shell, and linted wherever the
+// machine has `shellcheck`. A machine without it is told so on stdout, and not failed.
+//
+// "Each one" includes the scripts that live inside another file: the launcher is a heredoc in
+// `provision.sh`, and the first-boot script is a block in `cloud-init.yaml`. A syntax error there is
+// the same shop that does not open, one file further down.
+//
+// And two drift checks, because `provision.sh` carries two things it did not invent: a copy of
+// `deploy/edge/pos-edge.service`, for when it runs outside a checkout, and the `config.toml` the
+// console writes. Either one drifting is a second layout, where ADR-0150 has the appliance use the
+// one the console's installer already lays out.
+//
+// Linux only, like `sh -n` above: `--emit` runs on the Windows runner, and exists to feed .ps1 files
+// to PowerShell.
+
+/** Where the appliance lives, relative to this script. Absent inside the cloud image. */
+const APPLIANCE = new URL("../../deploy/appliance/", import.meta.url);
+
+/**
+ * The body of the quoted heredoc `<<'MARKER'` in `text`, including its final newline, or `null`.
+ * Quoted, so the body is exactly what the script writes to disk.
+ *
+ * @param {string} text
+ * @param {string} marker
+ * @returns {string | null}
+ */
+function heredoc(text, marker) {
+  const open = `<<'${marker}'\n`;
+  const start = text.indexOf(open);
+  if (start === -1) {
+    return null;
+  }
+  const body = start + open.length;
+  const end = text.indexOf(`\n${marker}\n`, body - 1);
+  return end === -1 ? null : text.slice(body, end + 1);
+}
+
+/**
+ * The scripts inside a file: every quoted heredoc whose body starts with `#!`, and every YAML
+ * `content: |` block that does. Just enough YAML for cloud-init's `write_files`, because this script
+ * runs on bare `node` with no dependencies.
+ *
+ * @param {string} text
+ * @returns {Array<{ label: string, body: string }>}
+ */
+function embeddedScripts(text) {
+  const scripts = [];
+  for (const [, marker] of text.matchAll(/<<'([A-Z_]+)'\n/gu)) {
+    const body = heredoc(text, marker);
+    if (body?.startsWith("#!")) {
+      scripts.push({ label: marker, body });
+    }
+  }
+  const lines = text.split("\n");
+  lines.forEach((line, at) => {
+    const header = /^( *)content: \|$/u.exec(line);
+    if (!header) {
+      return;
+    }
+    const block = [];
+    let indent = 0;
+    for (const next of lines.slice(at + 1)) {
+      const width = next.length - next.trimStart().length;
+      if (next.trim() !== "" && width <= header[1].length) {
+        break;
+      }
+      if (indent === 0 && next.trim() !== "") {
+        indent = width;
+      }
+      block.push(next.slice(indent));
+    }
+    const body = `${block.join("\n").trimEnd()}\n`;
+    if (body.startsWith("#!")) {
+      scripts.push({ label: `content block on line ${at + 1}`, body });
+    }
+  });
+  return scripts;
+}
+
+/** Whether `shellcheck` is on PATH. Asked once, and said once below if it is not. */
+function haveShellcheck() {
+  try {
+    execFileSync("shellcheck", ["--version"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Parses the script at `path` with the shell its first line names (`sh` for `#!/bin/sh`, `bash`
+ * otherwise) and, when `lint`, runs shellcheck over it. Returns the number of failures.
+ *
+ * @param {string} path
+ * @param {string} name
+ * @param {boolean} lint
+ * @returns {number}
+ */
+function checkShell(path, name, lint) {
+  const detail = (error) =>
+    error && typeof error === "object" && "stdout" in error
+      ? `${String(error.stdout)}${String(error.stderr)}`
+      : String(error);
+  const shell = readFileSync(path, "utf8").startsWith("#!/bin/sh\n") ? "sh" : "bash";
+  let failed = 0;
+  try {
+    execFileSync(shell, ["-n", path], { stdio: "pipe" });
+    console.log(`✓ ${name} parses (${shell} -n)`);
+  } catch (error) {
+    console.error(`✗ ${name} does not parse (${shell} -n)\n${detail(error)}`);
+    failed += 1;
+  }
+  if (lint) {
+    try {
+      execFileSync("shellcheck", [path], { stdio: "pipe" });
+      console.log(`✓ ${name} passes shellcheck`);
+    } catch (error) {
+      console.error(`✗ ${name} fails shellcheck\n${detail(error)}`);
+      failed += 1;
+    }
+  }
+  return failed;
+}
+
+let applianceChecked = 0;
+if (emitFlag === -1 && !existsSync(APPLIANCE)) {
+  console.log(
+    "— skipping the appliance checks: deploy/appliance/ not present.\n" +
+      "  Expected inside the cloud image, whose dashboard stage copies only dashboard/.",
+  );
+} else if (emitFlag === -1) {
+  const lint = haveShellcheck();
+  if (!lint) {
+    console.log(
+      "— shellcheck is not on PATH: the appliance scripts are parsed but not linted here.\n" +
+        "  `apt-get install shellcheck` (or your platform's package) adds the lint.",
+    );
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "pos-appliance-"));
+  for (const file of readdirSync(APPLIANCE).sort()) {
+    const path = fileURLToPath(new URL(file, APPLIANCE));
+    const name = `deploy/appliance/${file}`;
+    if (file.endsWith(".sh")) {
+      failures += checkShell(path, name, lint);
+      applianceChecked += 1;
+    }
+    if (!file.endsWith(".sh") && !file.endsWith(".yaml")) {
+      continue;
+    }
+    for (const { label, body } of embeddedScripts(lf(readFileSync(path, "utf8")))) {
+      const extracted = join(scratch, `${file}.${applianceChecked}.sh`);
+      writeFileSync(extracted, body, "utf8");
+      failures += checkShell(extracted, `${name} (${label})`, lint);
+      applianceChecked += 1;
+    }
+  }
+
+  const provisionPath = new URL("provision.sh", APPLIANCE);
+  const unitPath = new URL("../../deploy/edge/pos-edge.service", import.meta.url);
+  if (existsSync(provisionPath)) {
+    const provision = lf(readFileSync(provisionPath, "utf8"));
+
+    if (heredoc(provision, "POS_EDGE_SERVICE") === lf(readFileSync(unitPath, "utf8"))) {
+      console.log("✓ deploy/appliance/provision.sh carries deploy/edge/pos-edge.service unchanged");
+    } else {
+      console.error(
+        "✗ the POS_EDGE_SERVICE heredoc in deploy/appliance/provision.sh no longer matches\n" +
+          "  deploy/edge/pos-edge.service. That file is the source of truth: paste it into the heredoc.",
+      );
+      failures += 1;
+    }
+
+    // The store and cloud of the `plain` case, written the way provision.sh writes them: no name,
+    // the default port, no store_path.
+    const store = { ...PLAIN, storeName: "", tenantLabel: "", bindPort: "" };
+    const rendered = heredoc(provision, "POS_EDGE_CONFIG")
+      ?.replaceAll("@STORE_ID@", store.storeId)
+      .replaceAll("@CLOUD_URL@", store.cloudUrl);
+    if (rendered === configToml(store)) {
+      console.log("✓ deploy/appliance/provision.sh writes the console's config.toml");
+    } else {
+      console.error(
+        "✗ the POS_EDGE_CONFIG heredoc in deploy/appliance/provision.sh no longer matches\n" +
+          "  configToml() in src/installers.mjs. Render configToml() with storeId \"@STORE_ID@\",\n" +
+          "  cloudUrl \"@CLOUD_URL@\" and no name, port or store_path, and paste it into the heredoc.",
+      );
+      failures += 1;
+    }
+  }
+}
+
 if (failures > 0) {
   console.error(
-    `\n${failures} generated artifact(s) failed. These run as root on a store's only till; a parse error here is a shop that does not open.`,
+    `\n${failures} artifact(s) failed. These run as root on a store's only till; a parse error here is a shop that does not open.`,
   );
   exit(1);
 }
@@ -348,5 +551,8 @@ if (failures > 0) {
 if (emitFlag !== -1) {
   console.log(`wrote ${CASES.length} case(s) plus the checked-in template to ${outDir}`);
 } else {
-  console.log(`installer syntax: ${CASES.length} case(s) ok`);
+  console.log(
+    `installer syntax: ${CASES.length} case(s) ok` +
+      (applianceChecked > 0 ? `, ${applianceChecked} appliance script(s) ok` : ""),
+  );
 }
