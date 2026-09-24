@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **Refuse IPv4 special-purpose ranges 192.0.0.0/24 and 192.88.99.0/24 in webhook SSRF filter.**
+  `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 6890 IETF Protocol Assignments / DS-Lite (`192.0.0.0/24`) and 6to4 Relay Anycast (`192.88.99.0/24`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
+
 ### Added
 
 - **The console hands out the Windows setup file**
