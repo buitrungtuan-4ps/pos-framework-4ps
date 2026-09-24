@@ -85,6 +85,9 @@ fn respond(path: &str, asset: Asset, request: &HeaderMap) -> Response {
             [
                 (header::ETAG, HeaderValue::from_str(etag).unwrap_or(EMPTY)),
                 (header::CACHE_CONTROL, HeaderValue::from_static(caching)),
+                // What the 200 would have said (RFC 9110 §15.4.5). The compression layer adds it
+                // only to a body it compressed, and a 304 has none.
+                (header::VARY, HeaderValue::from_static(VARY)),
             ],
         )
             .into_response();
@@ -113,11 +116,18 @@ fn respond(path: &str, asset: Asset, request: &HeaderMap) -> Response {
             ),
             (header::CACHE_CONTROL, HeaderValue::from_static(caching)),
             (header::ETAG, etag),
+            // Set here as well as by the compression layer, which leaves it off a body under its
+            // size floor: a cache must not answer a gzip client from a plain copy, or the reverse.
+            (header::VARY, HeaderValue::from_static(VARY)),
         ],
         asset.bytes,
     )
         .into_response()
 }
+
+/// The one request header an asset's bytes vary on: the compression layer answers the same path
+/// gzip or plain, by what the client accepts.
+const VARY: &str = "accept-encoding";
 
 /// A placeholder for an asset with no hash (`dev-ui`). An empty `ETag` is never sent as a validator
 /// by a client, so it cannot match anything, and `none_match` is never reached without one.
@@ -125,7 +135,10 @@ const EMPTY: HeaderValue = HeaderValue::from_static("");
 
 /// Whether the client's `If-None-Match` already holds this asset.
 ///
-/// A list, because a client may offer several, and `*` matches anything it has.
+/// A list, because a client may offer several, and `*` matches anything it has. Compared **weakly**
+/// (RFC 9110 §13.1.2), as `If-None-Match` always is: `W/` is not part of the value. That is also
+/// what lets a tablet still holding the strong tag an older edge sent revalidate against this one
+/// instead of downloading the bundle again.
 fn none_match(request: &HeaderMap, etag: &str) -> bool {
     let Some(header) = request
         .get(header::IF_NONE_MATCH)
@@ -133,10 +146,16 @@ fn none_match(request: &HeaderMap, etag: &str) -> bool {
     else {
         return false;
     };
+    let ours = opaque(etag);
     header
         .split(',')
         .map(str::trim)
-        .any(|candidate| candidate == "*" || candidate == etag)
+        .any(|candidate| candidate == "*" || opaque(candidate) == ours)
+}
+
+/// An entity tag without its weakness marker.
+fn opaque(etag: &str) -> &str {
+    etag.strip_prefix("W/").unwrap_or(etag)
 }
 
 /// The bytes of a UI asset, from the binary or (under `dev-ui`) from disk. `None` if absent.
@@ -148,14 +167,20 @@ fn asset_at(path: &str) -> Option<Asset> {
     })
 }
 
-/// The build-time content hash as a strong `ETag`.
+/// The build-time content hash as a **weak** `ETag`.
+///
+/// Weak because the hash is of the file, and the compression layer serves that file gzip or plain
+/// under whatever tag this sets. A strong tag promises byte-identical representations (RFC 9110
+/// §8.8.3), so one strong tag on both let a cache hand gzip bytes to a client that never asked
+/// for them. Nothing here needs the strong kind: it is only for `If-Match` and `If-Range`, and
+/// these routes serve no ranges.
 #[cfg(not(feature = "dev-ui"))]
 fn hex_etag(hash: [u8; 32]) -> String {
     use std::fmt::Write as _;
     // Sixteen bytes of SHA-256 is far past any collision a build could produce, and keeps the
     // header short enough to read in a trace.
-    let mut etag = String::with_capacity(34);
-    etag.push('"');
+    let mut etag = String::with_capacity(36);
+    etag.push_str("W/\"");
     for byte in &hash[..16] {
         // Infallible: writing to a `String` cannot fail.
         let _ = write!(etag, "{byte:02x}");
@@ -197,8 +222,31 @@ fn mime_for(path: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{IMMUTABLE, REVALIDATE, cache_control, mime_for, none_match};
-    use axum::http::{HeaderMap, HeaderValue, header};
+    use super::{Asset, IMMUTABLE, REVALIDATE, cache_control, mime_for, none_match, respond};
+    use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+
+    #[cfg(not(feature = "dev-ui"))]
+    #[test]
+    fn the_tag_is_weak_because_one_path_has_two_encodings() {
+        assert!(super::hex_etag([7; 32]).starts_with("W/\""));
+    }
+
+    #[test]
+    fn every_answer_says_it_varies_on_accept_encoding() {
+        let asset = || Asset {
+            etag: Some("W/\"abc123\"".to_owned()),
+            bytes: b"<html></html>".to_vec(),
+        };
+        let full = respond("index.html", asset(), &HeaderMap::new());
+        assert_eq!(full.status(), StatusCode::OK);
+        assert_eq!(full.headers()[header::VARY], "accept-encoding");
+
+        // The 304 too, which the compression layer never marks: it has no body to compress.
+        let revalidated = respond("index.html", asset(), &with_if_none_match("W/\"abc123\""));
+        assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(revalidated.headers()[header::VARY], "accept-encoding");
+        assert_eq!(revalidated.headers()[header::ETAG], "W/\"abc123\"");
+    }
 
     #[test]
     fn a_content_hashed_asset_may_be_held_forever_and_index_may_not() {
@@ -233,6 +281,16 @@ mod tests {
         ));
         // `*` means "anything you have".
         assert!(none_match(&with_if_none_match("*"), etag));
+    }
+
+    #[test]
+    fn validators_compare_weakly() {
+        let ours = "W/\"abc123\"";
+        assert!(none_match(&with_if_none_match(ours), ours));
+        // The strong tag an older edge sent still revalidates, so an upgrade does not make every
+        // tablet download the bundle again.
+        assert!(none_match(&with_if_none_match("\"abc123\""), ours));
+        assert!(!none_match(&with_if_none_match("W/\"stale\""), ours));
     }
 
     #[test]

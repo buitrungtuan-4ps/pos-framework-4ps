@@ -67,8 +67,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   has fonts for Vietnamese. Test pages need `ManageDevices`. The Devices screen lists the printers
   with a *Print a test page* button each.
 
+### Security
+
+- **`/activate` is rate-limited.** The unauthenticated code exchange had no limit at all, although
+  `docs/pos-spec.md` §16 says activation codes are rate-limited: nothing but the size of the code
+  space stood between a script and a guessing run, and every guess cost a database lookup. Each
+  client now gets 10 exchanges per 10 minutes, on a budget of its own, so a busy store's `/sync`
+  polling cannot spend it; the eleventh answers `429` with `Retry-After`.
+- **A code issued for another store is refused before it is spent.** The edge now sends the store it
+  was installed for with its code, and the cloud refuses a mismatch with the same answer as an
+  unknown code. A technician who typed the wrong shop's code used to get that shop's device, which
+  surfaced only when `/sync` refused every call, with the code already spent. **Upgrade note:** the
+  body of `POST /activate` gains an optional `store_id`; an older edge that omits it is not checked.
+
 ### Fixed
 
+- **The till's bundle has one tag per representation.** The edge served an embedded asset gzip or
+  plain under the same strong `ETag`, which RFC 9110 forbids, and a cache between a till and the edge
+  could hand gzip bytes to a client that never asked for them. The tag is now weak, it is compared
+  weakly (so a tablet holding the old tag still revalidates rather than downloading the bundle again),
+  and `Vary: accept-encoding` is sent on the `200` and the `304` alike.
+- **Receipt fonts no longer fill the edge's memory** (finding F14). On a Windows PC the edge held
+  about 60 MB of CJK, Devanagari, Thai and Arabic faces for a shop that prints Vietnamese. Once a box
+  has synced its menu it keeps only faces that add a character the store prints: Latin and
+  Vietnamese always, plus what the menu, floor and receipt header use. A file too big to fit under
+  the ceiling is no longer read, a skipped file is no longer copied, and the plain sans-serif
+  families are tried first so ordinary text is not drawn in whatever display face sorts first.
 - **A voided bill gives its table back.** Voiding a bill left its table `AWAITING_PAYMENT` for good,
   a state only a settle leaves, and a voided bill cannot settle, so the table could never be billed,
   cleaned or seated again, and re-billing the order was refused as `BILL_ALREADY_OPEN`. The table now

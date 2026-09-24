@@ -5735,6 +5735,96 @@ async fn the_activation_exchange_is_single_use_and_gives_no_oracle() {
     assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
 }
 
+/// A code issued for another store is refused **unspent**, with the generic refusal.
+///
+/// A technician who types the wrong shop's code into a box got that shop's device, and nothing said
+/// so until `/sync` refused every call, by which time the code was spent. The edge now names the
+/// store it was installed for; the cloud refuses a mismatch before consuming anything.
+#[tokio::test]
+async fn a_code_for_another_store_is_refused_and_left_unspent() {
+    let code = ActivationCode::from_entropy([17; pos_core::activation::PAYLOAD_LEN]);
+    let device = DeviceId::new(Ulid::from_u128(0xBEEF));
+    let activations = FakeActivations::with_issued(hash_code(&code), tenant(), store_id(), device);
+    let router = http::activation_router(activations.clone(), FakeAdmin::default(), clock());
+    let exchange = |store: String| {
+        let router = router.clone();
+        let code = code.as_str().to_owned();
+        async move {
+            router
+                .oneshot(post_json(
+                    "/activate",
+                    &serde_json::json!({ "code": code, "store_id": store }),
+                ))
+                .await
+                .expect("route the exchange")
+        }
+    };
+
+    let elsewhere = StoreId::new(Ulid::from_u128(0x0E15_E1E4)).to_string();
+    let refused = exchange(elsewhere).await;
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let body: serde_json::Value =
+        serde_json::from_slice(&body_bytes(refused).await).expect("the envelope");
+    assert_eq!(
+        body["error"]["message"], "activation refused",
+        "the generic refusal"
+    );
+    assert_eq!(activations.minted(), 0, "nothing was minted");
+
+    let granted = exchange(store_id().to_string()).await;
+    assert_eq!(
+        granted.status(),
+        StatusCode::CREATED,
+        "the code was not spent"
+    );
+    assert_eq!(activations.minted(), 1);
+
+    let malformed = exchange("not-a-ulid".to_owned()).await;
+    assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+}
+
+/// The unauthenticated code exchange has a budget per client (`docs/pos-spec.md` §16). It had
+/// none, so nothing but the size of the code space stood between a script and a guessing run.
+#[tokio::test]
+async fn the_code_exchange_is_refused_once_a_client_is_over_its_budget() {
+    let state = app(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+    );
+    let throttle = state.sync_throttle();
+    let router =
+        http::activation_router(FakeActivations::default(), FakeAdmin::default(), clock()).layer(
+            axum::middleware::from_fn_with_state(throttle, http::throttle_sync),
+        );
+    let guess = |n: u8| {
+        let router = router.clone();
+        async move {
+            let code = ActivationCode::from_entropy([n; pos_core::activation::PAYLOAD_LEN]);
+            router
+                .oneshot(post_json(
+                    "/activate",
+                    &serde_json::json!({ "code": code.as_str() }),
+                ))
+                .await
+                .expect("route the guess")
+                .status()
+        }
+    };
+    for n in 0..10 {
+        assert_eq!(
+            guess(n).await,
+            StatusCode::FORBIDDEN,
+            "guess {n} is looked up"
+        );
+    }
+    assert_eq!(
+        guess(10).await,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the eleventh is not"
+    );
+}
+
 // --- The AIP-193 error envelope (roadmap v3 Q3a, ADR-0026 §27) ----------------------------------
 
 /// A refusal answers the envelope — and two different refusals still answer *identically*.

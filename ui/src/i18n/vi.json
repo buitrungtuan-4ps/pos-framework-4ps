@@ -49,7 +49,7 @@
   "devices.this_device": "Máy này",
   "devices.title": "Thiết bị",
   "error.activation_code_malformed": "Đây không phải mã kích hoạt: mã gồm mười hai chữ và số, đúng như console hiển thị.",
-  "error.activation_refused": "Cloud không chấp nhận mã này. Đối chiếu với console, hoặc tạo mã mới ở đó — mỗi mã chỉ dùng được một lần.",
+  "error.activation_refused": "Cloud không chấp nhận mã này. Đối chiếu với console — mã phải được tạo cho đúng cửa hàng này — hoặc tạo mã mới ở đó; mỗi mã chỉ dùng được một lần.",
   "error.activation_unavailable": "Chưa kích hoạt được: máy chủ cửa hàng không kết nối được cloud, hoặc không lưu được thông tin xác thực. Kiểm tra internet của máy rồi thử lại.",
   "error.activation_wrong_state": "Cloud báo mã hoặc thiết bị này không ở trạng thái phù hợp. Hãy tạo mã mới trong console rồi thử lại.",
   "error.already_activated": "Máy chủ cửa hàng này đã được kích hoạt.",

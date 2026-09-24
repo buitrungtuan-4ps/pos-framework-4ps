@@ -112,7 +112,11 @@ impl HttpTransport for StubCloud {
                     .get("code")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                if code == VALID_CODE {
+                // The real cloud refuses a code for another store before spending it, so the
+                // adapter has to say which store this box is.
+                let for_this_store = request.get("store_id").and_then(serde_json::Value::as_str)
+                    == Some(reporting_store().to_string().as_str());
+                if code == VALID_CODE && for_this_store {
                     let payload = serde_json::json!({
                         "device_id": granted_device().to_string(),
                         "credential": "posdev_stub_secret",

@@ -49,7 +49,7 @@
   "devices.this_device": "This device",
   "devices.title": "Devices",
   "error.activation_code_malformed": "That is not an activation code: it is twelve letters and digits, exactly as the console shows it.",
-  "error.activation_refused": "The cloud did not accept that code. Check it against the console, or issue a new one there — each code works once.",
+  "error.activation_refused": "The cloud did not accept that code. Check it against the console — it must be for this store — or issue a new one there; each code works once.",
   "error.activation_unavailable": "Activation did not go through: this store server could not reach the cloud, or could not store its credential. Check its internet connection and try again.",
   "error.activation_wrong_state": "The cloud says this code or device is in the wrong state. Issue a new code in the console and try again.",
   "error.already_activated": "This store server is already activated.",

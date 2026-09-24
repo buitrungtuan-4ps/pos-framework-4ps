@@ -184,6 +184,12 @@ pub struct FontLibrary {
     /// How many bytes of font file the library is holding, counting a `.ttc` once however many of
     /// its faces were kept.
     bytes_held: usize,
+    /// The codepoints the store prints, as sorted inclusive ranges, when it said
+    /// ([`FontLibrary::wanting`]). A face is kept only for what it adds **inside** this set, so a
+    /// Vietnamese shop's library does not hold the CJK, Devanagari and Arabic faces a Windows font
+    /// directory hands over. `None` keeps every face that adds anything, as a store that has not
+    /// said what it prints must.
+    wanted: Option<Vec<(u32, u32)>>,
     /// How many faces parsed but were not kept: unreachable ones, and ones a ceiling refused.
     ///
     /// Counted rather than discarded silently. The first kind is free — those faces could never
@@ -212,6 +218,31 @@ impl FontLibrary {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty library that will keep only the faces needed to print `text`, and Latin and
+    /// Vietnamese ([`ALWAYS_WANTED`]) whatever `text` says.
+    ///
+    /// A kept face still renders everything it covers; what this bounds is which faces are kept.
+    /// The finding it answers (F14): on a store PC whose font directory holds every script, the
+    /// library filled its 64 MiB ceiling with CJK, Devanagari, Thai and Arabic faces a Vietnamese
+    /// shop never prints, and held them for as long as the process ran.
+    #[must_use]
+    pub fn wanting(text: &str) -> Self {
+        let mut points: Vec<u32> = text.chars().map(u32::from).collect();
+        points.sort_unstable();
+        points.dedup();
+        let mut from_text: Vec<(u32, u32)> = Vec::new();
+        for point in points {
+            match from_text.last_mut() {
+                Some((_, last)) if last.checked_add(1) == Some(point) => *last = point,
+                _ => from_text.push((point, point)),
+            }
+        }
+        Self {
+            wanted: Some(merge_ranges(&ALWAYS_WANTED, &from_text)),
+            ..Self::default()
+        }
     }
 
     /// Whether no face has been loaded — a library that can render nothing.
@@ -293,10 +324,10 @@ impl FontLibrary {
     fn load(&mut self, name: &str, data: &[u8]) -> Loaded {
         let count = faces_in(data);
         let mut outcome = Loaded::default();
-        // One allocation for the file, cloned as a handle by each face kept from it. Built before
-        // the loop and dropped unused when no face is kept, so a file that contributes nothing
-        // costs nothing.
-        let shared: Arc<[u8]> = Arc::from(data);
+        // One allocation for the file, cloned as a handle by each face kept from it. Made on the
+        // first face kept rather than before the loop: most files in a system font directory
+        // contribute nothing, and copying each one only to drop it doubled the peak of every read.
+        let mut shared: Option<Arc<[u8]>> = None;
         for index in 0..count {
             let Ok(face) = skrifa::FontRef::from_index(data, index) else {
                 continue;
@@ -314,9 +345,15 @@ impl FontLibrary {
             }
             outcome.parsed += 1;
             let coverage = coverage_of(&face);
+            // What the face could be chosen for: everything it covers, or only what the store
+            // prints when it has said.
+            let useful = self.wanted.as_ref().map_or_else(
+                || coverage.clone(),
+                |wanted| intersect_ranges(&coverage, wanted),
+            );
             // The whole of the dedup rule. `face_for` answers with the first covering face, so a
             // face adding no codepoint to the union can never be the answer to anything.
-            let merged = merge_ranges(&self.covered, &coverage);
+            let merged = merge_ranges(&self.covered, &useful);
             if covered_codepoints(&merged) == covered_codepoints(&self.covered) {
                 self.skipped += 1;
                 continue;
@@ -335,7 +372,7 @@ impl FontLibrary {
                 } else {
                     name.to_owned()
                 },
-                data: Arc::clone(&shared),
+                data: Arc::clone(shared.get_or_insert_with(|| Arc::from(data))),
                 index,
                 units_per_em: metrics.units_per_em,
                 ascender: whole(metrics.ascent),
@@ -355,7 +392,9 @@ impl FontLibrary {
     /// Recursive because that is how font packages install: on Linux the `DejaVu` package writes to
     /// `/usr/share/fonts/truetype/dejavu/`, so a scan of `/usr/share/fonts/truetype` alone would
     /// find nothing and a store would silently have no fonts. Paths are visited in sorted order, so
-    /// a library built twice from the same tree has the same fallback order.
+    /// a library built twice from the same tree has the same fallback order — after the plain
+    /// sans-serif families in [`PREFERRED`], so ordinary text is not drawn in whatever display face
+    /// sorts first (in a Windows directory with Office installed, that was Agency FB).
     ///
     /// A file that is not a font is skipped rather than failing the load: font directories collect
     /// `README`s and licence files. Returns how many faces were added.
@@ -373,10 +412,20 @@ impl FontLibrary {
                 source,
             }
         })?;
-        files.sort();
+        files.sort_by_cached_key(|path| (preference(path), path.clone()));
 
         let mut added = 0;
         for path in files {
+            // A file bigger than what is left under the ceiling cannot be kept, so it is not read:
+            // a CJK collection is tens of megabytes, and reading it only to refuse it was the
+            // slowest part of a boot.
+            let room = MAX_FONT_BYTES.saturating_sub(self.bytes_held);
+            if std::fs::metadata(&path).is_ok_and(|metadata| {
+                usize::try_from(metadata.len()).map_or(true, |len| len > room)
+            }) {
+                self.skipped += 1;
+                continue;
+            }
             if let Ok(data) = std::fs::read(&path) {
                 let name = path.file_name().map_or_else(
                     || path.display().to_string(),
@@ -459,6 +508,42 @@ const PROBES: [(&str, &str); 8] = [
     ("Thai", "อาหาร"),
     ("Arabic", "طعام"),
 ];
+
+/// What every store prints whatever its menu says: Latin with its accents, Vietnamese (Latin
+/// Extended Additional), punctuation and currency signs, `₫` among them. The receipt's own labels are
+/// Latin, and a buyer's name or a note is typed at the till, where nothing predicts the script.
+const ALWAYS_WANTED: [(u32, u32); 6] = [
+    (0x0020, 0x007E),
+    (0x00A0, 0x024F),
+    (0x0300, 0x036F),
+    (0x1E00, 0x1EFF),
+    (0x2000, 0x206F),
+    (0x20A0, 0x20CF),
+];
+
+/// File names a directory scan tries first, case-insensitively: plain, complete sans-serif
+/// families that print well on a receipt. The first face covering a character draws it, and face 0
+/// also sets the line height.
+const PREFERRED: [&str; 6] = [
+    "dejavusans.ttf",
+    "notosans-regular.ttf",
+    "arial.ttf",
+    "segoeui.ttf",
+    "tahoma.ttf",
+    "liberationsans-regular.ttf",
+];
+
+/// Where a file sorts in a directory scan: its place in [`PREFERRED`], or after all of them.
+fn preference(path: &Path) -> usize {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    PREFERRED
+        .iter()
+        .position(|preferred| *preferred == name)
+        .unwrap_or(PREFERRED.len())
+}
 
 /// How deep to walk a font directory. Deep enough for every packaging layout in use, shallow enough
 /// that a symlink loop or a misconfigured path cannot walk a whole filesystem at boot.
@@ -561,6 +646,25 @@ fn merge_ranges(left: &[(u32, u32)], right: &[(u32, u32)]) -> Vec<(u32, u32)> {
     merged
 }
 
+/// The codepoints two sorted, non-overlapping range lists share, as the same kind of list.
+fn intersect_ranges(left: &[(u32, u32)], right: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut shared = Vec::new();
+    let (mut l, mut r) = (left.iter().peekable(), right.iter().peekable());
+    while let (Some(&&(l_first, l_last)), Some(&&(r_first, r_last))) = (l.peek(), r.peek()) {
+        let (first, last) = (l_first.max(r_first), l_last.min(r_last));
+        if first <= last {
+            shared.push((first, last));
+        }
+        // Whichever range ends first can overlap nothing further along the other list.
+        if l_last < r_last {
+            l.next();
+        } else {
+            r.next();
+        }
+    }
+    shared
+}
+
 /// How many faces a font file holds — more than one only for a collection (`.ttc`).
 fn faces_in(data: &[u8]) -> u32 {
     skrifa::raw::FileRef::new(data).map_or(1, |file| match file {
@@ -586,8 +690,82 @@ fn whole(value: f32) -> i16 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Arc, FontLibrary, covered_codepoints, merge_ranges};
+    use super::{
+        Arc, FontLibrary, MAX_FONT_BYTES, PREFERRED, covered_codepoints, intersect_ranges,
+        merge_ranges, preference,
+    };
     use std::path::Path;
+
+    const DEJAVU: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+    const WQY: &str = "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc";
+
+    /// F14: a Vietnamese shop's library keeps no CJK face, however much of one the directory holds.
+    #[test]
+    fn a_store_that_prints_vietnamese_holds_no_cjk_face() {
+        let (dejavu, wqy) = (Path::new(DEJAVU), Path::new(WQY));
+        if !dejavu.exists() || !wqy.exists() {
+            return;
+        }
+        let mut library = FontLibrary::wanting("Phở bò tái nạm 50.000₫");
+        assert_eq!(library.add_file(dejavu).expect("load"), 1);
+        let held = library.bytes_held();
+        assert_eq!(
+            library.add_file(wqy).expect("load"),
+            0,
+            "nothing wanted in it"
+        );
+        assert_eq!(library.bytes_held(), held, "so none of its bytes are held");
+        assert!(library.missing("Phở bò tái nạm 50.000₫").is_empty());
+    }
+
+    /// A script the store does print is kept, and the kept face renders all it has, not only the
+    /// characters that were asked for.
+    #[test]
+    fn a_script_the_store_prints_is_kept_whole() {
+        let (dejavu, wqy) = (Path::new(DEJAVU), Path::new(WQY));
+        if !dejavu.exists() || !wqy.exists() {
+            return;
+        }
+        let mut library = FontLibrary::wanting("寿司");
+        library.add_file(dejavu).expect("load");
+        assert!(library.add_file(wqy).expect("load") > 0);
+        assert!(library.covers('寿'));
+        assert!(library.covers('一'), "a kanji the menu never used");
+    }
+
+    /// A file that cannot fit under the ceiling is refused before it is read.
+    #[test]
+    fn a_file_too_big_to_keep_is_not_read() {
+        let directory = Path::new("/usr/share/fonts/truetype/dejavu");
+        if !directory.exists() {
+            return;
+        }
+        let mut library = FontLibrary::new();
+        library.bytes_held = MAX_FONT_BYTES - 1;
+        assert_eq!(library.add_directory(directory).expect("listed"), 0);
+        assert!(library.skipped() > 0, "each is counted as skipped");
+    }
+
+    #[test]
+    fn plain_sans_serif_families_are_tried_first() {
+        assert_eq!(preference(Path::new("/usr/share/fonts/DejaVuSans.ttf")), 0);
+        assert!(
+            preference(Path::new("C:/Windows/Fonts/arial.ttf"))
+                < preference(Path::new("C:/Windows/Fonts/AGENCYB.TTF"))
+        );
+        assert_eq!(preference(Path::new("ALGER.TTF")), PREFERRED.len());
+    }
+
+    #[test]
+    fn two_range_sets_intersect_to_what_both_cover() {
+        let left = [(0x20, 0x7E), (0x1E00, 0x1EFF), (0x4E00, 0x9FFF)];
+        let right = [(0x41, 0x5A), (0x1EA0, 0x1EF9), (0xAC00, 0xD7A3)];
+        assert_eq!(
+            intersect_ranges(&left, &right),
+            vec![(0x41, 0x5A), (0x1EA0, 0x1EF9)]
+        );
+        assert!(intersect_ranges(&left, &[]).is_empty());
+    }
 
     /// A face that is present wherever this repository's tests run: the `fonts-dejavu-core` package
     /// the edge image installs. A test needing a real face skips rather than fails when it is

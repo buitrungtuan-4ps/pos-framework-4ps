@@ -98,10 +98,13 @@ pub struct EdgeConfig {
     /// code — a framework that embedded one would ship every store several megabytes it will not
     /// print and still not cover the next country.
     ///
-    /// Every `.ttf`, `.otf` and `.ttc` directly inside each directory is loaded, directories in the
-    /// order given and files within one in filename order. That order is the fallback order: put the
-    /// face for ordinary Latin text first. Defaults to the standard system font directories for the
-    /// platform, which is where the packages `deploy/edge/README.md` names install to.
+    /// Every `.ttf`, `.otf` and `.ttc` under each directory, subdirectories included, is considered:
+    /// directories in the order given, and within one the plain sans-serif families first and then
+    /// filename order. That order is the fallback order. A face is kept only if it adds a character
+    /// the store prints — Latin and Vietnamese always, plus whatever the synced menu, floor and
+    /// receipt header use — so a Windows font directory no longer fills memory with scripts the shop
+    /// never prints. Defaults to the standard system font directories for the platform, which is
+    /// where the packages `deploy/edge/README.md` names install to.
     ///
     /// A box that loads no font still trades and still prints ASCII; it refuses the lines it cannot
     /// draw, and says which scripts it can print at start-up.

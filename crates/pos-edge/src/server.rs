@@ -25,7 +25,7 @@ use updater_minisign::MinisignVerifier;
 
 use crate::activation::{activation_router, boot_standing};
 use crate::admission_events::AdmissionEvents;
-use crate::app::Edge;
+use crate::app::{Edge, EdgeSession};
 use crate::auth::Sessions;
 use crate::clock::SystemClock;
 use crate::cloud_http::{
@@ -680,7 +680,7 @@ where
     // the loaded pairing state so `/api/pair` and the gates agree.
     // Loaded before the configuration is handed to the application state, and logged there:
     // an operator needs to know at start-up whether tonight's tickets can print (ADR-0102).
-    let fonts = load_fonts(&config);
+    let fonts = load_fonts(&config, &edge.session());
     let state = AppState::with_fanout(config, edge.fanout().clone())
         .with_pairing(Arc::clone(&pairing))
         // The same cell the commands refuse on, so the `pos-lease-standing` header on every
@@ -1293,8 +1293,13 @@ where
 /// It is, however, logged loudly and precisely, because the failure it produces otherwise — a
 /// kitchen ticket that never comes out during service — is expensive and hard to trace back to a
 /// missing package.
-fn load_fonts(config: &EdgeConfig) -> Option<pos_render::TextRenderer> {
-    let mut library = pos_render::FontLibrary::new();
+fn load_fonts(config: &EdgeConfig, session: &EdgeSession) -> Option<pos_render::TextRenderer> {
+    // Only the scripts this store prints, once it has synced a menu to say what that is (F14): the
+    // session here is the one restored from the last sync. A box that has never synced keeps every
+    // face, as before, rather than guess.
+    let mut library = printed_text(session).map_or_else(pos_render::FontLibrary::new, |text| {
+        pos_render::FontLibrary::wanting(&text)
+    });
     for directory in &config.font_directories {
         match library.add_directory(directory) {
             Ok(0) => tracing::debug!(directory = %directory.display(), "no fonts there"),
@@ -1349,6 +1354,50 @@ fn load_fonts(config: &EdgeConfig) -> Option<pos_render::TextRenderer> {
         NonZeroU16::new(24).unwrap_or(NonZeroU16::MIN),
     );
     Some(pos_render::TextRenderer::new(library, size))
+}
+
+/// Everything the published configuration can put on paper: item and modifier names, the receipt
+/// header, table and area labels, station names, reason names. `None` for a store with no menu,
+/// which has not synced yet and so cannot say what it prints.
+///
+/// A script that reaches the menu after boot prints once the edge next restarts (an update, or
+/// the restart activation asks for). The boot log's `cannot_print` names it until then.
+fn printed_text(session: &EdgeSession) -> Option<String> {
+    if session.menu.is_empty() {
+        return None;
+    }
+    let profile = &session.profile;
+    let mut text = String::new();
+    let names = session
+        .menu
+        .items()
+        .iter()
+        .map(|item| item.display_name.as_str())
+        .chain(session.floor.areas().iter().map(|area| area.name.as_str()))
+        .chain(session.floor.tables().map(|table| table.label.as_str()))
+        .chain(
+            session
+                .stations
+                .stations()
+                .iter()
+                .map(|station| station.name.as_str()),
+        )
+        .chain(
+            session
+                .reason_codes
+                .codes()
+                .iter()
+                .map(|reason| reason.display_name.as_str()),
+        )
+        .chain(std::iter::once(profile.legal_name.as_str()))
+        .chain(profile.trading_name.as_deref())
+        .chain(profile.tax_registration_label.as_deref())
+        .chain(profile.address_lines.iter().map(String::as_str))
+        .chain(profile.contact_lines.iter().map(String::as_str));
+    for name in names {
+        text.push_str(name);
+    }
+    Some(text)
 }
 
 fn ota_installer(config: &EdgeConfig) -> Option<SystemdInstaller> {
