@@ -187,7 +187,8 @@ A box can also be installed **without** a store, from one image for every store
 serving:
 
 1. The box shows an eight-character code, `XXXX-XXXX`, in its log and on a page at
-   `http://127.0.0.1:8080/` that its own screen can show.
+   `http://127.0.0.1:8080/` that its own screen can show. The page is the code and nothing else:
+   there is no store yet, so there is no till around it.
 2. In the console, open **Activation → Claim a box**, type the code (case and dashes do not matter)
    and choose the device this box becomes. You need `console.devices.manage`.
 3. Within a few seconds the box collects its device credential, keeps it in the keyring, writes
