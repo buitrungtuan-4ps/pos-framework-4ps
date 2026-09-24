@@ -42,7 +42,7 @@ browser tab cannot — a tray on the store PC, and the print agent on a second m
 
 | Mode | Chosen when | What it adds |
 |---|---|---|
-| **Station** (3.2) | `http://127.0.0.1:8080/healthz` answers at start, or the device paired with a loopback address | a tray with a one-line summary, **Open till**, **Status**, **Pairing QR** (the till's Devices screen, where a manager mints a code and its QR) and **Quit**; a desktop notification for each change listed below |
+| **Station** (3.2) | `http://127.0.0.1:8787/healthz` (the edge's default port) answers at start, or the device paired with a loopback address | a tray with a one-line summary, **Open till**, **Status**, **Pairing QR** (the till's Devices screen, where a manager mints a code and its QR) and **Quit**; a desktop notification for each change listed below |
 | **Terminal** (3.3) | anything else: the edge is another machine | the print agent as a sidecar started with this terminal's token; a smaller tray (**Open till**, **Status**, **Quit**) |
 
 Both open the till when the app starts, **full screen** unless `till_full_screen` is `false` in
@@ -52,8 +52,8 @@ clause keeps a store PC a Station when the app starts before the edge's service 
 
 ### Pairing
 
-1. With no pairing, the app opens **connect**. It takes the edge's address — `192.168.1.10:8080`, or
-   the pairing link `http://192.168.1.10:8080/pair?code=123456`, or ADR-0111's hosted
+1. With no pairing, the app opens **connect**. It takes the edge's address — `192.168.1.10:8787`, or
+   the pairing link `http://192.168.1.10:8787/pair?code=123456`, or ADR-0111's hosted
    `https://till.example/pair?code=123456` — and the six-digit code, which a pasted link already
    carries.
 2. The Rust side posts the code to `POST /api/pair`, stores the token in the OS credential store

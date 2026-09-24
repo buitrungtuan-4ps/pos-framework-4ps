@@ -197,6 +197,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **POS Station recognises the store PC it runs on.** It looked for the PC's own edge at
+  `127.0.0.1:8080`, while the edge, every installer and the setup file bind `8787`. So on a store
+  PC installed the default way the app never chose Station mode: it opened the connect page, and a
+  pairing typed with the PC's LAN address made it a Terminal of its own edge, with the smaller
+  tray (no cloud link, outbox or printers, no notifications) and a print agent it had no use for.
+  It now looks at `127.0.0.1:8787`, and a Station test reads the edge's `DEFAULT_PORT` from its
+  source so the two cannot drift apart again. The connect page's examples show `8787` too. An edge
+  moved to another port is still a Station when it is paired as `127.0.0.1:<port>`. **Upgrade
+  note:** none. The Station is not released yet.
 - **A receipt says what each line was made with**
   ([ADR-0144](docs/adr/0144-a-line-records-the-names-of-its-modifiers.md), one of the ten known
   defects). A guest who ordered a 30 cm Margherita got a receipt that said "Margherita": the size's
