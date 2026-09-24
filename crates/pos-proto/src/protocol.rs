@@ -93,16 +93,23 @@ pub struct Hello {
     pub protocol_version_max: u32,
     /// The edge's product release.
     ///
-    /// **It does not reach the fleet view on the shipped path** (production-readiness **R2**). The
-    /// only production [`MessageLink`](pos_ports::message_link::MessageLink) is `link-nats`, which is
-    /// outbound-only by design ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)): there is no
-    /// cloud responder, so its `handshake` runs [`negotiate`] against its *own* compiled constants
-    /// and this field is never transmitted. The console learns which binary a store runs from
+    /// **It does not reach the fleet view** (production-readiness **R2**). There are two production
+    /// [`MessageLink`](pos_ports::message_link::MessageLink)s, and neither records it:
+    ///
+    /// - `link-nats` is outbound-only by design
+    ///   ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)). There is no cloud responder,
+    ///   so its `handshake` runs [`negotiate`] against its *own* compiled constants and this field is
+    ///   never transmitted.
+    /// - `cloud-sync-http`'s link
+    ///   ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md))
+    ///   posts this frame to the cloud, which negotiates the version range against its own and reads
+    ///   nothing else from it.
+    ///
+    /// The console learns which binary a store runs from
     /// [`CloudSync::report`](pos_ports::cloud_sync::CloudSync::report) over `/sync`
     /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), which is a different rail.
     ///
-    /// The field stays because the frame is the protocol's, not one transport's: the deferred
-    /// bidirectional link (roadmap-v3 #89b, whose ADR is not written) reads it, and removing a
+    /// The field stays because the frame is the protocol's, not one transport's, and removing a
     /// member from a wire type is a `PROTOCOL_VERSION` change made for no gain.
     pub product_version: ReleaseTag,
     /// Which store is calling.

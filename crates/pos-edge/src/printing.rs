@@ -333,6 +333,16 @@ pub fn receipt_document(
             line: line.display_name.as_str().to_owned(),
             style: TextStyle::default(),
         });
+        // What the line was made with, as the kitchen ticket prints it (ADR-0144): after the name and
+        // before the amount, because the unit price already includes every modifier's.
+        blocks.extend(
+            line.modifier_display_names
+                .iter()
+                .map(|modifier| PrintBlock::Text {
+                    line: format!("  + {}", modifier.as_str()),
+                    style: TextStyle::default(),
+                }),
+        );
         blocks.push(amount_line(
             &format!(
                 "  {} x {}",
@@ -1743,6 +1753,7 @@ mod tests {
             quantity: Quantity::from_milli(milli),
             unit_price: unit,
             line_total: total,
+            modifier_display_names: Vec::new(),
         }
     }
 
@@ -1777,6 +1788,42 @@ mod tests {
                 "  1 x VND 149,000  VND 149,000",
                 "Subtotal  VND 347,000",
                 "VND 347,000",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_receipt_prints_what_each_line_was_made_with() {
+        // ADR-0144: the names the line recorded, under the item and above its amount, whose unit
+        // price already includes them. A line recorded before the event carried names has none, and
+        // prints exactly what it printed before.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let mut pizza = sold("Margherita", 1_000, vnd(189_000), vnd(189_000));
+        pizza.modifier_display_names = vec![DisplayName::new("30 cm"), DisplayName::new("Burrata")];
+        let lines = [pizza, sold("Phở bò", 1_000, vnd(99_000), vnd(99_000))];
+
+        let document = receipt_document(
+            &StoreProfile::default(),
+            // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
+            &style(0),
+            9,
+            &lines,
+            &totals_of(vnd(288_000)),
+            None,
+        );
+
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "#9",
+                "Margherita",
+                "  + 30 cm",
+                "  + Burrata",
+                "  1 x VND 189,000  VND 189,000",
+                "Phở bò",
+                "  1 x VND 99,000  VND 99,000",
+                "Subtotal  VND 288,000",
+                "VND 288,000",
             ]
         );
     }

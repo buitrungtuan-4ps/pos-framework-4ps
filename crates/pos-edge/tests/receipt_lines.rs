@@ -20,7 +20,8 @@ use pos_core::billing::Payment;
 use pos_core::decision::Actor;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
-    Edge, EdgeSession, InMemoryReceipts, LineDraft, StaffAuth, StaffRoster, StoreIdentity,
+    Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StaffAuth, StaffRoster,
+    StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -110,13 +111,48 @@ fn session_naming(named: &str) -> EdgeSession {
 }
 
 fn edge() -> Edge<FakeStore> {
+    edge_over(FakeStore::default(), session_naming("Margherita"))
+}
+
+fn edge_over(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
     Edge::new(
-        FakeStore::default(),
+        store,
         StoreIdentity::for_store(StoreId::new(Ulid::from_u128(1))),
-        session_naming("Margherita"),
+        session,
         Arc::new(InMemoryReceipts::new()),
     )
     .expect("seed the id generator")
+}
+
+/// The size modifier the next cases choose (item 600, 40,000 on top of the pizza).
+fn size() -> MenuItemId {
+    item(600)
+}
+
+/// The same store, also selling the size, which the menu spells `spelled` today.
+fn session_selling_size(spelled: &str) -> EdgeSession {
+    let menu = MenuCatalog::new()
+        .with(MenuEntry::new(
+            item(500),
+            DisplayName::new("Margherita"),
+            vnd(150_000),
+            class(),
+        ))
+        .with(MenuEntry::new(
+            size(),
+            DisplayName::new(spelled),
+            vnd(40_000),
+            class(),
+        ));
+    session_naming("Margherita").with_menu(menu)
+}
+
+/// The names a receipt row prints under itself.
+fn modifiers_of(line: &pos_edge::ReceiptLine) -> Vec<&str> {
+    line.modifier_display_names
+        .iter()
+        .map(DisplayName::as_str)
+        .collect()
 }
 
 /// One line as a till would send it: the snapshot §14.2 demands, captured at add time.
@@ -274,6 +310,106 @@ fn the_receipt_says_what_the_guest_agreed_to_and_not_what_the_menu_says_now() {
                 .as_str(),
             "Margherita",
             "the name captured at add time, not the one published since"
+        );
+    });
+}
+
+#[test]
+fn a_row_names_its_modifiers_as_they_were_when_the_line_was_added() {
+    // ADR-0144. The till sends a modifier's id and never its name; the edge names it from the price
+    // book the line was priced against and records the name on the event. A rename the cloud
+    // publishes before payment then changes nothing on paper, which is the rule ADR-0129 holds the
+    // item's own name to.
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), session_selling_size("30 cm"));
+        edge.seat_table(server(), table(), None)
+            .await
+            .expect("seats");
+        let mut pizza = draft(item(500), "Margherita", 1_000, 190_000, 190_000);
+        pizza.modifier_menu_item_ids = vec![size()];
+        edge.add_line(server(), table(), pizza)
+            .await
+            .expect("adds the pizza");
+
+        edge.apply_session(session_selling_size("Large (30 cm)"));
+
+        let opened = edge.open_bill(server(), table()).await.expect("opens");
+        // 190,000 at 10 % is 209,000.
+        let settled = edge
+            .settle_bill(server(), opened.bill_id, vec![cash(209_000)], None)
+            .await
+            .expect("settles");
+
+        let row = settled.lines.first().expect("the pizza's row");
+        assert_eq!(
+            modifiers_of(row),
+            ["30 cm"],
+            "the name the line was priced under, not the one published since"
+        );
+    });
+}
+
+#[test]
+fn a_line_the_edge_prices_names_its_modifiers_and_keeps_them_across_a_restart() {
+    // ADR-0144's second writer, the order path the edge prices itself (ADR-0146), and the replay:
+    // the projection folds the same event after a restart, so a receipt printed then still names
+    // the size.
+    run_ready(async {
+        let store = FakeStore::default();
+        let order_id = {
+            let edge = edge_over(store.clone(), session_selling_size("30 cm"));
+            let opened = edge
+                .open_counter_order(server(), SalesChannel::DineIn)
+                .await
+                .expect("the counter opens an order");
+            let choice = OrderLineChoice {
+                menu_item_id: item(500),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: vec![size()],
+                seat: None,
+                course_id: None,
+                note_present: false,
+            };
+            edge.add_line_to_order(server(), opened.order_id, choice)
+                .await
+                .expect("a line joins it");
+            opened.order_id
+        };
+
+        let edge = edge_over(store, session_selling_size("Large (30 cm)"));
+        edge.rebuild().await.expect("rebuilds from the log");
+        let opened = edge
+            .open_bill_for_order(server(), order_id)
+            .await
+            .expect("bills");
+        // 150,000 + 40,000 at 10 % is 209,000.
+        let settled = edge
+            .settle_bill(server(), opened.bill_id, vec![cash(209_000)], None)
+            .await
+            .expect("settles");
+
+        let row = settled.lines.first().expect("the pizza's row");
+        assert_eq!(row.unit_price, vnd(190_000), "the size is inside the price");
+        assert_eq!(modifiers_of(row), ["30 cm"]);
+    });
+}
+
+#[test]
+fn a_row_without_modifiers_prints_none() {
+    // The common case, and the shape of every line recorded before ADR-0144: nothing under the row.
+    run_ready(async {
+        let edge = edge();
+        two_lines(&edge).await;
+        let opened = edge.open_bill(server(), table()).await.expect("opens");
+        let settled = edge
+            .settle_bill(server(), opened.bill_id, vec![cash(382_800)], None)
+            .await
+            .expect("settles");
+        assert!(
+            settled
+                .lines
+                .iter()
+                .all(|line| line.modifier_display_names.is_empty())
         );
     });
 }
