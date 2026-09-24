@@ -48,3 +48,15 @@ The edge already runs as a systemd service (`deploy/edge/pos-edge.service`). Wha
 - **The kiosk's browser is the distribution's Chromium**, updated by the OS rather than by our
   updater. Only the edge rides our signed updates.
 - **Android is unproven until someone runs it on a device.** Nothing here claims otherwise.
+
+**Amendment 1 (2026-09-24) — the appliance uses the layout the installer already has.** Built against
+the code, three details above were wrong, and the shipped script follows the code:
+
+- The service user is **`pos`**, not `pos-edge`: `deploy/edge/pos-edge.service` says `User=pos`, as
+  do the console's installers. A second user would leave the service unable to start.
+- `config.toml` lives at **`/var/lib/pos-edge/config.toml`**, where `POS_EDGE_CONFIG` points; only the
+  environment file is under `/etc/pos-edge/`.
+- The kiosk opens the till on the store server's own port, **8787** (or `bind` from `config.toml`).
+  `127.0.0.1:8080` is the claim page ADR-0148 describes, which the kiosk shows only while the box is
+  unclaimed.
+

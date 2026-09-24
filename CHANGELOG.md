@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
+  ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).
+  `deploy/appliance/provision.sh` lays out exactly what the console's installer does (the `pos`
+  user, the update slots, `pos-edge.service` unchanged, `fonts-dejavu-core`). With `--store` it
+  writes `config.toml`; without it, it installs `pos-edge-claim.service`, which runs `pos-edge claim`
+  on first boot as the service's user, so one image serves every store. `--kiosk` adds cage and
+  Chromium on tty1 through a logind session, showing the claim page until the box is claimed and the
+  till after. `--dry-run` prints every action, and re-runs never replace the binary the edge is
+  running. `deploy/appliance/cloud-init.yaml` does the same on first boot, checking the binary's
+  minisign signature and pinning the script by SHA-256. The console's installer gate now also checks
+  the appliance scripts. Guide: `docs/guides/appliance.md`.
+
 - **A box installed with no store claims itself** with `pos-edge claim --cloud <url>`
   ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
   4.1, edge half). It opens a claim, shows the code in its log and on a page at
@@ -152,6 +164,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Two deployment instructions that did not work.** `docs/release-runbook.md` verified an artifact
+  with `minisign -P "$(cat minisign.pub)"`, which minisign refuses (`-P` takes the key line, not the
+  file); it now uses `-p minisign.pub`. `deploy/edge/README.md` added the printer group to a user
+  called `pos-edge`; the service runs as `pos`.
 - **A generated environment file no longer sets the store key to a sentence.** For a store with no
   key the console wrote `POS_EDGE_SYNC_KEY=  # issue a key in step 2, or paste one here`, and systemd
   keeps everything after the `=`, so the hint became the key and every `/sync` call was refused. The

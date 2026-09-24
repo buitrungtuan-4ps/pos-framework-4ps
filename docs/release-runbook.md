@@ -212,7 +212,7 @@ release. A fork without a certificate leaves it unset and gets a notice instead 
 ## Verifying an artifact by hand
 
 ```
-minisign -Vm pos-edge-v1.2.0-x86_64-unknown-linux-gnu.tar.gz -P "$(cat minisign.pub)"
+minisign -Vm pos-edge-v1.2.0-x86_64-unknown-linux-gnu.tar.gz -p minisign.pub
 ```
 
 `Signature and comment signature verified` means the artifact is authentic and unmodified — the same

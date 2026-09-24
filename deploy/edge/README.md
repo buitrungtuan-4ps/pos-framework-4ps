@@ -21,6 +21,11 @@ Use [`pos-edge.service`](pos-edge.service). The install steps are in its header 
 systemd sends `SIGTERM`; the edge drains in-flight requests before exiting, so a committed sale is
 durable and an interrupted one was never acknowledged.
 
+To turn a stock Debian 12 or Ubuntu 24.04 machine into a dedicated store box in one step, with an
+optional full-screen till and a first boot that claims itself from the console, use
+[`deploy/appliance/provision.sh`](../appliance/provision.sh); the
+[appliance guide](../../docs/guides/appliance.md) walks through it. It lays out exactly this unit.
+
 ### The binary lives under the state directory
 
 `ExecStart` is **`/var/lib/pos-edge/bin/current`**, a symlink, not `/usr/local/bin/pos-edge`
@@ -449,7 +454,7 @@ Two Linux details:
   for some serial adapters). Without it every print is `Unavailable` and the log says the printer
   could not be reached, which reads like an unplugged cable.
   ```sh
-  sudo usermod -aG lp pos-edge
+  sudo usermod -aG lp pos    # the user pos-edge.service runs as
   ```
 - **A serial printer needs its baud rate set outside the process.** USB printer-class devices have
   no baud rate and need nothing; serial ones do, and the edge does not set it (that would mean
