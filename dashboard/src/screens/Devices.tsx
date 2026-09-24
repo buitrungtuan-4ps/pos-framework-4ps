@@ -8,7 +8,7 @@
 // approved devices in one store, so neither can be shown by the pending queue above; they read
 // through `listStoreDevices` and follow the top bar's store, not the tenant.
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { DeviceProposalSummary, Station, Store } from "../api/types";
@@ -100,8 +100,13 @@ export function Devices() {
   const conditionalFleet = <T,>(write: () => Promise<T>) =>
     withStaleReload(write, loadFleet, t("devices.stale"));
 
-  const terminals = () => (fleet() ?? []).filter((device) => device.kind === "terminal");
-  const printers = () => (fleet() ?? []).filter((device) => device.kind === "printer");
+  // Memoized device filters avoid re-filtering `fleet()` on every table render or accessor call.
+  const terminals = createMemo(() => (fleet() ?? []).filter((device) => device.kind === "terminal"));
+  const printers = createMemo(() => (fleet() ?? []).filter((device) => device.kind === "printer"));
+  // Pre-build O(1) lookup map for terminal names by device ID instead of doing O(N) array finds per printer row.
+  const terminalMap = createMemo(
+    () => new Map(terminals().map((device) => [device.id, device.name])),
+  );
 
   // A printer names its agent by id; the operator reads the terminal's name. A pick that no longer
   // resolves — the terminal was created in another store, or archived — shows the raw id rather than
@@ -110,7 +115,7 @@ export function Devices() {
     if (!agentId) {
       return t("devices.agentNone");
     }
-    return terminals().find((device) => device.id === agentId)?.name ?? agentId;
+    return terminalMap().get(agentId) ?? agentId;
   };
 
   const createTerminal = () => {
