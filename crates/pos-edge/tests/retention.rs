@@ -148,7 +148,7 @@ async fn a_finished_table(edge: &Edge<SqliteStore>) {
 #[tokio::test]
 async fn a_finished_synced_day_is_forgotten_once_old() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let store = SqliteStore::open(&dir.path().join("store.db")).expect("open");
+    let store = SqliteStore::open(dir.path().join("store.db")).expect("open");
     let edge = edge_over(&store);
     a_finished_table(&edge).await;
     sync_everything(&store).await;
@@ -175,7 +175,7 @@ async fn a_finished_synced_day_is_forgotten_once_old() {
 #[tokio::test]
 async fn an_open_order_keeps_everything_since_it_began() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let store = SqliteStore::open(&dir.path().join("store.db")).expect("open");
+    let store = SqliteStore::open(dir.path().join("store.db")).expect("open");
     let edge = edge_over(&store);
     edge.seat_table(actor(), table(), None)
         .await
@@ -202,7 +202,7 @@ async fn an_open_order_keeps_everything_since_it_began() {
 #[tokio::test]
 async fn nothing_goes_inside_the_store_s_retention() {
     let dir = tempfile::tempdir().expect("temp dir");
-    let store = SqliteStore::open(&dir.path().join("store.db")).expect("open");
+    let store = SqliteStore::open(dir.path().join("store.db")).expect("open");
     let edge = edge_over(&store);
     a_finished_table(&edge).await;
     sync_everything(&store).await;

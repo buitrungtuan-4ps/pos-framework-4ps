@@ -143,14 +143,10 @@ impl Fixture {
 }
 
 fn intact_with(status: &ChainStatus, expected: u64) {
-    match status {
-        ChainStatus::Intact { checked, .. } => {
-            assert_eq!(*checked, expected, "records verified from the checkpoint");
-        }
-        ChainStatus::Broken { at_seq, reason } => {
-            panic!("the kept log must verify, broke at {at_seq}: {reason:?}")
-        }
-    }
+    assert!(
+        matches!(status, ChainStatus::Intact { checked, .. } if *checked == expected),
+        "the kept log must verify, with {expected} records checked from the checkpoint: {status:?}"
+    );
 }
 
 /// However old, an event the link has not acknowledged stays. This is the rule that lets a store
@@ -218,21 +214,18 @@ fn the_head_stays_and_the_chain_continues() {
 fn records_from_before_the_chain_go_first() {
     let fixture = Fixture::new();
     // Three rows written by a build that had no chain: no `seq`, no hash.
-    Fixture::sql(
-        &fixture.path,
-        &(0..3)
-            .map(|n| {
-                let envelope =
-                    serde_json::to_string(&envelope(900 + n)).expect("serialise an envelope");
-                format!(
-                    "INSERT INTO events (store_id, event_id, envelope) VALUES ('{}', '{}', '{}');",
-                    store_id(),
-                    Ulid::from_u128(0x0100 + n),
-                    envelope.replace('\'', "''"),
-                )
-            })
-            .collect::<String>(),
-    );
+    for n in 0..3 {
+        let envelope = serde_json::to_string(&envelope(900 + n)).expect("serialise an envelope");
+        Fixture::sql(
+            &fixture.path,
+            &format!(
+                "INSERT INTO events (store_id, event_id, envelope) VALUES ('{}', '{}', '{}');",
+                store_id(),
+                Ulid::from_u128(0x0100 + n),
+                envelope.replace('\'', "''"),
+            ),
+        );
+    }
     let fixture = Fixture {
         store: SqliteStore::open(&fixture.path).expect("reopen"),
         ..fixture
