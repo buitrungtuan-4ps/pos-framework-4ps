@@ -29,8 +29,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   vault answer errors, so the counter keeps trading while cloud sync waits; it never falls back to
   the keyring, which would read as "not activated" and send the till to `/setup`. An activated box
   keeps its activation when the key is added. Without a TPM2 a copied disk can open the key.
-  **Upgrade note:** nothing changes until a vault key is sealed. The installers do not do it yet;
-  the steps are in `deploy/edge/README.md`. Windows is unchanged.
+  **Upgrade note:** both Linux installers set it up: the console's `install-pos-edge.sh` and
+  `deploy/appliance/provision.sh`. Each box seals its own key at its first start, never while an
+  image is built. On a box installed before, run its installer again: it now restarts the service
+  rather than `enable --now`, which applies the drop-in and moves a credential still in the keyring
+  into the sealed store before the next reboot. An installer that cannot seal a key leaves the
+  unit drop-in out, so the box stays on the keyring. The steps by hand are in
+  `deploy/edge/README.md`. Windows is unchanged.
 
 - **A replacement box never reuses a receipt number the cloud has seen**
   ([ADR-0149](docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md), plan step
