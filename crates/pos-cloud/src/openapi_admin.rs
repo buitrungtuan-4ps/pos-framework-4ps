@@ -333,6 +333,9 @@ const UNDOCUMENTED: &[&str] = &[
     // reason, and the runbook step that carries the upload's `curl` carries this one's too.
     "/admin/ota/releases/fetch",
     "/admin/config/qr",
+    // How long a store's edge keeps a synced event (ADR-0145): one bounded number, enumerated with
+    // the rest of the console's settings surface at the same fidelity.
+    "/admin/config/retention",
     "/admin/config/scheduled",
     "/admin/config/scheduled/{id}",
     "/admin/config/tax",

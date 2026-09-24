@@ -97,6 +97,15 @@ const REGISTRATION_LABEL: Record<string, string> = {
 };
 
 /** One node of the store's effective config tree, or `null` when the tree does not carry it. */
+/** The edge's event retention bounds and default (ADR-0145), as the cloud enforces them. */
+const MIN_EVENT_LOG_DAYS = 30;
+const MAX_EVENT_LOG_DAYS = 3650;
+const DEFAULT_EVENT_LOG_DAYS = 90;
+
+function clampEventLogDays(days: number): number {
+  return Math.max(MIN_EVENT_LOG_DAYS, Math.min(MAX_EVENT_LOG_DAYS, Math.trunc(days)));
+}
+
 function node(effective: Json | null, key: string): Record<string, Json> | null {
   if (effective === null || typeof effective !== "object" || Array.isArray(effective)) {
     return null;
@@ -169,6 +178,8 @@ export function StoreSettings() {
   const [footerText, setFooterText] = createSignal("");
   const [roundingText, setRoundingText] = createSignal("");
   const [notesText, setNotesText] = createSignal("");
+  // How many days the store's edge keeps a synced event before it may forget it (ADR-0145).
+  const [eventLogDays, setEventLogDays] = createSignal(DEFAULT_EVENT_LOG_DAYS);
   // A write's refusal. The read's own refusal lives in the resource below; the two are kept apart
   // because a form that could not be read and a publish that was rejected want different words.
   const [error, setError] = createSignal("");
@@ -234,6 +245,7 @@ export function StoreSettings() {
     setRegistrationLabel("");
     setContactText("");
     setFooterText("");
+    setEventLogDays(DEFAULT_EVENT_LOG_DAYS);
   };
 
   /**
@@ -253,6 +265,10 @@ export function StoreSettings() {
   const hydrate = (effective: Json | null) => {
     const locale = node(effective, "locale");
     const profile = node(effective, "store_profile");
+    const days = readNumber(node(effective, "retention"), "event_log_days");
+    if (days !== null) {
+      setEventLogDays(clampEventLogDays(days));
+    }
 
     const currencyCode = readString(locale, "currency_code");
     if (currencyCode !== null) {
@@ -421,6 +437,20 @@ export function StoreSettings() {
       toast.ok(t("storeSettings.profilePublished", { store: storeName() }));
       // Re-read the node dates, not the whole form: the fields hold exactly what was just
       // published, and a failed read here should not blank a form the operator is still using.
+      await published.refresh();
+    } catch (caught) {
+      fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const publishRetention = async () => {
+    setError("");
+    setBusy(true);
+    try {
+      await api.publishRetention(tenantId(), storeId(), eventLogDays());
+      toast.ok(t("storeSettings.retentionPublished", { store: storeName() }));
       await published.refresh();
     } catch (caught) {
       fail(caught);
@@ -666,6 +696,31 @@ export function StoreSettings() {
               busy={busy()}
               onPublish={() => void publishProfile()}
             />
+            </StickyActions>
+          </div>
+        </Card>
+        <Card title={t("storeSettings.retention")}>
+          <p class="mb-4 max-w-2xl text-sm text-ink-muted">{t("storeSettings.retentionHint")}</p>
+          <div class="grid max-w-xl gap-4">
+            <NumberField
+              label={t("storeSettings.eventLogDays")}
+              value={eventLogDays()}
+              // Clamped as the edge and the cloud clamp it: the spinner's bounds do not bound what
+              // can be typed.
+              onChange={(days) => setEventLogDays(clampEventLogDays(days ?? DEFAULT_EVENT_LOG_DAYS))}
+              min={MIN_EVENT_LOG_DAYS}
+              max={MAX_EVENT_LOG_DAYS}
+              hint={t("storeSettings.eventLogDaysHint")}
+            />
+            <StickyActions>
+              <PublishBar
+                label={t("storeSettings.retention")}
+                publishedAtMs={published.publishedAtMs("retention")}
+                describe={describePublish}
+                publishLabel={t("storeSettings.publishRetention")}
+                busy={busy()}
+                onPublish={() => void publishRetention()}
+              />
             </StickyActions>
           </div>
         </Card>

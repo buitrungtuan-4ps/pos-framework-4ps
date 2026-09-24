@@ -312,7 +312,7 @@ keeping the last-known-good if a version is rejected
 | **People** | the staff roster and what each role may do | **Yes** — nobody can sign in without it |
 | **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
 | **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
-| **Store settings** | country, currency, timezone, business-date cutoff | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)) |
+| **Store settings** | country, currency, timezone, business-date cutoff; the receipt's seller identity; and how many days the store PC keeps synced events (90 unless set, [ADR-0145](../adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)) | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)); the retention can stay at its default |
 | **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
 | **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
 | **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |

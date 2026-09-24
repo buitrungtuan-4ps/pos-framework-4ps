@@ -19283,6 +19283,80 @@ async fn a_closed_set_refusal_names_the_field_and_a_stable_reason() {
     assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
 }
 
+/// A store's event retention is published as its `retention` node and read back (ADR-0145), and a
+/// figure outside 30..=3650 days is refused, naming the field.
+#[tokio::test]
+async fn a_store_s_event_retention_is_published_within_its_range() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let publish = |days: u32| {
+        put_with_cookie(
+            "/admin/config/retention",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "event_log_days": days,
+            }),
+            &cookie,
+        )
+    };
+
+    let published = router
+        .clone()
+        .oneshot(publish(45))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/config/retention?tenant_id={}&store_id={}",
+                tenant().as_ulid(),
+                store_id().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(json_body(read).await["event_log_days"], 45);
+
+    for refused in [29, 3_651] {
+        let response = router
+            .clone()
+            .oneshot(publish(refused))
+            .await
+            .expect("route the publish");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused} days");
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["details"][0]["field"], "event_log_days");
+        assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    }
+}
+
+/// The cloud's bounds on `event_log_days` are the edge's. The two crates share no dependency, so
+/// this pins the numbers here and the edge's own test pins them there.
+#[test]
+fn the_cloud_bounds_event_retention_as_the_edge_does() {
+    assert_eq!(http::EVENT_LOG_DAYS, 30..=3650);
+}
+
 /// A range refusal about two fields names only the one actually out of range.
 ///
 /// `"open_hour and close_hour must be in 0..=23"` had the same over-naming the ULID refusals did,

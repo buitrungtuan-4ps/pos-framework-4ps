@@ -24,8 +24,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   start-up replay grew for as long as a store traded. Once an hour the edge now deletes an event
   only when three things are true:
   - the event link has acknowledged it;
-  - it is older than the store's retention (90 days by default; a per-store figure from the cloud
-    follows);
+  - it is older than the store's retention: 90 days unless the console's **Store settings → Event
+    log** publishes another figure (30–3650) as the store's `retention` node, through
+    `GET`/`PUT /admin/config/retention` (`console.config.publish` to change it);
   - nothing still open began before it: an order still owing, an open bill, a table that is not
     free, a guest order awaiting staff, or the open shift.
 
