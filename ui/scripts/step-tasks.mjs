@@ -125,8 +125,6 @@ export const TASKS = [
       { route: "/counter", action: "payCash" },
     ],
     outcome: { route: "/counter", mark: "settled" },
-    unreplayable:
-      "a counter order arrives from the cloud over the relay (ADR-0093, ADR-0061), and the on-fakes example has no cloud_url, so no relay runs and the counter list is always empty",
   },
   {
     task: "Settle a dine-in table by card",
@@ -212,8 +210,6 @@ export const TASKS = [
       { route: "/counter", action: "payCash" },
     ],
     outcome: { route: "/counter", mark: "settled" },
-    unreplayable:
-      "the same missing relay as the tipped counter case above — there is no order at the counter to charge",
   },
   {
     task: "Charge a counter order by card",
@@ -223,8 +219,20 @@ export const TASKS = [
       { route: "/counter", action: "payCard" },
     ],
     outcome: { route: "/counter", mark: "settled" },
-    unreplayable:
-      "the same missing relay as the two counter cases above — there is no order at the counter to charge",
+  },
+  {
+    task: "Start a counter order for a walk-in guest",
+    budget: 2,
+    note: "One tap on the counter screen opens a tableless order with the day's next queue number and lands on it (ADR-0146, F12). Before it, a store with no tables could charge an order somebody else started and could not start one.",
+    steps: [{ route: "/counter", action: "newOrder" }],
+    outcome: { route: "/order/:id", mark: "order-open" },
+  },
+  {
+    task: "Add an item to a counter order",
+    budget: 2,
+    note: "The same grid and the same one tap as a table's order; the edge prices the line at the order's own channel, so the till sends only what the guest chose.",
+    steps: [{ route: "/order/:id", action: "onItem" }],
+    outcome: { route: "/order/:id", mark: "line-added" },
   },
   {
     task: "Open the cash shift with a float",

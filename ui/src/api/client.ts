@@ -29,7 +29,9 @@ import type {
   LocaleResponse,
   MenuResponse,
   MintedCode,
+  OpenedOrder,
   OpenShiftRequest,
+  OrderLineRequest,
   PairAccepted,
   PairingState,
   PrinterEntry,
@@ -273,6 +275,10 @@ export const api = {
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID
   // to charge one.
   openOrders: () => request<CounterOrder[]>("GET", "/api/orders/open"),
+  // The counter starts its own order (ADR-0146): a tableless takeaway order and its queue number.
+  openOrder: () => request<OpenedOrder>("POST", "/api/orders", {}),
+  addOrderLine: (orderId: string, line: OrderLineRequest) =>
+    request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 
   // What is open right now, with the line ids to act on it. The read a device has instead of the
   // fan-out events it was not running to hear: without it a reloaded till draws an empty order and

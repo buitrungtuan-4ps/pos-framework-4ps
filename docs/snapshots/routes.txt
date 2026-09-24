@@ -30,10 +30,12 @@ POST /api/kds/bump
 POST /api/lines/{id}/fire
 POST /api/lines/{id}/quantity
 POST /api/lines/{id}/void
+POST /api/orders
 POST /api/orders/{id}/bill
 POST /api/orders/{id}/confirm
 POST /api/orders/{id}/fire
 POST /api/orders/{id}/fire/{course_id}
+POST /api/orders/{id}/lines
 POST /api/orders/{id}/reject
 POST /api/pair
 POST /api/pair/codes

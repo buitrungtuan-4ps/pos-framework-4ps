@@ -33,7 +33,7 @@ use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
 use pos_core::lease::LeaseGeneration;
 use pos_core::machines::{Bill, BillTrigger};
-use pos_core::menu::PricedLine;
+use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_core::state_machine::StateMachine;
@@ -888,6 +888,34 @@ pub enum AppError {
     /// time the kitchen reads the ticket — the line was priced without the size it was sold at.
     #[error("the modifiers on that line break the item's selection rules")]
     ModifierSelectionInvalid,
+    /// The store does not accept orders on that sales channel (ADR-0146): the counter asked to open
+    /// an order on a channel its published `channels` node leaves out.
+    #[error("this store does not accept orders on that sales channel")]
+    ChannelNotAccepted,
+    /// The item, or one of its modifiers, is not in the store's price book or is 86'd right now,
+    /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
+    #[error("that item cannot be sold right now")]
+    ItemNotSellable,
+}
+
+impl AppError {
+    /// Why the price book could not price a line, as a refusal (ADR-0146). A missing rate is the
+    /// same configuration fault the bill reports, so it keeps that token.
+    fn from_reprice(error: RepriceError) -> Self {
+        match error {
+            RepriceError::MissingRate {
+                tax_class_id,
+                sales_channel,
+            } => Self::Domain(DomainError::TaxRateNotConfigured {
+                tax_class_id: tax_class_id.to_string(),
+                sales_channel: pos_proto::WireEnum::as_wire(sales_channel).to_owned(),
+            }),
+            RepriceError::Money(error) => Self::Domain(DomainError::Money(error)),
+            // An unknown or 86'd item, and — `RepriceError` being non-exhaustive — any reason this
+            // build has not learned: the line cannot be priced, and a refusal is the safe answer.
+            _ => Self::ItemNotSellable,
+        }
+    }
 }
 
 /// A manager's step-up authorisation for one act (`docs/pos-spec.md` §9, §11.4).
@@ -975,6 +1003,33 @@ pub struct LineDraft {
     pub modifier_menu_item_ids: Vec<MenuItemId>,
     /// Whether a guest note was written — its text never enters the log.
     pub note_present: bool,
+}
+
+/// What a till sends to add a line to an order by its id (ADR-0146): the guest's choice, and no
+/// price. The edge prices it from its own price book at the order's channel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderLineChoice {
+    /// The item.
+    pub menu_item_id: MenuItemId,
+    /// How many.
+    pub quantity: Quantity,
+    /// The chosen modifiers, each a price-book item.
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Seat, when seats are enabled.
+    pub seat: Option<u16>,
+    /// Course, when courses are enabled.
+    pub course_id: Option<CourseId>,
+    /// Whether the line carries a free-text note (the note itself never enters an event).
+    pub note_present: bool,
+}
+
+/// A counter order the till has just opened (ADR-0146).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CounterOrderOpened {
+    /// The new order.
+    pub order_id: OrderId,
+    /// The trading day it opened on, which the queue number is counted within.
+    pub business_date: BusinessDate,
 }
 
 /// What a line looks like to a caller after a command.
@@ -2291,9 +2346,9 @@ impl<S> Edge<S> {
     /// Refuses a command that would **open** something new when a replacement machine has taken this
     /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
-    /// Called by the three commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
-    /// no others — `open_shift`, `seat_table` and `open_inbound_order`, which are exactly the three
-    /// sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
+    /// Called by the four commands that mint an [`OrderId`] or a [`ShiftId`] from nothing, and by
+    /// no others — `open_shift`, `seat_table`, `open_inbound_order` and `open_counter_order`, which
+    /// are exactly the sites in this file that call `next_order_id` or construct a `ShiftId`. Everything already open runs to settlement on a superseded box — a seated table takes
     /// its second round, gets its bill and is paid — because the order lives in *this* box's log and
     /// there is nowhere else for those guests to be served. What the box cannot do is start
     /// anything: the floor drains and does not refill.
@@ -3566,6 +3621,123 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .order_for_table(table_id)
             .ok_or(AppError::NoOpenOrder)?;
+        self.append_line(&ctx, order_id, draft).await
+    }
+
+    /// Opens a tableless order at the counter for the signed-in member of staff
+    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    ///
+    /// What a store without tables was missing: until now the only way a tableless order began was
+    /// the relay intake, so a kiosk could charge an order somebody else started and could not start
+    /// one. It records `sales.order.opened` with no table, on a channel the store accepts, and the
+    /// order is billable and settleable as every counter order has been since ADR-0093.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Superseded`] on a replaced box, [`AppError::ChannelNotAccepted`] for a channel the
+    /// store does not take, or [`AppError`] if the store cannot be written.
+    pub async fn open_counter_order(
+        &self,
+        actor: Actor,
+        channel: SalesChannel,
+    ) -> Result<CounterOrderOpened, AppError> {
+        // A replaced machine starts nothing (ADR-0123), exactly as it seats nobody.
+        self.refuse_if_superseded()?;
+        let ctx = self.decision_ctx(actor)?;
+        if !self.session().channel_enabled(channel) {
+            return Err(AppError::ChannelNotAccepted);
+        }
+        let order_id = self.next_order_id();
+        let opened = SalesOrderOpened {
+            order_id,
+            channel: Open::from_known(channel),
+            table_id: None,
+            guest_count: None,
+        };
+        self.commit_and_publish(&ctx, &opened).await?;
+        self.lock_projection()
+            .open_order_origin(order_id, Some(channel), None);
+        Ok(CounterOrderOpened {
+            order_id,
+            business_date: ctx.business_date,
+        })
+    }
+
+    /// Adds a line to an order by its id, **priced by the edge** at the order's own channel
+    /// ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+    ///
+    /// The table path records the prices the device copied from the menu, which is priced for the
+    /// session's channel. A takeaway order carrying dine-in prices but taxed at the takeaway rate
+    /// would be a receipt that does not add up, so this path looks the item up itself, as the order
+    /// intake does, and the device sends only what the guest chose.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownOrder`] for an order this edge never saw open, [`AppError::OrderRejected`]
+    /// for one staff refused, [`AppError::BillAlreadyOpen`] once a bill is open on it (that bill
+    /// would not cover the line), [`AppError::ItemNotSellable`] if the price book cannot price it,
+    /// [`AppError::ModifierSelectionInvalid`], [`AppError::Domain`] for a seat on a store without
+    /// seats, or [`AppError`] if the store cannot be written.
+    pub async fn add_line_to_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        choice: OrderLineChoice,
+    ) -> Result<LineView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        if choice.seat.is_some() {
+            ctx.require_capability(Capability::Seats)?;
+        }
+        let session = self.session();
+        let (origin, bill, refused) = {
+            let projection = self.lock_projection();
+            (
+                projection.order_origin(order_id),
+                projection.bill_for_order(order_id),
+                projection.staff_decision(order_id) == Some(StaffDecision::Rejected),
+            )
+        };
+        let origin = origin.ok_or(AppError::UnknownOrder)?;
+        if refused {
+            return Err(AppError::OrderRejected);
+        }
+        if bill.is_some() {
+            return Err(AppError::BillAlreadyOpen);
+        }
+        let channel = origin.channel.unwrap_or(session.sales_channel);
+        let requested = RequestedLine {
+            menu_item_id: choice.menu_item_id,
+            quantity: choice.quantity,
+            modifier_menu_item_ids: choice.modifier_menu_item_ids,
+            quoted_unit_price: None,
+        };
+        let priced = reprice_line(&session.menu, &session.tax_rates, channel, &requested)
+            .map_err(AppError::from_reprice)?;
+        let draft = LineDraft {
+            menu_item_id: priced.menu_item_id,
+            display_name: priced.display_name,
+            quantity: priced.quantity,
+            unit_price: priced.unit_price,
+            line_total: priced.line_total,
+            tax_class_id: priced.tax_class_id,
+            tax_rate: priced.tax_rate,
+            seat: choice.seat,
+            course_id: choice.course_id,
+            modifier_menu_item_ids: priced.modifier_menu_item_ids,
+            note_present: choice.note_present,
+        };
+        Self::check_modifiers(&session, &draft)?;
+        self.append_line(&ctx, order_id, draft).await
+    }
+
+    /// Records a line on an order and folds it into the projection: the shared tail of the table
+    /// path and the order path.
+    async fn append_line(
+        &self,
+        ctx: &DecisionCtx,
+        order_id: OrderId,
+        draft: LineDraft,
+    ) -> Result<LineView, AppError> {
         let order_line_id = OrderLineId::new(self.next_ulid());
 
         let payload = SalesOrderLineAdded {
@@ -3583,7 +3755,7 @@ impl<S: EventStore> Edge<S> {
             modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             note_present: draft.note_present,
         };
-        self.commit_and_publish(&ctx, &payload).await?;
+        self.commit_and_publish(ctx, &payload).await?;
 
         // From the event, for the reason the order-in path above says.
         self.lock_projection()

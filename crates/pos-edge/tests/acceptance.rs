@@ -1238,6 +1238,117 @@ async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
     );
 }
 
+/// A counter starts its own order, adds a line the edge prices, and charges it (ADR-0146, F12).
+///
+/// Until now a store without tables could charge an order somebody else started — the relay's —
+/// and could not start one: the only command that opened an order at the till was `seat`.
+#[tokio::test]
+async fn a_walk_in_is_started_priced_and_charged_at_the_counter() {
+    let store = a_store().await;
+    let (status, opened) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/orders",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "the counter opens an order: {opened}"
+    );
+    assert_eq!(
+        opened["queue_number"], 1,
+        "and the guest is called by the day's first number"
+    );
+    let order_id = opened["order_id"]
+        .as_str()
+        .expect("the new order's id")
+        .to_owned();
+
+    // The till sends what the guest chose and no price; the edge prices it from its price book.
+    let (status, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/lines"),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a line joins the order: {line}");
+    assert_eq!(line["order_id"], order_id);
+
+    let (status, listed) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/orders/open",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let waiting = &listed.as_array().expect("a list")[0];
+    assert_eq!(waiting["order_id"], order_id);
+    assert_eq!(
+        waiting["queue_number"], 1,
+        "the list shows the number the counter called"
+    );
+    assert_eq!(waiting["total_due"]["amount_minor"], WITH_TAX);
+
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{bill}");
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    // A bill is open: a line added now would not be on it, so it is refused.
+    let (status, late) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/orders/{order_id}/lines"),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{late}");
+
+    let (status, settled) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    let (_, after) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/orders/open",
+        None,
+    )
+    .await;
+    assert_eq!(
+        after.as_array().map(Vec::len),
+        Some(0),
+        "paid, it leaves the list"
+    );
+}
+
 /// The cash shift, over the composed router: open with a float, count blind, close with the variance.
 #[tokio::test]
 async fn a_cash_shift_opens_counts_and_closes_on_the_composed_edge() {

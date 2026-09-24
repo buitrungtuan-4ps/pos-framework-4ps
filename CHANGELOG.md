@@ -18,6 +18,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A counter store starts its own orders** ([ADR-0146](docs/adr/0146-a-counter-store-starts-its-own-orders.md),
+  finding F12). The counter screen has **New order**. It opens a tableless takeaway order, gives it
+  the day's next queue number, and lands on the order screen a table uses, at `/order/:id`. Each line
+  is priced **by the edge** at the order's own channel through `POST /api/orders/{id}/lines`, so a
+  takeaway line carries the takeaway rate, not the dine-in rate the till's menu is priced at. A line
+  is refused once a bill is open, because that bill would not cover it. **Take payment** returns to
+  the counter with that order's pad open. Until now a store without tables could charge only orders
+  started elsewhere. The three counter charge flows are now replayed in the browser gate, where
+  before they were skipped for want of an order to charge. **Upgrade note:** two edge routes are
+  added (`POST /api/orders`, `POST /api/orders/{id}/lines`), plus two refusal tokens,
+  `CHANNEL_NOT_ACCEPTED` and `ITEM_NOT_SELLABLE`.
 - **The edge forgets what it no longer needs, and only that**
   ([ADR-0145](docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). The documents
   promised each store kept 90 days of events, but nothing ever deleted one, so the database and the

@@ -16,6 +16,7 @@ import type {
   CourseResponse,
   DiscountResponse,
   LineRequest,
+  OrderLineRequest,
   LayoutCategory,
   MenuItemResponse,
   ModifierGroup,
@@ -391,7 +392,8 @@ export function openBillFor(tableId: string): string | undefined {
 // tax class — showed the guest one number and settled against another. The edge assembles this with
 // the same `billing::assemble` the settle path runs, so there is one calculation, in the domain.
 export async function loadCheck(tableId: string): Promise<CheckResponse> {
-  return api.check(tableId);
+  const walkIn = walkInOrder(tableId);
+  return walkIn === undefined ? api.check(tableId) : api.checkOrder(walkIn);
 }
 
 // ---- small payload readers (fan-out payloads are untyped JSON) --------------
@@ -844,6 +846,10 @@ export async function addItem(
   if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
     throw new Error(`${item.display_name} is not sellable`);
   }
+  const walkIn = walkInOrder(tableId);
+  if (walkIn !== undefined) {
+    return addItemToWalkIn(walkIn, tableId, item, modifiers);
+  }
   const line: LineRequest = {
     menu_item_id: item.menu_item_id,
     display_name: item.display_name,
@@ -883,6 +889,75 @@ export async function addItem(
         lineTotal: item.unit_price,
         state: response.state,
         seat: line.seat,
+        modifierMenuItemIds: modifiers,
+        courseId: line.course_id,
+      };
+    }),
+  );
+}
+
+// ---- counter orders the till starts itself (ADR-0146) ----------------------
+
+// The key a walk-in order is held under in `tableOrder`, beside the real tables. A walk-in sits on no
+// table, but the order screen and every helper it reads are keyed by one; giving the order a key of
+// its own lets them all work on it unchanged, and the prefix keeps it from ever meeting a real table
+// id, which is a ULID.
+const WALK_IN = "walkin:";
+
+export function walkInKey(orderId: string): string {
+  return WALK_IN + orderId;
+}
+
+/** The order behind a walk-in key, or `undefined` for a real table. */
+export function walkInOrder(key: string): string | undefined {
+  return key.startsWith(WALK_IN) ? key.slice(WALK_IN.length) : undefined;
+}
+
+/** Holds an order under its walk-in key, so the order screen can reach it after a reload. */
+export function holdWalkIn(orderId: string): void {
+  if (state.tableOrder[walkInKey(orderId)] === undefined) {
+    setState("tableOrder", walkInKey(orderId), orderId);
+  }
+}
+
+/**
+ * Opens a tableless order at the counter and returns its id (ADR-0146). The edge records it, gives
+ * it the day's next queue number, and prices every line added to it at the order's own channel.
+ */
+export async function startWalkIn(): Promise<string> {
+  const opened = await api.openOrder();
+  holdWalkIn(opened.order_id);
+  return opened.order_id;
+}
+
+// A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
+// line drawn here carries the menu's price until the order screen next reads the check, which is the
+// edge's figure; the counter's price book is the one the edge prices from, so the two agree.
+async function addItemToWalkIn(
+  orderId: string,
+  key: string,
+  item: MenuItemResponse,
+  modifiers: string[],
+): Promise<void> {
+  const line: OrderLineRequest = {
+    menu_item_id: item.menu_item_id,
+    quantity: { milli: 1000 },
+    course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
+    modifier_menu_item_ids: modifiers,
+    note_present: false,
+  };
+  const response = await api.addOrderLine(orderId, line);
+  setState(
+    produce((draft) => {
+      draft.tableOrder[key] = response.order_id;
+      draft.lines[response.order_line_id] = {
+        orderLineId: response.order_line_id,
+        orderId: response.order_id,
+        name: item.display_name,
+        quantityMilli: 1000,
+        lineTotal: item.unit_price,
+        state: response.state,
+        seat: undefined,
         modifierMenuItemIds: modifiers,
         courseId: line.course_id,
       };
