@@ -569,6 +569,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
         ))
+        // A box installed with no store claims itself (ADR-0148): it shows a code, a console user
+        // binds it to a device slot, and the box collects its credential once.
+        .merge(http::claim_router(
+            store.claims(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // The org registry (ADR-0065): named Tenant/Brand/Store/Device under the super-admin session,
         // the source of the dashboard's named pickers. Its tables are backfilled from `config_trees`
         // by migration 0011, so an existing cell's fleet appears here on the first boot after upgrade.
