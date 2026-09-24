@@ -28,6 +28,7 @@
 )]
 
 use core::future::Future;
+use std::time::Duration;
 
 use link_nats::{NatsConfig, NatsLink};
 use pos_ports::message_link::MessageLink;
@@ -96,14 +97,24 @@ fn a_token_in_the_url_authenticates_against_an_enforcing_broker() {
 fn the_same_broker_refuses_the_address_without_the_token() {
     // Without this, the case above would also pass against a broker enforcing nothing — which is
     // precisely the state the rest of this crate's integration tests run in.
+    //
+    // The connect itself succeeds, by design: the link connects in the background and keeps trying,
+    // so a store PC that boots before its router still gets a publisher (`tests/unreachable.rs`).
+    // This case used to assert that the connect failed, and went red on `main` the day that design
+    // landed, because nothing before a merge runs it. The refusal shows where it matters instead: no
+    // session is ever established, so the handshake — which needs JetStream to create the stream —
+    // cannot complete, where the companion case's handshake does.
     block_on(async {
-        let refused =
-            NatsLink::connect(&url_without_credentials(), config("POS_AUTH_DENIED")).await;
+        let link = NatsLink::connect(&url_without_credentials(), config("POS_AUTH_DENIED"))
+            .await
+            .expect("the connect hands back a link that keeps trying, refused or not");
+        let handshake =
+            tokio::time::timeout(Duration::from_secs(30), link.handshake(&hello())).await;
         assert!(
-            refused.is_err(),
-            "a broker with an authorization block must refuse an unauthenticated connection; if \
-             this passes, the server under test is not enforcing and the companion case proves \
-             nothing"
+            matches!(handshake, Ok(Err(_))),
+            "a broker with an authorization block must refuse an unauthenticated session, so the \
+             handshake fails; if it completes, the server under test is not enforcing and the \
+             companion case proves nothing (got {handshake:?})"
         );
     });
 }

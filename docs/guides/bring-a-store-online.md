@@ -53,13 +53,16 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
-2. **API key** — issue the store's scoped key. It is issued **bound to the store you just created**,
-   which is what the `/sync/stores/{id}/…` routes require: those serve one store its own
-   configuration, employee roster included, so a key naming another store — or naming none — is
-   refused there. `read_config` and `relay_orders` are pre-selected together and you should keep
-   both: with only `read_config` the box syncs its configuration and looks healthy while the order
-   relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The key
-   is shown **once** — the next step embeds it in a file for you.
+2. **API key** — **optional**, and **Skip the key** is the usual choice. A box activated with a code
+   (Step 3) syncs, relays orders and publishes events with the credential activation gives it
+   ([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so it
+   needs no store key. Issue one for a box you set up by hand with `-SyncKey`. It is issued **bound
+   to the store you just created**, which is what the `/sync/stores/{id}/…` routes require: those
+   serve one store its own configuration, employee roster included, so a key naming another store —
+   or naming none — is refused there. `read_config` and `relay_orders` are pre-selected together and
+   you should keep both: with only `read_config` the box syncs its configuration and looks healthy
+   while the order relay answers `403` on every poll, so orders placed in the cloud never reach the
+   kitchen. The key is shown **once** — the next step embeds it in a file for you.
 
    Issuing a store key by hand instead (**API keys** screen) works the same way, but you must pick
    the store in *Which store is this key for?*. A tenant-wide key is right for an integration that
@@ -177,7 +180,10 @@ store key to paste and no broker token to copy. A store key still works if you g
 loops use it instead. The console will not offer the file when it was opened over plain http, because
 the file tells the store to dial the cloud over `https`, the only way a store dials it. Windows
 SmartScreen warns on the file unless your fork signs it
-([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)).
+([ADR-0142](../adr/0142-windows-signing-is-the-forks-choice.md)): the browser may ask whether to keep
+the file (keep it), and Windows opens with **Windows protected your PC** (choose **More info**, then
+**Run anyway**). It happens once per PC, at that first double-click; updates install without it, and
+the console's setup-file panel says the same.
 
 ### A box with no store yet: claim it
 
@@ -318,9 +324,12 @@ selling**: until it is done the store serves nothing but `/setup`, and no cloud 
 >
 > The store's scoped key must carry **`relay_orders` as well as `read_config`**; with only the latter
 > the relay is dark and the edge logs a `403` on every pull — which is exactly the symptom *Reading the
-> boot log* above exists for, because the box otherwise looks healthy. One flagged gap remains: on a
-> **headless Linux** box the kernel keyring is not durable across a reboot, and the TPM-sealed
-> hardening is a tracked hardware handoff ([`gate-register.md`](../gate-register.md) row P2).
+> boot log* above exists for, because the box otherwise looks healthy. On a **headless Linux** box
+> the credential survives a reboot: the Linux installers set up a vault key sealed with
+> `systemd-creds` ([ADR-0151](../adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md),
+> [`deploy/edge/README.md`](../../deploy/edge/README.md)). A box installed before them keeps it in the
+> kernel keyring, which a reboot empties, until its installer runs again. The proof on real hardware
+> is [`gate-register.md`](../gate-register.md) row P2.
 
 ## Step 4 — Publish the store's configuration
 

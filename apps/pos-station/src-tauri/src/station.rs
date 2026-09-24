@@ -5,7 +5,7 @@
 //!
 //! # Two modes, chosen by where the edge is (ADR-0147)
 //!
-//! - **Station** — the edge answers on `127.0.0.1:8080`, or the device paired with a loopback
+//! - **Station** — the edge answers on `127.0.0.1:8787`, or the device paired with a loopback
 //!   address: this is the store PC. A tray summarises the edge, the cloud link, the outbox and the
 //!   printers, a notification marks each change, and the tray opens the till, the status page and
 //!   the pairing QR.

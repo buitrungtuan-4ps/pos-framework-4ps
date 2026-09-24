@@ -22,9 +22,9 @@ const STRINGS = {
     "connect.lead":
       "Pair this computer with the store server. You need its address and a six-digit pairing code: a manager gets one on the till's Devices screen, and the store server shows one when it starts.",
     "connect.address_label": "Store server address or pairing link",
-    "connect.address_placeholder": "192.168.1.10:8080",
+    "connect.address_placeholder": "192.168.1.10:8787",
     "connect.address_hint":
-      "For example 192.168.1.10:8080. Or paste the whole link from the pairing QR — its code comes with it.",
+      "For example 192.168.1.10:8787. Or paste the whole link from the pairing QR — its code comes with it.",
     "connect.code_label": "Pairing code",
     "connect.code_placeholder": "123456",
     "connect.code_hint": "Six digits. Leave it empty if you pasted the pairing link.",
@@ -34,7 +34,7 @@ const STRINGS = {
     "connect.error.address_empty": "Enter the store server's address.",
     "connect.error.address_scheme": "The address must start with http:// or https://, or have no prefix at all.",
     "connect.error.address_credentials": "The address must not contain a user name or password.",
-    "connect.error.address_host": "That is not a valid address. Use host:port, for example 192.168.1.10:8080.",
+    "connect.error.address_host": "That is not a valid address. Use host:port, for example 192.168.1.10:8787.",
     "connect.error.address_port": "The port must be a number from 1 to 65535.",
     "connect.error.code_missing": "Enter the six-digit pairing code.",
     "connect.error.code_format": "The pairing code is six digits.",
@@ -96,9 +96,9 @@ const STRINGS = {
     "connect.lead":
       "Ghép nối máy tính này với máy chủ cửa hàng. Bạn cần địa chỉ của máy chủ và mã ghép nối sáu chữ số: quản lý lấy mã trên màn hình Thiết bị của máy bán hàng, và máy chủ cửa hàng hiện một mã khi khởi động.",
     "connect.address_label": "Địa chỉ máy chủ cửa hàng hoặc link ghép nối",
-    "connect.address_placeholder": "192.168.1.10:8080",
+    "connect.address_placeholder": "192.168.1.10:8787",
     "connect.address_hint":
-      "Ví dụ 192.168.1.10:8080. Hoặc dán cả link từ mã QR ghép nối — mã ghép nối đi kèm theo link.",
+      "Ví dụ 192.168.1.10:8787. Hoặc dán cả link từ mã QR ghép nối — mã ghép nối đi kèm theo link.",
     "connect.code_label": "Mã ghép nối",
     "connect.code_placeholder": "123456",
     "connect.code_hint": "Sáu chữ số. Để trống nếu bạn đã dán link ghép nối.",
@@ -108,7 +108,7 @@ const STRINGS = {
     "connect.error.address_empty": "Hãy nhập địa chỉ máy chủ cửa hàng.",
     "connect.error.address_scheme": "Địa chỉ phải bắt đầu bằng http:// hoặc https://, hoặc không có tiền tố nào.",
     "connect.error.address_credentials": "Địa chỉ không được chứa tên đăng nhập hoặc mật khẩu.",
-    "connect.error.address_host": "Địa chỉ không hợp lệ. Hãy nhập dạng máy:cổng, ví dụ 192.168.1.10:8080.",
+    "connect.error.address_host": "Địa chỉ không hợp lệ. Hãy nhập dạng máy:cổng, ví dụ 192.168.1.10:8787.",
     "connect.error.address_port": "Cổng phải là một số từ 1 đến 65535.",
     "connect.error.code_missing": "Hãy nhập mã ghép nối sáu chữ số.",
     "connect.error.code_format": "Mã ghép nối gồm sáu chữ số.",

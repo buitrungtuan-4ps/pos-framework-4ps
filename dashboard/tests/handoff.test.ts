@@ -82,11 +82,39 @@ describe("the files a replacement box needs", () => {
   });
 
   it("emits a credential-less env file rather than a broken one, when no key was issued", () => {
-    // The "this box already holds its key" path. It must produce a file that installs — the store
-    // trades either way — and it must not smuggle a placeholder that looks like a credential.
+    // The keyless path, the ordinary one since ADR-0143. It must produce a file that installs and
+    // it must not smuggle a placeholder that looks like a credential.
     const body = named("env").render({ ...VALUES, key: null });
     expect(body).not.toContain(VALUES.key);
     expect(body.length).toBeGreaterThan(0);
+  });
+
+  it("tells a keyless install it needs no key, because activation is what lets it sync", () => {
+    // The installers used to end a keyless run with a warning that config sync and the order
+    // relay would not work, which sent technicians looking for a key nothing needs (ADR-0143).
+    for (const name of ["install-pos-edge.sh", "install-pos-edge.ps1"]) {
+      const body = named(name).render({ ...VALUES, key: null });
+      expect(body).toContain("none is needed");
+      expect(body).not.toContain("will not work until one is installed");
+    }
+  });
+
+  it("has the Linux installer seal a vault key and restart the service (ADR-0151)", () => {
+    // The restart is the point for a box already running: it applies the vault drop-in and moves a
+    // credential still in the kernel keyring into the sealed store before a reboot empties it.
+    // `enable --now` does neither on a running service.
+    const body = named("install-pos-edge.sh").render(VALUES);
+    expect(body).toContain("/usr/local/libexec/pos-edge/pos-edge-vault seal");
+    expect(body).toContain("systemctl restart pos-edge");
+    expect(body).not.toContain("systemctl enable --now pos-edge");
+    // The drop-in only after a seal that succeeded, and gone when none did: an edge whose drop-in
+    // cannot get it a key answers vault errors, where the keyring would at least activate it.
+    // The full path, because the helper's own header, embedded above, names `pos-edge-vault seal`.
+    const seal = "/usr/local/libexec/pos-edge/pos-edge-vault seal";
+    const dropIn = "cat > /etc/systemd/system/pos-edge.service.d/vault.conf";
+    expect(body.indexOf(seal)).toBeGreaterThan(-1);
+    expect(body.indexOf(seal)).toBeLessThan(body.indexOf(dropIn));
+    expect(body).toContain("rm -f /etc/systemd/system/pos-edge.service.d/vault.conf");
   });
 
   it("carries the PowerShell byte-order mark out through the render", () => {

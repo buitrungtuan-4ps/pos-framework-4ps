@@ -1,7 +1,8 @@
 // The guided new-store wizard (ADR-0065, WS-C). Onboarding from zero without a ULID or a curl: name
-// the store (optionally under a brand) → create it in the registry → issue the scoped API key its
-// devices use to reach the cloud (shown once) → a handoff summary pointing at the next steps
-// (activation, configuration). Composes the registry + API-key routes; tenant comes from the picker.
+// the store (optionally under a brand) → create it in the registry → optionally issue a scoped API
+// key (shown once) → a handoff summary pointing at the next steps (activation, configuration). The
+// key is optional because an activated machine syncs with its device credential (ADR-0143); it is
+// for a box set up by hand. Composes the registry + API-key routes; tenant comes from the picker.
 
 import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -369,9 +370,9 @@ export function NewStore() {
                         {t("wizard.issueKey")}
                       </Button>
                       {/* The short path, named (decision D4). The Stores screen used to carry a
-                          second create form for exactly this — a registry row and nothing else —
-                          and the operator could not tell from the button that the store it made
-                          could not trade. It is this step instead, and it says so. */}
+                          second create form for exactly this — a registry row and nothing else.
+                          It is this step instead: it goes on to the setup files without a key,
+                          and the hint below says why a store needs none (ADR-0143). */}
                       <Button
                         data-step="setStep"
                         data-step-value="handoff-without-key"

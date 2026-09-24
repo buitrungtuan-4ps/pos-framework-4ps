@@ -77,7 +77,7 @@ describe("on a console with nothing in it", () => {
     mount();
     await waitFor(() => expect(listTenants).toHaveBeenCalled());
     expect(screen.getByText("Create an organisation")).toBeTruthy();
-    expect(screen.getByText("0 of 6 required steps done.")).toBeTruthy();
+    expect(screen.getByText("0 of 5 required steps done.")).toBeTruthy();
   });
 
   it("asks for nothing scoped to a store, because no store is chosen", async () => {
@@ -117,7 +117,10 @@ describe("with a tenant and a store chosen", () => {
     await waitFor(() => expect(listApiKeys).toHaveBeenCalled());
     await waitFor(() => expect(screen.getByText("Issue the store's key")).toBeTruthy());
     // Two keys exist and neither one is a live key bound to this store, so the step is not done.
-    expect(screen.queryByText("6 of 6 required steps done.")).toBeNull();
+    // It is optional (ADR-0143), so it says so rather than counting against the setup.
+    const row = screen.getByText("Issue the store's key").closest("li");
+    expect(row?.textContent).toContain("Not yet");
+    expect(row?.textContent).toContain("Optional");
   });
 });
 
@@ -139,8 +142,9 @@ describe("once the setup is finished", () => {
     mount();
     await waitFor(() => expect(admittedDevices).toHaveBeenCalled());
     expect(screen.getByText("Set up this cloud")).toBeTruthy();
-    // Five steps are done, so the panel has folded (D6); the operator opens it to see which one
-    // could not be checked, and the answer is the honest "could not check" rather than a cross.
+    // Four required steps are done, so the panel has folded (D6); the operator opens it to see
+    // which one could not be checked, and the answer is the honest "could not check" rather than
+    // a cross.
     fireEvent.click(await screen.findByRole("button", { name: "Show the steps" }));
     expect(screen.getByText("Could not check")).toBeTruthy();
   });
@@ -156,7 +160,7 @@ describe("once the operator is under way", () => {
     setStoreId(STORE);
     mount();
     await waitFor(() => expect(fleetStore).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText("5 of 6 required steps done.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("4 of 5 required steps done.")).toBeTruthy());
     // The progress is still on the screen; the seven rows of guidance are not.
     expect(screen.queryByText("Create an organisation")).toBeNull();
 

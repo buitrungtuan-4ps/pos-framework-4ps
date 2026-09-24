@@ -126,9 +126,11 @@ covers this in full.
     to be present, which is why the wizard always emits it.
 
 20. ⛔ **GATE — reboot the box once, deliberately** ([P2](gate-register.md#6-real-hardware--cannot-be-cleared-in-ci)).
-    On headless Linux the sessionless keyring is **volatile across a reboot**, so a power cycle
-    re-activates the store unless the documented interim (`POS_EDGE_SYNC_KEY` in the mode-0600 env
-    file) is in place. Find that out on your schedule, not during service.
+    On headless Linux the device credential survives a reboot only if a vault key has been sealed
+    with `systemd-creds` ([ADR-0151](adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md),
+    [`deploy/edge/README.md`](../deploy/edge/README.md)); the start-up log says which. Without one a
+    power cycle means activating the store again, and a store key does not stand in for it. Find
+    that out on your schedule, not during service.
 
 ## Phase 5 — Publish, then trade
 

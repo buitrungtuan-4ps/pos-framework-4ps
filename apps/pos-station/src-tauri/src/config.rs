@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct Settings {
-    /// The edge this device paired with, as an origin (`http://192.168.1.10:8080`). `None` until the
+    /// The edge this device paired with, as an origin (`http://192.168.1.10:8787`). `None` until the
     /// first pairing.
     pub(crate) edge_origin: Option<String>,
     /// Whether the till opens full screen. It opens when the app starts, which the installer arranges

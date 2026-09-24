@@ -18,6 +18,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A headless Linux box can keep its activation across a reboot**
+  ([ADR-0151](docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md), gate
+  P2). On Linux the device credential lived in the kernel keyring, which a reboot empties, so a box
+  that lost power came back asking for a new activation code. Given a vault key sealed with
+  `systemd-creds` (the TPM2 when the machine has one, systemd's host key otherwise), the edge now
+  seals its secrets under it in `/var/lib/pos-edge/vault`, and they survive. New in `deploy/edge/`:
+  `pos-edge-vault`, the root helper that seals the key at install and unseals it at each start, and
+  `pos-edge.service.d/vault.conf`, the unit drop-in that runs it. A key that cannot be read makes the
+  vault answer errors, so the counter keeps trading while cloud sync waits; it never falls back to
+  the keyring, which would read as "not activated" and send the till to `/setup`. An activated box
+  keeps its activation when the key is added. Without a TPM2 a copied disk can open the key.
+  **Upgrade note:** both Linux installers set it up: the console's `install-pos-edge.sh` and
+  `deploy/appliance/provision.sh`. Each box seals its own key at its first start, never while an
+  image is built. On a box installed before, run its installer again: it now restarts the service
+  rather than `enable --now`, which applies the drop-in and moves a credential still in the keyring
+  into the sealed store before the next reboot. An installer that cannot seal a key leaves the
+  unit drop-in out, so the box stays on the keyring. The steps by hand are in
+  `deploy/edge/README.md`. Windows is unchanged.
+
 - **A replacement box never reuses a receipt number the cloud has seen**
   ([ADR-0149](docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md), plan step
   4.2). Every lease bump now publishes `receipt_floor` (`{ "number": M }`, the highest receipt
@@ -39,8 +58,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   PC (**Terminal**) it runs the print agent as a restarted sidecar with that terminal's token. Pages
   from the edge get no app commands. Measured on Ubuntu 24.04: a 4.4 MiB `.deb`, the till in about
   0.55 s from launch, 380–550 MiB resident while idle. Windows (WebView2, LTSC, the installer) is
-  documented, not yet run. Not built by CI yet: that is a `.github` change awaiting an owner. Guide:
+  documented, not yet run. CI builds it, Windows installer included (next entry). Guide:
   `docs/guides/pos-station.md`.
+
+- **CI builds POS Station, and runs the edge's performance budgets every night.**
+  `.github/workflows/station.yml` runs the app's fmt, clippy and tests on Linux and bundles the
+  Windows installer, on every pull request or push to `main` that touches the app, the print agent
+  or `sign-windows.ps1`, and on demand. The installer, unsigned, is kept as the run artifact
+  `pos-station-windows-unsigned` for 14 days, for trying on a real PC. `nightly.yml` gains `bench`:
+  the `perf_budget` tests in a release build, over the in-memory store and over SQLite, so a store
+  that starts slowing with age again fails a job. **Upgrade note:** none — CI only, no change to any
+  shipped artifact.
 
 - **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
   ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).
@@ -188,6 +216,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **POS Station recognises the store PC it runs on.** It looked for the PC's own edge at
+  `127.0.0.1:8080`, while the edge, every installer and the setup file bind `8787`. So on a store
+  PC installed the default way the app never chose Station mode: it opened the connect page, and a
+  pairing typed with the PC's LAN address made it a Terminal of its own edge, with the smaller
+  tray (no cloud link, outbox or printers, no notifications) and a print agent it had no use for.
+  It now looks at `127.0.0.1:8787`, and a Station test reads the edge's `DEFAULT_PORT` from its
+  source so the two cannot drift apart again. The connect page's examples show `8787` too. An edge
+  moved to another port is still a Station when it is paired as `127.0.0.1:<port>`. **Upgrade
+  note:** none. The Station is not released yet.
 - **A receipt says what each line was made with**
   ([ADR-0144](docs/adr/0144-a-line-records-the-names-of-its-modifiers.md), one of the ten known
   defects). A guest who ordered a 30 cm Margherita got a receipt that said "Margherita": the size's
@@ -300,6 +337,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console stops saying a store needs a key to sync.** Since
+  [ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md) a machine
+  activated with a code syncs, relays orders and publishes events with its device credential, but
+  the console still treated the store key as required. The Get Started checklist counted it among
+  the required steps, so a store with no key never finished setup. The wizard said a store without
+  a key "cannot sync or trade", and the setup-file panel said configuration sync "waits until a key
+  is installed". The move-to-another-box drawer warned in red that files without a key were only
+  for a box that already held one, and the generated Linux and Windows installers ended a keyless
+  run warning that config sync and the order relay would not work. The key step is now marked
+  optional. The wizard, the drawer, the
+  setup-file panel and the checklist say what a key is for (a box set up by hand), the skip button
+  says it goes on to the setup files, and the drawer's red warning is a plain note.
+  `docs/guides/bring-a-store-online.md` says the same. **Upgrade note:** a
+  store that was only waiting on a key now shows as set up, and the Get Started panel stands down
+  for it.
+
+- **The console tells whoever installs a shop's PC how to get past SmartScreen.** A fork without a
+  code-signing certificate ships the Windows setup file unsigned (ADR-0142), so the browser asks
+  whether to keep it and Windows opens with "Windows protected your PC". The setup-file panel now
+  says so beside the download link, with the way past each (keep the file; More info, then Run
+  anyway), and that it happens once per PC. The release runbook, the fork checklist, the Station
+  guide and `sign-windows.ps1` no longer say a public CA issues a `.pfx`: since June 2023 its key
+  stays in hardware, so a bought certificate is used through `POS_SIGN_COMMAND` and a cloud signing
+  service, and the `.pfx` mode is for an internal certificate.
 - **The kitchen board draws tickets, oldest first, and can be one station's board.** One card per
   order, station and course — what a cook makes together — aged from its oldest line, bumped with
   one tap to the station it was fired to, and showing the quantity. Lines now carry the station

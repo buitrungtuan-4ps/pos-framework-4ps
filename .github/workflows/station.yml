@@ -1,0 +1,116 @@
+name: station
+
+# POS Station and POS Terminal (ADR-0147, `apps/pos-station`) are their own Cargo project, outside
+# the workspace, so nothing in `pr.yml` compiles them: a change to the edge, the print agent or the
+# signing script could break the app and every check would stay green. This workflow is where the
+# app is built.
+#
+# - **linux** runs what `docs/guides/pos-station.md` tells a contributor to run: fmt, clippy with
+#   warnings denied, and the tests, against the WebKitGTK the app links.
+# - **windows** builds the print agent, puts it where the bundler looks, and bundles the NSIS
+#   installer — the file a shop PC installs. The bundler's `signCommand` runs `sign-windows.ps1`
+#   (ADR-0142), which here finds no certificate, says so in a notice and leaves the installer
+#   unsigned. The installer is kept as a run artifact for a person to download and try on a real PC;
+#   it is a test build, not a release, and nothing here holds a key.
+
+on:
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "apps/pos-station/**"
+      - "crates/pos-print-agent/**"
+      - "deploy/release/sign-windows.ps1"
+      - ".github/workflows/station.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/pos-station/**"
+      - "crates/pos-print-agent/**"
+      - "deploy/release/sign-windows.ps1"
+      - ".github/workflows/station.yml"
+  # A build of the current app for a PC to try, without waiting for a change to it.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: station-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Not `./.github/actions/rust-setup`: its cache is keyed for the workspace, and a run here that
+      # saved under that key first would hand every `pr.yml` job a cache without the workspace's
+      # build in it. The app has a cache of its own instead.
+      - name: install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/pos-station/src-tauri/target
+          key: station-${{ runner.os }}-${{ hashFiles('apps/pos-station/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: station-${{ runner.os }}-
+      - name: install what the app links on Linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev
+      - name: fmt, clippy and tests
+        working-directory: apps/pos-station/src-tauri
+        run: |
+          cargo fmt -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The toolchain and a cache of this job's own, for the reason given in the job above.
+      - name: install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+            apps/pos-station/src-tauri/target
+          key: station-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'apps/pos-station/src-tauri/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: station-${{ runner.os }}-
+      - name: build the print agent
+        run: cargo build --release --locked -p pos-print-agent
+      - name: put the print agent where the bundler looks
+        run: |
+          mkdir -p apps/pos-station/src-tauri/binaries
+          cp target/release/pos_print_agent.exe \
+            apps/pos-station/src-tauri/binaries/pos_print_agent-x86_64-pc-windows-msvc.exe
+      # The CLI version is the one `docs/guides/pos-station.md` pins, so the build here and a
+      # contributor's build are the same build.
+      - name: bundle the installer
+        working-directory: apps/pos-station
+        run: npx --yes @tauri-apps/cli@2.11.5 build --config src-tauri/tauri.sidecar.conf.json --bundles nsis
+      - name: keep the installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pos-station-windows-unsigned
+          path: apps/pos-station/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 14
+          if-no-files-found: error

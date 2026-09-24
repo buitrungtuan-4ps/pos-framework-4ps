@@ -28,7 +28,7 @@ use crate::address::{EdgeOrigin, PairingCode};
 /// second. The pairing POST is the only call an operator waits on.
 const TIMEOUT: Duration = Duration::from_secs(8);
 
-/// How long connecting may take — short, because "nothing on 127.0.0.1:8080" decides the mode.
+/// How long connecting may take — short, because "nothing on 127.0.0.1:8787" decides the mode.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// A call that did not produce an answer this build can use.

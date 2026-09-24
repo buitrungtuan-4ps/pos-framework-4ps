@@ -58,6 +58,40 @@ layout and starts no updater; everything else — pairing, selling, config-pull,
 — is unchanged. To migrate an existing store, follow the unit's install block (create `bin/`, copy
 the running binary to `slot-a`, link `current` at it) and change `ExecStart`.
 
+### The device credential survives a reboot: seal a vault key
+
+On Linux the edge keeps its device credential in the kernel keyring unless the service is given a
+**vault key** ([ADR-0151](../../docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md)),
+and the kernel keyring is empty after a reboot: a box that lost power comes back asking for a new
+activation code. With a vault key sealed by `systemd-creds` (the machine's TPM2 when it has one,
+systemd's host key otherwise) the edge seals its secrets under it in `/var/lib/pos-edge/vault`, and
+they survive. It needs systemd 250 or later, which Debian 12 and Ubuntu 24.04 have. Both Linux
+installers (the console's `install-pos-edge.sh` and `deploy/appliance/provision.sh`) set it up; a
+box installed before them gains it when its installer runs again, which restarts the service and
+keeps the activation. An installer that cannot seal a key leaves the drop-in out and says so, and
+the box stays on the kernel keyring. By hand, as root, beside this file:
+
+```
+install -d -o root -g root -m 0755 /usr/local/libexec/pos-edge
+install -o root -g root -m 0755 pos-edge-vault /usr/local/libexec/pos-edge/pos-edge-vault
+/usr/local/libexec/pos-edge/pos-edge-vault seal
+install -d -o root -g root -m 0755 /etc/systemd/system/pos-edge.service.d
+install -o root -g root -m 0644 pos-edge.service.d/vault.conf /etc/systemd/system/pos-edge.service.d/
+systemctl daemon-reload && systemctl restart pos-edge
+```
+
+`seal` says whether it used a TPM2; without one, a copy of the disk can open the key. (Skip it when
+building an image: `unseal` seals a key of the machine's own at its first boot.) The start-up log
+then says `secrets are sealed under this machine's vault key`. An activated box keeps its
+activation: the credential moves from the keyring into the sealed store the first time it is read.
+Running `seal` again keeps a key that still unseals.
+
+If the log says instead that **the vault key could not be used**, the counter keeps trading and
+cloud sync waits. Run `pos-edge-vault seal` again: it replaces a key that no longer unseals (after a
+cleared TPM, or on a disk moved from another machine), and moves the old key and the secrets sealed
+under it aside as `*.unopenable-<time>`. Then restart the service and activate the box again. If the
+failure was one that passes, moving both back and restarting brings the old activation back.
+
 ## Windows — a service
 
 Windows is a supported store OS, and the binary speaks the Service Control Manager's protocol itself

@@ -782,8 +782,11 @@ export function Stores() {
                             {t("wizard.skipKey")}
                           </Button>
                         </div>
+                        {/* A note, not a warning: since ADR-0143 a box activated with a code
+                            syncs with its device credential, so files without a key are the
+                            ordinary case rather than a risky one. */}
                         <Show when={handoffKeyless()}>
-                          <Banner tone="danger" message={t("handoff.withoutKey")} />
+                          <p class="text-sm text-ink-muted">{t("handoff.withoutKey")}</p>
                         </Show>
                       </div>
                     }

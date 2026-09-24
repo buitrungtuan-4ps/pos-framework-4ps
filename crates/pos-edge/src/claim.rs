@@ -33,7 +33,7 @@ use axum::extract::State;
 use axum::response::Redirect;
 use axum::routing::get;
 use cloud_sync_http::{Collection, HttpClaim, HttpTransport, TlsHttpTransport};
-use key_vault_keyring::{KeyringVault, OsKeyring};
+use key_vault_keyring::OsVault;
 use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_proto::ClockSource as _;
 use pos_proto::ids::StoreId;
@@ -145,7 +145,10 @@ pub fn run(arguments: &[String], config_path: &Path) -> Result<(), EdgeError> {
             cloud: origin(&cloud),
         });
         serve_page(page).await;
-        let vault = KeyringVault::new(OsKeyring::new());
+        // The same vault the service will read: sealed when the claim unit was given the vault key
+        // (ADR-0151), so the credential the claim collects survives the reboot before first sale.
+        let vault = OsVault::from_env();
+        crate::server::log_vault(vault.standing());
         let claimed = claim(
             &HttpClaim::new(transport),
             &vault,

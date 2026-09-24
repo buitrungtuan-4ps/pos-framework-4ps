@@ -1248,11 +1248,16 @@ dependencies = [
 name = "key-vault-keyring"
 version = "0.1.0"
 dependencies = [
+ "chacha20poly1305",
+ "getrandom 0.4.3",
  "keyring",
  "pos-contract-tests",
  "pos-fakes",
  "pos-ports",
+ "tempfile",
  "thiserror",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]

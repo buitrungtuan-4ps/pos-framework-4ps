@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 
 use cloud_sync_http::{HttpCloudSync, HttpLink, TlsHttpTransport};
-use key_vault_keyring::{KeyringVault, OsKeyring};
+use key_vault_keyring::{OsVault, VaultStanding};
 use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
 use pos_ports::config_store::ConfigStore;
@@ -893,8 +893,10 @@ where
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
 {
-    // The device credential (activation) and the scoped sync key both live in the OS keyring (ADR-0086).
-    let vault = Arc::new(KeyringVault::new(OsKeyring::new()));
+    // The device credential (activation) and the scoped sync key: sealed under the vault key when the
+    // unit's vault drop-in gave the service one (ADR-0151), in the OS keyring otherwise (ADR-0086).
+    let vault = Arc::new(OsVault::from_env());
+    log_vault(vault.standing());
     // One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
     // own bearer-carrying client (cloud_http), keyed by a store key when one is set and by the device
     // credential otherwise (ADR-0143).
@@ -1157,6 +1159,29 @@ impl BackupPlan {
 
 /// What [`spawn_cloud_loops`] hands back when it starts: the keyed client the OTA loop dials on, and
 /// the heartbeat task a stop has to release and then wait for.
+/// Says where this run keeps its secrets, once at start: the one line that tells an operator why a
+/// Linux box asked for a new activation code after a reboot, and what fixes it.
+pub(crate) fn log_vault(standing: &VaultStanding) {
+    match standing {
+        VaultStanding::Sealed(dir) => tracing::info!(
+            dir = %dir.display(),
+            "secrets are sealed under this machine's vault key (systemd-creds, ADR-0151)"
+        ),
+        #[cfg(target_os = "linux")]
+        VaultStanding::Keyring => tracing::warn!(
+            "secrets are in the kernel keyring, which a reboot empties: run the installer again so \
+             it seals a vault key and the activation survives a power cut (ADR-0151)"
+        ),
+        #[cfg(not(target_os = "linux"))]
+        VaultStanding::Keyring => tracing::info!("secrets are in the OS credential store"),
+        VaultStanding::Unusable(reason) => tracing::error!(
+            %reason,
+            "the vault key could not be used, so the vault answers errors: the counter keeps \
+             trading and cloud sync waits until it is fixed; run the installer again (ADR-0151)"
+        ),
+    }
+}
+
 struct CloudLoops {
     client: CloudHttpClient,
     heartbeat: tokio::task::JoinHandle<()>,
