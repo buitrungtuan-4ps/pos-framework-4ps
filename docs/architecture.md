@@ -171,7 +171,7 @@ A tiny slug→country directory (no PII) lets the home cell issue a **301 redire
 
 A weekly job restores a random store backup *and* the cloud database to a scratch instance and verifies totals. A backup never restored is not a backup.
 
-**Cloud can be rebuilt from the stores.** Each store retains 90 days of events, so a cloud data loss within that window is recoverable: an internal command resets a cursor and asks edges to replay from a given ULID. This is the strongest recovery property in the system and it costs almost nothing, because the data is already there.
+**Cloud can be rebuilt from the stores.** Each store keeps an event until it is synced **and** older than the store's retention: 90 days by default, set per store in the cloud ([ADR-0145](adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). It never deletes an event the link has not acknowledged, or one an order still open depends on. So a cloud data loss within that window is recoverable from the stores. **What is missing** is the other half: an internal command that resets a cursor and asks the edges to replay from a given ULID. The data is there, but nothing yet asks for it.
 
 **Resource limits are mandatory configuration**, not good intentions:
 

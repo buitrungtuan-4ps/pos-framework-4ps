@@ -14,12 +14,12 @@ Sizing numbers, load limits, and what happens when things break.
 |---|---|
 | `pos_edge` memory | 200–400 MB |
 | CPU | under 1% average, under 5% at peak |
-| Disk | 150–300 MB (90-day retention) + ~20 MB menu images + WAL |
+| Disk | 150–300 MB (90-day retention, ADR-0145) + ~20 MB menu images + WAL |
 | SQLite writes | 1–3 per second at peak (ceiling above 10,000/s) |
 | LAN clients | 3–30, WebSocket fan-out under 50 ms |
 | QR ordering load | **none** — guests hit the cloud; the store only receives the resulting order |
 
-**The edge's hot paths have budgets, and `just bench` measures them.** At 30,000 settled orders of history with 40 tables open, in a release build: `GET /api/orders/live` p95 under 20 ms, adding a line p95 under 5 ms, and adding a line while another device reads the live orders in a loop p95 under 10 ms (`crates/pos-edge/tests/perf_budget.rs`, ignored by `just test` because a timing assertion in a debug build measures the runner). Measured on a 4-vCPU container over SQLite: 1.05 ms, 0.42 ms and 0.84 ms. Before the projection indexed its orders the same run gave ~65 ms for the read and ~61 ms for the contended add — the store got slower with every order it had ever sold. **Still open:** the projection holds every order since install (nothing is evicted), so memory and the startup replay still grow with age; a snapshot and eviction need their own record.
+**The edge's hot paths have budgets, and `just bench` measures them.** At 30,000 settled orders of history with 40 tables open, in a release build: `GET /api/orders/live` p95 under 20 ms, adding a line p95 under 5 ms, and adding a line while another device reads the live orders in a loop p95 under 10 ms (`crates/pos-edge/tests/perf_budget.rs`, ignored by `just test` because a timing assertion in a debug build measures the runner). Measured on a 4-vCPU container over SQLite: 1.05 ms, 0.42 ms and 0.84 ms. Before the projection indexed its orders the same run gave ~65 ms for the read and ~61 ms for the contended add — the store got slower with every order it had ever sold. **Retention bounds the log** ([ADR-0145](adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)): once an hour the edge deletes events that are synced, older than the store's retention (90 days unless the cloud sets another figure) and needed by nothing still open. A store offline for months keeps everything until it syncs. SQLite reuses the freed pages, so the file stops growing rather than shrinking. **Still open:** between restarts the projection holds every order since boot, so memory grows with uptime; the start-up replay is bounded by the retained log.
 
 **Disk per event depends on the page size the file was created with.** An event row is just over the ~1,000 bytes a 4 KiB page keeps locally for the `WITHOUT ROWID` log, so a store whose file was created at 4 KiB spends about 4.7 KB of disk per event; a file created at 8 KiB — every store opened from this release on — about 1.2 KB. The retention figure in the table above assumes the latter. An existing store keeps its page size until its file is rebuilt (`VACUUM`), which is an operational step, not a migration.
 
@@ -84,7 +84,7 @@ At peak, latency does not change — every tier stays far below the point where 
 | Store disk full | One store | Threshold alert | — | Minutes | None |
 | Store network down | Store **keeps selling**; marketplaces see "busy"; **QR ordering stops** | Heartbeat | Staff take orders directly | Automatic on reconnect | None |
 | **Cloud VPS down** | Dashboards, QR, webhooks, ingest stop — **every store keeps selling** | External ping / user report | Stores are autonomous | Restore in 30–60 min | ≤ backup RPO (minutes with WAL archiving) |
-| PostgreSQL corruption | All cloud data | Integrity checks | Stores autonomous | Restore, **or replay from the edges** | Recoverable within the 90-day store retention |
+| PostgreSQL corruption | All cloud data | Integrity checks | Stores autonomous | Restore, **or replay from the edges** (the replay command is not built yet) | Recoverable within each store's retention, 90 days by default (ADR-0145) |
 | JetStream stream full | Sync halts; events wait in store outboxes | Queue-depth alert | — | Minutes | None |
 | Bad OTA release | At most one ring | Self-test + canary | Automatic rollback, kill switch | Minutes | None — the database is copied before migration |
 | Printer or display failure | One station | Print queue + red badge | Backup printer or the screen | Immediate | None |
@@ -103,7 +103,7 @@ At peak, latency does not change — every tier stays far below the point where 
 | 1 | **Bandwidth became a constraint for the first time.** QR ordering makes the cloud serve menu images to guests; scenario B reaches ~7.5 TB/month, above some VPS transfer allowances. | Thumbnails ≤30 KB, lazy loading, `Cache-Control: immutable` on hashed URLs; if needed, serve **images only** from a CDN — legally clean because menu images contain no personal data, unlike everything else. |
 | 2 | **The cloud is now customer-visible.** Before QR, a cloud outage was invisible outside the office. | State the degradation openly: the guest page says "please ask a staff member", staff remain the primary path, and no end-customer SLA is promised for QR. |
 | 3 | Cloud RPO depended on backup cadence (up to 24 hours). | Enable **continuous WAL archiving** for PostgreSQL into object storage — RPO drops to minutes. |
-| 4 | **The cloud can be rebuilt from the stores**, because each edge retains 90 days of events. | Add an internal "reset cursor and replay from ULID" command. Cloud data loss inside that window becomes recoverable at almost no cost — the data is already there. |
+| 4 | **The cloud can be rebuilt from the stores**, because each edge keeps its synced events for its retention, 90 days by default (ADR-0145). | Add an internal "reset cursor and replay from ULID" command. Cloud data loss inside that window becomes recoverable at almost no cost — the data is already there. |
 | 5 | A printed static QR code can be photographed and used from outside the venue. | **Staff confirmation on by default**, per-table rate limits, orders accepted only during opening hours and only while the store is online. |
 | 6 | Online payment for QR would pull in a large new scope. | v1 pays at the counter; payment gateways become a sixth adapter group later. |
 | 7 | QR needs a second image size. | The image pipeline produces a ≤30 KB thumbnail and a ≤150 KB detail image. |

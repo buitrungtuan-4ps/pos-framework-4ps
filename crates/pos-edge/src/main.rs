@@ -194,6 +194,11 @@ where
         }
     });
 
+    // Retention (ADR-0145): once an hour, the events that are synced, old and needed by nothing
+    // still open are deleted. It waits ten minutes before its first sweep, so it never runs
+    // across the chain walk above.
+    pos_edge::retention::spawn(Arc::clone(&edge));
+
     serve_until(
         config,
         edge,
