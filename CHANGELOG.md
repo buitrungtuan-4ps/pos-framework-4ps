@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **POS Station, a native till app** ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md),
+  plan steps 1.5, 3.2 and 3.3), in `apps/pos-station`, outside the workspace with its own lockfile.
+  A Tauri v2 window loads the till from the store's own edge, so it is always the version that edge
+  serves, and pairs natively: the token goes to the OS credential store and reaches the till through
+  ADR-0111's seam, so the till opens already paired. On the store PC (**Station**) it adds a tray
+  with the cloud link, the outbox and the printers, and notifications when they change; on a second
+  PC (**Terminal**) it runs the print agent as a restarted sidecar with that terminal's token. Pages
+  from the edge get no app commands. Measured on Ubuntu 24.04: a 4.4 MiB `.deb`, the till in about
+  0.55 s from launch, 380–550 MiB resident while idle. Windows (WebView2, LTSC, the installer) is
+  documented, not yet run. Not built by CI yet: that is a `.github` change awaiting an owner. Guide:
+  `docs/guides/pos-station.md`.
+
 - **A stock Debian 12 or Ubuntu 24.04 box provisions itself as a store appliance**
   ([ADR-0150](docs/adr/0150-the-appliance-is-a-linux-image-that-claims-itself.md), plan step 4.4).
   `deploy/appliance/provision.sh` lays out exactly what the console's installer does (the `pos`

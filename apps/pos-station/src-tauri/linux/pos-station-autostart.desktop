@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Pizza 4P's. All rights reserved.
+# Proprietary and confidential. Internal use only. See LICENSE.
+#
+# Installed by the .deb to /etc/xdg/autostart, so POS Station starts at every graphical login and
+# opens the till (full screen unless station.json says till_full_screen = false).
+[Desktop Entry]
+Type=Application
+Name=POS Station
+Exec=pos-station
+Icon=pos-station
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

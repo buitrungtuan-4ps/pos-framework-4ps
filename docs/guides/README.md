@@ -13,6 +13,7 @@ The first is for someone **outside** this system calling it; the rest are for so
 | Deploy the cloud to a real server | [Start from zero → Part 2](start-from-zero.md#part-2--deploy-the-cloud-to-a-vps-15-minutes), then the [deploy runbook](../deploy-runbook.md) |
 | Bring a real store online from the dashboard | [Bring a store online](bring-a-store-online.md) |
 | Turn a stock Debian or Ubuntu box into a store appliance that claims itself | [The store appliance](appliance.md) |
+| Run the till as a native app, with a tray on the store PC or the print agent on a second PC | [POS Station](pos-station.md) |
 | Take a fork all the way to a trading store | [Go live](../go-live.md), and the [gate register](../gate-register.md) it stops at |
 | Write an adapter for a new vendor/device | [Write an adapter](write-an-adapter.md) |
 | Add a new country (tax, locale, vendors) | [Add a country module](add-a-country-module.md) |

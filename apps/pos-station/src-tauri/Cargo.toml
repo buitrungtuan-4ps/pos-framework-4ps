@@ -1,0 +1,102 @@
+# Copyright (c) 2026 Pizza 4P's. All rights reserved.
+# Proprietary and confidential. Internal use only. See LICENSE.
+
+[package]
+name         = "pos-station"
+version      = "0.1.0"
+description  = "POS Station: a Tauri v2 shell around the edge's own till, with a tray on the store PC and the print agent on a terminal (ADR-0147)."
+edition      = "2024"
+rust-version = "1.94"
+license      = "LicenseRef-Proprietary"
+publish      = false
+repository   = "https://github.com/buitrungtuan-4ps/pos-framework-4ps"
+
+# An empty table makes this directory its own workspace root, with its own Cargo.lock. ADR-0147
+# keeps the app OUTSIDE the main workspace so no edge or cloud binary takes the webview's dependency
+# tree, and `cargo deny` over the workspace does not change.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+# Every dependency is justified in docs/guides/pos-station.md ("Dependencies"). Adding one is a
+# review decision, the same as in the workspace.
+[dependencies]
+tauri                     = { version = "2.11", features = ["tray-icon", "image-png"] }
+tauri-plugin-notification = "2.4"
+serde                     = { version = "1", features = ["derive"] }
+serde_json                = "1"
+# A synchronous client on the app's own threads (the monitor, the sidecar supervisor, and
+# `spawn_blocking` for the one command that pairs), so no async task ever blocks. `rustls` here means
+# ring and the bundled Mozilla roots, the same posture as the workspace's own client (ADR-0054).
+ureq = { version = "3.4", default-features = false, features = ["rustls", "json"] }
+# The facade Tauri already logs through; `logging.rs` is a small stderr sink for it.
+log  = { version = "0.4", features = ["std"] }
+
+# The OS credential store, with exactly the backends the workspace's `key-vault-keyring` adapter
+# chose (ADR-0086): Credential Manager, the macOS Keychain, the Linux kernel keyring.
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["linux-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+# A binary outside the workspace cannot inherit [workspace.lints], so it restates the rules that
+# matter (AGENTS.md §2, the root Cargo.toml). The root clippy.toml still applies: clippy finds it by
+# walking up from this directory, so floats, `SystemTime::now`, `Instant::now`, `thread::sleep`,
+# `process::exit` and the print macros are banned here exactly as in the workspace.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+unreachable_patterns          = "deny"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+unwrap_used      = "deny"
+expect_used      = "deny"
+panic            = "deny"
+todo             = "deny"
+unimplemented    = "deny"
+unreachable      = "deny"
+indexing_slicing = "deny"
+exit             = "deny"
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+wildcard_enum_match_arm = "deny"
+disallowed_types        = "deny"
+disallowed_methods      = "deny"
+disallowed_macros       = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+# Dependencies carry no debug info in a dev build. A Tauri tree with full debug info is several
+# gigabytes of target directory, and a backtrace through wry is not what anyone debugs here.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+# The workspace's release profile, plus `opt-level = "s"`: installer size is one of the things the
+# spike measures, and nothing in a shell around a webview is CPU-bound.
+[profile.release]
+opt-level       = "s"
+lto             = "thin"
+codegen-units   = 1
+panic           = "abort"
+strip           = "symbols"
+overflow-checks = true
