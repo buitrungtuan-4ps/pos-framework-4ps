@@ -1,7 +1,7 @@
 [package]
 name        = "key-vault-keyring"
 version     = "0.1.0"
-description = "The edge's KeyVault adapter: device credentials in the OS credential store (ADR-0086)."
+description = "The edge's KeyVault adapter: device credentials in the OS credential store (ADR-0086), sealed under a systemd-creds vault key on Linux (ADR-0151)."
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -22,6 +22,14 @@ pos-ports = { path = "../../pos-ports" }
 
 thiserror = { workspace = true }
 
+# ADR-0151: secrets sealed on disk under a vault key systemd-creds keeps. The same cipher, entropy
+# source and zeroizing the edge's backups use (all three already in the tree through pos-edge), and
+# Tokio for the blocking pool, since sealed secrets are file I/O (AGENTS.md §2).
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
+getrandom        = "0.4"
+zeroize          = "1.8"
+tokio            = { version = "1", features = ["rt"] }
+
 # ADR-0086: the OS credential store, behind one maintained cross-platform crate rather than three
 # hand-rolled platform FFIs (ADR-0007). Only the native backend per platform is selected — no D-Bus /
 # Secret Service subtree — so the adapter works under the headless store service user (linux keyutils)
@@ -41,6 +49,10 @@ keyring = { version = "3", default-features = false, features = ["apple-native"]
 # other adapters' contract tests use, since this adapter's keyring calls are inline and ready.
 pos-contract-tests = { path = "../../pos-contract-tests" }
 pos-fakes = { path = "../../pos-fakes" }
+# The sealed store's tests write into a throwaway directory, and drive OsVault's blocking-pool calls
+# on a current-thread runtime.
+tempfile = "3"
+tokio    = { version = "1", features = ["rt"] }
 
 [lints]
 workspace = true

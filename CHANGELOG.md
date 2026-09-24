@@ -18,6 +18,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A headless Linux box can keep its activation across a reboot**
+  ([ADR-0151](docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md), gate
+  P2). On Linux the device credential lived in the kernel keyring, which a reboot empties, so a box
+  that lost power came back asking for a new activation code. Given a vault key sealed with
+  `systemd-creds` (the TPM2 when the machine has one, systemd's host key otherwise), the edge now
+  seals its secrets under it in `/var/lib/pos-edge/vault`, and they survive. New in `deploy/edge/`:
+  `pos-edge-vault`, the root helper that seals the key at install and unseals it at each start, and
+  `pos-edge.service.d/vault.conf`, the unit drop-in that runs it. A key that cannot be read makes the
+  vault answer errors, so the counter keeps trading while cloud sync waits; it never falls back to
+  the keyring, which would read as "not activated" and send the till to `/setup`. An activated box
+  keeps its activation when the key is added. Without a TPM2 a copied disk can open the key.
+  **Upgrade note:** nothing changes until a vault key is sealed. The installers do not do it yet;
+  the steps are in `deploy/edge/README.md`. Windows is unchanged.
+
 - **A replacement box never reuses a receipt number the cloud has seen**
   ([ADR-0149](docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md), plan step
   4.2). Every lease bump now publishes `receipt_floor` (`{ "number": M }`, the highest receipt
