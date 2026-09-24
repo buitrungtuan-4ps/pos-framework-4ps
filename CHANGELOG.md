@@ -18,6 +18,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud can claim a box that shows a code**
+  ([ADR-0148](docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md), plan step
+  4.1, cloud half). A box installed with no store opens a claim with `POST /claim` and gets a claim
+  id, an eight-character code to show (`XXXX-XXXX`), and a 256-bit secret it keeps. On
+  **Activation → Claim a box**, a console user with `console.devices.manage` types the code and
+  picks the device it becomes (`POST /admin/claims/bind`, audited as `device.claim`). The box then
+  collects its device credential exactly once with `POST /claim/{claim_id}/collect`: `202` until the
+  code is bound, then the slot and the credential, minted in the same transaction that marks the
+  claim collected. A code lasts an hour and binds once, and only hashes of the code and the secret are
+  stored. Opening a claim shares `/activate`'s budget; polling has its own. The edge's `pos-edge claim`
+  lands next. **Upgrade note:** migration `0069_device_claims.sql` adds the `device_claims` table, and
+  three routes are added.
+
 - **A box needs one code and nothing else**
   ([ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md), plan step
   1.2). The device credential activation mints now authenticates the box's `/sync` calls: config

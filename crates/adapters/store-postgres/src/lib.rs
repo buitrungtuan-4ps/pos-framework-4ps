@@ -28,6 +28,7 @@ mod archives;
 mod audit;
 mod campaigns;
 mod catalog;
+mod claims;
 mod config_releases;
 mod config_trees;
 mod devices;
@@ -68,6 +69,7 @@ pub use catalog::{
     CatalogMenuSectionRow, CatalogModifierGroupRow, CatalogPlacementRow, CatalogTaxClassRow,
     CatalogTaxonomyRow, ItemOrder, PostgresCatalog,
 };
+pub use claims::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 pub use config_trees::{
     BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,

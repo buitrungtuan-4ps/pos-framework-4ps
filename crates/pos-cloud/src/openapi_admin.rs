@@ -288,6 +288,7 @@ const UNDOCUMENTED: &[&str] = &[
     "/admin/devices/terminals",
     "/admin/activation-codes",
     "/admin/activation-codes/revoke",
+    "/admin/claims/bind",
     // --- the four-level configuration tree and its publishes (ADR-0033) ---
     "/admin/config/campaigns",
     "/admin/config/campaigns/preview",

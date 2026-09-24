@@ -153,6 +153,10 @@ use crate::catalog::{
     ModifierGroup, ModifierGroupId, TaxClass,
 };
 use crate::catalog_compiler::{compile_layout_book, compile_menu, would_cycle};
+use crate::claim::{
+    BindOutcome, CLAIM_TTL_MS, ClaimStore, CollectOutcome, USER_CODE_ENTROPY, UserCode,
+    hash_claim_secret, hash_user_code,
+};
 use crate::cloud::{Cloud, DailyRollup};
 use crate::config::InternalSecret;
 use crate::config_tree::{
@@ -514,6 +518,10 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
         SyncThrottle {
             limiter: self.sync_rate_limiter.clone(),
             activate_limiter: SlidingRateLimiter::new(ACTIVATE_MAX_ATTEMPTS, ACTIVATE_WINDOW_SECS),
+            collect_limiter: SlidingRateLimiter::new(
+                CLAIM_COLLECT_MAX_POLLS,
+                CLAIM_COLLECT_WINDOW_SECS,
+            ),
             trusted_proxy_hops: self.trusted_proxy_hops,
             clock: self.clock.clone(),
         }
@@ -22594,6 +22602,307 @@ fn mint_activation_code() -> Option<ActivationCode> {
     Some(ActivationCode::from_entropy(entropy))
 }
 
+// --- Device claims (`/claim`, `/claim/{claim_id}/collect`, `/admin/claims/bind`) ------------------
+
+/// How often a box waiting to be claimed should ask whether it has been, in seconds.
+const CLAIM_POLL_INTERVAL_SECS: u64 = 5;
+
+/// The collaborators the claim routes need, stated independently of [`CloudApp`].
+#[derive(Clone)]
+struct ClaimState<Cl, A, C> {
+    claims: Cl,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the claim sub-router
+/// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
+///
+/// A box installed with no store opens a claim on `/claim` and polls `/claim/{claim_id}/collect`.
+/// Neither is authenticated, as `/activate` is not: the box has no credential yet. `/claim` shares
+/// `/activate`'s small budget and collection has one sized for polling ([`throttle_sync`]). A console
+/// user with `console.devices.manage` binds a code to a device slot on `/admin/claims/bind`, which is
+/// audited.
+pub fn claim_router<Cl, A, C>(
+    claims: Cl,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(CLAIM_PATH, post(open_claim::<Cl, A, C>))
+        .route("/claim/{claim_id}/collect", post(collect_claim::<Cl, A, C>))
+        .route("/admin/claims/bind", post(admin_bind_claim::<Cl, A, C>))
+        .with_state(ClaimState {
+            claims,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// What `POST /claim` answers. The box shows `user_code` and keeps `secret` to itself.
+#[derive(Debug, Serialize)]
+struct OpenedClaim {
+    claim_id: String,
+    /// The code to show, as `XXXX-XXXX`.
+    user_code: String,
+    /// 256 bits, as hex. Shown nowhere; presented only to collect.
+    secret: String,
+    expires_in_secs: i64,
+    poll_interval_secs: u64,
+}
+
+/// A box opens a claim. Unauthenticated: the box has nothing to authenticate with yet.
+async fn open_claim<Cl, A, C>(State(state): State<ClaimState<Cl, A, C>>) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let now_ms = state.clock.now().as_milliseconds_since_epoch();
+    let (Some(claim_id), Some(secret), Some(code), Ok(expires_at)) = (
+        mint_ulid(now_ms),
+        random_hex_32(),
+        mint_user_code(),
+        pos_proto::time::Timestamp::from_milliseconds_since_epoch(
+            now_ms.saturating_add(CLAIM_TTL_MS),
+        ),
+    ) else {
+        tracing::error!("could not read OS entropy to open a claim");
+        return service_unavailable("claim");
+    };
+    match state
+        .claims
+        .open(
+            claim_id,
+            hash_user_code(&code),
+            hash_claim_secret(&secret),
+            expires_at,
+        )
+        .await
+    {
+        Ok(()) => (
+            StatusCode::CREATED,
+            Json(OpenedClaim {
+                claim_id: claim_id.to_string(),
+                user_code: code.display(),
+                secret,
+                expires_in_secs: CLAIM_TTL_MS / 1000,
+                poll_interval_secs: CLAIM_POLL_INTERVAL_SECS,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be opened");
+            service_unavailable("claim")
+        }
+    }
+}
+
+/// A box presents its secret to collect.
+#[derive(Debug, Deserialize)]
+struct CollectClaimRequest {
+    secret: String,
+}
+
+/// What a collection answers once: the box's slot and its device credential.
+#[derive(Debug, Serialize)]
+struct CollectedClaim {
+    tenant_id: String,
+    store_id: String,
+    device_id: String,
+    /// The `posdev_<id>_<secret>` token, shown this once; only its hash is kept.
+    credential: String,
+}
+
+/// A box polls for its credential. `202` while nobody has bound the code, the credential once it
+/// has, `409` with reason `EXPIRED` when the hour is over, and one `403` for everything else.
+async fn collect_claim<Cl, A, C>(
+    State(state): State<ClaimState<Cl, A, C>>,
+    Path(claim_id): Path<String>,
+    Json(request): Json<CollectClaimRequest>,
+) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let claim_id = match parse_ulid_fields([("claim_id", &claim_id)]) {
+        Ok([claim_id]) => claim_id,
+        Err(refusal) => return refusal,
+    };
+    let now = state.clock.now();
+    let (Some(credential_id), Some(credential_secret)) = (
+        mint_ulid(now.as_milliseconds_since_epoch()),
+        random_hex_32(),
+    ) else {
+        tracing::error!("could not read OS entropy to mint a device credential");
+        return service_unavailable("claim");
+    };
+    let (credential, token) = mint_device_credential(credential_id, &credential_secret);
+    match state
+        .claims
+        .collect(
+            claim_id,
+            hash_claim_secret(&request.secret),
+            &credential,
+            now,
+        )
+        .await
+    {
+        Ok(CollectOutcome::Collected {
+            tenant_id,
+            store_id,
+            device_id,
+        }) => (
+            StatusCode::OK,
+            Json(CollectedClaim {
+                tenant_id: tenant_id.to_string(),
+                store_id: store_id.to_string(),
+                device_id: device_id.to_string(),
+                credential: token,
+            }),
+        )
+            .into_response(),
+        Ok(CollectOutcome::Pending) => (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({ "status": "PENDING" })),
+        )
+            .into_response(),
+        Ok(CollectOutcome::Expired) => api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "this claim has expired; open a new one",
+            &[("claim_id", "EXPIRED")],
+        ),
+        Ok(CollectOutcome::Refused) => api_error(
+            ErrorStatus::PermissionDenied,
+            "this claim cannot be collected",
+        ),
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be collected");
+            service_unavailable("claim")
+        }
+    }
+}
+
+/// A console user binds the code a box shows to a device slot.
+#[derive(Debug, Deserialize)]
+struct BindClaimRequest {
+    user_code: String,
+    tenant_id: String,
+    store_id: String,
+    device_id: String,
+}
+
+/// Binds a claim. Needs `console.devices.manage`, and is audited as `device.claim`.
+async fn admin_bind_claim<Cl, A, C>(
+    State(state): State<ClaimState<Cl, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<BindClaimRequest>,
+) -> Response
+where
+    Cl: ClaimStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, store_id, device_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &request.store_id),
+        ("device_id", &request.device_id),
+    ]) {
+        Ok([tenant_id, store_id, device_id]) => (
+            TenantId::new(tenant_id),
+            StoreId::new(store_id),
+            DeviceId::new(device_id),
+        ),
+        Err(refusal) => return refusal,
+    };
+    let Some(code) = UserCode::parse(&request.user_code) else {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "a claim code is eight letters and digits, as the box shows it",
+            &[("user_code", "INVALID_VALUE")],
+        );
+    };
+    let outcome = match state
+        .claims
+        .bind(
+            hash_user_code(&code),
+            tenant_id,
+            store_id,
+            device_id,
+            state.clock.now(),
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::error!(%error, "a claim could not be bound");
+            return service_unavailable("claim");
+        }
+    };
+    match outcome {
+        BindOutcome::Bound => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device.claim",
+                "device",
+                &device_id.to_string(),
+                None,
+                Some(serde_json::json!({
+                    "store_id": store_id.to_string(),
+                    "device_id": device_id.to_string(),
+                })),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        BindOutcome::Unknown => api_error_with_details(
+            ErrorStatus::NotFound,
+            "no box is waiting with that code",
+            &[("user_code", "NOT_FOUND")],
+        ),
+        BindOutcome::Expired => api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "that code has expired; the box shows a new one",
+            &[("user_code", "EXPIRED")],
+        ),
+        BindOutcome::AlreadyBound => api_error_with_details(
+            ErrorStatus::AlreadyExists,
+            "that code has already been used",
+            &[("user_code", "ALREADY_BOUND")],
+        ),
+    }
+}
+
+/// Draws a user code from OS entropy, or `None` if the entropy source is unavailable.
+fn mint_user_code() -> Option<UserCode> {
+    let mut entropy = [0_u8; USER_CODE_ENTROPY];
+    getrandom::fill(&mut entropy).ok()?;
+    Some(UserCode::from_entropy(entropy))
+}
+
 // --- Translation grid (`/admin/translations`) ---------------------------------------------------
 
 /// The collaborators the translation-grid routes need, stated independently of [`CloudApp`].
@@ -23700,6 +24009,20 @@ const ACTIVATE_MAX_ATTEMPTS: usize = 10;
 /// The sliding window [`ACTIVATE_MAX_ATTEMPTS`] counts over, in seconds.
 const ACTIVATE_WINDOW_SECS: u64 = 600;
 
+/// Opening a claim ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md))
+/// shares [`ACTIVATE_PATH`]'s budget: both are how an unauthenticated box first asks for anything.
+const CLAIM_PATH: &str = "/claim";
+
+/// Collection polls sit under this prefix, and get [`CLAIM_COLLECT_MAX_POLLS`] of their own.
+const CLAIM_COLLECT_PREFIX: &str = "/claim/";
+
+/// Collection polls allowed per client within [`CLAIM_COLLECT_WINDOW_SECS`]: one every five seconds,
+/// with room for a second box claimed from the same shop.
+const CLAIM_COLLECT_MAX_POLLS: usize = 120;
+
+/// The sliding window [`CLAIM_COLLECT_MAX_POLLS`] counts over, in seconds.
+const CLAIM_COLLECT_WINDOW_SECS: u64 = 300;
+
 /// The prefix [`throttle_sync`] guards. Every store-facing route sits under it (ADR-0097 moved the
 /// two that did not), so one prefix check covers config-pull, the heartbeat, the update report, the
 /// artifact fetch, the device proposals and the order relay.
@@ -23735,10 +24058,15 @@ where
             &throttle.limiter,
             "too many requests to the store sync surface; try again later",
         )
-    } else if path == ACTIVATE_PATH {
+    } else if path == ACTIVATE_PATH || path == CLAIM_PATH {
         (
             &throttle.activate_limiter,
             "too many activation attempts; try again later",
+        )
+    } else if path.starts_with(CLAIM_COLLECT_PREFIX) {
+        (
+            &throttle.collect_limiter,
+            "too many claim polls; try again later",
         )
     } else {
         return next.run(request).await;
@@ -23762,6 +24090,9 @@ pub struct SyncThrottle<C> {
     /// `/activate`'s own budget, independent of `/sync`'s so a busy store's polling cannot lock a
     /// technician out of activating the next box.
     activate_limiter: SlidingRateLimiter,
+    /// The claim-collection polls' budget, apart from the rest so a box waiting to be claimed cannot
+    /// spend a technician's activation attempts.
+    collect_limiter: SlidingRateLimiter,
     trusted_proxy_hops: usize,
     clock: C,
 }

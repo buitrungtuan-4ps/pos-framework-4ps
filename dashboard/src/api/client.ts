@@ -787,6 +787,15 @@ export const api = {
       store_id: storeId,
       device_id: deviceId,
     }),
+  // A box installed with no store shows a code; binding it to a device slot lets the box collect
+  // its credential (ADR-0148). 204 on success; 404, or 409 with EXPIRED / ALREADY_BOUND, otherwise.
+  bindClaim: (tenantId: string, storeId: string, deviceId: string, userCode: string) =>
+    requestVoid("POST", "/admin/claims/bind", {
+      user_code: userCode,
+      tenant_id: tenantId,
+      store_id: storeId,
+      device_id: deviceId,
+    }),
 
   // --- people & access (ADR-0070, Track M1): employees, role templates, per-store assignments ---
   // Reads need only console.data.read; every write needs console.people.manage (Owner/Admin) — the
