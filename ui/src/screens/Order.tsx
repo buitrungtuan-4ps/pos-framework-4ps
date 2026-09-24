@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
-import { useNavigate, useParams } from "@solidjs/router";
+import { useLocation, useNavigate, useParams } from "@solidjs/router";
 
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
@@ -10,6 +10,7 @@ import {
   addItem,
   chooseSeat,
   groupsFor,
+  holdWalkIn,
   modifiersSatisfied,
   fireCourse,
   fireOrder,
@@ -28,6 +29,7 @@ import {
   unfiredLinesForTable,
   unsentCoursesForTable,
   voidLine,
+  walkInKey,
   type OrderLine,
   formatAmount,
 } from "../state/store";
@@ -44,7 +46,16 @@ const VOID_LINE = "REASON_ACTION_VOID_LINE";
 export function Order() {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [error, setError] = createSignal<string | null>(null);
+  // A walk-in order the counter started (ADR-0146), at `/order/:id`, rather than a table's. It sits
+  // on no table, so it is held under a key of its own and every table-keyed read below works on it
+  // unchanged; only the header, the way back and the way to pay differ.
+  const walkIn = () => location.pathname.startsWith("/order/");
+  const key = () => (walkIn() ? walkInKey(params.id) : params.id);
+  if (walkIn()) {
+    holdWalkIn(params.id);
+  }
   // The table's published label — the number the floor, the kitchen board and the pass all show
   // (F6). Cutting leading zeros off the id is what this used to do, which was right for the
   // bootstrap floor's `01`…`12` and wrong for every published table: a ULID lost its zeros and the
@@ -74,20 +85,20 @@ export function Order() {
   // Written below `params` deliberately: a `createMemo` runs when it is created, so one placed above
   // the `const`s it reads dies in their temporal dead zone and takes the screen down (`.jules/bolt.md`).
   const priceable = createMemo(() =>
-    linesForTable(params.id)
+    linesForTable(key())
       .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
       .join(","),
   );
-  const [check] = createResource(priceable, () => loadCheck(params.id));
+  const [check] = createResource(priceable, () => loadCheck(key()));
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
   // be a row count they made themselves (`docs/ui-ux.md` §3).
-  const unfired = () => unfiredLinesForTable(params.id);
+  const unfired = () => unfiredLinesForTable(key());
 
   // The courses with food still waiting, in the store's service order. Empty on a store with courses
   // off, which is what keeps the row off those tills entirely rather than drawing an empty heading.
-  const unsentCourses = () => unsentCoursesForTable(params.id);
+  const unsentCourses = () => unsentCoursesForTable(key());
 
   // How many the store said this table seats, from the published floor plan. Zero means the plan
   // recorded no capacity, and a picker with no seats in it is worse than none — so the control only
@@ -95,8 +106,14 @@ export function Order() {
   const seatCount = () => floorTables().find((table) => table.id === params.id)?.seats ?? 0;
   const showSeats = () => seatsEnabled() && seatCount() > 0;
 
+  // A walk-in is paid on the counter screen, whose pad charges any counter order; it opens this
+  // order's bill there, so a bill is never left open on an order nobody went on to pay.
   const takePayment = () =>
     guard(async () => {
+      if (walkIn()) {
+        navigate(`/counter?charge=${params.id}`);
+        return;
+      }
       await openBill(params.id);
       navigate(`/table/${params.id}/pay`);
     });
@@ -260,7 +277,7 @@ export function Order() {
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
     if (groupsFor(item).length === 0) {
-      void guard(() => addItem(params.id, item));
+      void guard(() => addItem(key(), item));
       return;
     }
     setError(null);
@@ -297,7 +314,7 @@ export function Order() {
   // a `409` off a guest's eyeline.
   const confirmItem = (item: MenuItemResponse) =>
     guard(async () => {
-      await addItem(params.id, item, chosen());
+      await addItem(key(), item, chosen());
       closeChoosing();
     });
 
@@ -346,14 +363,16 @@ export function Order() {
           wider than a phone: a grid item's `min-width` is `auto`, not `0`. */}
       <div class="min-w-0">
         <div class="mb-3 flex items-center gap-3">
-          <a href="/" class="text-sm text-ink-muted no-underline">
-            {t("common.back_floor")}
+          <a href={walkIn() ? "/counter" : "/"} class="text-sm text-ink-muted no-underline">
+            {walkIn() ? t("common.back_counter") : t("common.back_floor")}
           </a>
-          {/* Seating a table ends here, on this table's order screen (ADR-0109). */}
+          {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
           <h1 class="text-lg font-semibold" data-outcome="order-open">
-            {t("common.table", { label: label() })}
+            {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
           </h1>
-          <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
+          <Show when={!walkIn()}>
+            <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
+          </Show>
         </div>
 
         <Show when={error()}>
@@ -366,7 +385,7 @@ export function Order() {
 
         <ul class="flex flex-col gap-2">
           <For
-            each={linesForTable(params.id)}
+            each={linesForTable(key())}
             fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
           >
             {(line) => (
@@ -751,7 +770,7 @@ export function Order() {
                         type="button"
                         class="min-h-touch flex-1 rounded-token border border-primary px-3 text-base font-semibold text-ink"
                         data-step="fireCourse"
-                        onClick={() => void guard(() => fireCourse(params.id, course.course_id))}
+                        onClick={() => void guard(() => fireCourse(key(), course.course_id))}
                       >
                         {t("order.send_course_count", {
                           course: course.display_name,
@@ -770,7 +789,7 @@ export function Order() {
             class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
             disabled={unfired().length === 0}
             data-step="fireOrder"
-            onClick={() => void guard(() => fireOrder(params.id))}
+            onClick={() => void guard(() => fireOrder(key()))}
           >
             {unfired().length === 0
               ? t("order.send")

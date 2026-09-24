@@ -1,4 +1,5 @@
 import { For, Show, createSignal, onMount } from "solid-js";
+import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
@@ -9,6 +10,7 @@ import {
   cashDenominations,
   formatAmount,
   settle,
+  startWalkIn,
   tenderAccepted,
   tipsEnabled,
 } from "../state/store";
@@ -32,6 +34,10 @@ export function Takeaway() {
   const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  const navigate = useNavigate();
+  // `?charge=<order>` is how the order screen hands a walk-in over to be paid (ADR-0146): the list
+  // loads, and that order's pad opens as if its card had been tapped.
+  const [search, setSearch] = useSearchParams<{ charge?: string }>();
 
   const explain = (caught: unknown) =>
     setError(errorMessage(caught));
@@ -39,11 +45,33 @@ export function Takeaway() {
   const refresh = () =>
     api
       .openOrders()
-      .then((waiting) => setOrders(waiting))
+      .then((waiting) => {
+        setOrders(waiting);
+        const wanted = search.charge;
+        if (wanted !== undefined) {
+          setSearch({ charge: undefined });
+          const order = waiting.find((candidate) => candidate.order_id === wanted);
+          if (order !== undefined) {
+            void charge(order);
+          }
+        }
+      })
       .catch((caught: unknown) => {
         setOrders([]);
         explain(caught);
       });
+
+  // A walk-in guest (ADR-0146, finding F12): the counter opens its own order and goes straight to
+  // it. Before this, a store without tables could charge an order someone else started and could
+  // not start one.
+  const newOrder = async () => {
+    setError(null);
+    try {
+      navigate(`/order/${await startWalkIn()}`);
+    } catch (caught) {
+      explain(caught);
+    }
+  };
 
   onMount(() => void refresh());
 
@@ -140,6 +168,14 @@ export function Takeaway() {
         fallback={
           <>
             <PageHeader title={t("counter.title")} />
+            <button
+              type="button"
+              class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
+              data-step="newOrder"
+              onClick={() => void newOrder()}
+            >
+              {t("counter.new_order")}
+            </button>
 
             <Show when={error()}>
               {(message) => (

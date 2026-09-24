@@ -599,6 +599,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ReasonCodeNotValid => "REASON_CODE_NOT_VALID",
         AppError::VoidReasonNotValid => "VOID_REASON_NOT_VALID",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
+        AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
+        AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
         AppError::AlreadyFired => "ALREADY_FIRED",
         AppError::ApprovalRequired => "APPROVAL_REQUIRED",
         AppError::ApprovalRefused => "APPROVAL_REFUSED",
@@ -634,6 +636,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ReasonCodeNotValid
         | AppError::VoidReasonNotValid
         | AppError::ModifierSelectionInvalid
+        | AppError::ChannelNotAccepted
+        | AppError::ItemNotSellable
         | AppError::AlreadyFired => refusal(StatusCode::CONFLICT, reason, error.to_string()),
         // A missing or refused manager PIN is an authorisation failure, not a state conflict: the
         // command is well-formed and applies to the record, and the only thing missing is the

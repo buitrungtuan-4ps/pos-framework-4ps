@@ -176,6 +176,7 @@ export function App() {
       <Route path="/kds" component={Kds} />
       <Route path="/expo" component={Expo} />
       <Route path="/counter" component={Takeaway} />
+      <Route path="/order/:id" component={Order} />
       {/* The staff-confirmation queue (ADR-0116) — the screen the QR hold had no way to reach. */}
       <Route path="/guests" component={Confirm} />
       <Route path="/today" component={Today} />

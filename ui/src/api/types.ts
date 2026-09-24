@@ -32,6 +32,23 @@ export interface LineResponse {
   state: string;
 }
 
+// A line added to a counter order by its id (ADR-0146): what the guest chose and no price, because
+// the edge prices it at the order's own channel.
+export interface OrderLineRequest {
+  menu_item_id: string;
+  quantity: Quantity;
+  modifier_menu_item_ids: string[];
+  course_id?: string;
+  note_present: boolean;
+}
+
+// A counter order the till has just opened, with the number the guest will be called by.
+export interface OpenedOrder {
+  order_id: string;
+  queue_number: number;
+  business_date: string;
+}
+
 // How many a line should now be. A quantity and no money: the edge holds the unit price the device
 // captured when the line was added and extends the line itself, so a till cannot quote a total that
 // does not follow from the price it showed.

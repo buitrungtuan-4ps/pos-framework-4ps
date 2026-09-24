@@ -33,6 +33,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   REASON_CODE_NOT_VALID: "error.reason_not_valid",
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
+  CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
+  ITEM_NOT_SELLABLE: "error.item_not_sellable",
   APPROVAL_REQUIRED: "error.approval_required",
   APPROVAL_REFUSED: "error.approval_refused",
   SUPERSEDED: "error.superseded",
