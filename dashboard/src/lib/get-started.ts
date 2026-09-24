@@ -67,6 +67,12 @@ export type Step = {
  * store can be created and can trade without one. It stays on the list because a fork that skips
  * brands and later wants them has to restate every store's identity; but marking it required would
  * make the checklist demand work the server does not.
+ *
+ * `apiKey` is optional for the same reason. A machine activated with a code syncs with the device
+ * credential that activation gave it
+ * ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)),
+ * so a store trades and syncs without a store key; one is for a box set up by hand. Counting it
+ * would keep the checklist open over a key nothing needs.
  */
 export const STEPS: readonly Step[] = [
   { id: "tenant", title: "getStarted.tenant.title", hint: "getStarted.tenant.hint" },
@@ -88,6 +94,7 @@ export const STEPS: readonly Step[] = [
     title: "getStarted.apiKey.title",
     hint: "getStarted.apiKey.hint",
     go: { screen: "apiKeys", label: "getStarted.apiKey.action" },
+    optional: true,
   },
   // Links to Store settings, not to Configuration: the store cannot trade until its locale, tax,
   // menu and roster are published, and each is published from the screen that owns it (ADR-0004),

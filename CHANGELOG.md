@@ -318,6 +318,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console stops saying a store needs a key to sync.** Since
+  [ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md) a machine
+  activated with a code syncs, relays orders and publishes events with its device credential, but
+  the console still treated the store key as required. The Get Started checklist counted it among
+  the required steps, so a store with no key never finished setup. The wizard said a store without
+  a key "cannot sync or trade", and the setup-file panel said configuration sync "waits until a key
+  is installed". The move-to-another-box drawer warned in red that files without a key were only
+  for a box that already held one, and the generated Linux and Windows installers ended a keyless
+  run warning that config sync and the order relay would not work. The key step is now marked
+  optional. The wizard, the drawer, the
+  setup-file panel and the checklist say what a key is for (a box set up by hand), the skip button
+  says it goes on to the setup files, and the drawer's red warning is a plain note.
+  `docs/guides/bring-a-store-online.md` says the same. **Upgrade note:** a
+  store that was only waiting on a key now shows as set up, and the Get Started panel stands down
+  for it.
+
 - **The console tells whoever installs a shop's PC how to get past SmartScreen.** A fork without a
   code-signing certificate ships the Windows setup file unsigned (ADR-0142), so the browser asks
   whether to keep it and Windows opens with "Windows protected your PC". The setup-file panel now

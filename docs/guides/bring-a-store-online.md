@@ -53,13 +53,16 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
-2. **API key** — issue the store's scoped key. It is issued **bound to the store you just created**,
-   which is what the `/sync/stores/{id}/…` routes require: those serve one store its own
-   configuration, employee roster included, so a key naming another store — or naming none — is
-   refused there. `read_config` and `relay_orders` are pre-selected together and you should keep
-   both: with only `read_config` the box syncs its configuration and looks healthy while the order
-   relay answers `403` on every poll, so orders placed in the cloud never reach the kitchen. The key
-   is shown **once** — the next step embeds it in a file for you.
+2. **API key** — **optional**, and **Skip the key** is the usual choice. A box activated with a code
+   (Step 3) syncs, relays orders and publishes events with the credential activation gives it
+   ([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so it
+   needs no store key. Issue one for a box you set up by hand with `-SyncKey`. It is issued **bound
+   to the store you just created**, which is what the `/sync/stores/{id}/…` routes require: those
+   serve one store its own configuration, employee roster included, so a key naming another store —
+   or naming none — is refused there. `read_config` and `relay_orders` are pre-selected together and
+   you should keep both: with only `read_config` the box syncs its configuration and looks healthy
+   while the order relay answers `403` on every poll, so orders placed in the cloud never reach the
+   kitchen. The key is shown **once** — the next step embeds it in a file for you.
 
    Issuing a store key by hand instead (**API keys** screen) works the same way, but you must pick
    the store in *Which store is this key for?*. A tenant-wide key is right for an integration that

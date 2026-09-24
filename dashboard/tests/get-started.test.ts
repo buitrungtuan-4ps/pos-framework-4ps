@@ -2,9 +2,9 @@
 //
 // Signing into a fresh console lands on a store hub with no store, whose only advice is "choose it
 // in the top bar" — which cannot be followed, because there is nothing to choose. The work is a
-// chain: a tenant, a store under it, a key that store's machine can present, a published
-// configuration, the machine installed and a till admitted, and then the shop reports. Every link
-// has a screen in this console and nothing anywhere said what the chain was.
+// chain: a tenant, a store under it, a published configuration, the machine installed and a till
+// admitted, and then the shop reports; a brand and a store key are optional. Every link has a
+// screen in this console and nothing anywhere said what the chain was.
 //
 // What is pinned here is not the list — a list is not a defect risk — but the three ways a
 // checklist starts lying: reporting work as undone when the read was refused, reporting it as
@@ -101,19 +101,28 @@ describe("the store's key", () => {
 });
 
 describe("a finished setup", () => {
-  it("is complete, and stays complete without the optional step", () => {
+  it("is complete, and stays complete without the optional steps", () => {
     expect(setupComplete(statuses(FINISHED))).toBe(true);
     // A brand is optional because POST /admin/stores does not require one. A checklist that
     // demanded it would be demanding work the server does not.
     expect(setupComplete(statuses({ ...FINISHED, brands: ready(0) }))).toBe(true);
     expect(statuses({ ...FINISHED, brands: ready(0) }).brand).toBe("todo");
   });
+
+  it("does not wait for a store key, because an activated machine syncs without one", () => {
+    // ADR-0143: the device credential from activation authenticates the store's sync, so a store
+    // with no key of its own trades and syncs. The step still reads "Not yet" for whoever wants
+    // one, and no longer holds the checklist open.
+    const keyless = statuses({ ...FINISHED, keys: ready(0) });
+    expect(keyless.apiKey).toBe("todo");
+    expect(setupComplete(keyless)).toBe(true);
+  });
 });
 
 describe("the progress line", () => {
   it("counts only the required steps", () => {
     const optional = STEPS.filter((step) => step.optional === true).length;
-    expect(optional).toBe(1);
+    expect(optional).toBe(2);
     expect(requiredProgress(statuses(FINISHED))).toEqual({
       done: STEPS.length - optional,
       total: STEPS.length - optional,
