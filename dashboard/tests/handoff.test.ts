@@ -82,11 +82,21 @@ describe("the files a replacement box needs", () => {
   });
 
   it("emits a credential-less env file rather than a broken one, when no key was issued", () => {
-    // The "this box already holds its key" path. It must produce a file that installs — the store
-    // trades either way — and it must not smuggle a placeholder that looks like a credential.
+    // The keyless path, the ordinary one since ADR-0143. It must produce a file that installs and
+    // it must not smuggle a placeholder that looks like a credential.
     const body = named("env").render({ ...VALUES, key: null });
     expect(body).not.toContain(VALUES.key);
     expect(body.length).toBeGreaterThan(0);
+  });
+
+  it("tells a keyless install it needs no key, because activation is what lets it sync", () => {
+    // The installers used to end a keyless run with a warning that config sync and the order
+    // relay would not work, which sent technicians looking for a key nothing needs (ADR-0143).
+    for (const name of ["install-pos-edge.sh", "install-pos-edge.ps1"]) {
+      const body = named(name).render({ ...VALUES, key: null });
+      expect(body).toContain("none is needed");
+      expect(body).not.toContain("will not work until one is installed");
+    }
   });
 
   it("carries the PowerShell byte-order mark out through the render", () => {

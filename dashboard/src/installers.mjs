@@ -335,7 +335,7 @@ export function linuxInstaller(v) {
     ...(v.key
       ? ['echo "Now DELETE this installer — it contains the store key."']
       : [
-          'echo "WARNING: no key was issued, so /etc/pos-edge/env has no credential. Config sync and the order relay will not work until one is installed."',
+          'echo "No store key was issued, and none is needed: once this box is activated on /setup, it syncs with the credential activation gives it."',
         ]),
     "",
   ].join("\n");
@@ -658,7 +658,7 @@ export function windowsInstaller(v) {
       warningBlock: v.key
         ? ["Write-Host 'Now DELETE this installer — it contains the store key.'"]
         : [
-            "Write-Host 'WARNING: no key was issued, so the service has no credential. Config sync and the order relay will not work until one is installed.'",
+            "Write-Host 'No store key was issued, and none is needed: once this box is activated on /setup, it syncs with the credential activation gives it.'",
           ],
       cloudHost: v.cloudHost,
       bindPort: v.bindPort.trim() || DEFAULT_BIND_PORT,

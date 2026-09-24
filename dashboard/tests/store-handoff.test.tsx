@@ -162,10 +162,10 @@ describe("handing a store's files over again", () => {
     }
   });
 
-  it("lets a box that already holds its key through, without a write", async () => {
-    // The other direction out of the fork. It must reach the files — a box being repaired by hand
-    // is a real case — and it must say plainly that they carry no credential, because the download
-    // itself looks identical either way.
+  it("goes on to the files without a key, and without a write", async () => {
+    // The other direction out of the fork, and since ADR-0143 the ordinary one: a box activated
+    // with a code syncs with its device credential. It must reach the files, and it must say that
+    // they carry no key, because the download itself looks identical either way.
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
     await waitFor(() =>
