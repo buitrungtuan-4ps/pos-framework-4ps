@@ -69,6 +69,10 @@ impl NatsLink {
     /// box with no publisher at all, trading on and never shipping an event until somebody
     /// restarted it.
     ///
+    /// **A broker that refuses the credentials is not an error here either.** The client is refused
+    /// and tries again, so the refusal shows at the first call that needs a session — the
+    /// handshake fails as unavailable — rather than at the connect (`tests/auth.rs`).
+    ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the address itself is unusable.
