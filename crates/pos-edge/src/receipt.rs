@@ -46,6 +46,21 @@ pub trait ReceiptAuthority: Send + Sync + std::fmt::Debug {
         store_id: StoreId,
         bill_id: BillId,
     ) -> Pin<Box<dyn Future<Output = Result<u64, PortError>> + Send + 'a>>;
+
+    /// Raises the counter so the next number allocated at `store_id` is above `floor`
+    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    ///
+    /// **Monotonic**: a counter already above the floor is left alone, so applying the same floor
+    /// twice, or an older floor after a newer one, changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the authority cannot be reached or the write fails.
+    fn raise_floor<'a>(
+        &'a self,
+        store_id: StoreId,
+        floor: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), PortError>> + Send + 'a>>;
 }
 
 impl ReceiptAuthority for SqliteStore {
@@ -57,6 +72,17 @@ impl ReceiptAuthority for SqliteStore {
         bill_id: BillId,
     ) -> Pin<Box<dyn Future<Output = Result<u64, PortError>> + Send + 'a>> {
         Box::pin(self.allocate_receipt_number(store_id, bill_id))
+    }
+
+    fn raise_floor<'a>(
+        &'a self,
+        store_id: StoreId,
+        floor: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), PortError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.raise_receipt_floor(store_id, floor).await?;
+            Ok(())
+        })
     }
 }
 
@@ -107,6 +133,22 @@ impl ReceiptAuthority for InMemoryReceipts {
             *counter = counter.saturating_add(1);
             state.allocated.insert(bill_id, number);
             Ok(number)
+        })
+    }
+
+    fn raise_floor<'a>(
+        &'a self,
+        store_id: StoreId,
+        floor: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), PortError>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut state = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let counter = state.next.entry(store_id).or_insert(1);
+            *counter = (*counter).max(floor.saturating_add(1));
+            Ok(())
         })
     }
 }

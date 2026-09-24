@@ -109,6 +109,31 @@ impl SqliteStore {
         .await
     }
 
+    /// Raises the receipt counter so the next number is above `floor`, and returns that next number
+    /// ([ADR-0149](../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    ///
+    /// The cloud publishes the highest receipt number it has seen from this store with every lease
+    /// bump, so a replacement box never reuses one. Monotonic: a counter already above the floor is
+    /// left alone, so the same floor applied twice changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError`] if the store cannot be reached or the write fails.
+    pub async fn raise_receipt_floor(
+        &self,
+        store_id: StoreId,
+        floor: u64,
+    ) -> Result<u64, PortError> {
+        self.ask(PortName::EventStore, move |reply| {
+            Command::RaiseReceiptFloor {
+                store_id,
+                floor,
+                reply,
+            }
+        })
+        .await
+    }
+
     /// Allocates the next daily queue number for a tableless order, or returns the one it already
     /// has (ADR-0064, the edge `OrderIn` authority).
     ///

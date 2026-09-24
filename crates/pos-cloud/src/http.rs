@@ -16998,6 +16998,7 @@ where
             node,
             action: "config.ota.publish",
             detail: audit_detail,
+            companions: Vec::new(),
         },
     )
     .await
@@ -17066,6 +17067,7 @@ where
             node,
             action: "config.ota.halt",
             detail: serde_json::json!({ "halted": request.halted }),
+            companions: Vec::new(),
         },
     )
     .await
@@ -17085,6 +17087,10 @@ struct OtaNodeWrite<'a> {
     action: &'a str,
     /// The audit detail, which carries no personal data — a rollout is fleet configuration.
     detail: serde_json::Value,
+    /// Nodes published in the **same** version beside `node`, so no pull can see one without the
+    /// other. Only the lease bump has one: the receipt floor a replacement box must number above
+    /// (ADR-0149).
+    companions: Vec<(&'a str, serde_json::Value)>,
 }
 
 /// The shared load→set-node→publish→save→audit tail behind every OTA lever.
@@ -17101,7 +17107,13 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     L: ArtifactStore + Clone + Send + Sync + 'static,
 {
-    let nodes = vec![(write.key.to_owned(), write.node)];
+    let mut nodes = vec![(write.key.to_owned(), write.node)];
+    nodes.extend(
+        write
+            .companions
+            .into_iter()
+            .map(|(key, node)| (key.to_owned(), node)),
+    );
     let id = match publish_config_nodes(
         &state.config_trees,
         &state.clock,
@@ -17241,6 +17253,7 @@ where
             node: node.clone(),
             action: "config.ota.placement",
             detail: node,
+            companions: Vec::new(),
         },
     )
     .await
@@ -17493,6 +17506,11 @@ where
         Err(error) => return lease_store_error_response(&error),
     };
     let node = lease_node(bump.generation);
+    let receipt_floor = receipt_floor(&state.config_trees, tenant_id, store_id).await;
+    let companions = receipt_floor
+        .map(|number| ("receipt_floor", serde_json::json!({ "number": number })))
+        .into_iter()
+        .collect();
     publish_ota_node(
         &state,
         &context,
@@ -17527,10 +17545,39 @@ where
                 // The trail is the only record that an earlier machine's sales were written off,
                 // and by whom.
                 "abandoned_generation": acknowledged.map(LeaseGeneration::value),
+                // What the replacement numbers its receipts above, or `null` when no floor went
+                // out (ADR-0149).
+                "receipt_floor": receipt_floor,
             }),
+            companions,
         },
     )
     .await
+}
+
+/// The receipt floor a lease bump publishes beside the lease (ADR-0149): the highest receipt number
+/// the cloud has ingested from the store, so the box that learns it is the store has already learned
+/// where its numbers must start. A log that cannot be read does not hold the takeover back: the lease
+/// still publishes, without a floor, and the warning says so.
+async fn receipt_floor<Cfg: LeaseStore>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Option<u64> {
+    match config_trees
+        .highest_receipt_number(tenant_id, store_id)
+        .await
+    {
+        Ok(floor) => floor,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                store = %store_id,
+                "could not read the highest receipt number; the lease is published without a receipt floor"
+            );
+            None
+        }
+    }
 }
 
 /// A `POST /admin/config/lease/settle` body: the store, and the generation the caller is attesting

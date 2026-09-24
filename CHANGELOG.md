@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A replacement box never reuses a receipt number the cloud has seen**
+  ([ADR-0149](docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md), plan step
+  4.2). Every lease bump now publishes `receipt_floor` (`{ "number": M }`, the highest receipt
+  number ingested from the store's `billing.bill.settled` events) in the same config version as the
+  `lease` node. The edge raises its receipt counter above the floor on the pull that carries it,
+  before anything else in that document takes effect, and never lowers it; a floor it cannot write
+  holds the version back so the next pull tries again. A box restored from an older archive now skips
+  the numbers issued since instead of printing them twice. Receipts issued offline and never synced
+  remain the named risk. New guide: `docs/guides/replace-a-store-box.md`. **Upgrade note:** a new
+  Store-layer config node, `receipt_floor`; a bump on a cloud whose log cannot be read publishes the
+  lease without it and logs a warning.
+
 - **POS Station, a native till app** ([ADR-0147](docs/adr/0147-pos-station-is-a-tauri-shell-over-the-edge.md),
   plan steps 1.5, 3.2 and 3.3), in `apps/pos-station`, outside the workspace with its own lockfile.
   A Tauri v2 window loads the till from the store's own edge, so it is always the version that edge

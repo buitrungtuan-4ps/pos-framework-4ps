@@ -177,3 +177,81 @@ fn the_counter_survives_reopening_the_database() {
         assert_eq!(bill_one_again, 1, "an allocation survives a reopen");
     });
 }
+
+/// A replacement box numbers above what the cloud has seen
+/// ([ADR-0149](../../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)):
+/// the floor lifts the counter, a lower or repeated floor changes nothing, and it holds across a
+/// reopen.
+#[test]
+fn a_receipt_floor_lifts_the_counter_and_never_lowers_it() {
+    let dir = TempDir::new().expect("temp dir");
+    let path = dir.path().join("store.sqlite");
+    let store = open(&path);
+
+    block_on(async {
+        // A box restored from an old archive has issued receipts 1 and 2.
+        for index in 1..=2 {
+            store
+                .allocate_receipt_number(store_id(), bill(index))
+                .await
+                .expect("allocate");
+        }
+        // The cloud has seen up to 40 from the box it replaces.
+        assert_eq!(
+            store
+                .raise_receipt_floor(store_id(), 40)
+                .await
+                .expect("raise"),
+            41
+        );
+        assert_eq!(
+            store
+                .allocate_receipt_number(store_id(), bill(3))
+                .await
+                .expect("allocate"),
+            41,
+            "the next receipt is above everything the cloud has seen"
+        );
+        assert_eq!(
+            store
+                .raise_receipt_floor(store_id(), 40)
+                .await
+                .expect("raise"),
+            42,
+            "the same floor again leaves a counter already above it alone"
+        );
+        assert_eq!(
+            store
+                .raise_receipt_floor(store_id(), 5)
+                .await
+                .expect("raise"),
+            42,
+            "a lower floor never lowers it"
+        );
+    });
+    drop(store);
+
+    let reopened = open(&path);
+    let next = block_on(reopened.allocate_receipt_number(store_id(), bill(4))).expect("allocate");
+    assert_eq!(next, 42, "the lifted counter is durable");
+}
+
+/// A store that has never issued a receipt starts above the floor.
+#[test]
+fn a_fresh_store_starts_above_the_floor() {
+    let dir = TempDir::new().expect("temp dir");
+    let store = open(&dir.path().join("store.sqlite"));
+    block_on(async {
+        store
+            .raise_receipt_floor(store_id(), 1_000)
+            .await
+            .expect("raise");
+        assert_eq!(
+            store
+                .allocate_receipt_number(store_id(), bill(1))
+                .await
+                .expect("allocate"),
+            1_001
+        );
+    });
+}

@@ -391,6 +391,33 @@ impl PostgresConfigTrees {
         Ok(())
     }
 
+    /// The highest receipt number this store's `billing.bill.settled` events carry, or `None` when
+    /// the log holds none
+    /// ([ADR-0149](../../../../docs/adr/0149-a-replacement-box-numbers-above-what-the-cloud-has-seen.md)).
+    ///
+    /// Read at a lease bump, which a person does by hand, so a scan of the store's settled events
+    /// through `events_store_event` is an acceptable cost for the one number that keeps a
+    /// replacement box from reusing a receipt.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn highest_receipt_number(
+        &self,
+        store_id: StoreId,
+    ) -> Result<Option<i64>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_one(
+                "SELECT max((envelope->'data'->>'receipt_number')::bigint) FROM events \
+                 WHERE store_id = $1 AND envelope->>'event_type' = 'billing.bill.settled'",
+                &[&store_id.to_string()],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.get(0))
+    }
+
     /// Issues this store's next lease generation and returns it, together with the edge placement
     /// the store now has — a **bump**, and the only write this adapter offers
     /// ([ADR-0108](../../../../docs/adr/0108-the-lease-generation-is-authority.md),
