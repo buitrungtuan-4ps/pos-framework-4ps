@@ -22,6 +22,14 @@
 // cloud writes it into the file name, and the edge reads a name back as `https` — the only scheme
 // its cloud transport dials, loopback included — so a console reached over plain http cannot hand
 // out a file that would work, and says so instead.
+//
+// # Why it talks about SmartScreen
+//
+// A fork without a code-signing certificate ships the file unsigned (ADR-0142), and then the
+// browser asks whether to keep it and Windows opens with "Windows protected your PC", whose way on
+// is a small "More info" link. Whoever sets up a shop's PC meets that once, at the first
+// double-click, and without a word here stops at the first red screen. The console cannot tell a
+// signed release from an unsigned one, so the hint says "if".
 
 import { createResource, createSignal, onMount, Show } from "solid-js";
 
@@ -102,6 +110,7 @@ export function SetupFile(props: {
                   {t("setupFile.download")}
                 </a>
               </div>
+              <p class="text-sm text-ink-muted">{t("setupFile.unsigned")}</p>
             </Show>
           </Show>
         </Show>

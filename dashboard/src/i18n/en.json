@@ -1520,6 +1520,7 @@
   "setupFile.release": "Release",
   "setupFile.releaseHint": "The version to install — the one your stores run, on the OTA screen. The box updates itself from there.",
   "setupFile.title": "Windows setup file (.exe)",
+  "setupFile.unsigned": "If the release is not code-signed, the browser or Windows may warn about the file. When the browser asks, keep the file. When Windows shows “Windows protected your PC”, choose More info, then Run anyway. It happens once per PC; later updates install without asking.",
   "shell.breadcrumb": "Breadcrumb",
   "shell.version": "Version {version}",
   "stations.addRule": "Add rule",

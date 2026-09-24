@@ -205,6 +205,9 @@ describe("handing a store's files over again", () => {
     // No key was issued, so the setup window's question is answered in advance: skip it, and what
     // that costs.
     expect(screen.getByRole("dialog").textContent).toContain(messages["setupFile.noKey"]);
+    // And the warnings an unsigned file meets on the shop's PC are named beside the link, with the
+    // way past each, because whoever double-clicks it has nobody to ask.
+    expect(screen.getByRole("dialog").textContent).toContain(messages["setupFile.unsigned"]);
   });
 
   it("says so when the cloud holds no Windows build of the release", async () => {
@@ -226,6 +229,8 @@ describe("handing a store's files over again", () => {
     const expected = (messages["setupFile.notHosted"] ?? "").replace("{release}", "1.5.0");
     await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain(expected));
     expect(screen.queryByRole("link", { name: messages["setupFile.download"] })).toBeNull();
+    // No file, so nothing to warn about.
+    expect(screen.getByRole("dialog").textContent).not.toContain(messages["setupFile.unsigned"]);
   });
 
   it("offers no setup file to a console on plain http, and says why", async () => {

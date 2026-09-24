@@ -300,6 +300,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The console tells whoever installs a shop's PC how to get past SmartScreen.** A fork without a
+  code-signing certificate ships the Windows setup file unsigned (ADR-0142), so the browser asks
+  whether to keep it and Windows opens with "Windows protected your PC". The setup-file panel now
+  says so beside the download link, with the way past each (keep the file; More info, then Run
+  anyway), and that it happens once per PC. The release runbook, the fork checklist, the Station
+  guide and `sign-windows.ps1` no longer say a public CA issues a `.pfx`: since June 2023 its key
+  stays in hardware, so a bought certificate is used through `POS_SIGN_COMMAND` and a cloud signing
+  service, and the `.pfx` mode is for an internal certificate.
 - **The kitchen board draws tickets, oldest first, and can be one station's board.** One card per
   order, station and course — what a cook makes together — aged from its oldest line, bumped with
   one tap to the station it was fired to, and showing the quantity. Lines now carry the station

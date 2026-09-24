@@ -202,9 +202,18 @@ Which mode a fork ends up in:
 | The fork has | Set | Result |
 |---|---|---|
 | nothing | nothing | ships **unsigned**; the build summary says so. SmartScreen warns on first run; updates are unaffected |
-| a certificate from a public CA, as a `.pfx` | `POS_SIGN_PFX_BASE64` + `POS_SIGN_PFX_PASSWORD` (secrets) | signed; SmartScreen reputation builds with downloads |
-| no public certificate, but a managed fleet | run `deploy/release/new-internal-signing-cert.ps1`, put the `.pfx` in the two secrets, push `pos-signing.cer` to the stores (Group Policy, Intune, or `deploy/edge/trust-internal-signing-cert.ps1`) | UAC names the fork; AppLocker/WDAC can allow by publisher. **No** SmartScreen reputation — that comes only from a public CA |
-| a key that cannot leave hardware (EV token, Azure Trusted Signing, cloud KMS) | `POS_SIGN_COMMAND` (variable), e.g. `jsign --storetype TRUSTEDSIGNING --keystore <endpoint> --storepass %AZURE_TOKEN% --alias <account>/<profile> {file}` | signed by whatever that command runs |
+| a certificate from a public CA (OV or EV) | `POS_SIGN_COMMAND` (variable): the signing service's command line, e.g. `jsign --storetype TRUSTEDSIGNING --keystore <endpoint> --storepass %AZURE_TOKEN% --alias <account>/<profile> {file}` | signed; SmartScreen reputation builds with downloads |
+| no public certificate, but a managed fleet | run `deploy/release/new-internal-signing-cert.ps1`, put the `.pfx` in `POS_SIGN_PFX_BASE64` + `POS_SIGN_PFX_PASSWORD` (secrets), push `pos-signing.cer` to the stores (Group Policy, Intune, or `deploy/edge/trust-internal-signing-cert.ps1`) | UAC names the fork; AppLocker/WDAC can allow by publisher. **No** SmartScreen reputation — that comes only from a public CA |
+
+**A public certificate does not arrive as a `.pfx`.** Since 1 June 2023 the CA/Browser Forum's
+code-signing requirements have had the private key of every publicly trusted code-signing
+certificate, OV as well as EV, generated and kept in hardware: a USB token, an HSM, or a signing
+service run by the CA or a cloud (Azure Trusted Signing, DigiCert KeyLocker, SSL.com eSigner, a key in
+a cloud KMS). A token cannot be plugged into a hosted runner, so for this workflow buy the
+cloud-signing form and point `POS_SIGN_COMMAND` at it; the key stays with the provider, which is where
+it is renewed and revoked. It never belongs on the cloud VPS the stores dial: that machine faces the
+internet, and whoever took it would sign anything in the fork's name. The `.pfx` mode is for the
+internal certificate in the row above.
 
 Set `POS_SIGN_REQUIRED=true` (a variable) on the build that must never ship unsigned — the official
 release. A fork without a certificate leaves it unset and gets a notice instead of a failure.

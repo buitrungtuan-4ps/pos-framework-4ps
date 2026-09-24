@@ -77,9 +77,9 @@ to `release.yml`, it reads:
 
 | Secret / variable | Required | What |
 |---|---|---|
-| `POS_SIGN_PFX_BASE64` (secret) | no | a `.pfx`, base64 — from a public CA, or made by `deploy/release/new-internal-signing-cert.ps1` |
+| `POS_SIGN_PFX_BASE64` (secret) | no | a `.pfx`, base64 — an internal certificate made by `deploy/release/new-internal-signing-cert.ps1` (a public CA no longer issues one) |
 | `POS_SIGN_PFX_PASSWORD` (secret) | no | its password |
-| `POS_SIGN_COMMAND` (variable) | no | any signer's command line with `{file}` — for a key that cannot leave its hardware |
+| `POS_SIGN_COMMAND` (variable) | no | any signer's command line with `{file}` — how a public CA's certificate is used, since its key cannot leave its hardware |
 | `POS_SIGN_REQUIRED` (variable) | no | `true` makes "no signing configured" a failure instead of a notice |
 
 None set: the Windows binary ships unsigned and the build summary says so.
