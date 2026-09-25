@@ -1129,6 +1129,47 @@ test("a modifier marked sold out cannot be chosen, and the dish still sells with
   }
 });
 
+// On a phone or a tablet, a dish's choices open on screen, where the thumb that tapped it is.
+//
+// Below a terminal the menu is under the bill, and the picker was drawn in the bill's column, so it
+// opened wherever the bill ended. A long menu, or a screen on its side, puts that out of sight: the
+// server tapped the pizza and saw nothing happen. It is a sheet from the bottom of the screen there
+// now. The test does not click its way to the choices, because a click scrolls to what it clicks;
+// it asks whether they are on screen the moment the pizza is tapped. A phone on its side is the case
+// the demo's five-dish menu can show failing. Upright, that menu is too short to push the end of
+// the bill out of view, so the upright case guards the sheet itself.
+for (const device of [
+  { name: "a phone", width: 390, height: 844 },
+  { name: "a phone on its side", width: 844, height: 390 },
+]) {
+  test(`on ${device.name} a dish's choices open on screen, where the thumb is`, async ({ page }) => {
+    const edge = await startEdge();
+    try {
+      await page.setViewportSize({ width: device.width, height: device.height });
+      await pair(page, edge);
+      await signIn(page, edge);
+      await seatTable(page);
+      // A table with a few dishes on it already, as it is mid-service.
+      for (const query of ["salad", "iced", "water", "pho"]) {
+        await addByName(page, query);
+      }
+
+      await page.locator("#menu-search").fill("margherita");
+      await page.locator('[data-step="onItem"]').click();
+      const confirm = page.locator('[data-step="confirmItem"]');
+      await expect(confirm).toBeInViewport();
+      await expect(page.locator('[data-step="chooseModifier"]').first()).toBeInViewport();
+
+      await page.locator('[data-step="chooseModifier"]').first().click();
+      await confirm.click();
+      await expect(confirm).toHaveCount(0);
+      await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+    } finally {
+      await edge.stop();
+    }
+  });
+}
+
 // A tip on a bill that is not a round number still settles.
 //
 // The pay screen computed its tip keys with `(total * percent) / 100` — a float division on a money

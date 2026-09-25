@@ -448,7 +448,9 @@ export function Order() {
           </Show>
         </div>
 
-        <Show when={error()}>
+        {/* While a dish's choices are open, a refusal shows in the picker, beside the button that
+            drew it: on a phone the picker covers this spot. */}
+        <Show when={choosing() ? null : error()}>
           {(message) => (
             <p class="mb-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
               {message()}
@@ -659,85 +661,122 @@ export function Order() {
         */}
         <Show when={choosing()}>
           {(item) => (
-            <div class="mb-3 rounded-token border border-line bg-surface p-3">
-              <h2 class="font-semibold">{t("order.choose_title", { item: item().display_name })}</h2>
-              <For each={groupsFor(item())}>
-                {(group) => (
-                  <div class="mt-3">
-                    <p class="text-sm text-ink-muted">
-                      {group.min_select >= 1
-                        ? t("order.choose_required", { group: group.display_name })
-                        : t("order.choose_optional", { group: group.display_name })}
-                    </p>
-                    <div class="mt-2 grid grid-cols-2 gap-2">
-                      <For each={group.member_menu_item_ids}>
-                        {(memberId) => (
-                          <Show when={menuItemMap().get(memberId)}>
-                            {(member) => (
-                              <button
-                                type="button"
-                                class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left disabled:opacity-50"
-                                classList={{
-                                  "bg-primary text-primary-ink": chosen().includes(memberId),
-                                  "bg-surface text-ink": !chosen().includes(memberId),
-                                }}
-                                // A choice the kitchen has run out of, or the console withdrew,
-                                // cannot be made: the edge refuses a line that asks for it. One
-                                // already chosen stays tappable, so it can still be taken off.
-                                disabled={!member().available && !chosen().includes(memberId)}
-                                aria-pressed={chosen().includes(memberId)}
-                                data-step="chooseModifier"
-                                onClick={() => chooseModifier(group, memberId)}
-                              >
-                                <span classList={{ "line-through": member().sold_out === true }}>
-                                  {member().display_name}
-                                </span>
-                                <Show
-                                  when={member().available}
-                                  fallback={
-                                    <span class="text-sm text-ink-muted">
-                                      {member().sold_out === true
-                                        ? t("order.sold_out")
-                                        : t("order.unavailable")}
-                                    </span>
-                                  }
-                                >
-                                  {/* A modifier is an ordinary item with its own price, which is
-                                      how a large costs more than a small. A free choice says
-                                      nothing rather than saying zero. */}
-                                  <Show when={member().unit_price.amount_minor > 0}>
-                                    <span class="tabular-nums text-ink-muted">
-                                      {"+ "}
-                                      {formatAmount(member().unit_price)}
-                                    </span>
-                                  </Show>
-                                </Show>
-                              </button>
-                            )}
-                          </Show>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                )}
-              </For>
-              <button
-                type="button"
-                class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
-                disabled={!modifiersSatisfied(item(), chosen())}
-                data-step="confirmItem"
-                onClick={() => void confirmItem(item())}
-              >
-                {t("order.choose_add")}
-              </button>
-              <button
-                type="button"
-                class="mt-2 min-h-touch w-full rounded-token border border-line px-3 text-sm"
+            <>
+              {/*
+                Where the picker opens depends on where the menu is. On a phone or a tablet the menu
+                is below the bill, and the picker, drawn in the bill's column, opened off-screen: a
+                server tapped the pizza and saw nothing happen. There it is a sheet from the bottom
+                of the screen, where the thumb that tapped is, over the menu washed out behind it,
+                and a tap on the washed-out menu cancels, as Cancel does. A terminal draws the bill
+                beside the menu, so there the picker stays in the bill's column, where it always was.
+              */}
+              <div
+                class="fixed inset-0 z-20 bg-canvas/70 terminal:hidden"
+                aria-hidden="true"
                 onClick={() => closeChoosing()}
+              />
+              <div
+                class="fixed inset-x-0 bottom-0 z-30 flex max-h-[85dvh] flex-col rounded-t-token border-t border-line bg-surface shadow-overlay terminal:static terminal:z-auto terminal:mb-3 terminal:block terminal:max-h-none terminal:rounded-token terminal:border terminal:shadow-none"
+                role="dialog"
+                aria-label={t("order.choose_title", { item: item().display_name })}
               >
-                {t("common.cancel")}
-              </button>
-            </div>
+                {/* The choices scroll inside the sheet and the two buttons under them do not, so a
+                    phone on its side, a screen shorter than the choices, still shows Add. */}
+                <div class="min-h-0 overflow-y-auto p-4 pb-0 terminal:overflow-visible terminal:p-3 terminal:pb-0">
+                  <h2 class="font-semibold">
+                    {t("order.choose_title", { item: item().display_name })}
+                  </h2>
+                  <For each={groupsFor(item())}>
+                    {(group) => (
+                      <div class="mt-3">
+                        <p class="text-sm text-ink-muted">
+                          {group.min_select >= 1
+                            ? t("order.choose_required", { group: group.display_name })
+                            : t("order.choose_optional", { group: group.display_name })}
+                        </p>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                          <For each={group.member_menu_item_ids}>
+                            {(memberId) => (
+                              <Show when={menuItemMap().get(memberId)}>
+                                {(member) => (
+                                  <button
+                                    type="button"
+                                    class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left disabled:opacity-50"
+                                    classList={{
+                                      "bg-primary text-primary-ink": chosen().includes(memberId),
+                                      "bg-surface text-ink": !chosen().includes(memberId),
+                                    }}
+                                    // A choice the kitchen has run out of, or the console withdrew,
+                                    // cannot be made: the edge refuses a line that asks for it. One
+                                    // already chosen stays tappable, so it can still be taken off.
+                                    disabled={!member().available && !chosen().includes(memberId)}
+                                    aria-pressed={chosen().includes(memberId)}
+                                    data-step="chooseModifier"
+                                    onClick={() => chooseModifier(group, memberId)}
+                                  >
+                                    <span classList={{ "line-through": member().sold_out === true }}>
+                                      {member().display_name}
+                                    </span>
+                                    <Show
+                                      when={member().available}
+                                      fallback={
+                                        <span class="text-sm text-ink-muted">
+                                          {member().sold_out === true
+                                            ? t("order.sold_out")
+                                            : t("order.unavailable")}
+                                        </span>
+                                      }
+                                    >
+                                      {/* A modifier is an ordinary item with its own price, which is
+                                          how a large costs more than a small. A free choice says
+                                          nothing rather than saying zero. */}
+                                      <Show when={member().unit_price.amount_minor > 0}>
+                                        <span class="tabular-nums text-ink-muted">
+                                          {"+ "}
+                                          {formatAmount(member().unit_price)}
+                                        </span>
+                                      </Show>
+                                    </Show>
+                                  </button>
+                                )}
+                              </Show>
+                            )}
+                          </For>
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                  <Show when={error()}>
+                    {(message) => (
+                      <p
+                        class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
+                        role="alert"
+                      >
+                        {message()}
+                      </p>
+                    )}
+                  </Show>
+                </div>
+                <div class="p-4 pt-0 terminal:p-3 terminal:pt-0">
+                  <button
+                    type="button"
+                    class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
+                    disabled={!modifiersSatisfied(item(), chosen())}
+                    data-step="confirmItem"
+                    onClick={() => void confirmItem(item())}
+                  >
+                    {t("order.choose_add")}
+                  </button>
+                  <button
+                    type="button"
+                    class="mt-2 min-h-touch w-full rounded-token border border-line px-3 text-sm"
+                    onClick={() => closeChoosing()}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            </>
           )}
         </Show>
 
