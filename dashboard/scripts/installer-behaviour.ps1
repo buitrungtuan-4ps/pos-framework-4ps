@@ -109,7 +109,10 @@ function global:Invoke-RestMethod {
     param([string] $Uri, $TimeoutSec)
     if (-not $global:scene.Listening -or -not $global:scene.Answers) { throw 'connection refused' }
     $global:scene.Events.Add('health')
-    return [pscustomobject]@{ status = 'ok'; version = $global:scene.Running; store_id = $global:scene.AnsweringStore }
+    $health = [ordered]@{ status = 'ok'; store_id = $global:scene.AnsweringStore }
+    # $null: an answer with no version in it, which the installer reports as 'unknown'.
+    if ($null -ne $global:scene.Running) { $health.version = $global:scene.Running }
+    return [pscustomobject]$health
 }
 
 function global:Invoke-WebRequest {
@@ -271,6 +274,9 @@ Assert-Says $r 'runs 0.14.0, newer than the 0.13.0 this installer carries, so it
 Assert-Silent $r 'To run 0.13.0'
 $r = Invoke-Scenario 'M same release' @{ Running = '0.14.0'; Carried = '0.14.0' }
 Assert-Says $r 'the binary it runs was kept (version 0.14.0)'
+$r = Invoke-Scenario 'M running release unknown' @{ Running = $null; Carried = '0.14.0' }
+Assert-Says $r 'the binary it runs was kept (version unknown)'
+Assert-Silent $r 'newer than'
 
 # G. The cloud cannot be reached; then it answers with an error status, which still proves the network.
 $r = Invoke-Scenario 'G no cloud' @{ Cloud = 'down' }
@@ -289,6 +295,9 @@ Assert-Says $r "WARN  this PC's clock is 10 minutes away from the cloud's"
 $r = Invoke-Scenario 'I no LAN' @{ Lan = @() }
 Assert-Says $r "http://<this PC's IPv4 address, from ipconfig>:8787/pair?code=222222"
 Assert-Says $r 'WARN  no network adapter with a default gateway is up'
+# With nothing to tell the LAN by, a Public network still gets its line.
+$r = Invoke-Scenario 'I no LAN, public network' @{ Lan = @(); Network = 'Public' }
+Assert-Says $r "WARN  network 'Shop' (Ethernet) is Public"
 
 # J. The start itself is refused.
 $r = Invoke-Scenario 'J start refused' @{ StartCode = 1058; Answers = $false; Pairing = $null }
