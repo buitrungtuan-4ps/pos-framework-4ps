@@ -100,6 +100,18 @@ fn cash_rounding() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("cash-rounding"))
 }
 
+/// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
+///
+/// That profile publishes no `permissions` node, which is what a store the console has not staffed
+/// yet receives. It exists for the sign-in screen, which has to say so rather than refuse every
+/// code as a mistyped one; `examples/minimal-edge` reads it to know whether there is a badge to
+/// print.
+#[must_use]
+pub fn staffed() -> bool {
+    !std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("unstaffed"))
+}
+
 fn demo_menu() -> MenuBook {
     let tax_class = EdgeSession::standard_tax_class();
     let menu_item = |id: u128| MenuItemId::new(Ulid::from_u128(id));
@@ -220,6 +232,11 @@ fn demo_menu() -> MenuBook {
 /// the default: the fractional-tip replay needs a total that is *not*, and no single store can be
 /// both.
 ///
+/// # The unstaffed profile
+///
+/// `POS_DEMO_PROFILE=unstaffed` publishes the same store with no `permissions` node: nobody can
+/// sign in, as on a store the console has not staffed yet. See [`staffed`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -263,6 +280,13 @@ pub fn config_document() -> Option<serde_json::Value> {
         && let Some(object) = document.as_object_mut()
     {
         object.insert("locale".to_owned(), demo_locale());
+    }
+    // Removed rather than built empty: an absent node is what an unstaffed store is published, and
+    // it leaves the bootstrap's empty roster in place exactly as it would there.
+    if !staffed()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.remove("permissions");
     }
     Some(document)
 }

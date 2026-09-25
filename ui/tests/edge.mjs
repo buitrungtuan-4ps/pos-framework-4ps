@@ -46,7 +46,8 @@ async function freePort() {
  * Starts an edge and waits until it has printed its pairing URL.
  *
  * Resolves to `{ baseURL, pairingCode, staffCode, staffPin, stop() }`. Every field but `baseURL`
- * comes out of the process's own output, so nothing here can disagree with the binary.
+ * comes out of the process's own output, so nothing here can disagree with the binary. The
+ * `"unstaffed"` store has no badge, so its `staffCode` and `staffPin` are `undefined`.
  */
 export async function startEdge(profile) {
   if (!existsSync(BINARY)) {
@@ -67,7 +68,8 @@ export async function startEdge(profile) {
       NO_COLOR: "1",
       // Which demo store to publish. Absent means the table-service one every other test drives;
       // `"counter"` publishes the same shop with `tables_enabled` off, which is the only way to see
-      // what §10's counter preset actually does to the till (`crates/pos-edge/src/demo.rs`).
+      // what §10's counter preset actually does to the till, and `"unstaffed"` publishes nobody to
+      // sign in as (`crates/pos-edge/src/demo.rs`).
       ...(profile === undefined ? {} : { POS_DEMO_PROFILE: profile }),
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -92,8 +94,16 @@ export async function startEdge(profile) {
   for (;;) {
     const pairing = /pairing_url=\S*code=(\d{6})/.exec(output);
     const staff = /sign in with code (\S+) and PIN (\S+)/.exec(output);
-    if (pairing !== null && staff !== null) {
-      return { baseURL, pairingCode: pairing[1], staffCode: staff[1], staffPin: staff[2], stop };
+    // The unstaffed store prints no badge, because it has none to print.
+    const unstaffed = /publishes no staff/.test(output);
+    if (pairing !== null && (staff !== null || unstaffed)) {
+      return {
+        baseURL,
+        pairingCode: pairing[1],
+        staffCode: staff?.[1],
+        staffPin: staff?.[2],
+        stop,
+      };
     }
     if (child.exitCode !== null) {
       await stop();

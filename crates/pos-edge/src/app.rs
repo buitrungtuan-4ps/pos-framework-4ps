@@ -236,6 +236,18 @@ impl StaffRoster {
         self.by_code.is_empty()
     }
 
+    /// Whether anyone can sign in: at least one member has the id and the PIN a sign-in needs.
+    ///
+    /// `false` until the console has published someone with a PIN for this store, and on a box that
+    /// has not been activated and so has received no roster at all. The sign-in screen says so
+    /// rather than refusing every code as a wrong one, which is all a refusal can say.
+    #[must_use]
+    pub fn sign_in_ready(&self) -> bool {
+        self.by_code
+            .values()
+            .any(|auth| auth.employee_id.is_some() && auth.pin_phc.is_some())
+    }
+
     /// Authorises a sign-in: verifies `pin` against the published Argon2id hash for `code`, returning
     /// the granted [`PermissionSet`] on success. `None` for an unknown code, a member with no PIN set,
     /// or a wrong PIN — so a bad sign-in never yields any permissions. The rate-limit that turns
@@ -7637,5 +7649,33 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the merge returned rather than deadlocking on the projection lock");
         assert!(merged, "the merge succeeds");
+    }
+
+    #[test]
+    fn a_roster_is_ready_for_sign_in_once_someone_has_an_id_and_a_pin() {
+        use super::{StaffAuth, StaffRoster};
+        use pos_core::permission::PermissionSet;
+
+        let member = |employee_id: Option<u128>, pin_phc: Option<&str>| StaffAuth {
+            employee_id: employee_id.map(|id| EmployeeId::new(Ulid::from_u128(id))),
+            permissions: PermissionSet::default(),
+            discount_ceiling: None,
+            pin_phc: pin_phc.map(str::to_owned),
+        };
+        let mut roster = StaffRoster::new();
+        assert!(
+            !roster.sign_in_ready(),
+            "a roster nobody published signs nobody in"
+        );
+
+        roster.insert("1001", member(Some(1), None));
+        roster.insert("1002", member(None, Some("$argon2id$v=19$stand-in")));
+        assert!(
+            !roster.sign_in_ready(),
+            "a member with no PIN, or with no id, cannot sign in either"
+        );
+
+        roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
+        assert!(roster.sign_in_ready());
     }
 }
