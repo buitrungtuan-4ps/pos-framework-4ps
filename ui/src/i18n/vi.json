@@ -135,6 +135,7 @@
   "nav.today": "Hôm nay",
   "order.approver_code": "Mã thẻ quản lý",
   "order.approver_pin": "Mã PIN quản lý",
+  "order.bill_summary": "Hóa đơn · {count, plural, =0 {chưa có món} other {# món}} · {total}",
   "order.categories": "Danh mục thực đơn",
   "order.choose_add": "Thêm vào đơn",
   "order.choose_optional": "{group} — tuỳ chọn",

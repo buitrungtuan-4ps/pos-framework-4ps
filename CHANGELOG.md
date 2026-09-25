@@ -27,6 +27,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **On a tablet the order screen shows the menu, and the bill slides up.** `docs/ui-ux.md` §1
+  asks a tablet for "large item grid, bill slides up". A tablet was drawn like a phone instead, with
+  the bill first and the menu under it, so a server scrolled past everything already ordered to reach
+  the next dish.
+  - The menu is now the screen, three dishes across.
+  - The bill waits in a bar at the bottom: how many dishes, and what they come to. The seat row and
+    **Send** and **Take payment** sit under it, side by side, so sending and paying stay one tap from
+    the menu.
+  - A tap on the bar slides the whole bill up over the menu, and another closes it.
+  - A phone on its side is as wide as a tablet and gets the same. A phone upright and a terminal are
+    unchanged.
+
+  Docs: `docs/ui-ux.md` §1 principle 9.
+
 - **The store hub's "Out of stock" card counts what the tills mark sold out.** It said stores do not
   report sold-out items, which stopped being true when staff could mark them at the till.
   - It shows the newest trading day's items marked sold out and not brought back, as before, and now

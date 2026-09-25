@@ -135,6 +135,7 @@
   "nav.today": "Today",
   "order.approver_code": "Manager badge code",
   "order.approver_pin": "Manager PIN",
+  "order.bill_summary": "Bill · {count, plural, =0 {nothing yet} one {# item} other {# items}} · {total}",
   "order.categories": "Menu categories",
   "order.choose_add": "Add to order",
   "order.choose_optional": "{group} — optional",
