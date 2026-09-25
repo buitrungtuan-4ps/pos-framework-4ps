@@ -37,9 +37,9 @@ const DISCOUNT = "REASON_ACTION_DISCOUNT";
 // makes by tapping the nearest of three.
 const TIP_PERCENTS = [5, 10, 15] as const;
 
-// The guest counts an even split offers. One row, like the tips: a table of seven is rare enough to
-// split six ways and settle the seventh share by hand, and a second row of buttons would push the
-// tenders below the fold on a phone for every bill, split or not.
+// The guest counts an even split offers, two to six, in one row like the tips. A second row for the
+// rarer larger party would push the tenders below the fold on a phone for every bill, split or not;
+// splitting more ways than six is left for when a store asks for it.
 const SPLIT_WAYS = [2, 3, 4, 5, 6] as const;
 
 // The label for a payment method in a split's list of shares.
