@@ -24,10 +24,11 @@
 // **Working** is a count of shifts, not a list of names: the cloud projects no roster, and a roster
 // would be T1 employee data needing a lawful basis, not a card. **Out of stock** is the day's net
 // count, not the live 86 list: `inventory.item.sold_out` minus `inventory.item.restored` cannot name
-// the dish, only count it. It also does not count anything *yet* — nothing in the tree emits either
-// event (production-readiness **O5**), so the card says "not reported" rather than a confident zero.
-// ADR-0099 claimed the number was exact; a number nobody produces is exactly zero, which is not the
-// same thing. Both cards are recorded as follow-ups in that ADR rather than dressed up here.
+// the dish, only count it. Staff mark items sold out at the till (`docs/pos-spec.md` §3), which is
+// the only producer of either event (production-readiness **O5**; auto-86 from stock is still a
+// follow-up) — so a store whose tills have marked nothing in a month shows an em dash and says so,
+// rather than a zero that reads as "nothing is 86'd" when nobody is marking. Both cards are recorded
+// as follow-ups in ADR-0099 rather than dressed up here.
 
 import { createSignal, Show, type JSXElement } from "solid-js";
 
@@ -41,6 +42,7 @@ import {
   configVerdict,
   neverInstalled,
   onlineVerdict,
+  stockAnswer,
   type Tone,
 } from "../lib/posture";
 import { staleNodes, usePublishedNodes } from "../lib/published";
@@ -62,6 +64,13 @@ function canReadRevenue(): boolean {
 function ageSeconds(atMs: number): number {
   return Math.max(0, (Date.now() - atMs) / 1000);
 }
+
+/**
+ * How many trading days the activity read covers. The stock card asks the whole window whether this
+ * store's tills mark anything sold out at all (`stockAnswer`); every other card reads the newest day
+ * alone.
+ */
+const ACTIVITY_WINDOW_DAYS = 30;
 
 /** How many of `type` the day's activity rollup counted (absent means none happened). */
 function counted(day: DailyRollup | undefined, type: string): number {
@@ -146,17 +155,18 @@ export function StoreHub() {
   // for rather than printing two version ULIDs at it (F4).
   const published = usePublishedNodes();
 
-  // `limit: 1` returns the store's newest trading day (the window keeps the newest N, oldest first),
-  // which is not necessarily *today* — a shop that has not traded yet reports yesterday. Every card
-  // built on it prints the business date it is reporting rather than claiming "today", because "no
-  // revenue today" and "the latest day we have is yesterday" are different facts.
+  // The window keeps the newest N trading days, oldest first, so a card's day is `days.at(-1)` — which
+  // is not necessarily *today*: a shop that has not traded yet reports yesterday. Every card built on
+  // it prints the business date it is reporting rather than claiming "today", because "no revenue
+  // today" and "the latest day we have is yesterday" are different facts. Revenue reads one day; the
+  // activity read covers `ACTIVITY_WINDOW_DAYS` for the stock card's sake.
   onScopedContext("store", (tenant, store) => {
     setFleet(LOADING);
     setActivity(LOADING);
     setRevenue(LOADING);
     setAlerts(LOADING);
     void panelOf(api.fleetStore(tenant, store), setFleet);
-    void panelOf(api.dailyRollups(tenant, store, { limit: 1 }), setActivity);
+    void panelOf(api.dailyRollups(tenant, store, { limit: ACTIVITY_WINDOW_DAYS }), setActivity);
     void panelOf(api.listAlerts(), setAlerts);
     if (canReadRevenue()) {
       void panelOf(api.dailyRevenue(tenant, store, { limit: 1 }), setRevenue);
@@ -436,28 +446,29 @@ export function StoreHub() {
             linkLabel={t("hub.stock.link")}
           >
             {(days) => {
-              const day = days.at(-1);
-              const out =
-                counted(day, "inventory.item.sold_out") - counted(day, "inventory.item.restored");
-              // Nothing in the tree emits either event yet (production-readiness **O5**): the
-              // auto-86 rule exists in `pos-core` §8 but the live stock projection that would fire
-              // it is still a follow-up. So this arithmetic is always zero, and a confident `0`
-              // beside "items marked out" reads as "nothing is 86'd today" — a measurement, when
-              // there is no measurement. An em dash says what is true: not reported yet.
-              if (out <= 0) {
-                return {
-                  headline: "—",
-                  tone: "idle" as const,
-                  support: t("hub.stock.notReported"),
-                };
+              const answer = stockAnswer(days);
+              switch (answer.kind) {
+                case "no_day":
+                  return { headline: "—", tone: "idle", support: t("hub.stock.noDay") };
+                case "out":
+                  return {
+                    headline: formatCount(answer.count),
+                    tone: "attention",
+                    support: t("hub.stock.support", { date: answer.business_date }),
+                  };
+                case "never_marked":
+                  return {
+                    headline: "—",
+                    tone: "idle",
+                    support: t("hub.stock.neverMarked", { days: ACTIVITY_WINDOW_DAYS }),
+                  };
+                case "none_out":
+                  return {
+                    headline: formatCount(0),
+                    tone: "ok",
+                    support: t("hub.stock.noneOut", { date: answer.business_date }),
+                  };
               }
-              return {
-                headline: formatCount(out),
-                tone: "attention" as const,
-                support: day
-                  ? t("hub.stock.support", { date: day.business_date })
-                  : t("hub.stock.noDay"),
-              };
             }}
           </HubCard>
 
