@@ -880,6 +880,79 @@ async fn the_floor_says_when_each_seated_table_sat_down() {
     );
 }
 
+/// Staff mark an item sold out over the composed edge, and every till reading the menu sees it —
+/// then bring it back.
+///
+/// The menu read says both what can be sold (`available`) and why not (`sold_out`), so a till can
+/// offer to restore an item staff marked without offering to restore one the console withdrew.
+#[tokio::test]
+async fn an_item_is_marked_sold_out_and_restored_on_the_composed_edge() {
+    let store = a_store().await;
+    let item = MenuItemId::new(Ulid::from_u128(ITEM));
+    let listed = |menu: &Value| {
+        menu["items"]
+            .as_array()
+            .expect("the price book")
+            .iter()
+            .find(|entry| entry["menu_item_id"] == item.to_string())
+            .cloned()
+            .expect("the item is on the menu")
+    };
+
+    let (status, marked) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/menu/{item}/sold-out"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the sold-out route is mounted: {marked}"
+    );
+    assert_eq!(marked["sold_out"], true);
+    let entry = listed(&read(&store, "/api/menu").await);
+    assert_eq!(entry["available"], false, "a sold-out item is not sellable");
+    assert_eq!(entry["sold_out"], true, "and the menu says why");
+
+    // A line for it is refused, whatever the device that sent it was showing.
+    let table = TableId::new(Ulid::from_u128(708));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a sold-out item cannot be ordered"
+    );
+
+    let (status, restored) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/menu/{item}/restore"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["sold_out"], false);
+    let entry = listed(&read(&store, "/api/menu").await);
+    assert_eq!(entry["available"], true);
+    assert_eq!(entry["sold_out"], false);
+}
+
 /// One tap sends the whole order, and sending it twice is not an error.
 ///
 /// The operator's act is "send this order". It was one tap and one round trip per line, because the

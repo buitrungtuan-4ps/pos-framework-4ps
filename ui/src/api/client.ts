@@ -216,6 +216,13 @@ export const api = {
   // menu — a store never guesses a price, and neither does the till.
   menu: () => request<MenuResponse>("GET", "/api/menu"),
 
+  // Staff mark an item sold out at this store (86), and bring it back. Every device folds the
+  // event and greys the item out; the edge refuses a line for it in the meantime.
+  markSoldOut: (menuItemId: string) =>
+    request<{ menu_item_id: string; sold_out: boolean }>("POST", `/api/menu/${menuItemId}/sold-out`),
+  restoreItem: (menuItemId: string) =>
+    request<{ menu_item_id: string; sold_out: boolean }>("POST", `/api/menu/${menuItemId}/restore`),
+
   // How the till groups and orders those items, from the `layout` node published beside the price
   // book (ADR-0066, production-readiness C4). A separate node, so a separate read: a price change
   // relays no buttons and a button moving reprices nothing.

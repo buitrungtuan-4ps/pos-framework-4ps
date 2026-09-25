@@ -24,6 +24,7 @@ import {
   reasonsFor,
   seatFor,
   seatsEnabled,
+  setItemSoldOut,
   state,
   tableLabel,
   tableState,
@@ -332,7 +333,36 @@ export function Order() {
       closeChoosing();
     });
 
-  const sellButton = (item: MenuItemResponse, caption: string) => (
+  // Marking items sold out (86): while it is on, a tap on an item marks it sold out on every till,
+  // or brings it back, rather than selling it. A mode rather than a control on every button, so a
+  // tap meant to sell during a rush can never take a dish off the menu by accident.
+  const [marking, setMarking] = createSignal(false);
+  const startMarking = () => {
+    setError(null);
+    setMarking(true);
+  };
+  const toggleSoldOut = (item: MenuItemResponse) =>
+    guard(() => setItemSoldOut(item.menu_item_id, item.sold_out !== true));
+
+  // What an item's button says on its right: the price, or why the dish will not sell. A sold-out
+  // item says so in words and not only by the strike-through, so a till read at arm's length still
+  // says why.
+  const itemState = (item: MenuItemResponse) => (
+    <Show
+      when={item.sold_out === true}
+      fallback={
+        <span class="tabular-nums text-ink-muted">
+          {item.available ? formatAmount(item.unit_price) : t("order.unavailable")}
+        </span>
+      }
+    >
+      <span class="text-sm text-danger" data-outcome="item-sold-out">
+        {t("order.sold_out")}
+      </span>
+    </Show>
+  );
+
+  const saleButton = (item: MenuItemResponse, caption: string) => (
     <button
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
@@ -340,11 +370,37 @@ export function Order() {
       data-step="onItem"
       onClick={() => onItem(item)}
     >
-      <span>{caption}</span>
-      <span class="tabular-nums text-ink-muted">
-        {item.available ? formatAmount(item.unit_price) : t("order.unavailable")}
-      </span>
+      <span classList={{ "line-through": item.sold_out === true }}>{caption}</span>
+      {itemState(item)}
     </button>
+  );
+
+  const markButton = (item: MenuItemResponse, caption: string) => (
+    <button
+      type="button"
+      class="flex min-h-touch items-center justify-between rounded-token border bg-surface px-3 py-2 text-left disabled:opacity-50"
+      classList={{
+        "border-line": item.sold_out !== true,
+        "border-2 border-danger": item.sold_out === true,
+      }}
+      // An item the console withdrew, or cannot price, is not the till's to bring back.
+      disabled={!item.available && item.sold_out !== true}
+      aria-pressed={item.sold_out === true}
+      data-step="toggleSoldOut"
+      onClick={() => void toggleSoldOut(item)}
+    >
+      <span classList={{ "line-through": item.sold_out === true }}>{caption}</span>
+      {itemState(item)}
+    </button>
+  );
+
+  // Which of the two an item draws. A `<Show>` rather than a ternary: the buttons are drawn inside
+  // `<For>` and `<Show>`, whose children run untracked, so a ternary would be read once and a button
+  // already on screen would never change when the mode does.
+  const sellButton = (item: MenuItemResponse, caption: string) => (
+    <Show when={marking()} fallback={saleButton(item, caption)}>
+      {markButton(item, caption)}
+    </Show>
   );
 
   // What the aside draws while a query is in the box: the matches, or the sentence saying there are
@@ -620,24 +676,41 @@ export function Order() {
                             {(member) => (
                               <button
                                 type="button"
-                                class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left"
+                                class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left disabled:opacity-50"
                                 classList={{
                                   "bg-primary text-primary-ink": chosen().includes(memberId),
                                   "bg-surface text-ink": !chosen().includes(memberId),
                                 }}
+                                // A choice the kitchen has run out of, or the console withdrew,
+                                // cannot be made: the edge refuses a line that asks for it. One
+                                // already chosen stays tappable, so it can still be taken off.
+                                disabled={!member().available && !chosen().includes(memberId)}
                                 aria-pressed={chosen().includes(memberId)}
                                 data-step="chooseModifier"
                                 onClick={() => chooseModifier(group, memberId)}
                               >
-                                <span>{member().display_name}</span>
-                                {/* A modifier is an ordinary item with its own price, which is how
-                                    a large costs more than a small. A free choice says nothing
-                                    rather than saying zero. */}
-                                <Show when={member().unit_price.amount_minor > 0}>
-                                  <span class="tabular-nums text-ink-muted">
-                                    {"+ "}
-                                    {formatAmount(member().unit_price)}
-                                  </span>
+                                <span classList={{ "line-through": member().sold_out === true }}>
+                                  {member().display_name}
+                                </span>
+                                <Show
+                                  when={member().available}
+                                  fallback={
+                                    <span class="text-sm text-ink-muted">
+                                      {member().sold_out === true
+                                        ? t("order.sold_out")
+                                        : t("order.unavailable")}
+                                    </span>
+                                  }
+                                >
+                                  {/* A modifier is an ordinary item with its own price, which is
+                                      how a large costs more than a small. A free choice says
+                                      nothing rather than saying zero. */}
+                                  <Show when={member().unit_price.amount_minor > 0}>
+                                    <span class="tabular-nums text-ink-muted">
+                                      {"+ "}
+                                      {formatAmount(member().unit_price)}
+                                    </span>
+                                  </Show>
                                 </Show>
                               </button>
                             )}
@@ -814,7 +887,35 @@ export function Order() {
       </div>
 
       <aside class="min-w-0">
-        <h2 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
+        <div class="mb-2 flex items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
+          <Show
+            when={marking()}
+            fallback={
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted"
+                data-step="startMarking"
+                onClick={() => startMarking()}
+              >
+                {t("order.mark_sold_out")}
+              </button>
+            }
+          >
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
+              onClick={() => setMarking(false)}
+            >
+              {t("order.mark_sold_out_done")}
+            </button>
+          </Show>
+        </div>
+        <Show when={marking()}>
+          <p class="mb-3 text-sm text-ink-muted" role="status">
+            {t("order.mark_sold_out_hint")}
+          </p>
+        </Show>
         {/*
           The box that makes a long menu usable. `type="search"` rather than `text` so the browser
           gives the operator its own clear affordance — one control fewer to draw, and the one every

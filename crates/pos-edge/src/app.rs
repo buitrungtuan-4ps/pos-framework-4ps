@@ -48,10 +48,10 @@ use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingDiscountApplied, BillingPaymentCaptured, CashShiftClosed, CashShiftCounted,
     CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
-    EventType, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
-    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
-    SecurityPermissionOverridden, StoreChainAnchored,
+    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
+    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableOpened, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -1647,6 +1647,13 @@ struct Projection {
     /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
     /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.
     bumped_lines: HashSet<OrderLineId>,
+    /// The items staff have marked sold out (86) at this store, until somebody restores them
+    /// (`inventory.item.sold_out`, `inventory.item.restored`). An in-store override on top of the
+    /// published menu's own availability: the kitchen runs out mid-service, and the console is not
+    /// where anybody is standing. Folded from the log, so a restart keeps them. Bounded by the
+    /// menu: only an item on it can be marked, and one a later publish drops keeps its mark,
+    /// harmlessly, until it is back on the menu to be restored.
+    sold_out: HashSet<MenuItemId>,
     /// Each order's lines, in id order: the index every order-scoped read walks.
     ///
     /// Until it existed those reads filtered `lines` — every line the store had sold since it was
@@ -1942,6 +1949,15 @@ impl Projection {
     fn fold_fired(&mut self, line_id: OrderLineId, fired_time: Timestamp, station_id: StationId) {
         self.set_line_state(line_id, OrderLineState::Fired);
         self.set_fired_time(line_id, fired_time, station_id);
+    }
+
+    /// Marks an item sold out, or restores it — from a live mark and from the fold on rebuild.
+    fn set_sold_out(&mut self, menu_item_id: MenuItemId, sold_out: bool) {
+        if sold_out {
+            self.sold_out.insert(menu_item_id);
+        } else {
+            self.sold_out.remove(&menu_item_id);
+        }
     }
 
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
@@ -2867,6 +2883,98 @@ impl<S: EventStore> Edge<S> {
         (lines, table_id)
     }
 
+    /// Marks an item sold out (86) at this store (`inventory.item.sold_out`), so every device greys it
+    /// out and the edge refuses a line for it until somebody restores it.
+    ///
+    /// The kitchen runs out mid-service, and the console that publishes the menu is not where anybody
+    /// is standing — so this is an in-store override on top of the published menu's own
+    /// availability, recorded as the event `pos-proto` has always carried for it, with `automatic`
+    /// false: a person decided, not a stock threshold. [`Permission::MarkItemUnavailable`], which a
+    /// cook, a server and a cashier hold by default and which asks for no PIN: running out of
+    /// something is a fact, and it moves no money.
+    ///
+    /// Marking an item already sold out writes nothing, so a device that taps it after another has
+    /// records no second decision. Two taps landing in the same instant can both write, as any
+    /// command here can; the fold is a set, so the item is sold out exactly as it is after one.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if the actor lacks the permission, [`AppError::ItemNotSellable`] if the
+    /// store's menu has no such item, or [`AppError`] if the store cannot be written.
+    pub async fn mark_item_sold_out(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+    ) -> Result<(), AppError> {
+        self.set_item_sold_out(actor, menu_item_id, true).await
+    }
+
+    /// Restores an item staff marked sold out (`inventory.item.restored`). The same permission, the
+    /// same idempotence: restoring an item nobody marked writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::mark_item_sold_out`].
+    pub async fn restore_item(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+    ) -> Result<(), AppError> {
+        self.set_item_sold_out(actor, menu_item_id, false).await
+    }
+
+    /// Whether staff have marked an item sold out at this store.
+    #[must_use]
+    pub fn item_sold_out(&self, menu_item_id: MenuItemId) -> bool {
+        self.lock_projection().sold_out.contains(&menu_item_id)
+    }
+
+    /// The first of an item and its chosen modifiers that staff have marked sold out, if any.
+    ///
+    /// Every path that adds a line asks this — the table's, the counter's, and a guest's or a
+    /// marketplace's order (`crate::order_in`) — and asks it of the modifiers too: a modifier is an
+    /// item, and the extra cheese runs out as surely as the pizza does.
+    #[must_use]
+    pub fn first_sold_out(
+        &self,
+        menu_item_id: MenuItemId,
+        modifier_menu_item_ids: &[MenuItemId],
+    ) -> Option<MenuItemId> {
+        let projection = self.lock_projection();
+        std::iter::once(&menu_item_id)
+            .chain(modifier_menu_item_ids)
+            .find(|id| projection.sold_out.contains(id))
+            .copied()
+    }
+
+    async fn set_item_sold_out(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+        sold_out: bool,
+    ) -> Result<(), AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::MarkItemUnavailable)?;
+        if self.session().menu.get(menu_item_id).is_none() {
+            return Err(AppError::ItemNotSellable);
+        }
+        if self.item_sold_out(menu_item_id) == sold_out {
+            return Ok(());
+        }
+        if sold_out {
+            let payload = InventoryItemSoldOut {
+                menu_item_id,
+                automatic: false,
+            };
+            self.commit_and_publish(&ctx, &payload).await?;
+        } else {
+            let payload = InventoryItemRestored { menu_item_id };
+            self.commit_and_publish(&ctx, &payload).await?;
+        }
+        self.lock_projection().set_sold_out(menu_item_id, sold_out);
+        Ok(())
+    }
+
     /// Releases a guest's order to the kitchen (`sales.order.confirmed_by_staff`), ADR-0116.
     ///
     /// The order's lines become fireable; nothing else about it changes. Idempotent in the sense
@@ -3726,6 +3834,14 @@ impl<S: EventStore> Edge<S> {
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
+        // An item staff have marked sold out cannot be ordered, whatever a device still showing it
+        // sends: the till greys it out, and this is where that is enforced.
+        if self
+            .first_sold_out(draft.menu_item_id, &draft.modifier_menu_item_ids)
+            .is_some()
+        {
+            return Err(AppError::ItemNotSellable);
+        }
         let session = self.session();
         Self::check_modifiers(&session, &draft)?;
         // The device priced this line from the session's price book and sends the modifiers' ids,
@@ -3803,6 +3919,12 @@ impl<S: EventStore> Edge<S> {
         let ctx = self.decision_ctx(actor)?;
         if choice.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
+        }
+        if self
+            .first_sold_out(choice.menu_item_id, &choice.modifier_menu_item_ids)
+            .is_some()
+        {
+            return Err(AppError::ItemNotSellable);
         }
         let session = self.session();
         let (origin, bill, refused) = {
@@ -5465,7 +5587,26 @@ impl<S: EventStore> Edge<S> {
                     envelope.data.decode().map_err(AppError::Encode)?;
                 projection.mark_bumped(&event.order_line_ids);
             }
+            EventType::InventoryItemSoldOut | EventType::InventoryItemRestored => {
+                Self::fold_sold_out(projection, envelope, known)?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// An item staff marked sold out, or brought back: the in-store 86 a restart must keep.
+    fn fold_sold_out(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::InventoryItemSoldOut {
+            let event: InventoryItemSoldOut = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_sold_out(event.menu_item_id, true);
+        } else {
+            let event: InventoryItemRestored = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_sold_out(event.menu_item_id, false);
         }
         Ok(())
     }

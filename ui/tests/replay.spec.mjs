@@ -200,6 +200,7 @@ const PRECONDITIONS = {
     await addItem(page);
   },
   "Order an item for a particular seat": seatTable,
+  "Mark an item sold out on every till": seatTable,
   // The item that asks a question is deliberately *not* first on the grid — every other flow's
   // precondition taps the first item and wants a line rather than a conversation. So this one types
   // the name to bring it up, exactly as "Find an item by name" does, and typing is not a tap. Every
@@ -1035,6 +1036,94 @@ test("the floor says how long a table has been seated, and a reload still knows"
     await page.reload();
     await expect(page.locator('[data-outcome="floor"]').first()).toBeVisible();
     await expect(seated).toHaveText("Seated 25 min");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Staff mark an item sold out, and every till stops selling it at once — then bring it back.
+//
+// The kitchen runs out mid-service. One till marks the iced tea sold out, a second till showing the
+// menu greys it out without reloading, the mark survives a reload (it is the edge's, not the
+// screen's), and the same tap brings it back.
+test("an item marked sold out on one till stops selling on every till, until it is brought back", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await expect(other.locator('[data-outcome="floor"]').first()).toBeVisible();
+    await other.locator('[data-step="onCard"]').nth(1).click();
+    await expect(other.locator('[data-outcome="order-open"]')).toBeVisible();
+    await other.locator("#menu-search").fill("iced");
+    const otherTea = other.locator('[data-step="onItem"]');
+    await expect(otherTea).toHaveCount(1);
+    await expect(otherTea).toBeEnabled();
+
+    await till.locator('[data-step="startMarking"]').click();
+    await till.locator("#menu-search").fill("iced");
+    await till.locator('[data-step="toggleSoldOut"]').click();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    // The other till, without reloading.
+    await expect(otherTea).toBeDisabled();
+    await expect(other.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    // The edge's fact, not the screen's: a reload still has it.
+    await other.reload();
+    await other.locator("#menu-search").fill("iced");
+    await expect(other.locator('[data-step="onItem"]')).toBeDisabled();
+
+    // The same tap brings it back, and it sells again.
+    await till.locator('[data-step="toggleSoldOut"]').click();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    await till.getByRole("button", { name: "Done" }).click();
+    await expect(other.locator('[data-step="onItem"]')).toBeEnabled();
+    await till.locator('[data-step="onItem"]').click();
+    await expect(till.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A choice the kitchen has run out of cannot be picked, and the dish still sells without it.
+//
+// A modifier is an item in the price book, so the search finds the extra cheese in marking mode and
+// staff can mark it sold out. The pizza's picker then greys that choice out and says why, rather than
+// offering a choice the edge refuses once the whole pizza has been built.
+test("a modifier marked sold out cannot be chosen, and the dish still sells without it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    await page.locator('[data-step="startMarking"]').click();
+    await page.locator("#menu-search").fill("cheese");
+    await page.locator('[data-step="toggleSoldOut"]').click();
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+    await page.getByRole("button", { name: "Done" }).click();
+
+    await page.locator("#menu-search").fill("margherita");
+    await page.locator('[data-step="onItem"]').click();
+    const cheese = page.locator('[data-step="chooseModifier"]', { hasText: "Extra cheese" });
+    await expect(cheese).toBeDisabled();
+    await expect(cheese).toContainText("Sold out");
+
+    await page.locator('[data-step="chooseModifier"]').first().click();
+    await page.locator('[data-step="confirmItem"]').click();
+    await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-modifiers"]').first()).not.toContainText(
+      "Extra cheese",
+    );
   } finally {
     await edge.stop();
   }

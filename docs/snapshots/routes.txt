@@ -32,6 +32,8 @@ POST /api/kds/bump
 POST /api/lines/{id}/fire
 POST /api/lines/{id}/quantity
 POST /api/lines/{id}/void
+POST /api/menu/{id}/restore
+POST /api/menu/{id}/sold-out
 POST /api/orders
 POST /api/orders/{id}/bill
 POST /api/orders/{id}/confirm
