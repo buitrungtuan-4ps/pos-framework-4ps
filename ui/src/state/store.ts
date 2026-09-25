@@ -128,6 +128,11 @@ interface StoreShape {
   // the last open part needs: that meal is finished, so the table goes on to be cleaned rather than
   // back to occupied (`docs/pos-spec.md` §5). Cleared when the table's last bill closes.
   paidPart: Record<string, true>;
+  // When each seated table's guests sat down, as an ISO time, for the floor plan's "seated 25 min".
+  // Keyed by table, so it is never larger than the floor. From `seated_times` on the floor read; a
+  // table seated while this device watched is stamped with this device's clock until the next floor
+  // read replaces it with the edge's, the way a fired line's time is.
+  seatedAt: Record<string, string>;
   // The store's own price book, from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Empty until the edge
   // serves it — a store never guesses a price, so the till shows nothing to sell rather than a list
   // compiled into the app.
@@ -255,6 +260,7 @@ const [state, setState] = createStore<StoreShape>({
   lines: {},
   openBills: {},
   paidPart: {},
+  seatedAt: {},
   menu: [],
   layout: [],
   currency: null,
@@ -365,6 +371,11 @@ export async function loadFloor(): Promise<void> {
             published[table.id] ?? draft.tableState[table.id] ?? "TABLE_STATE_FREE",
           ]),
         );
+        // When each seated table sat down, by the edge's reckoning, so a till that reloaded shows
+        // the figure a till that watched does. An edge too old to send it leaves the times alone.
+        if (response.seated_times !== undefined) {
+          draft.seatedAt = { ...response.seated_times };
+        }
       }
       if (defaultStation !== undefined) {
         draft.defaultStation = defaultStation;
@@ -509,6 +520,7 @@ export function fold(event: ServerEvent): void {
             draft.tableState[table] = "TABLE_STATE_OCCUPIED";
             draft.tableOrder[table] = order;
             draft.orderTable[order] = table;
+            draft.seatedAt[table] = new Date().toISOString();
           }),
         );
       }
@@ -517,7 +529,12 @@ export function fold(event: ServerEvent): void {
     case "sales.table.closed": {
       const table = str(payload, "table_id");
       if (table !== null) {
-        setState("tableState", table, "TABLE_STATE_FREE");
+        setState(
+          produce((draft) => {
+            draft.tableState[table] = "TABLE_STATE_FREE";
+            delete draft.seatedAt[table];
+          }),
+        );
       }
       break;
     }
@@ -940,7 +957,17 @@ export function openBillCount(): number {
 
 export async function seat(tableId: string): Promise<void> {
   const response = await api.seatTable(tableId);
-  setState("tableState", tableId, response.state);
+  setState(
+    produce((draft) => {
+      draft.tableState[tableId] = response.state;
+      draft.seatedAt[tableId] ??= new Date().toISOString();
+    }),
+  );
+}
+
+// When this table's guests sat down, or undefined for a table nobody is sitting at.
+export function seatedAt(tableId: string): string | undefined {
+  return state.seatedAt[tableId];
 }
 
 export async function clean(tableId: string): Promise<void> {

@@ -66,6 +66,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The floor says how long each table has been seated.** A seated or paying table's card reads
+  "Seated 25 min" from its first whole minute; a host uses it to see who is due a check and who is
+  about to leave.
+  - The time comes from the edge. `GET /api/floor` gains `seated_times`, when each seated table's
+    guests sat down, read from the table's order id (a ULID minted at the moment of seating).
+  - So a till that reloads, or one switched on mid-service, shows the same figure as one that
+    watched. The live orders could not carry it, because a table is seated before anything is ordered.
+  - Additive: an older till ignores the field.
+
+  Docs: `docs/ui-ux.md` §3 (order), `docs/pos-spec.md` §2.
+
 - **The kitchen board rings when new food arrives.** A toggle in the board's header turns the sound on
   for that device, which remembers the choice; it is off until a cook turns it on.
   - When food reaches the board after the board's own first read of what is open, it plays two short

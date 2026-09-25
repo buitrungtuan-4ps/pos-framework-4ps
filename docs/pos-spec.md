@@ -20,6 +20,7 @@ Staff roles ship as editable templates: server, cashier, shift lead, store manag
 - **Transfer** moves an order to another table; **merge** combines two orders while each line keeps its origin so the kitchen is not confused.
 - **Tabs** (capability flag `tabs_enabled`): an open order identified by a guest name rather than a table — for bars and counters.
 - **Seats** (capability flag `seats_enabled`): each line may carry a seat number, which enables splitting a bill by seat.
+- **How long a table has been seated** is part of the floor read. `GET /api/floor` carries `seated_times`: when each seated table's guests sat down, for the tables somebody is sitting at. It is read from the table's order id, a ULID minted at the moment of seating. The floor plan shows it as "Seated 25 min" (`docs/ui-ux.md` §3).
 
 ## 3. Ordering
 

@@ -1012,6 +1012,34 @@ test("a till that reloads still knows which tables are occupied", async ({ page 
   }
 });
 
+// The floor says how long each table has been seated, and a till that reloads still knows.
+//
+// A host reads it to know who is due a check and who is about to leave. The time is when the
+// table's order opened, as the edge recorded it (`opened_time` on the live read), so a reload — or a
+// second till switched on mid-service — shows the same figure rather than counting from its own
+// start. Nothing shows for the first minute: "seated 0 min" says nothing.
+test("the floor says how long a table has been seated, and a reload still knows", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await navigateTo(page, "/");
+
+    const seated = page.locator('[data-step="onCard"]').first().locator('[data-outcome="table-seated"]');
+    await expect(seated).toHaveCount(0);
+    await page.clock.fastForward(25 * 60_000);
+    await expect(seated).toHaveText("Seated 25 min");
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]').first()).toBeVisible();
+    await expect(seated).toHaveText("Seated 25 min");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A tip on a bill that is not a round number still settles.
 //
 // The pay screen computed its tip keys with `(total * percent) / 100` — a float division on a money

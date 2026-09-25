@@ -159,6 +159,9 @@ export interface FloorResponse {
   // What each table is doing right now, keyed by table id. Absent from an edge that predates the
   // field, which the till reads as "tell me nothing" and leaves its own map alone.
   table_states?: Record<string, string>;
+  // When each seated table's guests sat down, keyed by table id, for the tables somebody is sitting
+  // at. Absent from an edge that predates the field.
+  seated_times?: Record<string, string>;
 }
 
 // The store's own price book from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Every amount is the

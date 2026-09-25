@@ -3512,6 +3512,25 @@ impl<S: EventStore> Edge<S> {
             .map_err(AppError::Port)
     }
 
+    /// When the guests at a table sat down, or `None` when nobody is sitting there.
+    ///
+    /// Read from the id of the order the table holds — a ULID minted at the moment it was seated,
+    /// the reading [ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)
+    /// makes for retention — rather than from a time stored beside it. Only while somebody is
+    /// sitting there, to be served or to pay: a table waiting to be cleaned has been left.
+    #[must_use]
+    pub fn seated_since(&self, table_id: TableId) -> Option<Timestamp> {
+        if !matches!(
+            self.table_state(table_id),
+            TableState::Occupied | TableState::AwaitingPayment
+        ) {
+            return None;
+        }
+        let order_id = self.lock_projection().order_for_table(table_id)?;
+        let millis = i64::try_from(order_id.as_ulid().timestamp_ms()).ok()?;
+        Timestamp::from_milliseconds_since_epoch(millis).ok()
+    }
+
     /// The current projected state of a table.
     #[must_use]
     pub fn table_state(&self, table_id: TableId) -> TableState {
