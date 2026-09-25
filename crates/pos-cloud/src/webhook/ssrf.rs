@@ -248,6 +248,8 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
     let is_documentation = (a == 192 && b == 0 && c == 2)
         || (a == 198 && b == 51 && c == 100)
         || (a == 203 && b == 0 && c == 113);
+    let is_ietf_protocol_or_relay =
+        (a == 192 && b == 0 && c == 0) || (a == 192 && b == 88 && c == 99);
     if a == 0 {
         // 0.0.0.0/8 (RFC 1122 "This host on this network", including 0.0.0.0 unspecified).
         Some(ForbiddenReason::Unspecified)
@@ -264,7 +266,8 @@ fn classify_v4(ip: Ipv4Addr) -> Option<ForbiddenReason> {
         Some(ForbiddenReason::Benchmarking)
     } else if is_documentation {
         Some(ForbiddenReason::Documentation)
-    } else if ip.is_broadcast() || a >= 240 {
+    } else if ip.is_broadcast() || a >= 240 || is_ietf_protocol_or_relay {
+        // Reserved, future-use, 192.0.0.0/24 IETF Protocol Assignments (RFC 6890), and 192.88.99.0/24 6to4 relay.
         Some(ForbiddenReason::Reserved)
     } else if ip.is_multicast() {
         Some(ForbiddenReason::Multicast)
@@ -556,6 +559,8 @@ mod tests {
             ("0.255.255.255", ForbiddenReason::Unspecified),
             ("100.64.0.1", ForbiddenReason::SharedCgn),
             ("198.18.0.1", ForbiddenReason::Benchmarking),
+            ("192.0.0.1", ForbiddenReason::Reserved),
+            ("192.88.99.1", ForbiddenReason::Reserved),
             ("255.255.255.255", ForbiddenReason::Reserved),
             ("224.0.0.1", ForbiddenReason::Multicast),
         ] {
