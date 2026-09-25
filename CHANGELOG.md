@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Tabs component keyboard navigation enhanced with Home and End keys.**
+  The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
+
 ### Added
 
 - **A headless Linux box can keep its activation across a reboot**
