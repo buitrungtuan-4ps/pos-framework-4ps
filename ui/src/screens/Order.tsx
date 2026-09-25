@@ -376,7 +376,10 @@ export function Order() {
           wider than a phone: a grid item's `min-width` is `auto`, not `0`. */}
       <div class="min-w-0">
         <div class="mb-3 flex items-center gap-3">
-          <a href={walkIn() ? "/counter" : "/"} class="text-sm text-ink-muted no-underline">
+          <a
+            href={walkIn() ? "/counter" : "/"}
+            class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
+          >
             {walkIn() ? t("common.back_counter") : t("common.back_floor")}
           </a>
           {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
@@ -514,7 +517,7 @@ export function Order() {
                 >
                   <button
                     type="button"
-                    class="rounded-token border border-line px-3 py-1 text-sm text-ink-muted disabled:opacity-50"
+                    class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
                     disabled={reasonsFor(VOID_LINE).length === 0}
                     data-step="askVoid"
                     onClick={() => askVoid(line)}

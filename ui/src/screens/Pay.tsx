@@ -495,7 +495,10 @@ export function Pay() {
 
   return (
     <section class="mx-auto max-w-xl p-4">
-      <a href={`/table/${params.id}`} class="text-sm text-ink-muted no-underline">
+      <a
+        href={`/table/${params.id}`}
+        class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
+      >
         {t("common.back_order")}
       </a>
 

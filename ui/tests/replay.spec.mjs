@@ -695,6 +695,24 @@ for (const device of DEVICE_CLASSES) {
         return small;
       });
       expect(shrunk, "a status-bar control is under the 48px §1 principle 2 asks for").toEqual([]);
+
+      // The same principle on the order and pay screens, where the till review measured the line's
+      // Void button and the back links at about 30px: the controls a server meets on every table.
+      for (const path of [`/table/${table}`, `/table/${table}/pay`]) {
+        await page.goto(`${edge.baseURL}${path}`);
+        await expect(page.locator("main a").first()).toBeVisible();
+        const small = await page.evaluate(() => {
+          const found = [];
+          for (const control of document.querySelectorAll("main a, main button")) {
+            const box = control.getBoundingClientRect();
+            if (box.height > 0 && box.height < 48) {
+              found.push(`${(control.textContent ?? "").trim()} is ${Math.round(box.height)}px`);
+            }
+          }
+          return found;
+        });
+        expect(small, `a control on ${path} is under the 48px §1 principle 2 asks for`).toEqual([]);
+      }
     } finally {
       await edge.stop();
     }
@@ -1122,6 +1140,135 @@ test("a bill split three ways settles with each guest's own tender, and the cash
 
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await expect(page.getByText("31,467₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Before anyone signs in, the status bar offers no destinations and no sign-out.
+//
+// Every destination only bounced back to sign-in, and a till that offers the kitchen before anyone
+// has signed in looks as if it has forgotten who you are. The language and theme stay, because the
+// first person to sign in may want them.
+test("before anyone signs in, the status bar offers no destinations and no sign-out", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await expect(page.locator("header nav")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Language" })).toHaveCount(1);
+
+    await signIn(page, edge);
+    await expect(page.locator("header nav")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a terminal, the sign-in pad's digits are on screen without scrolling.
+//
+// Stacked under the fields, the pad's digit row sat below the fold of a 1366x768 till — the
+// commonest Windows POS screen — so a PIN needed a scroll before its first digit. From a terminal
+// up the fields and the pad sit side by side.
+test("on a 1366x768 terminal the sign-in pad's digits are on screen without scrolling", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await pair(page, edge);
+    const zero = page.locator("#signin-pad").getByRole("button", { name: "0", exact: true });
+    await expect(zero).toBeVisible();
+    const box = await zero.boundingBox();
+    expect(box, "the pad's 0 key has a box").not.toBeNull();
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(768);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The Today screen names the shift in the till's language.
+//
+// The tile lower-cased the wire token and let CSS capitalise it, so a Vietnamese till read "Open"
+// in English. It now uses the status bar's own sentences.
+test("the Today screen names the shift in the till's language", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("none open");
+
+    await openShift(page);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("Shift open");
+    await page.getByRole("button", { name: "Language" }).click();
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("Đang mở ca");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A guest's QR order shows its table by the floor's label, and the queue refreshes itself.
+//
+// The screen's classes were defined nowhere, so it rendered unstyled; it headed each card with the
+// table's id rather than the label on the floor; and it loaded once, so an order placed after the
+// screen opened sat unseen. The demo store takes no QR orders (they arrive from the cloud), so the
+// queue's one route is answered here: empty on the first read, one order on the next. The page's
+// clock is driven so the fifteen-second refresh happens now rather than in fifteen seconds.
+test("a guest's QR order shows its table by the floor's label, and the queue refreshes itself", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    await page.locator('a[href="/"]').first().click();
+
+    let reads = 0;
+    await page.route("**/api/orders/awaiting-confirmation", async (route) => {
+      reads += 1;
+      const money = (amount) => ({ amount_minor: amount, currency_code: "VND" });
+      await route.fulfill({
+        json: {
+          orders:
+            reads === 1
+              ? []
+              : [
+                  {
+                    order_id: "01J0000000000000000000GUES",
+                    table_id: table,
+                    items: [
+                      {
+                        display_name: "Iced tea",
+                        quantity: { milli: 2000 },
+                        line_total: money(79_000),
+                      },
+                    ],
+                    total: money(86_900),
+                  },
+                ],
+          reject_reasons: [],
+        },
+      });
+    });
+
+    await navigateTo(page, "/guests");
+    await expect(page.getByText("No guest orders are waiting.")).toBeVisible();
+    await page.clock.fastForward(16_000);
+
+    const card = page.locator('[data-outcome="guest-order"]');
+    await expect(card).toHaveCount(1);
+    await expect(card.locator("h3")).toHaveText("Table 1");
+    const accept = card.getByRole("button", { name: "Send to kitchen" });
+    const box = await accept.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(48);
   } finally {
     await edge.stop();
   }
