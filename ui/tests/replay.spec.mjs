@@ -1071,6 +1071,88 @@ test("a cashier with no keyboard can enter a float on the keypad", async ({ page
   }
 });
 
+// A shift starts on a terminal with no keyboard of any kind.
+//
+// The float keypad above closed this for cash. It did not close it for the screen that comes first.
+// `docs/ui-ux.md` §2 asks for "a shared component for numeric and text entry on touch devices
+// without a physical keyboard"; only the numeric half existed, and sign-in needs the other one. The
+// badge code is free text — the console's own placeholder for it reads `e.g. A01` — so on a fixed
+// terminal whose on-screen keyboard is switched off, `inputmode` asked the platform for a keyboard
+// that never came and the field could not be filled. Not one awkward field: a till nobody can sign
+// in to, and therefore every field on every later screen.
+//
+// Driven with no `fill` anywhere, like the keypad flow, because `fill` is precisely the affordance
+// the device class in question does not have. Run at phone size, since that is the tightest of the
+// three and a pad that does not fit is a pad that is not there.
+test("a shift starts with no keyboard at all — badge code and PIN typed on the on-screen pad", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await pair(page, edge);
+
+    // The fixture has to carry a letter or this flow proves nothing it claims to. The demo badge
+    // code was four digits for a year, which is exactly how a keyboardless terminal's real problem
+    // stayed invisible behind a gate that was otherwise thorough.
+    expect(
+      edge.staffCode,
+      "the demo badge code is all digits again — a numeric keypad would serve it, and this flow no longer proves a text pad is needed",
+    ).toMatch(/[A-Z]/);
+
+    const pad = page.locator("#signin-pad");
+    const press = async (characters) => {
+      for (const character of characters) {
+        await pad.getByRole("button", { name: character, exact: true }).click();
+      }
+    };
+
+    // Tapping the field is how an operator chooses it, and it is what tells the pad which alphabet
+    // to draw.
+    await page.locator("#signin-code").click();
+    await press(edge.staffCode);
+    await expect(page.locator("#signin-code")).toHaveValue(edge.staffCode);
+
+    // The caret never left the field the keys were filling. A button takes focus on `pointerdown`,
+    // so without refusing that the first key press moves the cursor off the input and the operator
+    // watches the rest of their code go nowhere.
+    await expect(page.locator("#signin-code")).toBeFocused();
+
+    await page.locator("#signin-pin").click();
+
+    // The letters are gone, because the PIN field strips anything that is not a digit. Offering a
+    // key whose press does nothing is worse than offering no key: the operator presses it, nothing
+    // appears, and they have no way to tell that from a dead screen.
+    await expect(
+      pad.getByRole("button", { name: "A", exact: true }),
+      "the pad still offers letters on the PIN field, which strips them — a key that swallows a press",
+    ).toHaveCount(0);
+
+    await press(edge.staffPin);
+    await expect(page.locator("#signin-pin")).toHaveValue(edge.staffPin);
+
+    // Correction keys, for the same reason the float keypad has them: a mis-tap on a terminal with
+    // no keyboard has no other way back, and without them every slip is a reload. Found by their
+    // accessible names — `C` and `⌫` are glyphs, and a glyph is not a name a reader can say.
+    await pad.getByRole("button", { name: "Delete the last character" }).click();
+    await expect(page.locator("#signin-pin")).toHaveValue(edge.staffPin.slice(0, -1));
+    await press(edge.staffPin.slice(-1));
+
+    // Nothing is cut off sideways on the tightest device, with the letter grid drawn.
+    await page.locator("#signin-code").click();
+    const overflow = await page.evaluate(() => {
+      const root = document.documentElement;
+      return root.scrollWidth - root.clientWidth;
+    });
+    expect(overflow, "the sign-in pad runs wider than a phone").toBeLessThanOrEqual(1);
+
+    await page.locator('[data-step="submit"]').click();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A box being claimed (ADR-0148) shows its claim page and nothing of a till. `pos-edge claim` serves
 // only that page and `/api/claim`, so a status bar, navigation or sign-out drawn around it offered a
 // person reading a code off the box a row of places that all failed — which is what the round-two

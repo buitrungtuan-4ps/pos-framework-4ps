@@ -43,7 +43,14 @@ use crate::app::EdgeSession;
 /// A published credential for a store that has no data, listens on loopback and forgets everything
 /// on exit. It is printed at start-up rather than left for a reader to find, because a demo whose
 /// credential is a scavenger hunt is a demo nobody runs.
-pub const DEMO_STAFF_CODE: &str = "1001";
+///
+/// **It carries a letter on purpose.** This was `1001` — four digits — and every browser flow signs
+/// in with whatever this const says, so the whole gate typed a badge code that a numeric keypad
+/// could enter. A real one need not be: the console's own placeholder for the field reads `e.g.
+/// A01`, and a store that stamps `NV01A` on a badge is entering a string. A fixture whose every
+/// character is a digit is a fixture that proves the easy half — the same trap the menu prices
+/// below describe, in the other half of the till.
+pub const DEMO_STAFF_CODE: &str = "A01";
 
 /// The PIN that goes with [`DEMO_STAFF_CODE`].
 pub const DEMO_STAFF_PIN: &str = "1234";
