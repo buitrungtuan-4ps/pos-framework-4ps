@@ -4,11 +4,12 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { money, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
+import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
   applyDiscount,
   cashDenominations,
   cashRoundingIncrement,
+  currencyExponent,
   loadCheck,
   openBill,
   openBillFor,
@@ -94,6 +95,11 @@ export function Pay() {
   const [billId, setBillId] = createSignal<string | null>(openBillFor(params.id) ?? null);
   const [error, setError] = createSignal<string | null>(null);
   const [tender, setTender] = createSignal<number | null>(null);
+  // "Other amount": the cashier types what the guest handed over, for the pile no quick key names.
+  // A string for the reason the discount's is one — a half-typed figure must stay as typed — and
+  // only read while the pad is open, so tapping a quick key again puts that key back in charge.
+  const [typing, setTyping] = createSignal(false);
+  const [typedText, setTypedText] = createSignal("");
   // The tip, in minor units. Zero rather than null: there is no difference between "no tip" and "a
   // tip of nothing", and `Payment.tip` is optional on the wire so zero is what the edge would have
   // defaulted to anyway.
@@ -146,6 +152,11 @@ export function Pay() {
   // The store's currency, taken from the edge's own figure rather than assumed — a store on any other
   // currency then renders and tenders correctly with no change here.
   const currency = () => check()?.total_due.currency_code ?? "";
+  // What the guest handed over: the typed figure while "other amount" is open, otherwise the key the
+  // cashier tapped. Null is "nothing chosen", which the settle reads as the exact amount; a typed
+  // figure the till cannot read is null too, and the take-cash button refuses it below.
+  const typedTender = () => parseWhole(typedText(), currencyExponent());
+  const offered = () => (typing() ? typedTender() : tender());
   // Change is a subtraction of two amounts the operator can see — the edge's total and the note they
   // chose — shown as they tap. The authoritative figure is the one the settle records per payment
   // (`change_given`), which the receipt carries.
@@ -154,10 +165,24 @@ export function Pay() {
   // the figure on screen the same one the edge records — B1.3's second defect was exactly this
   // subtraction missing on the edge, so a till told a cashier to hand back money the guest had left.
   const change = () => {
-    const chosen = tender();
+    const chosen = offered();
     const owed = total() + tip();
     return chosen !== null && chosen >= owed ? chosen - owed : 0;
   };
+  // How much a typed figure falls short of the sale plus the tip, or null when it covers them (or
+  // nothing is typed yet). Shown, not only refused: "not enough" without the gap sends a cashier
+  // back to the guest to do the subtraction the till could have done.
+  const shortBy = () => {
+    const typed = typing() ? typedTender() : null;
+    const owed = total() + tip();
+    return typed !== null && typed < owed ? owed - typed : null;
+  };
+  // A typed tender the edge would refuse: unreadable, or less than is owed. The button stays
+  // disabled rather than answering with a refusal after the guest's money is on the counter.
+  const typedTenderInvalid = () => typing() && (typedTender() === null || shortBy() !== null);
+  // Opens the pad. A figure already typed survives a quick key closing the pad and this opening it
+  // again, so a cashier who changes their mind twice does not type it twice.
+  const typeTender = () => setTyping(true);
 
   // Tip keys as a share of the bill, plus a clear. Percentages rather than fixed amounts so they
   // scale with the check.
@@ -237,7 +262,7 @@ export function Pay() {
   const payCash = () => {
     // No note chosen means "exact", and exact now means the sale plus the tip — otherwise adding a
     // tip and tapping straight through would tender less than the guest owes.
-    const chosen = tender() ?? total() + tip();
+    const chosen = offered() ?? total() + tip();
     void pay([
       {
         method: "PAYMENT_METHOD_CASH",
@@ -254,6 +279,21 @@ export function Pay() {
         method: "PAYMENT_METHOD_CARD",
         // A card takes the sale plus whatever tip was added — there is no note to choose and no
         // change to give, so the tendered amount is the whole of what the terminal will capture.
+        tendered: money(currency(), total() + tip()),
+        applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
+      },
+    ]);
+
+  // A bank transfer to the store's QR, which the cashier records once they have seen it arrive. The
+  // exact amount, like a card: the guest scans for what the bill says and there is no change to give.
+  // Nothing here reaches a bank, which is why the button says the money *arrived* rather than asking
+  // for it: no integration yet has a bank or gateway tell the edge a transfer landed (roadmap B10.2
+  // is India's UPI equivalent).
+  const payQr = () =>
+    void pay([
+      {
+        method: "PAYMENT_METHOD_QR",
         tendered: money(currency(), total() + tip()),
         applied_to_bill: money(currency(), total()),
         tip: money(currency(), tip()),
@@ -488,15 +528,42 @@ export function Pay() {
                   <button
                     type="button"
                     class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
-                    classList={{ "border-accent": tender() === amount }}
+                    classList={{ "border-accent": !typing() && tender() === amount }}
                     data-step="setTender"
-                    onClick={() => setTender(amount)}
+                    onClick={() => {
+                      setTyping(false);
+                      setTender(amount);
+                    }}
                   >
                     {amount === total() ? t("pay.exact") : formatAmount(money(currency(), amount))}
                   </button>
                 )}
               </For>
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line bg-surface"
+                classList={{ "border-accent": typing() }}
+                aria-expanded={typing()}
+                data-step="typeTender"
+                onClick={() => typeTender()}
+              >
+                {t("pay.other_amount")}
+              </button>
             </div>
+            <Show when={typing()}>
+              <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
+              <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
+                {typedTender() === null ? "—" : formatAmount(money(currency(), typedTender() ?? 0))}
+              </p>
+              <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
+              <Show when={shortBy()}>
+                {(gap) => (
+                  <p class="mt-2 text-sm text-danger" role="status">
+                    {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
+                  </p>
+                )}
+              </Show>
+            </Show>
             <p class="mt-2 text-sm text-ink-muted">
               {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
             </p>
@@ -506,7 +573,8 @@ export function Pay() {
               <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button
                 type="button"
-                class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink"
+                class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
+                disabled={typedTenderInvalid()}
                 data-step="payCash"
                 onClick={() => payCash()}
               >
@@ -522,6 +590,17 @@ export function Pay() {
                 >
                   {t("pay.card")}
                 </button>
+              </Show>
+              <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface"
+                  data-step="payQr"
+                  onClick={() => payQr()}
+                >
+                  {t("pay.qr")}
+                </button>
+                <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
               </Show>
             </div>
 

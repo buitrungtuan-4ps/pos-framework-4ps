@@ -137,6 +137,29 @@ export const TASKS = [
     outcome: { route: "/table/:id/pay", mark: "settled" },
   },
   {
+    task: "Settle a dine-in table by QR transfer",
+    budget: 3,
+    note: "The card's shape: the guest scans for the exact amount, so there is no note to choose. The one tap on the pay screen is the cashier saying the transfer arrived; the till does not ask a bank, so a confirmation step would only repeat that tap.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Settle a dine-in table in cash, typing the amount handed over",
+    budget: 3,
+    note: "For the pile no quick key names. \"Other amount\" takes the place of choosing a note, so the flow costs what the cash settle costs; the figure is typed on the pad, and typing is not a tap.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "typeTender" },
+      { route: "/table/:id/pay", action: "payCash" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+    unreplayable:
+      "the amount is typed on the pad between the second and third taps, and the harness types only before the first; the standalone test \"a bill larger than the largest note takes any amount handed over\" drives the whole flow, typing included",
+  },
+  {
     task: "Void an unfired line",
     budget: 3,
     note: "Rare, and §6 allows three. It costs two: the void control is on the line itself, and the reason is the second tap — the reason is mandatory (ADR-0115), so it is part of the act rather than a question asked afterwards. Nothing was made and no stock moved, so no manager is involved.",
@@ -217,6 +240,16 @@ export const TASKS = [
     steps: [
       { route: "/counter", action: "charge" },
       { route: "/counter", action: "payCard" },
+    ],
+    outcome: { route: "/counter", mark: "settled" },
+  },
+  {
+    task: "Charge a counter order by QR transfer",
+    budget: 3,
+    note: "The counter's twin of the table's QR settle.",
+    steps: [
+      { route: "/counter", action: "charge" },
+      { route: "/counter", action: "payQr" },
     ],
     outcome: { route: "/counter", mark: "settled" },
   },

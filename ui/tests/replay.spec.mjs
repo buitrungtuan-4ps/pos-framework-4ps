@@ -167,6 +167,7 @@ const PRECONDITIONS = {
   "Add an item to a counter order": startWalkIn,
   "Charge a counter (takeaway) order in cash": aWalkInToCharge,
   "Charge a counter order by card": aWalkInToCharge,
+  "Charge a counter order by QR transfer": aWalkInToCharge,
   "Charge a counter order in cash, taking a tip": aWalkInToCharge,
   "Change how many of a line": async (page) => {
     await seatTable(page);
@@ -219,6 +220,10 @@ const PRECONDITIONS = {
     await addItem(page);
   },
   "Settle a dine-in table by card": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
+  "Settle a dine-in table by QR transfer": async (page) => {
     await seatTable(page);
     await addItem(page);
   },
@@ -978,6 +983,108 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
   }
 });
 
+// A bill larger than the largest note takes any amount the guest hands over.
+//
+// The quick-cash keys were "every note at least as large as the bill". That is the same answer while
+// the bill is smaller than the largest note, and no answer at all above it: Vietnam's largest note is
+// 500,000₫, so a family dinner offered "Exact" and nothing else, and a cashier handed 1,300,000₫ could
+// neither record it nor see the change. The keys are now the smallest pile of each note that covers
+// the bill, and "Other amount" takes whatever pile no key names.
+//
+// The demo store publishes no notes, and an empty list means "the exact amount only", so this hands
+// the till Vietnam's own six — the country pack's list — by changing that one field of
+// `GET /api/locale`, as the exponent test below does with its field. Four pizzas are 596,000₫ plus
+// ten percent: 655,600₫. Piles of 500,000₫, 200,000₫, 100,000₫ and 20,000₫ notes cover it at
+// 1,000,000, 800,000, 700,000 and 660,000; before the change the row was "Exact" alone.
+//
+// Then the pad: a figure short of the bill says by how much and cannot be taken, and one that covers
+// it settles with the change the screen showed.
+test("a bill larger than the largest note takes any amount handed over", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          cash_denominations: [10_000, 20_000, 50_000, 100_000, 200_000, 500_000],
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (let pizza = 0; pizza < 4; pizza += 1) {
+      await addItemWithAChoice(page);
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]')).toHaveText([
+      "Exact",
+      "660,000₫",
+      "700,000₫",
+      "800,000₫",
+      "1,000,000₫",
+    ]);
+
+    await page.locator('[data-step="typeTender"]').click();
+    const keypad = page.locator('[data-step="tenderKeypad"]');
+    for (const digit of ["6", "0", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await expect(page.locator('[data-outcome="typed-tender"]')).toHaveText("600,000₫");
+    await expect(page.getByText("Short by 55,600₫")).toBeVisible();
+    await expect(page.locator('[data-step="payCash"]')).toBeDisabled();
+
+    await keypad.getByRole("button", { name: "Clear the amount" }).click();
+    for (const digit of ["1", "3", "0", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await expect(page.locator('[data-outcome="typed-tender"]')).toHaveText("1,300,000₫");
+    await expect(page.getByText("644,400₫", { exact: true })).toBeVisible();
+
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.getByText("644,400₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A counter tip on a bill that is not a round number still settles.
+//
+// The table pay screen's float-division tip was fixed (the test above it here says how it failed);
+// the counter's copy of the same line was not, and survived one file over. The iced tea's 43,450₫ is
+// the bill it fails on: five percent is 2,172.5, which the edge refuses as a money amount — so this
+// walks the whole tipped charge and asks only that it ends settled.
+test("a counter tip on a bill that is not a round number still settles", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await page.locator("#menu-search").fill("tea");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+    await page.locator('[data-step="onItem"]').click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+    await page.locator('a[href="/counter"]').first().click();
+    await page.waitForURL((url) => url.pathname === "/counter");
+
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("43,450₫", { exact: true }).first()).toBeVisible();
+    await page.locator('[data-step="setTip"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The till draws money with the exponent the store published, not one it guessed.
 //
 // `ui/src/lib/money.ts` used to hold `MINOR_DIGITS[code] ?? 0` and that `?? 0` was the defect: it is
@@ -1173,6 +1280,7 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
+      "Settle a dine-in table in cash, typing the amount handed over",
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",
