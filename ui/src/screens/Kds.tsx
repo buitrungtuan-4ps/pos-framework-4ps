@@ -1,11 +1,14 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
+import type { MenuItemResponse } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { chime, chimeReady, unlockChime } from "../lib/chime";
+import { errorMessage } from "../lib/errors";
 import { formatQuantity } from "../lib/money";
 import { useDarkTakeover } from "../lib/screen";
+import { fold, matches } from "../lib/search";
 import {
   bump,
   kitchenTickets,
@@ -13,6 +16,7 @@ import {
   modifierNames,
   queueNumberFor,
   refreshQueueNumbers,
+  setItemSoldOut,
   state,
   type KitchenTicket,
 } from "../state/store";
@@ -199,20 +203,144 @@ export function Kds() {
     void bump(ticket.orderId, ticket.lineIds, ticket.stationId);
   };
 
+  // Taking a dish off every till from the kitchen (86), and putting it back. The cook is usually
+  // the first to know the mozzarella has run out, and the board is where the cook is. A panel over
+  // the board rather than a control on each ticket: a ticket is one whole-card tap that bumps it,
+  // and a second target inside it would be hit by mistake in a rush. The same marks the tills make
+  // (`docs/pos-spec.md` §3), under the same permission, which a cook holds by default.
+  const [marking, setMarking] = createSignal(false);
+  const [soldOutQuery, setSoldOutQuery] = createSignal("");
+  const [soldOutError, setSoldOutError] = createSignal<string | null>(null);
+  const soldOutNeedle = createMemo(() => fold(soldOutQuery().trim()));
+  const soldOutNow = createMemo(() => state.menu.filter((item) => item.sold_out === true));
+  // Every dish that can be marked, or the ones the box names. The whole price book, choices
+  // included: the extra cheese runs out as surely as the pizza does. An item the console withdrew is
+  // not the kitchen's to mark.
+  const markable = createMemo(() =>
+    state.menu.filter(
+      (item) =>
+        item.sold_out !== true &&
+        item.available &&
+        (soldOutNeedle() === "" || matches(soldOutNeedle(), [fold(item.display_name)])),
+    ),
+  );
+  const openSoldOut = () => {
+    setSoldOutError(null);
+    setSoldOutQuery("");
+    setMarking(true);
+  };
+  const guardSoldOut = async (run: () => Promise<void>) => {
+    setSoldOutError(null);
+    try {
+      await run();
+    } catch (caught) {
+      setSoldOutError(errorMessage(caught));
+    }
+  };
+  const markSoldOut = (item: MenuItemResponse) =>
+    void guardSoldOut(() => setItemSoldOut(item.menu_item_id, true));
+  const bringBack = (item: MenuItemResponse) =>
+    void guardSoldOut(() => setItemSoldOut(item.menu_item_id, false));
+
   return (
     <section class="p-4" onPointerDown={() => wake()}>
       <div class="flex items-start justify-between gap-3">
         <PageHeader title={t("kds.title")} size="xl" />
-        <button
-          type="button"
-          class="min-h-touch shrink-0 rounded-token border border-line bg-surface px-3 text-sm"
-          aria-pressed={sound()}
-          data-outcome="kds-sound"
-          onClick={() => toggleSound()}
-        >
-          {sound() ? t("kds.sound_on") : t("kds.sound_off")}
-        </button>
+        <div class="flex shrink-0 flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
+            aria-expanded={marking()}
+            data-step="openSoldOut"
+            onClick={() => openSoldOut()}
+          >
+            {t("kds.sold_out")}
+          </button>
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
+            aria-pressed={sound()}
+            data-outcome="kds-sound"
+            onClick={() => toggleSound()}
+          >
+            {sound() ? t("kds.sound_on") : t("kds.sound_off")}
+          </button>
+        </div>
       </div>
+      <Show when={marking()}>
+        <section
+          class="mb-4 rounded-token border border-line bg-surface p-4"
+          aria-label={t("kds.sold_out_title")}
+        >
+          <div class="flex items-center justify-between gap-3">
+            <h2 class="text-lg font-semibold">{t("kds.sold_out_title")}</h2>
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
+              onClick={() => setMarking(false)}
+            >
+              {t("kds.sold_out_done")}
+            </button>
+          </div>
+          <Show when={soldOutError()}>
+            {(message) => (
+              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+          {/* What is off now, first: the question a cook asks before marking anything is whether
+              somebody already has, and the answer is also the list to bring back from. */}
+          <h3 class="mt-3 text-sm font-semibold text-ink-muted">{t("kds.sold_out_now")}</h3>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <For
+              each={soldOutNow()}
+              fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_none")}</p>}
+            >
+              {(item) => (
+                <button
+                  type="button"
+                  class="flex min-h-touch items-center gap-2 rounded-token border-2 border-danger bg-surface-raised px-3 text-left"
+                  data-step="bringBack"
+                  onClick={() => bringBack(item)}
+                >
+                  <span class="font-semibold line-through" data-outcome="kds-sold-out">
+                    {item.display_name}
+                  </span>
+                  <span class="text-sm text-ink-muted">{t("kds.bring_back")}</span>
+                </button>
+              )}
+            </For>
+          </div>
+          <label class="mt-4 block">
+            <span class="text-sm text-ink-muted">{t("kds.sold_out_find")}</span>
+            <input
+              id="kds-sold-out-search"
+              type="search"
+              class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-3"
+              value={soldOutQuery()}
+              onInput={(event) => setSoldOutQuery(event.currentTarget.value)}
+            />
+          </label>
+          <div class="mt-3 grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-4">
+            <For
+              each={markable()}
+              fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_no_match")}</p>}
+            >
+              {(item) => (
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-left"
+                  data-step="markSoldOut"
+                  onClick={() => markSoldOut(item)}
+                >
+                  {item.display_name}
+                </button>
+              )}
+            </For>
+          </div>
+        </section>
+      </Show>
       <Show when={sound() && !soundLive()}>
         <p class="mb-3 text-sm text-ink-muted">{t("kds.sound_tap")}</p>
       </Show>
