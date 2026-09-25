@@ -46,6 +46,7 @@ import type {
   SyncResponse,
   TableResponse,
   TestPrintResponse,
+  TransferResponse,
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
@@ -201,6 +202,12 @@ export const api = {
     request<TableResponse>("POST", `/api/tables/${tableId}/seat`),
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
+  // Moves the guests at a table, and their order, to a free one; the table they left waits to be
+  // cleared (`sales.table.transferred`).
+  transferTable: (tableId: string, toTableId: string) =>
+    request<TransferResponse>("POST", `/api/tables/${tableId}/transfer`, {
+      to_table_id: toTableId,
+    }),
   getTable: (tableId: string) => request<TableResponse>("GET", `/api/tables/${tableId}`),
 
   // The store's published floor plan and kitchen stations (ADR-0072). The app reads this at start to

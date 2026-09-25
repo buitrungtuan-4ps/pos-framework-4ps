@@ -642,6 +642,9 @@ pub enum TableCommand {
     Settle,
     /// Clean down: needs cleaning → free.
     Clean,
+    /// The guests moved to another table, taking their order: occupied → needs cleaning. The table
+    /// they moved to is [`Self::Seat`]ed.
+    Transfer,
 }
 
 impl TableCommand {
@@ -653,6 +656,7 @@ impl TableCommand {
             Self::RequestBill => TableTrigger::RequestBill,
             Self::Settle => TableTrigger::Settle,
             Self::Clean => TableTrigger::Clean,
+            Self::Transfer => TableTrigger::Transfer,
         }
     }
 }
@@ -670,6 +674,11 @@ pub fn decide_table(
     ctx: &DecisionCtx,
 ) -> Result<TableDecision, DomainError> {
     ctx.require_capability(Capability::Tables)?;
+    // Moving guests and their order to another table is `sales.order.transfer`. Seating, billing
+    // and clearing a table are serving it, and ask for nothing beyond the capability.
+    if matches!(command, TableCommand::Transfer) {
+        ctx.require(Permission::TransferOrder)?;
+    }
     let next_state = Table::step(current, command.trigger())?;
     Ok(TableDecision {
         next_state,
@@ -1366,6 +1375,47 @@ mod tests {
         let free =
             decide_table(TableState::NeedsCleaning, TableCommand::Clean, &ctx).expect("clean");
         assert_eq!(free.next_state, TableState::Free);
+    }
+
+    #[test]
+    fn guests_who_move_table_leave_theirs_to_be_cleared() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::TransferOrder),
+            CapabilityContext::NONE.with(Capability::Tables),
+        );
+        let left =
+            decide_table(TableState::Occupied, TableCommand::Transfer, &ctx).expect("transfer");
+        assert_eq!(left.next_state, TableState::NeedsCleaning);
+        // Not once the guests have asked for the bill: a bill names the order it charges, and that
+        // table pays where it sits. And not from a table nobody is sitting at.
+        for from in [
+            TableState::AwaitingPayment,
+            TableState::Free,
+            TableState::NeedsCleaning,
+        ] {
+            assert!(
+                matches!(
+                    decide_table(from, TableCommand::Transfer, &ctx),
+                    Err(DomainError::Transition(_))
+                ),
+                "{from:?} cannot transfer"
+            );
+        }
+    }
+
+    #[test]
+    fn moving_guests_to_another_table_needs_the_transfer_permission() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY,
+            CapabilityContext::NONE.with(Capability::Tables),
+        );
+        assert!(matches!(
+            decide_table(TableState::Occupied, TableCommand::Transfer, &ctx),
+            Err(DomainError::PermissionDenied { .. })
+        ));
+        // Seating the table they move to asks for nothing more than it ever did.
+        let seated = decide_table(TableState::Free, TableCommand::Seat, &ctx).expect("seat");
+        assert_eq!(seated.next_state, TableState::Occupied);
     }
 
     #[test]

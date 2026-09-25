@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
-import { useLocation, useNavigate, useParams } from "@solidjs/router";
+import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 
 import { ApproverFields } from "../components/ApproverFields";
 import { t } from "../i18n";
@@ -20,6 +20,7 @@ import {
   setQuantity,
   loadCheck,
   modifierNames,
+  moveTable,
   openBill,
   reasonsFor,
   seatFor,
@@ -62,10 +63,11 @@ export function Order() {
   // (F6). Cutting leading zeros off the id is what this used to do, which was right for the
   // bootstrap floor's `01`…`12` and wrong for every published table: a ULID lost its zeros and the
   // header read "Table 69" over Table 1. Only a table the floor does not know yet falls back to it.
-  const label = () => {
-    const published = tableLabel(params.id);
-    return published !== params.id ? published : params.id.replace(/^0+/, "") || params.id;
+  const labelOf = (tableId: string) => {
+    const published = tableLabel(tableId);
+    return published !== tableId ? published : tableId.replace(/^0+/, "") || tableId;
   };
+  const label = () => labelOf(params.id);
 
   const guard = async (run: () => Promise<void>) => {
     setError(null);
@@ -120,6 +122,38 @@ export function Order() {
   // appears where the store both does seats and said how many this table has.
   const seatCount = () => floorTables().find((table) => table.id === params.id)?.seats ?? 0;
   const showSeats = () => seatsEnabled() && seatCount() > 0;
+
+  // Moving the guests to another table: whether the list of free tables is open, and a refusal,
+  // shown in that list rather than under a bill it may be drawn over. The table they came from rides
+  // on the new table's address, so the screen they land on can say what just happened.
+  const [moving, setMoving] = createSignal(false);
+  const [moveError, setMoveError] = createSignal<string | null>(null);
+  const [search] = useSearchParams<{ moved_from?: string }>();
+  // Guests move before the bill only: once they have asked for it they pay where they sit, and the
+  // edge refuses the move (`docs/pos-spec.md` §2).
+  const movable = () => !walkIn() && tableState(params.id) === "TABLE_STATE_OCCUPIED";
+  // Every free table on the published floor, in the floor's own order.
+  const freeTables = createMemo(() =>
+    floorTables().filter(
+      (table) => table.id !== params.id && tableState(table.id) === "TABLE_STATE_FREE",
+    ),
+  );
+  const openMove = () => {
+    setMoveError(null);
+    setMoving(true);
+  };
+  const moveTo = async (to: string) => {
+    const from = params.id;
+    setMoveError(null);
+    try {
+      await moveTable(from, to);
+    } catch (caught) {
+      setMoveError(errorMessage(caught));
+      return;
+    }
+    setMoving(false);
+    navigate(`/table/${to}?moved_from=${from}`);
+  };
 
   // A walk-in is paid on the counter screen, whose pad charges any counter order; it opens this
   // order's bill there, so a bill is never left open on an order nobody went on to pay.
@@ -452,7 +486,9 @@ export function Order() {
           On a tablet this column's own box is dissolved (`contents`): its header becomes a row of
           the screen above the menu, and its body becomes the panel at the bottom. */}
       <div class="min-w-0 tablet:contents terminal:block">
-        <div class="mb-3 flex items-center gap-3">
+        {/* Wraps rather than squeezes: on a narrow phone, in a longer language, the move button goes
+            to a line of its own instead of breaking every word in the row onto two. */}
+        <div class="mb-3 flex flex-wrap items-center gap-3">
           <a
             href={walkIn() ? "/counter" : "/"}
             class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
@@ -466,7 +502,71 @@ export function Order() {
           <Show when={!walkIn()}>
             <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
           </Show>
+          <Show when={movable()}>
+            <button
+              type="button"
+              class="ml-auto min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
+              aria-expanded={moving()}
+              data-step="openMove"
+              onClick={() => openMove()}
+            >
+              {t("order.move_table")}
+            </button>
+          </Show>
         </div>
+
+        {/* The guests' new table says where they came from, once, on the screen they land on. */}
+        <Show when={!walkIn() && search.moved_from}>
+          {(from) => (
+            <p class="mb-3 text-sm text-ok" role="status" data-outcome="table-moved">
+              {t("order.moved_from", { label: labelOf(from()) })}
+            </p>
+          )}
+        </Show>
+
+        {/* The free tables the guests can move to. A tap moves them, with their order, and opens
+            the new table; the table they leave waits to be cleared. */}
+        <Show when={moving() && movable()}>
+          <div class="mb-3 rounded-token border border-line bg-surface p-3">
+            <div class="mb-1 flex items-center justify-between gap-2">
+              <h2 class="font-semibold">{t("order.move_title", { label: label() })}</h2>
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line px-3 text-sm"
+                onClick={() => setMoving(false)}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+            <p class="mb-2 text-sm text-ink-muted">{t("order.move_hint")}</p>
+            <Show when={moveError()}>
+              {(message) => (
+                <p class="mb-2 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                  {message()}
+                </p>
+              )}
+            </Show>
+            <Show
+              when={freeTables().length > 0}
+              fallback={<p class="text-sm text-ink-muted">{t("order.move_none_free")}</p>}
+            >
+              <div class="grid grid-cols-3 gap-2 tablet:grid-cols-6 terminal:grid-cols-4">
+                <For each={freeTables()}>
+                  {(table) => (
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line px-2 py-2 font-semibold"
+                      data-step="moveTo"
+                      onClick={() => void moveTo(table.id)}
+                    >
+                      {t("common.table", { label: table.label })}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </Show>
 
         {/*
           The bill. A phone and a terminal draw it in the column, as they always did. A tablet slides

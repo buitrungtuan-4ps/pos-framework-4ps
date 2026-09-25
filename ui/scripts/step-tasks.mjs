@@ -81,6 +81,16 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "item-sold-out" },
   },
   {
+    task: "Move a table's guests to another table",
+    budget: 2,
+    note: "Two: open the list of free tables, tap the one they are moving to. The order goes with them (every line, what the kitchen already has, the time they sat down) and the new table opens; the table they left waits to be cleared. Nothing is rung again. No confirmation, because a move is undone the same way: clear the old table, and move them back.",
+    steps: [
+      { route: "/table/:id", action: "openMove" },
+      { route: "/table/:id", action: "moveTo" },
+    ],
+    outcome: { route: "/table/:id", mark: "table-moved" },
+  },
+  {
     task: "Mark a dish sold out from the kitchen board",
     budget: 2,
     note: "Two: open the panel, tap the dish. The cook is usually the first to know something has run out, and the board is where the cook is. A panel over the board rather than a control on each ticket, because a ticket is one whole-card tap that bumps it and a second target inside it would be hit by mistake in a rush.",

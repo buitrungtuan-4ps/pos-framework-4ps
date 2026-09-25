@@ -880,6 +880,99 @@ async fn the_floor_says_when_each_seated_table_sat_down() {
     );
 }
 
+/// Guests move to another table over the composed edge, and take their order with them.
+///
+/// The order they bring has a line the kitchen has already made, because that is when guests move:
+/// mid-meal. Every read a device boots from follows them (the floor's states and seated times, the
+/// live orders, both tables' checks), and they pay at the table they moved to.
+#[tokio::test]
+async fn guests_move_to_another_table_on_the_composed_edge() {
+    use pos_proto::floor::{FloorArea, FloorPlan, FloorTable};
+    use pos_proto::ids::AreaId;
+
+    let from = TableId::new(Ulid::from_u128(709));
+    let to = TableId::new(Ulid::from_u128(710));
+    let table = |table_id: TableId, label: &str| FloorTable {
+        table_id,
+        label: DisplayName::new(label),
+        seats: 4,
+        position: None,
+    };
+    let store = a_store_where(|session| {
+        session.with_floor(FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(1)),
+            name: DisplayName::new("Main hall"),
+            tables: vec![table(from, "9"), table(to, "10")],
+        }))
+    })
+    .await;
+    a_fired_and_prepared_order(&store, from).await;
+    let sat_down = read(&store, "/api/floor").await["seated_times"][from.to_string()].clone();
+    assert!(sat_down.is_string(), "a seated table says when");
+
+    let (status, moved) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{from}/transfer"),
+        Some(json!({ "to_table_id": to })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the transfer route is mounted: {moved}"
+    );
+    assert_eq!(moved["from_table"]["state"], "TABLE_STATE_NEEDS_CLEANING");
+    assert_eq!(moved["to_table"]["state"], "TABLE_STATE_OCCUPIED");
+
+    let floor = read(&store, "/api/floor").await;
+    assert_eq!(
+        floor["table_states"][from.to_string()],
+        "TABLE_STATE_NEEDS_CLEANING"
+    );
+    assert_eq!(
+        floor["table_states"][to.to_string()],
+        "TABLE_STATE_OCCUPIED"
+    );
+    assert_eq!(
+        floor["seated_times"][to.to_string()],
+        sat_down,
+        "they sat down when they did: {floor}"
+    );
+    assert!(floor["seated_times"][from.to_string()].is_null(), "{floor}");
+
+    let live = live_orders(&store).await;
+    let orders = live.as_array().expect("the live orders");
+    assert_eq!(orders.len(), 1, "{live}");
+    assert_eq!(orders[0]["order_id"], moved["order_id"]);
+    assert_eq!(orders[0]["table_id"], to.to_string(), "{live}");
+    let check = read(&store, &format!("/api/tables/{to}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX);
+    let left = read(&store, &format!("/api/tables/{from}/check")).await;
+    assert_eq!(left["total_due"]["amount_minor"], 0, "{left}");
+
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{to}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "they pay where they sit: {bill}");
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{to}/transfer"),
+        Some(json!({ "to_table_id": from })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "and once they have asked for the bill they stay"
+    );
+}
+
 /// Staff mark an item sold out over the composed edge, and every till reading the menu sees it —
 /// then bring it back.
 ///

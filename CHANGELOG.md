@@ -104,6 +104,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Guests move to another table, and take their order with them.** *Move table* in the order
+  screen's header lists the free tables on the floor. A tap on one moves the guests' order there and
+  opens the new table, which says where they came from. Before this, guests who asked for the window
+  had to be seated again as a new order, while the old table kept a check nobody was sitting at.
+  - The order moves whole: every line, what the kitchen already has, and the time they sat down.
+    Nothing is rung or fired again. The floor, the kitchen board's ticket and the pass name the new
+    table on every device at once.
+  - The table they left waits to be cleared, as it does when guests pay and go.
+  - Only before the bill: once the guests have asked for it, they pay where they sit. Refused to a
+    table that is not free, and while the order is a guest's QR order still waiting for staff to
+    confirm or refuse it.
+  - New edge route `POST /api/tables/{id}/transfer` with `{"to_table_id"}`, answering with the order
+    and both tables. It writes `sales.table.transferred`, which the schema has always carried and
+    nothing emitted until now. Additive.
+  - The table state machine gains a `transfer` trigger, `OCCUPIED → NEEDS_CLEANING`
+    (`docs/state-machines.md`).
+  - A kitchen ticket already printed still names the table it was sent from; the screens show the
+    new one. Merging two tables' orders is not built.
+
+  **Upgrade note:** the existing `sales.order.transfer` permission now names an act. Its default
+  roles are unchanged: servers, supervisors, managers and owners. The edge checks it the way it
+  checks every permission that asks for no PIN today, against the store's grants rather than the
+  signed-in person's role, so in practice anyone signed in can move a table until that changes.
+
+  Docs: `docs/pos-spec.md` §2, `docs/ui-ux.md` §3 (order), `docs/state-machines.md`.
+
 - **The kitchen marks a dish sold out, and brings it back.** *Mark sold out* in the kitchen board's
   header opens a panel over the board: the dishes sold out now, each with *Bring back*, and every
   dish that can be marked, which a search box narrows. The cook is usually the first to know

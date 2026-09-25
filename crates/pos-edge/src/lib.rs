@@ -85,7 +85,7 @@ pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
     AppError, Approval, BillCheckView, BillView, CounterOrderOpened, EVENT_LOG_DAYS, Edge,
     EdgeSession, FiredLine, InboundOrderOpened, LineDraft, LineView, OrderLineChoice, ReceiptLine,
-    ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView,
+    ShiftView, StaffAuth, StaffRoster, StoreIdentity, TableView, TransferView,
 };
 pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
 pub use backup::{ArchiveError, ArchiveKey};

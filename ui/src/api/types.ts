@@ -9,6 +9,13 @@ export interface TableResponse {
   state: string;
 }
 
+// What moving guests to another table did: the order that went with them, and both tables after.
+export interface TransferResponse {
+  order_id: string;
+  from_table: TableResponse;
+  to_table: TableResponse;
+}
+
 export interface LineRequest {
   menu_item_id: string;
   display_name: string;
