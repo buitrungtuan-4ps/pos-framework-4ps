@@ -94,7 +94,20 @@ export function Order() {
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
   // be a row count they made themselves (`docs/ui-ux.md` §3).
-  const unfired = () => unfiredLinesForTable(key());
+  // Wrapped in `createMemo` to avoid re-filtering `linesForTable(key())` on every access or re-render.
+  const unfired = createMemo(() => unfiredLinesForTable(key()));
+
+  // Pre-aggregate waiting line counts per course in a single O(N) pass to avoid O(C * N) filtering
+  // during rendering in `<For each={unsentCourses()}>`.
+  const courseWaitingCounts = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const line of unfired()) {
+      if (line.courseId) {
+        counts.set(line.courseId, (counts.get(line.courseId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  });
 
   // The courses with food still waiting, in the store's service order. Empty on a store with courses
   // off, which is what keeps the row off those tills entirely rather than drawing an empty heading.
@@ -763,8 +776,7 @@ export function Order() {
               <div class="flex flex-wrap gap-2">
                 <For each={unsentCourses()}>
                   {(course) => {
-                    const waiting = () =>
-                      unfired().filter((line) => line.courseId === course.course_id).length;
+                    const waiting = () => courseWaitingCounts().get(course.course_id) ?? 0;
                     return (
                       <button
                         type="button"

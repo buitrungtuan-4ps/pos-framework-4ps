@@ -30,6 +30,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Tabs component keyboard navigation enhanced with Home and End keys.**
   The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
 
+- **Memoize unfired lines and course waiting counts on the order screen.**
+  `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
+
 ### Added
 
 - **The console's Fetch from the release button works after a deploy, with nothing added by
