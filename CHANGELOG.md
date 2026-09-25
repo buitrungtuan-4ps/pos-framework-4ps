@@ -27,6 +27,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The store hub's "Out of stock" card counts what the tills mark sold out.** It said stores do not
+  report sold-out items, which stopped being true when staff could mark them at the till.
+  - It shows the newest trading day's items marked sold out and not brought back, as before, and now
+    a real `0` when none are.
+  - A store whose tills have marked nothing in the last 30 trading days shows an em dash and says so.
+    Its edge may be too old to mark, or its kitchen may not mark; either way a zero would not have
+    been measured.
+  - The hub's activity read covers those 30 days instead of one; every other card still reads the
+    newest day.
+
+  Docs: `docs/production-readiness.md` O5.
+
 - **Tabs component keyboard navigation enhanced with Home and End keys.**
   The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
 
