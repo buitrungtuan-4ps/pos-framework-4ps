@@ -230,6 +230,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A refused pairing code, and a store nobody can sign in to, say what to do.** Found on the owner's
+  test PC, where a device sent back to pairing retyped a single-use code that was already spent. The
+  pairing screen showed the edge's English sentence (*unknown or expired pairing code*) and nothing
+  about where the next code comes from. It now says, in the till's language, that the code is wrong,
+  spent or older than five minutes, and names both ways to a new one: *Devices → Get a pairing code*
+  on a paired till, or a service restart and `pairing-url.txt`. Too many wrong codes get their own
+  line. The sign-in screen used to refuse every code as a wrong one on a store the console had not
+  staffed yet. `GET /api/session` now carries `sign_in_ready`, which is `false` while no published
+  member of staff has a PIN, and the screen then says so before anyone types, with the steps in the
+  console's **People** screen. An older edge that does not send the field shows no notice.
+  `POS_DEMO_PROFILE=unstaffed` publishes the demo store with nobody to sign in as, which is what the
+  browser gate runs it against.
+
 - **A release that fails its self-test before an over-the-air install no longer moves the store
   back a release.** `SystemdInstaller::rollback` reverted in both of its cases. After a failed
   pre-commit self-test it pointed `current` at `previous`, which on a box that had updated before is

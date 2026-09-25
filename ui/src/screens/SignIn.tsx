@@ -20,6 +20,8 @@ export function SignIn() {
   const [pin, setPin] = createSignal("");
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
+  // Nobody on this store has a PIN yet, so every code would be refused as a wrong one.
+  const [unstaffed, setUnstaffed] = createSignal(false);
 
   onMount(() => {
     // A device already signed in has no business here; a device not paired must pair first. Both are
@@ -29,7 +31,10 @@ export function SignIn() {
       .then((session) => {
         if (session.signed_in) {
           navigate("/", { replace: true });
+          return;
         }
+        // Only an explicit `false`: an edge too old to say is not a store with no staff.
+        setUnstaffed(session.sign_in_ready === false);
       })
       .catch((caught) => {
         if (caught instanceof ApiError && caught.isUnauthorized) {
@@ -92,6 +97,11 @@ export function SignIn() {
     <section class="mx-auto max-w-sm p-4">
       <PageHeader title={t("signin.title")} />
       <p class="text-ink-muted">{t("signin.hint")}</p>
+      <Show when={unstaffed()}>
+        <p id="signin-no-staff" class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
+          {t("signin.no_staff")}
+        </p>
+      </Show>
 
       <label class="mt-3 block text-ink-muted" for="signin-code">
         {t("signin.code")}

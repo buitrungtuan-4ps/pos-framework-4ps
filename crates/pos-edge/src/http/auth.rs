@@ -238,6 +238,12 @@ pub(crate) struct SessionState {
     /// draws anything, and because the state is a fact about the *box*, not about who is signed in:
     /// a superseded till should say so on its sign-in screen, before anybody tries to seat a table.
     lease_standing: &'static str,
+    /// Whether anyone can sign in on this box: at least one published member of staff has a PIN
+    /// ([`StaffRoster::sign_in_ready`](crate::app::StaffRoster::sign_in_ready)).
+    ///
+    /// It says nothing about any one badge code. It lets the sign-in screen tell a store the
+    /// console has not staffed yet from a mistyped PIN; the refusal alone answers both the same.
+    sign_in_ready: bool,
 }
 
 /// `POST /api/session/sign-in` — verify a badge code + PIN against the synced roster and, on success,
@@ -349,16 +355,19 @@ where
     // (ADR-0123), so the state is answerable with `curl` and not only by a browser reading response
     // headers — and so the app has it on the one call it makes before drawing anything.
     let lease_standing = deps.edge.lease().token();
+    let sign_in_ready = deps.edge.session().staff.sign_in_ready();
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
             employee_id: Some(employee_id.to_string()),
             lease_standing,
+            sign_in_ready,
         },
         None => SessionState {
             signed_in: false,
             employee_id: None,
             lease_standing,
+            sign_in_ready,
         },
     };
     Json(state).into_response()

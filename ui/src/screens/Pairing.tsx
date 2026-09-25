@@ -1,10 +1,24 @@
 import { Show, createSignal } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
+
+// What a refused code tells the operator. The edge answers `403` for a code that is wrong, spent or
+// expired, alike on purpose (ADR-0030), and `429` after too many wrong ones. Both used to reach the
+// screen as the edge's English sentence, with no word on where the next code comes from, and a
+// code is single-use: an operator sent back here with a spent one had no way forward.
+function pairingRefusal(caught: unknown): string {
+  if (caught instanceof ApiError && caught.status === 403) {
+    return t("pair.rejected");
+  }
+  if (caught instanceof ApiError && caught.status === 429) {
+    return t("pair.too_many");
+  }
+  return errorMessage(caught);
+}
 
 // Pairing a device: the operator reads a six-digit code off the edge and enters it here (or opens
 // the QR link, which lands here with the code pre-filled). Redeeming is single-use; an unknown or
@@ -29,7 +43,7 @@ export function Pairing() {
       // on sign-in, not the floor.
       navigate("/signin", { replace: true });
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(pairingRefusal(caught));
     }
   };
 

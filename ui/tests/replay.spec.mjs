@@ -434,6 +434,64 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
   }
 });
 
+// A pairing code is single-use and lives five minutes, so the one an operator is holding is often
+// spent: a second tablet given the same code, or a device sent back to pairing after it lost its
+// token. The screen used to show the edge's English sentence and nothing about where the next code
+// comes from, and the operator retyped the dead one. Asserted by text both languages carry, so
+// the test does not depend on which one the browser picks.
+test("a spent pairing code says where the next one comes from", async ({ page, browser }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+
+    const other = await browser.newPage();
+    try {
+      await other.goto(`${edge.baseURL}/pair?code=${edge.pairingCode}`);
+      await other.locator("#pair-submit").click();
+      const refusal = other.getByRole("alert");
+      await expect(refusal).toBeVisible();
+      await expect(
+        refusal,
+        "a refused code should say how to get a new one, not show the edge's own sentence",
+      ).toContainText("pairing-url.txt");
+      await expect(refusal).not.toContainText("unknown or expired");
+    } finally {
+      await other.close();
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store the console has not staffed yet: the device pairs, and every code it tries is refused as
+// a wrong one, because there is nobody to sign in as. The screen says so before anyone types.
+test("a store nobody can sign in to says so on the sign-in screen", async ({ page }) => {
+  const edge = await startEdge("unstaffed");
+  try {
+    const answered = page.waitForResponse((response) => response.url().endsWith("/api/session"));
+    await pair(page, edge);
+    expect((await (await answered).json()).sign_in_ready).toBe(false);
+    await expect(
+      page.locator("#signin-no-staff"),
+      "a store with no staff published showed a sign-in form that refuses every code, and no reason",
+    ).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a staffed store's sign-in screen carries no such notice", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    const answered = page.waitForResponse((response) => response.url().endsWith("/api/session"));
+    await pair(page, edge);
+    expect((await (await answered).json()).sign_in_ready).toBe(true);
+    await signIn(page, edge);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A device that was not running when the order was taken still learns what was chosen, and for whom.
 //
 // `GET /api/orders/live` exists for exactly this — its own doc calls it *"what a device has instead

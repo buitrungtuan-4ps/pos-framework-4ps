@@ -146,6 +146,10 @@ export interface SessionState {
   signed_in: boolean;
   employee_id?: string;
   lease_standing: LeaseStanding;
+  // Whether anyone can sign in on this box: the console has published at least one member of staff
+  // with a PIN. Absent from an edge too old to send it, which the sign-in screen reads as "ready",
+  // because a hint that the store has no staff must never be shown on a guess.
+  sign_in_ready?: boolean;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
