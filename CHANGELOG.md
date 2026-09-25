@@ -104,6 +104,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The kitchen marks a dish sold out, and brings it back.** *Mark sold out* in the kitchen board's
+  header opens a panel over the board: the dishes sold out now, each with *Bring back*, and every
+  dish that can be marked, which a search box narrows. The cook is usually the first to know
+  something has run out.
+  - It is the same mark a till makes, under the same permission, which a cook holds by default, so
+    every till greys the dish out at once.
+  - It is a panel rather than a control on each ticket, because a ticket is one whole-card tap that
+    bumps it.
+
+  Docs: `docs/ui-ux.md` §3 (what `/kds` does today), `docs/pos-spec.md` §3.
+
 - **Staff mark an item sold out at the till (86), and bring it back.** *Mark sold out* above the
   order screen's menu turns on a mode in which a tap on an item marks it sold out on every device
   instead of selling it; the same tap brings it back, and *Done* ends the mode.

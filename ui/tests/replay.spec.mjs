@@ -216,6 +216,9 @@ const PRECONDITIONS = {
   },
   "Order an item for a particular seat": seatTable,
   "Mark an item sold out on every till": seatTable,
+  "Mark a dish sold out from the kitchen board": async (page) => {
+    await navigateTo(page, "/kds");
+  },
   // The item that asks a question is deliberately *not* first on the grid — every other flow's
   // precondition taps the first item and wants a line rather than a conversation. So this one types
   // the name to bring it up, exactly as "Find an item by name" does, and typing is not a tap. Every
@@ -1139,6 +1142,47 @@ test("a modifier marked sold out cannot be chosen, and the dish still sells with
     await expect(page.locator('[data-outcome="line-modifiers"]').first()).not.toContainText(
       "Extra cheese",
     );
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The kitchen marks a dish sold out, every till stops selling it, and the kitchen brings it back.
+//
+// The cook is usually the first to know something has run out. The board's own panel makes the
+// same mark a till makes, so a till showing the menu greys the dish out without reloading, and the
+// panel's "sold out now" list is where the kitchen brings it back from.
+test("the kitchen marks a dish sold out, a till stops selling it, and the kitchen brings it back", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+    await till.locator("#menu-search").fill("iced");
+    const tea = till.locator('[data-step="onItem"]');
+    await expect(tea).toBeEnabled();
+
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+    await board.locator('[data-step="openSoldOut"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveCount(0);
+    await board.locator("#kds-sold-out-search").fill("iced");
+    await expect(board.locator('[data-step="markSoldOut"]')).toHaveCount(1);
+    await board.locator('[data-step="markSoldOut"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveText("Iced tea");
+    // Off the list of dishes to mark once it is marked.
+    await expect(board.locator('[data-step="markSoldOut"]')).toHaveCount(0);
+
+    // The till, without reloading.
+    await expect(tea).toBeDisabled();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    await board.locator('[data-step="bringBack"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveCount(0);
+    await expect(tea).toBeEnabled();
   } finally {
     await edge.stop();
   }

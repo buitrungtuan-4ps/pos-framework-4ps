@@ -81,6 +81,16 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "item-sold-out" },
   },
   {
+    task: "Mark a dish sold out from the kitchen board",
+    budget: 2,
+    note: "Two: open the panel, tap the dish. The cook is usually the first to know something has run out, and the board is where the cook is. A panel over the board rather than a control on each ticket, because a ticket is one whole-card tap that bumps it and a second target inside it would be hit by mistake in a rush.",
+    steps: [
+      { route: "/kds", action: "openSoldOut" },
+      { route: "/kds", action: "markSoldOut" },
+    ],
+    outcome: { route: "/kds", mark: "kds-sold-out" },
+  },
+  {
     task: "Find an item by name and add it",
     budget: 2,
     note: "One tap, and the typing before it is not one — the same accounting the shift float and the manager's PIN get. That is the whole claim: a menu too long for the grid costs the flow nothing extra to sell from. Declared separately from \"Add an item\" although it taps the same control and ends the same way, because the claim is different and the harness proves it differently: the precondition types the query **and asserts the grid narrowed to one button**, so a search that stopped filtering fails here while the plain add stays green. Put search behind a button and this goes red twice over — the box the precondition fills would be gone, and the flow would have grown the tap this says it does not need.",
