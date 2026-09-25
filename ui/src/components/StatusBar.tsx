@@ -194,7 +194,10 @@ export function StatusBar() {
         class="w-full flex-col items-stretch gap-1 tablet:flex tablet:w-auto tablet:flex-1 tablet:flex-row tablet:flex-wrap tablet:items-center tablet:gap-x-3"
         classList={{ hidden: !menuOpen(), flex: menuOpen() }}
       >
-        <nav class="flex flex-col gap-1 text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center">
+        <nav
+          aria-label={t("nav.menu")}
+          class="flex flex-col gap-1 text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center"
+        >
           <For each={NAV.filter((item) => item.needs === undefined || item.needs())}>
             {(item) => (
               <A
