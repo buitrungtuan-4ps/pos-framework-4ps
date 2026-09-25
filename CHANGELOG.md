@@ -35,6 +35,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A counter order on the kitchen board and the pass is called by the guest's number.** Both
+  screens headed a counter ticket with the last four characters of the order's internal id ("Counter
+  order …7K3Q"), which nobody at the counter could match to a guest holding a number. They now show
+  "No. 12". The number is read from the counter list for the counter orders on the board, kept only
+  for those, and asked for again at most every five seconds while one is missing. Docs:
+  `docs/ui-ux.md` §3 (what `/kds` does today).
 - **Screens the till review found broken.** Docs: `docs/ui-ux.md` §1 (principle 9), §2 (on-screen
   keyboard), §3.
   - **Guest orders** (`/guests`, QR orders held for staff). The screen's classes were defined

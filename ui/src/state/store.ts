@@ -3,7 +3,7 @@
 // device does appears on every other. Actions call the typed client and lean on the fan-out to
 // reconcile; a line the operator adds shows at once and is de-duplicated when its own event returns.
 
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
@@ -191,6 +191,11 @@ interface StoreShape {
   // Lines a station has marked prepared (`kitchen.ticket.bumped`). Folded from the fan-out, not held
   // per-screen, so every KDS agrees a ticket is done (#44).
   bumped: Record<string, boolean>;
+  // The number the guest was given for each counter order on a kitchen board or the pass, keyed by
+  // order id. Read from the counter list (`GET /api/orders/open`), the one read that carries it:
+  // the live orders do not. Kept only for orders with a ticket still on a board, so it is never
+  // larger than the service in progress.
+  queueNumbers: Record<string, number>;
   // The orders still owing money, table and counter alike: what the kitchen board works from. Read
   // at boot from `GET /api/orders/live`, grown by a line on a new order, and shrunk by a settle.
   //
@@ -260,6 +265,7 @@ const [state, setState] = createStore<StoreShape>({
   numberFormat: null,
   reasonCodes: [],
   bumped: {},
+  queueNumbers: {},
   liveOrders: {},
   billOrder: {},
   stations: [],
@@ -676,6 +682,47 @@ export function modifierNames(line: OrderLine): string[] {
   return line.modifierMenuItemIds.map(
     (id) => state.menu.find((item) => item.menu_item_id === id)?.display_name ?? id,
   );
+}
+
+// How long a board waits before asking the counter list again for a number it has not got. A
+// counter order is numbered when it is opened, so one read almost always answers; the wait only
+// stops an order that has no number from being asked about on every change to the board.
+const QUEUE_NUMBER_READ_MS = 5_000;
+let queueNumbersReadAt = 0;
+
+// The number the guest was given for a counter order, or undefined when the till has not read it,
+// or the order was never given one.
+export function queueNumberFor(orderId: string): number | undefined {
+  return state.queueNumbers[orderId];
+}
+
+// Reads the counter list for the numbers of the counter orders on a board, keeping only those.
+// A failed read keeps what the board had: it goes on showing the order's reference until the next
+// read answers.
+export async function refreshQueueNumbers(onBoard: readonly string[]): Promise<void> {
+  const now = Date.now();
+  if (now - queueNumbersReadAt < QUEUE_NUMBER_READ_MS) {
+    return;
+  }
+  queueNumbersReadAt = now;
+  try {
+    const counter = await api.openOrders();
+    const wanted = new Set(onBoard);
+    const next: Record<string, number> = {};
+    for (const [orderId, number] of Object.entries(state.queueNumbers)) {
+      if (wanted.has(orderId)) {
+        next[orderId] = number;
+      }
+    }
+    for (const order of counter) {
+      if (order.queue_number !== undefined && wanted.has(order.order_id)) {
+        next[order.order_id] = order.queue_number;
+      }
+    }
+    setState("queueNumbers", reconcile(next));
+  } catch {
+    // Kept as it was; see above.
+  }
 }
 
 // The floor label for a table id (the "3" of table 3), for the kitchen and expo tickets.

@@ -1320,6 +1320,33 @@ test("a manager voids a bill on a till with no keyboard, typing on the on-screen
   }
 });
 
+// A counter order on the kitchen board and the pass is called by the guest's number.
+//
+// Both screens labelled a counter ticket with the last four characters of the order's internal id
+// ("Counter order …7K3Q"), which nobody at the counter can match to a guest holding a number. The
+// number lives on the counter list, not on the live orders the boards are drawn from, so the boards
+// read it from there for the counter orders they show. The first walk-in of a fresh demo day is
+// number 1.
+test("a counter order on the kitchen board and the pass is called by the guest's number", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await addItem(page);
+    await sendOrder(page);
+
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-step="onBump"]').first()).toContainText("No. 1");
+    await navigateTo(page, "/expo");
+    await expect(page.getByText("No. 1", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter tip on a bill that is not a round number still settles.
 //
 // The table pay screen's float-division tip was fixed (the test above it here says how it failed);
