@@ -33,7 +33,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
 
+### Fixed
+
+- **A counter tip on a bill that is not a round number settles.** The counter screen computed its
+  tip keys as `(total * percent) / 100`, the float division the table pay screen had already been
+  fixed for. On a 43,450₫ bill the 5% key was 2,172.5₫, which the edge refuses as a money amount, so
+  the settle failed with the guest's money on the counter. The keys are now whole minor units,
+  snapped to the store's cash increment as the pay screen's are.
+
 ### Added
+
+- **The till takes any amount of cash handed over, and a QR transfer.** Found in the till review
+  against market restaurant POS systems.
+  - **Quick-cash keys cover bills above the largest note.** The keys used to be "every note at least
+    as large as the bill", which left a bill above Vietnam's 500,000₫ note with "Exact" alone. They
+    are now the smallest pile of each published note that covers the bill, up to four: a 655,600₫
+    bill offers 660,000, 700,000, 800,000 and 1,000,000.
+  - **Other amount** opens a keypad for the figure the guest handed over. The change shows as it is
+    typed; a short figure shows how much is missing and the take-cash button stays disabled.
+  - **QR transfer received** records a `PAYMENT_METHOD_QR` payment for the exact amount, on the table
+    pay screen and the counter. The cashier taps it once the transfer shows in the store's account:
+    nothing asks a bank yet, and the screen says so. A store whose accepted tenders leave QR out does
+    not see the button.
+  - Docs: `docs/ui-ux.md` §3 (cashier).
 
 - **The console's Fetch from the release button works after a deploy, with nothing added by
   hand** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 4). The button needs a

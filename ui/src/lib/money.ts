@@ -218,13 +218,41 @@ export function fallbackQuickCash(currencyCode: string): readonly number[] {
   return QUICK_CASH[currencyCode] ?? [];
 }
 
-// The quick-cash keys to draw: the store's denominations, largest-last, excluding anything below
-// `atLeast` (a note that cannot cover the bill is not a tender the cashier can take).
+// How many quick-cash keys the pad draws beside the exact amount. Four, so the exact key, the piles
+// and "other amount" fill three rows of the pad's two columns, which a phone shows without scrolling.
+const QUICK_CASH_KEYS = 4;
+
+// The quick-cash keys to draw: for each of the store's notes, the smallest pile of that note that
+// covers `atLeast`, ascending. A 305,250₫ bill offers 350,000₫ and 400,000₫, what a guest holding
+// 50,000₫ or 100,000₫ notes hands over, and not only the one note large enough on its own.
+//
+// It used to be "every note at least as large as the bill". That is the same answer while the bill
+// is smaller than the largest note, and no answer at all above it: Vietnam's largest note is
+// 500,000₫, so a family's 1,234,000₫ dinner offered the exact amount and nothing else, and a cashier
+// handed 1,300,000₫ could neither record it nor see the change.
+//
+// Only the piles of the largest notes are kept. A pile of small notes lands within a coin of the
+// exact amount, which the exact key already offers, and a pile equal to `atLeast` is that key again.
+// Integer arithmetic throughout (ADR-0028): the pile is counted with a remainder, not a division
+// rounded up.
 export function quickCashFor(
   denominations: readonly number[],
   atLeast: number,
 ): readonly number[] {
-  return denominations.filter((note) => note >= atLeast);
+  const piles = new Set<number>();
+  const largestFirst = denominations.filter((note) => note > 0).sort((a, b) => b - a);
+  for (const note of largestFirst) {
+    if (piles.size === QUICK_CASH_KEYS) {
+      break;
+    }
+    const whole = (atLeast - (atLeast % note)) / note;
+    const count = Math.max(1, atLeast % note === 0 ? whole : whole + 1);
+    const pile = count * note;
+    if (pile > atLeast) {
+      piles.add(pile);
+    }
+  }
+  return [...piles].sort((a, b) => a - b);
 }
 
 // Parse a whole-đồng figure a cashier typed into minor units. Digits only; anything else is `null`

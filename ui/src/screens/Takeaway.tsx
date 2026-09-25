@@ -3,11 +3,14 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
+import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
-import { money, quickCashFor } from "../lib/money";
+import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
   cashDenominations,
+  cashRoundingIncrement,
+  currencyExponent,
   formatAmount,
   settle,
   startWalkIn,
@@ -15,6 +18,15 @@ import {
   tipsEnabled,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+
+// The table pay screen's tip shares and its guard on the cash snap, repeated rather than shared: this
+// is their second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx` carries the
+// reasoning for both.
+const TIP_PERCENTS = [5, 10, 15] as const;
+
+function distinctAndSpendable(keys: readonly number[]): boolean {
+  return keys.every((amount, index) => amount > (index === 0 ? 0 : (keys[index - 1] ?? 0)));
+}
 
 // The counter screen: the takeaway orders waiting to be paid for, and the pad that charges one
 // (ADR-0093).
@@ -31,6 +43,9 @@ export function Takeaway() {
   const [orders, setOrders] = createSignal<CounterOrder[] | null>(null);
   const [chosen, setChosen] = createSignal<CounterOrder | null>(null);
   const [tender, setTender] = createSignal<number | null>(null);
+  // "Other amount", as on the table pay screen: the figure the guest handed over, typed on the pad.
+  const [typing, setTyping] = createSignal(false);
+  const [typedText, setTypedText] = createSignal("");
   const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
   const [error, setError] = createSignal<string | null>(null);
@@ -81,12 +96,35 @@ export function Takeaway() {
   const currency = () => chosen()?.total_due.currency_code ?? "";
   // As on the table pay screen: the tip comes out of the change, not out of the sale, so the figure
   // shown is the one the edge records (roadmap **B1.3**).
+  const typedTender = () => parseWhole(typedText(), currencyExponent());
+  const offered = () => (typing() ? typedTender() : tender());
   const change = () => {
-    const offered = tender();
+    const handed = offered();
     const owed = total() + tip();
-    return offered !== null && offered >= owed ? offered - owed : 0;
+    return handed !== null && handed >= owed ? handed - owed : 0;
   };
-  const tipKeys = () => [5, 10, 15].map((percent) => (total() * percent) / 100);
+  const shortBy = () => {
+    const typed = typing() ? typedTender() : null;
+    const owed = total() + tip();
+    return typed !== null && typed < owed ? owed - typed : null;
+  };
+  const typedTenderInvalid = () => typing() && (typedTender() === null || shortBy() !== null);
+  // Opens the pad. A figure already typed survives a quick key closing the pad and this opening it
+  // again, so a cashier who changes their mind twice does not type it twice.
+  const typeTender = () => setTyping(true);
+  // Whole minor units, snapped to the store's cash increment where that still leaves three amounts a
+  // cashier can tell apart — the table pay screen's keys. This line was `(total * percent) / 100`,
+  // the float division `Pay.tsx` had already been fixed for: on an odd total the 5% key was a
+  // fraction of a đồng, and the edge refused the settle with the guest's money on the counter.
+  const tipKeys = () => {
+    const exact = TIP_PERCENTS.map((percent) => percentOf(total(), percent));
+    const increment = cashRoundingIncrement();
+    if (increment === null) {
+      return exact;
+    }
+    const snapped = exact.map((amount) => roundToIncrement(amount, increment));
+    return distinctAndSpendable(snapped) ? snapped : exact;
+  };
   // The same quick-cash ladder the table pay screen offers, so a cashier's hands learn one pad —
   // and, since roadmap **E5**, keyed on this order's own currency rather than VND's three notes.
   // This was the fifth hardcoded-VND site: E5 named three, the audit found a fourth, and this is the
@@ -99,6 +137,8 @@ export function Takeaway() {
   const back = () => {
     setChosen(null);
     setTender(null);
+    setTyping(false);
+    setTypedText("");
     setDone(null);
     setError(null);
     void refresh();
@@ -111,6 +151,8 @@ export function Takeaway() {
     setError(null);
     setChosen(order);
     setTender(null);
+    setTyping(false);
+    setTypedText("");
     if (order.bill_id !== undefined) {
       return;
     }
@@ -137,11 +179,11 @@ export function Takeaway() {
   };
 
   const payCash = () => {
-    const offered = tender() ?? total() + tip();
+    const handed = offered() ?? total() + tip();
     void pay([
       {
         method: "PAYMENT_METHOD_CASH",
-        tendered: money(currency(), offered),
+        tendered: money(currency(), handed),
         applied_to_bill: money(currency(), total()),
         tip: money(currency(), tip()),
       },
@@ -152,6 +194,17 @@ export function Takeaway() {
     void pay([
       {
         method: "PAYMENT_METHOD_CARD",
+        tendered: money(currency(), total() + tip()),
+        applied_to_bill: money(currency(), total()),
+        tip: money(currency(), tip()),
+      },
+    ]);
+
+  // A transfer to the store's QR, recorded once the cashier has seen it arrive — see `Pay.tsx`.
+  const payQr = () =>
+    void pay([
+      {
+        method: "PAYMENT_METHOD_QR",
         tendered: money(currency(), total() + tip()),
         applied_to_bill: money(currency(), total()),
         tip: money(currency(), tip()),
@@ -299,9 +352,12 @@ export function Takeaway() {
                         <button
                           type="button"
                           class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
-                          classList={{ "border-accent": tender() === amount }}
+                          classList={{ "border-accent": !typing() && tender() === amount }}
                           data-step="setTender"
-                          onClick={() => setTender(amount)}
+                          onClick={() => {
+                            setTyping(false);
+                            setTender(amount);
+                          }}
                         >
                           {amount === total()
                             ? t("pay.exact")
@@ -309,7 +365,33 @@ export function Takeaway() {
                         </button>
                       )}
                     </For>
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface"
+                      classList={{ "border-accent": typing() }}
+                      aria-expanded={typing()}
+                      data-step="typeTender"
+                      onClick={() => typeTender()}
+                    >
+                      {t("pay.other_amount")}
+                    </button>
                   </div>
+                  <Show when={typing()}>
+                    <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
+                    <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
+                      {typedTender() === null
+                        ? "—"
+                        : formatAmount(money(currency(), typedTender() ?? 0))}
+                    </p>
+                    <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
+                    <Show when={shortBy()}>
+                      {(gap) => (
+                        <p class="mt-2 text-sm text-danger" role="status">
+                          {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
+                        </p>
+                      )}
+                    </Show>
+                  </Show>
                   <p class="mt-2 text-sm text-ink-muted">
                     {t("pay.change")}:{" "}
                     <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
@@ -320,7 +402,8 @@ export function Takeaway() {
                     <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
                       <button
                         type="button"
-                        class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink"
+                        class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
+                        disabled={typedTenderInvalid()}
                         data-step="payCash"
                         onClick={() => payCash()}
                       >
@@ -336,6 +419,17 @@ export function Takeaway() {
                       >
                         {t("pay.card")}
                       </button>
+                    </Show>
+                    <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface"
+                        data-step="payQr"
+                        onClick={() => payQr()}
+                      >
+                        {t("pay.qr")}
+                      </button>
+                      <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
                     </Show>
                   </div>
                 </>
