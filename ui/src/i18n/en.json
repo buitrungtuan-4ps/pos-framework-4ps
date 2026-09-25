@@ -100,6 +100,7 @@
   "expo.count": "{count, plural, one {# table on the pass} other {# tables on the pass}}",
   "expo.empty": "Nothing on the pass.",
   "expo.title": "Pass",
+  "floor.seated_for": "{minutes, plural, one {Seated # min} other {Seated # min}}",
   "floor.seats": "Seats {count, plural, one {# guest} other {# guests}}",
   "floor.title": "Floor",
   "kds.all_stations": "All stations",

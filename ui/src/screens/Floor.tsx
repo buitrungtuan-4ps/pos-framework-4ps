@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, onCleanup } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { PageHeader } from "../components/ui";
@@ -9,6 +9,7 @@ import {
   clean,
   floorAreas,
   seat,
+  seatedAt,
   tableState,
   tablesEnabled,
   type FloorArea,
@@ -66,9 +67,28 @@ const DOT: Record<string, string> = {
 //
 // Nothing here fails when the plan is thin: an area with no name loses its heading, a table with no
 // seat count shows no capacity, and a store with neither is exactly the screen that shipped before.
+// How long a table has been seated is worth showing only while somebody is sitting there — to be
+// served, or to pay. A table waiting to be cleaned has been left.
+const SEATED_STATES = new Set(["TABLE_STATE_OCCUPIED", "TABLE_STATE_AWAITING_PAYMENT"]);
+
 export function Floor() {
   const navigate = useNavigate();
   const [error, setError] = createSignal<string | null>(null);
+  // The floor's clock, for how long each table has been sitting. Every thirty seconds: the figure
+  // is in whole minutes, and one timer serves every card.
+  const [now, setNow] = createSignal(Date.now());
+  const clock = setInterval(() => setNow(Date.now()), 30_000);
+  onCleanup(() => clearInterval(clock));
+  // Whole minutes since the guests sat down, or null when nobody is sitting there. A device clock
+  // behind the edge's would read a fresh table as seated in the future; that is zero minutes.
+  const seatedMinutes = (tableId: string) => {
+    const since = seatedAt(tableId);
+    if (since === undefined || !SEATED_STATES.has(tableState(tableId))) {
+      return null;
+    }
+    const started = Date.parse(since);
+    return Number.isNaN(started) ? null : Math.max(0, Math.floor((now() - started) / 60_000));
+  };
 
   const onCard = async (tableId: string) => {
     setError(null);
@@ -126,6 +146,16 @@ export function Floor() {
             (`pos_proto::floor::FloorTable`), and printing "seats 0" would be a lie a host acts on. */}
         <Show when={table.seats > 0}>
           <span class="text-sm text-ink-muted">{t("floor.seats", { count: table.seats })}</span>
+        </Show>
+        {/* How long the guests have been sitting, which a host reads to know who is due a check and
+            who is about to leave. From when the order opened, as the edge recorded it, and from the
+            first whole minute: "seated 0 min" on a table sat down a moment ago says nothing. */}
+        <Show when={seatedMinutes(table.id)}>
+          {(minutes) => (
+            <span class="text-sm tabular-nums text-ink-muted" data-outcome="table-seated">
+              {t("floor.seated_for", { minutes: minutes() })}
+            </span>
+          )}
         </Show>
       </button>
     );

@@ -787,6 +787,99 @@ async fn a_split_table_is_read_part_by_part_on_the_composed_edge() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
+/// The floor says when each seated table's guests sat down, so a floor plan can show how long a
+/// table has been sitting — and a till that reloads shows the same figure as one that watched.
+///
+/// A table is seated before anything is ordered, and the live read lists orders with lines, so the
+/// time rides on the floor read beside the table's state. The table that is sitting has a time, the
+/// free one has none, and once the table has paid and been cleaned it has none again.
+#[tokio::test]
+async fn the_floor_says_when_each_seated_table_sat_down() {
+    use pos_proto::floor::{FloorArea, FloorPlan, FloorTable};
+    use pos_proto::ids::AreaId;
+
+    let seated = TableId::new(Ulid::from_u128(706));
+    let free = TableId::new(Ulid::from_u128(707));
+    let table = |table_id: TableId, label: &str| FloorTable {
+        table_id,
+        label: DisplayName::new(label),
+        seats: 4,
+        position: None,
+    };
+    let store = a_store_where(|session| {
+        session.with_floor(FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(1)),
+            name: DisplayName::new("Main hall"),
+            tables: vec![table(seated, "6"), table(free, "7")],
+        }))
+    })
+    .await;
+
+    let before = pos_edge::SystemClock.now();
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let after = pos_edge::SystemClock.now();
+
+    let floor = read(&store, "/api/floor").await;
+    let since: pos_proto::time::Timestamp = floor["seated_times"][seated.to_string()]
+        .as_str()
+        .expect("a seated table says when: {floor}")
+        .parse()
+        .expect("a timestamp");
+    assert!(
+        before.as_milliseconds_since_epoch() <= since.as_milliseconds_since_epoch()
+            && since.as_milliseconds_since_epoch() <= after.as_milliseconds_since_epoch(),
+        "sat down while it was being seated: {before} <= {since} <= {after}"
+    );
+    assert!(
+        floor["seated_times"][free.to_string()].is_null(),
+        "nobody is sitting at a free table: {floor}"
+    );
+
+    // Paid and cleaned: the table is free again, and has no time.
+    let (_, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert!(line["order_line_id"].is_string(), "{line}");
+    let (_, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let floor = read(&store, "/api/floor").await;
+    assert!(
+        floor["seated_times"][seated.to_string()].is_null(),
+        "a table that has paid is waiting to be cleaned, not sitting: {floor}"
+    );
+}
+
 /// One tap sends the whole order, and sending it twice is not an error.
 ///
 /// The operator's act is "send this order". It was one tap and one round trip per line, because the

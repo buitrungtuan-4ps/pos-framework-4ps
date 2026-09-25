@@ -100,6 +100,7 @@
   "expo.count": "{count, plural, other {# bàn ở khu ra món}}",
   "expo.empty": "Không có bàn ở khu ra món.",
   "expo.title": "Khu ra món",
+  "floor.seated_for": "{minutes, plural, other {Ngồi # phút}}",
   "floor.seats": "{count, plural, other {# chỗ}}",
   "floor.title": "Sơ đồ bàn",
   "kds.all_stations": "Tất cả bếp",
