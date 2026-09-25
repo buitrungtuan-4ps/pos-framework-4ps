@@ -230,6 +230,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Re-running the Windows installer prints a pairing code that works, and opens setup when the
+  store is up.** Found on the first re-install of a real shop PC. The pairing file survives a
+  service stop, so the installer's wait took the previous process's file for the new one: it printed
+  a code nothing could redeem, then opened `/setup` before the new process listened, and the page
+  failed until it was refreshed. The installer now deletes that file before the start, waits for the
+  service to reach `STOPPED` rather than sleeping two seconds (a start sent during a slow drain was
+  refused, silently), and opens `/setup` only once `/healthz` answers. The edge now writes the
+  pairing file only after it has bound its port, so a box that cannot bind writes no code at all. A
+  pairing URL the edge could only write as `/pair?code=…` is printed complete, with each of the PC's
+  addresses that has a default gateway. The installer also ends with a **setup summary**: one
+  `ok`/`note`/`WARN`/`FAIL` line each for the release answering and the store it serves, a port
+  another program holds, a store that never came up (with the last lines of its log), another
+  store's edge on the port, a refused start, a network Windows has classed as Public (where the
+  firewall rule does not apply), the cloud's reachability and the clock's skew from it, and a PC with
+  no LAN address. `dashboard/scripts/installer-behaviour.ps1` runs the installer against a fake
+  Windows for each case, and the installer gate runs it whenever `pwsh` is present. **Upgrade
+  note:** the one-file installer is `pos-edge install`, which carries the script inside the binary,
+  so the fix reaches a PC with the next edge release. The console's downloadable `.ps1` gets it with
+  the next cloud deploy.
+
 - **POS Station recognises the store PC it runs on.** It looked for the PC's own edge at
   `127.0.0.1:8080`, while the edge, every installer and the setup file bind `8787`. So on a store
   PC installed the default way the app never chose Station mode: it opened the connect page, and a

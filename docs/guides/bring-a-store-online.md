@@ -367,8 +367,11 @@ publish reaches a healthy store inside a minute.
 Open the store UI from a device on the same LAN. It needs the pairing URL, and on a store server there
 is no screen to read it off — so read it from the box:
 
-* **Windows** — `Get-Content C:\ProgramData\pos-edge\pairing-url.txt`. The Windows installer also
-  prints it before it exits.
+* **Windows** — the installer prints it before it exits, completed with the PC's LAN address, above
+  a summary of everything that can stop a till reaching the store (`deploy/edge/README.md`, *Read
+  the summary it ends with*). Later, read it with
+  `Get-Content C:\ProgramData\pos-edge\pairing-url.txt`: if it holds only `/pair?code=…`, put
+  `http://<the PC's IPv4 address, from ipconfig>:8787` in front.
 * **Linux** — `journalctl -u pos-edge | grep pair`.
 
 Either way it is `http://<ip>:8787/pair?code=NNNNNN` (or `https://<host>/pair?code=NNNNNN` on a store
