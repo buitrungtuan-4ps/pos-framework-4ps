@@ -343,18 +343,19 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     }
 
     let segments = ip.segments();
-    // IPv4-compatible IPv6 address (`::a.b.c.d`): first 96 bits are zero, last 32 bits are IPv4.
-    if segments[0] == 0
-        && segments[1] == 0
-        && segments[2] == 0
-        && segments[3] == 0
-        && segments[4] == 0
-        && segments[5] == 0
-    {
+    // 6over4 / IPv4-compatible interface identifier (`<prefix>:0:0:a.b.c.d`, RFC 2529).
+    if segments[4] == 0 && segments[5] == 0 {
         let [a, b, c, d] = ip.octets()[12..16] else {
             unreachable!()
         };
-        return classify_v4(Ipv4Addr::new(a, b, c, d));
+        let is_v4_compat_prefix =
+            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
+        if is_v4_compat_prefix || a != 0 {
+            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
+            if reason.is_some() {
+                return reason;
+            }
+        }
     }
 
     // SIIT IPv4-translated IPv6 address (`::ffff:0:a.b.c.d`, RFC 6145).
@@ -788,6 +789,21 @@ mod tests {
             Err(SsrfRejection::ForbiddenAddress(
                 ip("64:ff9b:1:0:1::127.0.0.1"),
                 ForbiddenReason::Loopback
+            ))
+        );
+        // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("2001:1234:5678:9abc::127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:1234:5678:9abc::127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2606:2800:220:1::169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2606:2800:220:1::169.254.169.254"),
+                ForbiddenReason::LinkLocal
             ))
         );
         // ISATAP smuggling cases (`::5efe:a.b.c.d` and with arbitrary prefixes).
