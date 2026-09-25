@@ -70,8 +70,25 @@ for call in 'cloud_toml_mint_key_if_absent table_token_secret' \
   grep -q "$call" "$WORK/reconcile.sh" || fail "extraction lost the call: $call"
 done
 bash -n "$WORK/reconcile.sh" || fail "the extracted region does not parse"
+
+# Step 2c, the [release_source] block, runs on the same helpers and is its own script.
+r_start="$(line_of '^# 2c\.')"
+r_end=$(( $(line_of '^# 3\. NATS') - 1 ))
+[ -n "$r_start" ] && [ "$r_end" -gt "$r_start" ] || {
+  echo "FAIL  could not locate step 2c ([release_source]) in bootstrap.sh" >&2
+  exit 1
+}
+{
+  echo 'set -euo pipefail'
+  echo 'SECRETS="$PWD/secrets"'
+  sed -n "${h_start},${h_end}p" "$BOOTSTRAP"
+  sed -n "${r_start},${r_end}p" "$BOOTSTRAP"
+  echo 'echo "done   bootstrap complete"'
+} > "$WORK/release.sh"
+grep -q '} | cloud_toml_append' "$WORK/release.sh" || fail "extraction lost step 2c's append"
+bash -n "$WORK/release.sh" || fail "the extracted step 2c does not parse"
 [ "$fails" = 0 ] || { echo "refusing to assert against a broken extraction" >&2; exit 1; }
-pass "extracted the helpers and the reconcile block from bootstrap.sh"
+pass "extracted the helpers, the reconcile block and step 2c from bootstrap.sh"
 
 # --------------------------------------------------------------------------------------------------
 # Scenarios. Each writes a fixture cloud.toml, runs the block, and checks status + output.
@@ -199,6 +216,156 @@ fi
 expect_completed
 expect_says "cannot tell whether internal_shared_secret is set"
 expect_silent_on "set    cloud.toml"
+
+# --------------------------------------------------------------------------------------------------
+# Step 2c. The deploy workflow hands bootstrap.sh a repository and the block is written once; after
+# that it belongs to the operator, who may have added a token. A second definition of the table is
+# a TOML error that pos_cloud refuses to start on, so "already there" must be read generously.
+# --------------------------------------------------------------------------------------------------
+release_scenario() {   # $1 = name, $2 = RELEASE_SOURCE_REPOSITORY; stdin = the fixture cloud.toml
+  name="$1"
+  rm -rf secrets && mkdir -p secrets
+  cat > secrets/cloud.toml
+  cp secrets/cloud.toml before.toml
+  set +e
+  out="$(RELEASE_SOURCE_REPOSITORY="$2" bash "$WORK/release.sh" 2>&1)"
+  rc=$?
+  set -e
+}
+expect_unchanged() {
+  if cmp -s before.toml secrets/cloud.toml; then pass "$name: cloud.toml untouched"
+  else fail "$name: cloud.toml changed"; diff before.toml secrets/cloud.toml | sed 's/^/      /' >&2
+  fi
+}
+# What was there stays byte for byte, and the block is one table at the end with the key directly
+# under its header, which is where the cloud reads release_source.repository.
+expect_release_block() {   # $1 = the repository the block names
+  if ! head -c "$(wc -c < before.toml)" secrets/cloud.toml | cmp -s - before.toml; then
+    fail "$name: the lines already in cloud.toml changed"; return
+  fi
+  if [ "$(grep '^\[' secrets/cloud.toml | tail -1)" = "[release_source]" ] &&
+     [ "$(tail -1 secrets/cloud.toml)" = "repository = \"$1\"" ] &&
+     [ "$(grep -c '^[^#]*release_source' secrets/cloud.toml)" = 1 ]; then
+    pass "$name: [release_source] names $1, once, as the last table"
+  else
+    fail "$name: the block is not what the cloud reads"; sed 's/^/      /' secrets/cloud.toml >&2
+  fi
+}
+
+release_scenario "R1 absent" "example-org/pos-fork" <<'TOML'
+bind = "0.0.0.0:8080"
+internal_shared_secret = "aaaa"
+
+[artifacts]
+bucket = "pos-artifacts"
+TOML
+expect_completed
+expect_says "set    cloud.toml [release_source] repository = example-org/pos-fork"
+expect_release_block "example-org/pos-fork"
+
+# A commented-out example is not a block.
+release_scenario "R2 only a commented example" "example-org/pos-fork" <<'TOML'
+bind = "0.0.0.0:8080"
+# [release_source]
+# repository = "your-org/your-fork"
+TOML
+expect_completed
+expect_release_block "example-org/pos-fork"
+
+# The operator's own block, with the token this script is never given: left exactly as it is.
+release_scenario "R3 present with a token" "example-org/pos-fork" <<'TOML'
+bind = "0.0.0.0:8080"
+
+[release_source]
+repository = "example-org/private-fork"
+token = "not-a-real-token"
+
+[artifacts]
+bucket = "pos-artifacts"
+TOML
+expect_completed
+expect_says "keep   release_source"
+expect_unchanged
+
+# The same table in another spelling: appending a header here would define it twice.
+release_scenario "R4 present as a dotted key" "example-org/pos-fork" <<'TOML'
+bind = "0.0.0.0:8080"
+release_source.repository = "example-org/pos-fork"
+TOML
+expect_completed
+expect_says "keep   release_source"
+expect_unchanged
+
+# A private repository with no variable set: the workflow passes nothing.
+release_scenario "R5 nothing passed" "" <<'TOML'
+bind = "0.0.0.0:8080"
+TOML
+expect_completed
+expect_silent_on "release_source"
+expect_unchanged
+
+# The value is written inside a TOML string, so anything but owner/name is refused.
+for bad in "a/b/c" 'a"b/c' $'a/b\nc' "owner/"; do
+  release_scenario "R6 not owner/name ($(printf '%q' "$bad"))" "$bad" <<'TOML'
+bind = "0.0.0.0:8080"
+TOML
+  expect_completed
+  expect_says "is not owner/name"
+  expect_unchanged
+done
+
+# The file cannot be read: that is a warning and never an append. Same setup as F.
+rm -rf secrets && mkdir -p secrets
+printf 'bind = "0.0.0.0:8080"\n' > secrets/cloud.toml
+name="R7 unreadable cloud.toml"
+if [ "$(id -u)" = 0 ]; then
+  chmod 600 secrets/cloud.toml && chown 10001:10001 secrets/cloud.toml
+  set +e
+  out="$(setpriv --reuid=10002 --regid=10002 --clear-groups \
+           env PATH="$WORK/stub:$PATH" RELEASE_SOURCE_REPOSITORY=example-org/pos-fork \
+           bash "$WORK/release.sh" 2>&1)"
+  rc=$?
+  set -e
+else
+  chmod 000 secrets/cloud.toml
+  set +e
+  out="$(env PATH="$WORK/stub:$PATH" RELEASE_SOURCE_REPOSITORY=example-org/pos-fork \
+           bash "$WORK/release.sh" 2>&1)"
+  rc=$?
+  set -e
+  chmod 600 secrets/cloud.toml
+fi
+expect_completed
+expect_says "could not read"
+expect_silent_on "set    cloud.toml"
+if grep -q release_source secrets/cloud.toml; then fail "$name: wrote the block anyway"; else pass "$name: wrote nothing"; fi
+
+# Readable but not writable: the append fails inside an `&&` list, which `set -e` must not turn
+# into the end of the deploy.
+rm -rf secrets && mkdir -p secrets
+printf 'bind = "0.0.0.0:8080"\n' > secrets/cloud.toml
+name="R8 read-only cloud.toml"
+if [ "$(id -u)" = 0 ]; then
+  chmod 644 secrets/cloud.toml && chown 10001:10001 secrets/cloud.toml
+  set +e
+  out="$(setpriv --reuid=10002 --regid=10002 --clear-groups \
+           env PATH="$WORK/stub:$PATH" RELEASE_SOURCE_REPOSITORY=example-org/pos-fork \
+           bash "$WORK/release.sh" 2>&1)"
+  rc=$?
+  set -e
+else
+  chmod 444 secrets/cloud.toml
+  set +e
+  out="$(env PATH="$WORK/stub:$PATH" RELEASE_SOURCE_REPOSITORY=example-org/pos-fork \
+           bash "$WORK/release.sh" 2>&1)"
+  rc=$?
+  set -e
+  chmod 600 secrets/cloud.toml
+fi
+expect_completed
+expect_says "could not write"
+expect_silent_on "set    cloud.toml"
+if grep -q release_source secrets/cloud.toml; then fail "$name: wrote the block anyway"; else pass "$name: wrote nothing"; fi
 
 # --------------------------------------------------------------------------------------------------
 # The static rule the fifth blocker earned: read a helper's status through a captured variable, not
