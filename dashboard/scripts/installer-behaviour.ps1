@@ -30,7 +30,19 @@ New-Item -ItemType Directory -Path $work | Out-Null
 $installer = Join-Path $work 'install.ps1'
 [System.IO.File]::WriteAllText($installer, $body, (New-Object System.Text.UTF8Encoding $true))
 $binary = Join-Path $work 'pos-edge.exe'
-Set-Content -LiteralPath $binary -Value 'not a real binary'
+# The binary the installer carries, which it runs as `pos-edge.exe promote` from its rescue copy when a
+# re-run finds an older release. FAKE_PROMOTE says how that goes: 'ok' commits as the edge would,
+# leaving the unconfirmed marker the fake SCM reads; 'self-test' refuses as the edge does.
+[System.IO.File]::WriteAllText($binary, @'
+#!/bin/sh
+root=$(dirname "$POS_EDGE_CONFIG")
+echo "promote $*" >> "$root/promote-calls"
+case "$FAKE_PROMOTE" in
+  ok) echo 0 > "$root/bin/unconfirmed"; echo "installed in place of the previous release"; exit 0 ;;
+  *) echo 'Error: Install("pos-edge 0.14.1 failed its self-test on this PC, so the release already installed was kept; run pos-edge.exe --self-test to see why")' >&2; exit 1 ;;
+esac
+'@)
+& chmod +x $binary
 
 $store = '01M2MQ2BH6PKH6W4SEN2YVP9VT'
 $script:failures = 0
@@ -51,9 +63,14 @@ function global:sc.exe {
             # the port only on the installer's first wait (see Start-Sleep). An edge that wrote it here
             # would hide the race a real re-install hits.
             $global:scene.Started = $true
+            # A promote that committed left the marker: the service now starts the carried release.
+            if (Test-Path -LiteralPath (Join-Path (Split-Path $global:scene.PairingPath) 'bin/unconfirmed')) {
+                $global:scene.Running = $global:scene.Carried
+            }
             $global:LASTEXITCODE = 0
             return '[SC] StartService SUCCESS'
         }
+        'stop' { $global:scene.Stopped = $true; $global:LASTEXITCODE = 0; return '[SC] ControlService SUCCESS' }
         'query' { $global:LASTEXITCODE = 0; return 'SERVICE_NAME: pos-edge' }
         default { $global:LASTEXITCODE = 0; return "[SC] $verb SUCCESS" }
     }
@@ -107,6 +124,11 @@ function global:Get-NetIPConfiguration {
 
 function global:Invoke-RestMethod {
     param([string] $Uri, $TimeoutSec)
+    # The process a re-run finds, answering until the installer stops it.
+    if ($global:scene.AnswersBefore -and -not $global:scene.Stopped) {
+        $global:scene.Events.Add('probe')
+        return [pscustomobject]@{ status = 'ok'; version = $global:scene.Running; store_id = $global:scene.AnsweringStore }
+    }
     if (-not $global:scene.Listening -or -not $global:scene.Answers) { throw 'connection refused' }
     $global:scene.Events.Add('health')
     $health = [ordered]@{ status = 'ok'; store_id = $global:scene.AnsweringStore }
@@ -166,7 +188,7 @@ function Invoke-Scenario {
         Pairing = '/pair?code=222222'; PairingPath = (Join-Path $root 'pairing-url.txt')
         Answers = $true; AnsweringStore = $store; PortHolder = $null
         Network = 'Private'; Vpn = $null; Lan = @('192.168.1.20'); Cloud = 'ok'; ClockSkewMinutes = 0
-        Running = '0.14.0'; Carried = ''
+        Running = '0.14.0'; Carried = ''; AnswersBefore = $false; Stopped = $false; Promote = 'ok'
         Clock = [DateTime]::Now; Events = [System.Collections.Generic.List[string]]::new()
         Stale = $true; Kept = $true; Log = $null
     }
@@ -182,13 +204,18 @@ function Invoke-Scenario {
 
     # A script that stops half-way is the worst outcome for a technician, so a scenario that ends in
     # an exception is kept as text for the assertions to fail on, not left to end this run.
+    $env:FAKE_PROMOTE = $global:scene.Promote
     try {
         $output = & $installer -Binary $binary -StoreId $store -CloudUrl 'https://cloud.example.com' -Root $root -OpenSetup -CarriedVersion $global:scene.Carried 6>&1 3>&1 2>&1 |
             ForEach-Object { "$_" }
     } catch {
         $output = @("THE INSTALLER STOPPED: $($_.Exception.Message)")
     }
-    return [pscustomobject]@{ Name = $Name; Text = ($output -join "`n"); Events = @($global:scene.Events) }
+    return [pscustomobject]@{
+        Name = $Name; Text = ($output -join "`n"); Events = @($global:scene.Events)
+        Promoted = Test-Path -LiteralPath (Join-Path $root 'promote-calls')
+        Unconfirmed = Test-Path -LiteralPath (Join-Path $root 'bin/unconfirmed')
+    }
 }
 
 function Assert-Says($result, [string] $expected) {
@@ -266,9 +293,11 @@ $r = Invoke-Scenario 'F3 private LAN, public VPN' @{ Vpn = 'Public' }
 Assert-Silent $r 'WARN'
 
 # M. A re-run keeps the release that is running; the summary names both, and which way to go.
+# The old process was not answering when the installer started, so its release was not known and
+# nothing was put in place; it answers after the restart, so a second run can.
 $r = Invoke-Scenario 'M older release running' @{ Running = '0.11.0'; Carried = '0.14.0' }
-Assert-Says $r 'runs 0.11.0, which was kept; the 0.14.0 this installer carries'
-Assert-Says $r "To run 0.14.0 here, roll it out from the console's OTA screen."
+Assert-Says $r 'runs 0.11.0, which was kept because it was not answering when this installer started'
+Assert-Says $r 'Run this installer again to put 0.14.0 in place'
 $r = Invoke-Scenario 'M newer release running' @{ Running = '0.14.0'; Carried = '0.13.0' }
 Assert-Says $r 'runs 0.14.0, newer than the 0.13.0 this installer carries, so it was kept.'
 Assert-Silent $r 'To run 0.13.0'
@@ -277,6 +306,30 @@ Assert-Says $r 'the binary it runs was kept (version 0.14.0)'
 $r = Invoke-Scenario 'M running release unknown' @{ Running = $null; Carried = '0.14.0' }
 Assert-Says $r 'the binary it runs was kept (version unknown)'
 Assert-Silent $r 'newer than'
+
+# N. A re-run carrying a newer release than the one answering puts it in place, through the edge's own
+#    update steps, and never an older or equal one (ADR-0140 Amendment 1).
+$r = Invoke-Scenario 'N newer release carried' @{ AnswersBefore = $true; Running = '0.11.0'; Carried = '0.14.1' }
+Assert-Says $r 'ok    upgraded from 0.11.0 to 0.14.1'
+Assert-Says $r 'ok    pos-edge 0.14.1 is answering on port 8787'
+Assert-Silent $r 'which was kept'
+Assert-True $r (-not $r.Unconfirmed) 'ends the trial once the new release answers'
+$r = Invoke-Scenario 'N promote fails its self-test' @{ AnswersBefore = $true; Running = '0.11.0'; Carried = '0.14.1'; Promote = 'self-test' }
+Assert-Says $r 'WARN  could not put 0.14.1 in place of 0.11.0, so this PC still runs 0.11.0'
+Assert-Says $r 'failed its self-test on this PC'
+Assert-Says $r 'ok    pos-edge 0.11.0 is answering on port 8787'
+Assert-Says $r "To run 0.14.1 here, roll it out from the console's OTA screen."
+$r = Invoke-Scenario 'N older release carried' @{ AnswersBefore = $true; Running = '0.14.1'; Carried = '0.14.0' }
+Assert-True $r (-not $r.Promoted) 'never puts an older release in place'
+Assert-Says $r 'runs 0.14.1, newer than the 0.14.0 this installer carries, so it was kept.'
+$r = Invoke-Scenario 'N same release carried' @{ AnswersBefore = $true; Running = '0.14.1'; Carried = '0.14.1' }
+Assert-True $r (-not $r.Promoted) 'does not reinstall the release that is running'
+$r = Invoke-Scenario 'N promoted release never answers' @{ AnswersBefore = $true; Running = '0.11.0'; Carried = '0.14.1'; Answers = $false }
+Assert-Says $r 'FAIL  nothing answered on port 8787 within 30 seconds'
+Assert-Says $r 'is on trial: if it cannot start three times, the service goes back to 0.11.0 by itself'
+Assert-True $r $r.Unconfirmed 'leaves the trial running, so the old release comes back by itself'
+$r = Invoke-Scenario 'N another store answers first' @{ AnswersBefore = $true; Running = '0.11.0'; Carried = '0.14.1'; AnsweringStore = '01JBQ9ZK7X8N4M2P6R3T5V7W9Y' }
+Assert-True $r (-not $r.Promoted) 'takes no other store''s release for this one'
 
 # G. The cloud cannot be reached; then it answers with an error status, which still proves the network.
 $r = Invoke-Scenario 'G no cloud' @{ Cloud = 'down' }

@@ -230,6 +230,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A release that fails its self-test before an over-the-air install no longer moves the store
+  back a release.** `SystemdInstaller::rollback` reverted in both of its cases. After a failed
+  pre-commit self-test it pointed `current` at `previous`, which on a box that had updated before is
+  the release *before* the running one, so the next restart ran that. It also copied the backup over
+  the database the running store was still writing. On a box that had never updated it failed
+  outright and left the staged bytes behind for the next attempt. A rollback now discards bytes that
+  were never committed and touches nothing else; after a commit it reverts, as before.
+
 - **The Windows setup summary warns only about the network a till uses, and names both releases.**
   Found running the 0.14.0 installer on a real office PC. Every connection profile on Public got a
   `WARN`, so an OpenVPN adapter, which has no default gateway and which no till reaches the PC
@@ -382,6 +390,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   and a settled table's unbumped lines lingered.
 
 ### Changed
+
+- **Re-running the Windows one-file installer with a newer release puts that release in place**
+  ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md) Amendment 1). Found on the
+  owner's test PC, which ran 0.11.0 from an old install and stayed on it after the 0.14.0 installer
+  ran, so it kept a till defect 0.11.1 had fixed. The installer now asks the running store its
+  release before it stops the service. If its own is newer, it runs the new `pos-edge promote` from
+  its rescue copy: the edge's own update steps (database backup, stage, `--self-test`, commit), so the
+  old release stays as `bin\previous` and comes back by itself after three failed starts. The
+  summary says `ok upgraded from X to Y`, or why it could not. An older or equal release is never put
+  in place, and neither is one when the old process did not answer. **Upgrade note:** this arrives
+  with the installer of the next release. A 0.14.x installer still keeps an older binary, so move
+  such a PC with an over-the-air rollout, or stop the service, delete `bin\current` and run the
+  installer again.
 
 - **The console stops saying a store needs a key to sync.** Since
   [ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md) a machine
