@@ -136,7 +136,9 @@ pub fn from_arguments(arguments: &[String]) -> Result<InstallTarget, InstallInpu
 /// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)),
 /// so the script's `-AskSyncKey` prompt, which ADR-0141 added, is no longer passed. The switch stays on
 /// the script for anyone who still wants a store key. `-OpenSetup` makes it open the activation screen
-/// when the service is up, which is the next step and the only one left.
+/// when the service is up, which is the next step and the only one left. `-CarriedVersion` is this
+/// binary's release: a re-run keeps the binary the edge already runs, and the script's summary names
+/// both, so a technician sees that the PC still runs an older release and how to move it on.
 #[must_use]
 pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = [
@@ -160,6 +162,8 @@ pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget)
     // The script writes this into config.toml as given; `Url` adds a trailing slash to a bare
     // origin, which the edge's own URL handling does not want doubled.
     arguments.push(target.cloud_url.as_str().trim_end_matches('/').into());
+    arguments.push("-CarriedVersion".into());
+    arguments.push(crate::VERSION.into());
     arguments.push("-OpenSetup".into());
     arguments
 }
@@ -447,6 +451,7 @@ mod tests {
             Some("C:\\Downloads\\setup.exe")
         );
         assert!(arguments.iter().any(|argument| argument == "-OpenSetup"));
+        assert_eq!(after("-CarriedVersion").as_deref(), Some(crate::VERSION));
         assert!(
             !arguments.iter().any(|argument| argument == "-AskSyncKey"),
             "the activation code is the only secret a technician handles (ADR-0143)"
