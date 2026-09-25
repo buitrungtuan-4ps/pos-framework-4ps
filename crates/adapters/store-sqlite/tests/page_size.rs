@@ -61,6 +61,30 @@ fn envelope(n: u128) -> EventEnvelope<RawPayload> {
     }
 }
 
+/// Waits, bounded, until the store's writer thread has closed the database.
+///
+/// Dropping the last [`SqliteStore`] handle closes the writer's channel, and the thread closes its
+/// connection some time after. That close is what checkpoints the WAL into the file and deletes it.
+/// Measured before then, the file still has its events in the WAL. Rebuilt before then, it is
+/// refused as busy, which is what `rebuild_page_size` promises for a file something else has open.
+/// Both happened on a loaded CI runner.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a synchronous test waiting on another thread's file close; no async task is blocked"
+)]
+fn the_writer_closed(path: &Path) -> bool {
+    let mut wal = path.as_os_str().to_owned();
+    wal.push("-wal");
+    let wal = std::path::PathBuf::from(wal);
+    for _ in 0..200 {
+        if !wal.exists() {
+            return true;
+        }
+        std::thread::sleep(core::time::Duration::from_millis(50));
+    }
+    false
+}
+
 fn page_size(path: &Path) -> i64 {
     rusqlite::Connection::open(path)
         .expect("open")
@@ -88,6 +112,10 @@ fn an_old_store_is_rebuilt_at_8_kib_and_keeps_every_event() {
             }
         });
     }
+    assert!(
+        the_writer_closed(&path),
+        "the store's writer thread still had the file open ten seconds after its last handle dropped"
+    );
     assert_eq!(page_size(&path), 4096, "opening never changed it");
     assert!(needs_page_rebuild(&path).expect("read"));
     let before = std::fs::metadata(&path).expect("size").len();

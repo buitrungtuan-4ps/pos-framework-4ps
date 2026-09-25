@@ -230,6 +230,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`store-sqlite`'s page-size test no longer races the store's writer thread.** Dropping the last
+  `SqliteStore` handle closes the writer's channel. The thread closes its connection afterwards, and
+  that close is what checkpoints the WAL into the file. The test measured the file, and then rebuilt
+  it, straight after the drop. On a loaded runner the events were still in the WAL, and `test` went
+  red on a pull request that did not touch the crate (#482). Run 16 at a time on four cores it
+  failed 233 of 240 times. It now waits, bounded, until the writer has closed the file, and the same
+  load gives 0 of 240. `rebuild_page_size` itself is unchanged: the edge calls it before the store
+  opens, as its documentation requires.
+
 - **A refused pairing code, and a store nobody can sign in to, say what to do.** Found on the owner's
   test PC, where a device sent back to pairing retyped a single-use code that was already spent. The
   pairing screen showed the edge's English sentence (*unknown or expired pairing code*) and nothing
