@@ -656,6 +656,137 @@ async fn a_device_that_missed_the_events_reads_what_is_open() {
     );
 }
 
+/// `GET uri` on the composed router, asserting it answers.
+async fn read(store: &Store, uri: &str) -> Value {
+    let (status, body) = send(store.app.clone(), Some(&store.token), "GET", uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{uri} answers: {body}");
+    body
+}
+
+/// Seats `table`, sells it two things, opens its bill and splits it one line per part, all over the
+/// composed router. Returns the source bill, its two parts and the two lines, each in order.
+async fn a_table_split_two_ways(
+    store: &Store,
+    table: TableId,
+) -> (String, Vec<String>, Vec<String>) {
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut lines = Vec::new();
+    for _ in 0..2 {
+        let (status, line) = post(
+            store.app.clone(),
+            Some(&store.token),
+            &format!("/api/tables/{table}/lines"),
+            Some(a_line_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        lines.push(
+            line["order_line_id"]
+                .as_str()
+                .expect("a line id")
+                .to_owned(),
+        );
+    }
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let source = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let (status, split) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{source}/split"),
+        Some(json!({ "parts": [[lines[0]], [lines[1]]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{split}");
+    let parts = split["bill_ids"]
+        .as_array()
+        .expect("the parts")
+        .iter()
+        .map(|id| id.as_str().expect("a bill id").to_owned())
+        .collect();
+    (source, parts, lines)
+}
+
+/// A table whose bill is split is read **part by part** over the composed edge
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+///
+/// The split route has been mounted since the record was written; what a till could not do was read
+/// the result. The table's check answered with the newest part alone, so a table split two ways
+/// quoted half of what it owed, and the live read named that one part, so a till that reloaded
+/// mid-split had no id for the others. These are the reads a till settling a split table makes: each
+/// part by its own id, the table as a whole, and every part still open.
+#[tokio::test]
+async fn a_split_table_is_read_part_by_part_on_the_composed_edge() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(705));
+    let (source, parts, lines) = a_table_split_two_ways(&store, table).await;
+
+    // Each part, by its own id: what it owes and which line it covers.
+    let first = read(&store, &format!("/api/bills/{}/check", parts[0])).await;
+    assert_eq!(first["state"], "BILL_STATE_OPEN");
+    assert_eq!(first["order_line_ids"], json!([lines[0]]));
+    assert_eq!(first["total_due"]["amount_minor"], WITH_TAX);
+    assert_eq!(first["subtotal"]["amount_minor"], UNIT_PRICE);
+
+    // The source owes nothing more, and says so.
+    let split_source = read(&store, &format!("/api/bills/{source}/check")).await;
+    assert_eq!(split_source["state"], "BILL_STATE_SPLIT");
+
+    // The table owes both parts, and the live read names both.
+    let check = read(&store, &format!("/api/tables/{table}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX * 2);
+    let live = live_orders(&store).await;
+    assert_eq!(
+        live[0]["open_bill_ids"],
+        json!(parts),
+        "every open part: {live}"
+    );
+
+    // One guest pays; the table owes the other part, and that part is the one left open.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{}/settle", parts[0]),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let check = read(&store, &format!("/api/tables/{table}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX);
+    let live = live_orders(&store).await;
+    assert_eq!(live[0]["open_bill_ids"], json!([parts[1]]), "{live}");
+
+    // A path that is not a bill id is malformed, as it is on every other bill route.
+    let (status, _) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/bills/not-a-ulid/check",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
 /// One tap sends the whole order, and sending it twice is not an error.
 ///
 /// The operator's act is "send this order". It was one tap and one round trip per line, because the

@@ -452,6 +452,9 @@ where
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))
+        // What one bill owes and the lines it covers — the read a split needs, because once a
+        // table's bill is split each guest at the till is asking about their own part (ADR-0128).
+        .route("/api/bills/{id}/check", get(check::read_for_bill::<S>))
         // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
         // PIN with the request, which is the first thing in the tree to read the permission
         // registry's `pin: true`.

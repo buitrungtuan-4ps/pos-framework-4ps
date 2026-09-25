@@ -455,3 +455,110 @@ fn a_split_merged_back_and_settled_leaves_the_live_list() {
         assert_eq!(rebuilt.table_state(table()), TableState::NeedsCleaning);
     });
 }
+
+/// **A split table is read part by part, and as a whole.** Each part answers for itself by its own
+/// id, the table answers with what its open parts owe together, and the live read names every part
+/// still open.
+///
+/// Before these reads, the table's check answered with the newest open part alone, so a table split
+/// two ways quoted half of what it owed. And the live read named only that newest part, so a till
+/// that reloaded mid-split paid it, found the table still awaiting payment, and had no id to settle
+/// the rest with — asking for another bill is refused while one is open.
+#[test]
+fn a_split_table_is_read_part_by_part_and_as_a_whole() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        let (source, lines) = a_bill_of(&edge, 3).await;
+        let parts = edge
+            .split_bill(
+                server(),
+                source,
+                vec![vec![lines[0]], vec![lines[1], lines[2]]],
+            )
+            .await
+            .expect("splits");
+
+        let first = edge.bill_check(parts[0]).expect("the first part reads");
+        assert_eq!(first.state, pos_proto::BillState::Open);
+        assert_eq!(
+            first.order_line_ids,
+            vec![lines[0]],
+            "it covers its own line"
+        );
+        assert_eq!(first.totals.total_due, vnd(55_000));
+        let second = edge.bill_check(parts[1]).expect("the second part reads");
+        assert_eq!(second.order_line_ids, vec![lines[1], lines[2]]);
+        assert_eq!(second.totals.total_due, vnd(110_000));
+        assert_eq!(
+            edge.bill_check(source).expect("the source reads").state,
+            pos_proto::BillState::Split,
+            "and the source says it owes nothing more"
+        );
+
+        assert_eq!(
+            edge.check_totals(table())
+                .expect("the table reads")
+                .total_due,
+            vnd(165_000),
+            "the table owes both parts, not the newest one"
+        );
+        assert_eq!(
+            edge.live_orders()[0].open_bill_ids,
+            parts,
+            "both parts are open, oldest first"
+        );
+
+        edge.settle_bill(server(), parts[0], cash(55_000), None)
+            .await
+            .expect("the first part settles");
+        assert_eq!(
+            edge.check_totals(table())
+                .expect("the table reads")
+                .total_due,
+            vnd(110_000),
+            "and the table owes what is left"
+        );
+        assert_eq!(edge.live_orders()[0].open_bill_ids, vec![parts[1]]);
+
+        // A store that restarts answers the same.
+        let rebuilt = edge_over(store);
+        rebuilt.rebuild().await.expect("replays the log");
+        assert_eq!(
+            rebuilt
+                .check_totals(table())
+                .expect("the table reads")
+                .total_due,
+            vnd(110_000)
+        );
+        assert_eq!(rebuilt.live_orders()[0].open_bill_ids, vec![parts[1]]);
+        assert_eq!(
+            rebuilt.bill_check(parts[1]).expect("reads").order_line_ids,
+            vec![lines[1], lines[2]]
+        );
+    });
+}
+
+/// An ordinary bill is one open bill, and the table's check is that bill's — the sum of one part is
+/// the part, so nothing a table that never splits reads has changed.
+#[test]
+fn an_unsplit_table_reads_its_one_bill() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let (bill, lines) = a_bill_of(&edge, 2).await;
+        assert_eq!(edge.live_orders()[0].open_bill_ids, vec![bill]);
+        assert_eq!(
+            edge.check_totals(table()).expect("the table reads"),
+            edge.bill_totals(bill).expect("the bill reads"),
+        );
+        assert_eq!(
+            edge.bill_check(bill).expect("reads").order_line_ids,
+            lines,
+            "a bill covers every line the order had when it opened"
+        );
+        assert!(matches!(
+            edge.bill_check(BillId::new(Ulid::from_u128(999))),
+            Err(pos_edge::AppError::UnknownBill)
+        ));
+    });
+}

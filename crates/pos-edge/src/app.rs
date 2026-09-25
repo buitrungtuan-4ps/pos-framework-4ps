@@ -1313,8 +1313,28 @@ pub struct LiveOrderView {
     /// A bill already open on it, so a device that reloads on the payment screen settles **that**
     /// bill rather than asking for a second one the domain would refuse.
     pub bill_id: Option<BillId>,
+    /// Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part once
+    /// its bill has been split ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// `bill_id` names only the newest of them, so a device that reloaded mid-split learned one part
+    /// and none of the others. It paid that one, found the table still awaiting payment, and had no
+    /// id to settle the rest with — asking for a bill again is refused while one is open.
+    pub open_bill_ids: Vec<BillId>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
+}
+
+/// One bill as the till reads it back: where it has got to, the lines it covers, and what they come
+/// to ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillCheckView {
+    /// Open while it still owes. A settled, voided, split or merged bill owes nothing more, and its
+    /// totals are then what its lines came to rather than a sum to collect.
+    pub state: BillState,
+    /// The order lines it bills — how a till shows a guest what their part of a split table is for.
+    pub order_line_ids: Vec<OrderLineId>,
+    /// What those lines come to, less what has been taken off this bill.
+    pub totals: BillTotals,
 }
 
 /// What a cash shift looks like to a caller after a command.
@@ -1344,6 +1364,7 @@ struct LiveSnapshot {
     order_id: OrderId,
     table_id: Option<TableId>,
     bill_id: Option<BillId>,
+    open_bill_ids: Vec<BillId>,
     /// Each line with its id and whether a station has bumped it.
     lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
@@ -1996,6 +2017,23 @@ impl Projection {
     fn bill_for_order(&self, order_id: OrderId) -> Option<BillId> {
         self.latest_bill_in(order_id, BillState::Open)
             .or_else(|| self.latest_bill_in(order_id, BillState::Settled))
+    }
+
+    /// Every bill on an order that is still open, oldest first: one for an ordinary table, one per
+    /// unpaid part once its bill has been split (ADR-0128).
+    fn open_bills_for_order(&self, order_id: OrderId) -> Vec<BillId> {
+        self.order_bill_ids
+            .get(&order_id)
+            .map_or_else(Vec::new, |ids| {
+                ids.iter()
+                    .copied()
+                    .filter(|bill_id| {
+                        self.bills
+                            .get(bill_id)
+                            .is_some_and(|bill| bill.state == BillState::Open)
+                    })
+                    .collect()
+            })
     }
 
     /// Settles a bill, and moves its table on when nothing else on the order still owes.
@@ -3977,6 +4015,11 @@ impl<S: EventStore> Edge<S> {
     /// the guest and the figure the bill settles against are one calculation, not two that agree
     /// until a store publishes a second tax class. A table with no open order owes nothing.
     ///
+    /// A table whose bill has been split owes what its **open parts** owe together
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). It used to answer with the
+    /// newest part alone, so a table split two ways quoted half of what it owed until the other half
+    /// was paid.
+    ///
     /// # Errors
     ///
     /// [`AppError::Domain`] if a line's tax class has no configured rate — a configuration error the
@@ -3997,11 +4040,84 @@ impl<S: EventStore> Edge<S> {
         // Bound to a local for the reason the comment above gives, and which I proved by writing it
         // the other way first: `match self.lock_projection()...` holds the guard across the arm,
         // and both arms take it again. The test suite hung rather than failed.
-        let open_bill = self.lock_projection().bill_for_order(order_id);
-        match open_bill {
+        let open_bills = self.lock_projection().open_bills_for_order(order_id);
+        if !open_bills.is_empty() {
+            return self.totals_of_bills(&open_bills);
+        }
+        let settled_bill = self.lock_projection().bill_for_order(order_id);
+        match settled_bill {
             Some(bill_id) => self.bill_totals(bill_id),
             None => self.order_totals(order_id),
         }
+    }
+
+    /// What several bills owe together — the open parts of a split table — each assembled on its
+    /// own and then added up.
+    ///
+    /// Added rather than assembled again over all their lines at once, because each part computes
+    /// its own tax and its own rounding (ADR-0128 decision 4): what the table will be asked for is
+    /// the sum of what each guest is asked for. The tax lines are listed part by part rather than
+    /// merged per class, for the same reason — a merged line would be a figure no bill computed.
+    fn totals_of_bills(&self, bill_ids: &[BillId]) -> Result<BillTotals, AppError> {
+        let mut sum = Self::nothing_owed(self.session().currency);
+        for bill_id in bill_ids {
+            let part = self.bill_totals(*bill_id)?;
+            sum.subtotal = sum
+                .subtotal
+                .checked_add(part.subtotal)
+                .map_err(DomainError::from)?;
+            sum.discount_total = sum
+                .discount_total
+                .checked_add(part.discount_total)
+                .map_err(DomainError::from)?;
+            sum.comp_total = sum
+                .comp_total
+                .checked_add(part.comp_total)
+                .map_err(DomainError::from)?;
+            sum.service_charge = sum
+                .service_charge
+                .checked_add(part.service_charge)
+                .map_err(DomainError::from)?;
+            sum.tax_total = sum
+                .tax_total
+                .checked_add(part.tax_total)
+                .map_err(DomainError::from)?;
+            sum.rounding_adjustment = sum
+                .rounding_adjustment
+                .checked_add(part.rounding_adjustment)
+                .map_err(DomainError::from)?;
+            sum.total_due = sum
+                .total_due
+                .checked_add(part.total_due)
+                .map_err(DomainError::from)?;
+            sum.tax_lines.extend(part.tax_lines);
+        }
+        Ok(sum)
+    }
+
+    /// One bill read back: its state, the lines it covers and what they come to
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// The read a split needs. Once a table's bill is split, the table-keyed check answers for the
+    /// table as a whole, and each guest at the till is asking about **their** part — so the till
+    /// reads the part it is about to settle, by its id, from the same arithmetic the settle runs.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if a line's tax class has no
+    /// configured rate.
+    pub fn bill_check(&self, bill_id: BillId) -> Result<BillCheckView, AppError> {
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        let order_line_ids = self.covered_lines(&bill);
+        let totals = self.bill_totals(bill_id)?;
+        Ok(BillCheckView {
+            state: bill.state,
+            order_line_ids,
+            totals,
+        })
     }
 
     /// What a **bill** owes: its order's lines, less what has been taken off it.
@@ -4155,6 +4271,7 @@ impl<S: EventStore> Edge<S> {
                     order_id,
                     table_id: projection.table_for_order(order_id),
                     bill_id: projection.bill_for_order(order_id),
+                    open_bill_ids: projection.open_bills_for_order(order_id),
                     lines: projection
                         .identified_lines_for_order(order_id)
                         .into_iter()
@@ -4172,6 +4289,7 @@ impl<S: EventStore> Edge<S> {
                 order_id: order.order_id,
                 table_id: order.table_id,
                 bill_id: order.bill_id,
+                open_bill_ids: order.open_bill_ids,
                 lines: order
                     .lines
                     .into_iter()

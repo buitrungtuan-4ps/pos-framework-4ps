@@ -66,6 +66,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The edge answers for a table whose bill has been split.** Splitting has been on the edge since
+  ADR-0128, but a till could not read what came of it. Three reads now can:
+  - `GET /api/bills/{id}/check` is a new route. It reads one bill by its id: its state, the order lines
+    it covers, and the same five figures the table and order reads give. A till settling a split
+    table reads the part in front of it this way.
+  - `GET /api/tables/{id}/check` answers with what every open part owes together. It used to give
+    the newest part alone, so a table split two ways quoted half of what it owed.
+  - `GET /api/orders/live` carries `open_bill_ids`, every bill still open on the order, oldest
+    first. `bill_id` names only the newest, so a till that reloaded mid-split had no id for the
+    other parts. `bill_id` is unchanged.
+
+  All three are additive, and the route snapshot gains its one line. Docs: `docs/pos-spec.md` §5
+  (split).
+
 - **A manager approves a void or a discount on a till with no keyboard.** The fired-line void, the
   bill void and the discount each asked for the manager's badge and PIN in plain inputs. A fixed
   terminal with its on-screen keyboard switched off cannot fill those, so on a POS Station or
