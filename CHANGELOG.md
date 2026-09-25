@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Memoize unfired lines and course waiting counts on the order screen.**
+  `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
+
 ### Added
 
 - **A headless Linux box can keep its activation across a reboot**
