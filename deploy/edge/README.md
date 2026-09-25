@@ -178,7 +178,10 @@ the installer again.
 | Line | What it means | What to do |
 |---|---|---|
 | `ok pos-edge X is answering on port P for store S` | The store is up, on release X. | Nothing. |
-| `note this PC already had pos-edge and runs X…` | A re-run keeps the binary the edge runs, which may be one it installed over the air, so an older installer never downgrades a shop. The one-file installer names the release it carries beside the one running; its copy goes to `pos-edge.exe`, the rescue copy, only. | When the line says so, roll the newer release out from the console's OTA screen. |
+| `ok upgraded from X to Y` | The PC ran an older release than the one-file installer carries, so the installer put its own in place, through the edge's update steps (below). X stays beside it as `bin\previous`. | Nothing. |
+| `WARN could not put Y in place of X…` | The carried release failed its self-test on this PC, or a file could not be written. X still runs. | The edge's reason is on the line. `pos-edge.exe --self-test` in the state directory shows a self-test failure. The release can still reach the PC over the air. |
+| `note Y was put in place of X just now and is on trial…` | The new release has not answered yet. If it cannot start three times, the service puts X back by itself. | The log lines above say why Y did not start. Run the installer again after two minutes to see which release answers. |
+| `note this PC already had pos-edge and runs X…` | A re-run keeps the binary the edge runs when the installer's release is not newer, so an older installer never downgrades a shop that updated itself over the air. It is also kept when the old process was not answering as the installer started, because its release was unknown. The installer's copy then goes to `pos-edge.exe`, the rescue copy, only. | Do what the line says: run the installer again, or roll the newer release out from the console's OTA screen. |
 | `FAIL port P is already in use by NAME (PID n)` | Another program listens on the store's port, so the edge cannot. | Stop that program, or give the store another port. |
 | `FAIL nothing answered on port P within 30 seconds` | The edge did not come up. The installer prints the last 20 lines of `pos-edge.log` above the summary. | The first error in those lines is the cause. |
 | `FAIL port P is answered by pos-edge X for store T` | A different store's edge holds the port, typically a copy started by hand. | Stop it, then `sc.exe start pos-edge`. |
@@ -189,6 +192,17 @@ the installer again.
 | `FAIL cannot reach the cloud at URL` | Activation needs HTTPS to the cloud. | Check the connection, a proxy or a firewall. |
 | `WARN this PC's clock is N minutes away from the cloud's` | TLS and activation fail on a clock that is far off. | Settings → Time & language → **Sync now**. |
 | `WARN no network adapter with a default gateway is up` | Nothing on the shop LAN can reach the PC yet. | Connect it to the shop network, then read `pairing-url.txt` again. |
+
+**A re-run carrying a newer release puts it in place.** Before it stops the service, the one-file
+installer asks `/healthz` which release this store runs. If its own release is newer, it runs
+`pos-edge.exe promote` from its rescue copy once the service has stopped. That takes the steps an
+over-the-air install takes: back up the database, stage the binary beside `current`, run it as
+`--self-test`, and commit, which leaves the outgoing release as `bin\previous` and the new one on
+trial. The installer ends the trial when the new release answers `/healthz`. If it never does, the
+service puts the old one back after three failed starts, as it would after a bad update. A release
+that is older or equal is never put in place, and neither is one when the old process did not
+answer, or answered for another store. The console's downloadable script passes no release of its
+own, so it always keeps the binary.
 
 **The pairing URL it prints is one a device can open.** The edge writes only `/pair?code=NNNNNN` when
 it cannot name its own address (it listens on every interface and no `advertised_ip` is set), so the

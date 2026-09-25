@@ -152,6 +152,17 @@ const SELF_TEST_POLL: Duration = Duration::from_millis(100);
 /// needs no clock. `the_self_test_budget_is_the_timeout` keeps the three constants consistent.
 const SELF_TEST_POLLS: u32 = 300;
 
+/// What [`SystemdInstaller::promote`] did with the bytes it was given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Promotion {
+    /// They are `current` now, on trial exactly as an over-the-air install is. The outgoing version
+    /// is `previous`, and a new version that never boots healthy puts it back by itself.
+    Committed,
+    /// They failed `--self-test` on this box and were discarded. `current` and the database are
+    /// where they were.
+    FailedSelfTest,
+}
+
 /// The Linux install seam: a two-slot binary directory under the service's own `StateDirectory`, an
 /// atomic symlink swap, and a boot marker that makes a bad release heal itself
 /// ([ADR-0055](../../../docs/adr/0055-edge-ota-updater.md) Amendment 1).
@@ -296,6 +307,44 @@ impl SystemdInstaller {
                 "clearing {} failed: {error}",
                 marker.display()
             ))),
+        }
+    }
+
+    /// Puts `artifact` in place as this box's next version, for an installer run on the box itself
+    /// rather than an update fetched from the cloud: a re-run of the Windows installer that carries
+    /// a newer release than the one running
+    /// ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md) Amendment 1).
+    ///
+    /// Not a second way to swap a binary. It is the seam's own four steps in the seam's order:
+    /// backup, stage, self-test, then commit or roll back. So `previous`, the database copy and the
+    /// unconfirmed marker are exactly what an over-the-air install leaves, and a version that never
+    /// comes up reverts itself the same way. The caller stops the service first: nothing is
+    /// writing the database while it is copied, and the restart that follows is the caller's.
+    ///
+    /// # Errors
+    ///
+    /// [`InstallError`] if the box has no `current` to put a version beside, or if a file operation
+    /// failed. A self-test that fails is not an error. It is [`Promotion::FailedSelfTest`], with
+    /// the staged bytes discarded and `current` where it was.
+    pub fn promote(&self, artifact: &[u8]) -> Result<Promotion, InstallError> {
+        if !self.is_ready() {
+            return Err(InstallError::new(format!(
+                "{} does not exist, so there is no installed version to put this one beside",
+                self.bin.join(CURRENT).display()
+            )));
+        }
+        // A box whose store has never opened has nothing to back up, and nothing a revert could
+        // lose.
+        if self.database.exists() {
+            self.stage_backup()?;
+        }
+        self.apply(artifact)?;
+        if self.self_test()? {
+            self.commit()?;
+            Ok(Promotion::Committed)
+        } else {
+            self.rollback()?;
+            Ok(Promotion::FailedSelfTest)
         }
     }
 
@@ -480,13 +529,26 @@ impl UpdateInstaller for SystemdInstaller {
         })
     }
 
-    /// Points `current` back at `previous` and restores the pre-update database.
+    /// Undoes what the install did: discards bytes that were never committed, or points `current`
+    /// back at `previous` and restores the pre-update database.
     ///
-    /// Also clears the boot marker: whatever was on trial is no longer running, so counting further
-    /// boots against it would revert the binary that just came back.
+    /// Two callers mean two different things by it, and the staged file tells them apart. After a
+    /// failed pre-commit self-test `staged` is still there and `current` never moved, so the undo is
+    /// to delete it. A revert there would point `current` at the release *before* the running one,
+    /// and copy the backup over the database the running store is still writing to. After a commit
+    /// (the rollout's own `RollBack`, for a version that failed its trial) `commit` has renamed
+    /// `staged` into a slot, and the undo is the revert.
+    ///
+    /// The revert also clears the boot marker: whatever was on trial is no longer running, so
+    /// counting further boots against it would revert the binary that just came back.
     fn rollback(&self) -> Result<(), InstallError> {
+        let staged = self.bin.join(STAGED);
+        if staged.exists() {
+            return std::fs::remove_file(&staged).map_err(|error| {
+                InstallError::new(format!("discarding {} failed: {error}", staged.display()))
+            });
+        }
         self.revert_to_previous()?;
-        let _ignored = std::fs::remove_file(self.bin.join(STAGED));
         self.clear_boot_marker()
     }
 }
@@ -513,8 +575,8 @@ pub fn binary_directory(database: &Path) -> PathBuf {
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        BootStanding, MAX_UNCONFIRMED_BOOTS, SELF_TEST_POLL, SELF_TEST_POLLS, SELF_TEST_TIMEOUT,
-        SystemdInstaller, UpdateInstaller, binary_directory,
+        BootStanding, MAX_UNCONFIRMED_BOOTS, Promotion, SELF_TEST_POLL, SELF_TEST_POLLS,
+        SELF_TEST_TIMEOUT, SystemdInstaller, UpdateInstaller, binary_directory,
     };
     use std::path::{Path, PathBuf};
 
@@ -626,6 +688,113 @@ mod tests {
             !bin.join("unconfirmed").exists(),
             "nothing is on trial any more, so ordinary restarts must not count towards a revert"
         );
+    }
+
+    #[test]
+    fn a_failed_self_test_discards_the_staged_bytes_and_moves_nothing_else() {
+        // The pre-commit arm of rollback. This box has updated once before, so `previous` names an
+        // older release; reverting here would have pointed `current` at it, and copied the backup
+        // over the database the running store kept writing after the backup was taken.
+        let root = scratch("discard");
+        let installer = box_at(&root);
+        let bin = root.join("bin");
+        let database = root.join("store.sqlite");
+        write_program(&bin.join("slot-b"), 0);
+        std::os::unix::fs::symlink("slot-b", bin.join("previous")).expect("previous");
+
+        installer.stage_backup().expect("backup");
+        std::fs::write(&database, b"a sale taken during the self-test").expect("sale");
+        installer.apply(b"#!/bin/sh\nexit 9\n").expect("apply");
+        assert!(!installer.self_test().expect("run"));
+        installer.rollback().expect("rollback");
+
+        assert_eq!(
+            std::fs::read_link(bin.join("current")).expect("current"),
+            Path::new("slot-a"),
+            "current never moved, so there is nothing to move back"
+        );
+        assert_eq!(
+            std::fs::read_link(bin.join("previous")).expect("previous"),
+            Path::new("slot-b"),
+        );
+        assert_eq!(
+            std::fs::read(&database).expect("database"),
+            b"a sale taken during the self-test",
+            "the live database is never overwritten by a backup nothing needed"
+        );
+        assert!(
+            !bin.join("staged").exists(),
+            "and the rejected bytes are gone"
+        );
+    }
+
+    #[test]
+    fn a_rollback_with_nothing_staged_and_no_previous_is_an_error_not_a_guess() {
+        // A fresh layout has no `previous`. With nothing staged, the only rollback left is the
+        // revert, and there is nowhere to revert to.
+        let root = scratch("nothing-to-revert");
+        let installer = box_at(&root);
+        assert!(installer.rollback().is_err());
+    }
+
+    #[test]
+    fn promote_puts_the_bytes_in_the_spare_slot_on_trial() {
+        let root = scratch("promote");
+        let installer = box_at(&root);
+        let bin = root.join("bin");
+        let artifact = b"#!/bin/sh\nexit 0\n";
+
+        assert_eq!(
+            installer.promote(artifact).expect("promote"),
+            Promotion::Committed
+        );
+
+        assert_eq!(
+            std::fs::read_link(bin.join("current")).expect("current"),
+            Path::new("slot-b"),
+        );
+        assert_eq!(std::fs::read(bin.join("slot-b")).expect("slot-b"), artifact);
+        assert_eq!(
+            std::fs::read_link(bin.join("previous")).expect("previous"),
+            Path::new("slot-a"),
+            "the release it replaced is what a revert goes back to"
+        );
+        assert_eq!(
+            std::fs::read_to_string(bin.join("unconfirmed")).expect("marker"),
+            "0",
+            "on trial, exactly as an over-the-air install leaves it"
+        );
+        assert_eq!(
+            std::fs::read(root.join("store.sqlite.pre-update")).expect("backup"),
+            b"the store as it was",
+        );
+    }
+
+    #[test]
+    fn promote_discards_bytes_that_fail_their_self_test() {
+        let root = scratch("promote-fails");
+        let installer = box_at(&root);
+        let bin = root.join("bin");
+
+        assert_eq!(
+            installer.promote(b"#!/bin/sh\nexit 9\n").expect("promote"),
+            Promotion::FailedSelfTest
+        );
+
+        assert_eq!(
+            std::fs::read_link(bin.join("current")).expect("current"),
+            Path::new("slot-a"),
+        );
+        assert!(!bin.join("staged").exists());
+        assert!(!bin.join("unconfirmed").exists());
+        assert!(!bin.join("previous").exists());
+    }
+
+    #[test]
+    fn promote_refuses_a_box_with_no_installed_version() {
+        let root = scratch("promote-not-ready");
+        let installer = SystemdInstaller::new(root.join("bin"), root.join("store.sqlite"));
+        assert!(installer.promote(b"#!/bin/sh\nexit 0\n").is_err());
     }
 
     #[test]
