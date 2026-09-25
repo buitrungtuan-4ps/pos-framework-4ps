@@ -66,6 +66,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Staff mark an item sold out at the till (86), and bring it back.** *Mark sold out* above the
+  order screen's menu turns on a mode in which a tap on an item marks it sold out on every device
+  instead of selling it; the same tap brings it back, and *Done* ends the mode.
+  - A sold-out item greys out and says "Sold out" on every till at once, and a modifier the kitchen
+    ran out of greys out in the item's picker. A till that reloads still shows it.
+  - The edge refuses a line for a sold-out item, or for one choosing a sold-out modifier, whichever
+    way it arrives: from a table or the counter (`409 ITEM_NOT_SELLABLE`), or from a guest's QR order
+    or a marketplace (`failed_precondition`, as for an item the console withdrew).
+  - New edge routes `POST /api/menu/{id}/sold-out` and `POST /api/menu/{id}/restore`, under the
+    existing `sales.item.mark_unavailable` permission (cooks, servers, cashiers and up; no PIN).
+    `GET /api/menu` gains `sold_out`. Both additive.
+  - They write `inventory.item.sold_out` (`automatic: false`) and `inventory.item.restored`, which
+    the schema has always carried and nothing emitted until now. A second tap writes nothing, and
+    the mark lasts until somebody restores it: a restart keeps it, and the end of the day does not
+    clear it.
+  - Not yet: telling marketplaces, greying the item on the guest's QR page, and auto-86 from stock.
+
+  Docs: `docs/ui-ux.md` §3 (order), `docs/pos-spec.md` §3, `docs/production-readiness.md` O5.
+
 - **The floor says how long each table has been seated.** A seated or paying table's card reads
   "Seated 25 min" from its first whole minute; a host uses it to see who is due a check and who is
   about to leave.

@@ -56,12 +56,13 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use pos_core::capability::Capability;
+use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
 use pos_proto::menu::{MenuCourse, MenuEntry, MenuModifierGroup};
@@ -69,6 +70,7 @@ use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::{SalesChannel, WireEnum as _, locale::TaxRateTable, text::DisplayName};
 
 use crate::app::Edge;
+use crate::http::{bad_request, error_response, parse_ulid};
 
 /// The store's price book, as the in-store UI reads it.
 ///
@@ -187,6 +189,10 @@ pub(crate) struct MenuItemResponse {
     /// Whether the item can be sold right now. An item present but 86'd is shown and refused, not
     /// hidden, so staff can see why it cannot be ordered.
     available: bool,
+    /// Whether staff marked it sold out at this store, which `available` already accounts for.
+    /// Carried apart so a till can offer to restore it: an item the console published as
+    /// unavailable is not the till's to bring back.
+    sold_out: bool,
 }
 
 /// One course, as the till offers it.
@@ -225,7 +231,12 @@ pub(crate) struct ModifierGroupResponse {
 
 impl MenuItemResponse {
     /// Prices one catalogue entry for `channel` against the store's rate table.
-    fn from_entry(entry: &MenuEntry, rates: &TaxRateTable, channel: SalesChannel) -> Self {
+    fn from_entry(
+        entry: &MenuEntry,
+        rates: &TaxRateTable,
+        channel: SalesChannel,
+        sold_out: bool,
+    ) -> Self {
         let tax_rate = rates
             .rate_for(entry.tax_class_id, channel)
             .map(pos_proto::locale::TaxRate::as_ratio);
@@ -238,7 +249,8 @@ impl MenuItemResponse {
             // sellable however the catalogue flags it.
             modifier_group_ids: entry.modifier_group_ids.clone(),
             course_id: entry.course_id,
-            available: entry.available && tax_rate.is_some(),
+            available: entry.available && tax_rate.is_some() && !sold_out,
+            sold_out,
             tax_rate,
         }
     }
@@ -280,7 +292,14 @@ where
         .menu
         .items()
         .iter()
-        .map(|entry| MenuItemResponse::from_entry(entry, &session.tax_rates, channel))
+        .map(|entry| {
+            MenuItemResponse::from_entry(
+                entry,
+                &session.tax_rates,
+                channel,
+                edge.item_sold_out(entry.menu_item_id),
+            )
+        })
         .collect();
     (
         StatusCode::OK,
@@ -317,6 +336,63 @@ where
         .into_response()
 }
 
+/// What marking an item sold out, or restoring it, answers: the item, and whether it is now sold out.
+#[derive(Debug, Serialize)]
+pub(crate) struct SoldOutResponse {
+    menu_item_id: MenuItemId,
+    sold_out: bool,
+}
+
+/// `POST /api/menu/{id}/sold-out` — staff mark an item sold out at this store (86), so every device
+/// greys it out and the edge refuses a line for it until it is restored.
+///
+/// [`Edge::mark_item_sold_out`] carries the rules: `sales.item.mark_unavailable`, no PIN, and a
+/// second tap on an item already sold out writes nothing.
+pub(crate) async fn sold_out<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    set_sold_out(&edge, actor, &id, true).await
+}
+
+/// `POST /api/menu/{id}/restore` — staff bring an item they marked sold out back.
+pub(crate) async fn restore<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    set_sold_out(&edge, actor, &id, false).await
+}
+
+async fn set_sold_out<S>(edge: &Arc<Edge<S>>, actor: Actor, id: &str, sold_out: bool) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(menu_item_id) = parse_ulid(id).map(MenuItemId::new) else {
+        return bad_request("a menu item id is a ULID");
+    };
+    let outcome = if sold_out {
+        edge.mark_item_sold_out(actor, menu_item_id).await
+    } else {
+        edge.restore_item(actor, menu_item_id).await
+    };
+    match outcome {
+        Ok(()) => Json(SoldOutResponse {
+            menu_item_id,
+            sold_out,
+        })
+        .into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pos_proto::SalesChannel;
@@ -350,7 +426,8 @@ mod tests {
     fn an_items_rate_comes_from_the_stores_table_for_its_channel() {
         let rates =
             TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
-        let priced = MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn);
+        let priced =
+            MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, false);
         assert!(priced.available);
         assert!(
             priced.tax_rate.is_some(),
@@ -362,8 +439,12 @@ mod tests {
     fn an_unclassified_item_is_not_sellable_rather_than_taxed_at_zero() {
         // The rule this guards: a class with no row is a configuration error, and quoting the guest
         // zero tax on it is the kind of bug an audit finds. The till shows the item and refuses it.
-        let priced =
-            MenuItemResponse::from_entry(&entry(true), &TaxRateTable::new(), SalesChannel::DineIn);
+        let priced = MenuItemResponse::from_entry(
+            &entry(true),
+            &TaxRateTable::new(),
+            SalesChannel::DineIn,
+            false,
+        );
         assert!(priced.tax_rate.is_none());
         assert!(!priced.available);
     }
@@ -371,7 +452,8 @@ mod tests {
     #[test]
     fn a_rate_published_for_another_channel_does_not_price_this_one() {
         let rates = TaxRateTable::new().with(class(), SalesChannel::Qr, TaxRate::from_percent(10));
-        let priced = MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn);
+        let priced =
+            MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, false);
         assert!(priced.tax_rate.is_none());
         assert!(!priced.available);
     }
@@ -380,8 +462,22 @@ mod tests {
     fn an_86d_item_stays_unavailable_even_with_a_rate() {
         let rates =
             TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
-        let priced = MenuItemResponse::from_entry(&entry(false), &rates, SalesChannel::DineIn);
+        let priced =
+            MenuItemResponse::from_entry(&entry(false), &rates, SalesChannel::DineIn, false);
         assert!(priced.tax_rate.is_some(), "the rate is still reported");
         assert!(!priced.available, "an 86'd item is not sellable");
+        assert!(
+            !priced.sold_out,
+            "and it is the console's, not the till's to restore"
+        );
+    }
+
+    #[test]
+    fn an_item_staff_marked_sold_out_is_unavailable_and_says_why() {
+        let rates =
+            TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let priced = MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, true);
+        assert!(!priced.available, "a sold-out item is not sellable");
+        assert!(priced.sold_out, "and the till can offer to restore it");
     }
 }

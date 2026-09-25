@@ -202,6 +202,10 @@ export interface MenuItemResponse {
   // onto the line it adds, which is what gives a fire-by-course something to match.
   course_id?: string | null;
   available: boolean;
+  // Whether staff marked it sold out at this store (86), which `available` already accounts for.
+  // Apart so the till can offer to bring it back: an item the console withdrew is not the till's
+  // to restore. Absent from an edge older than the field.
+  sold_out?: boolean;
 }
 
 export interface MenuResponse {

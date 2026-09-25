@@ -401,6 +401,10 @@ where
         // The store's published price book, so the till prices from what the console published
         // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
         .route("/api/menu", get(menu::catalog::<S>))
+        // Staff mark an item sold out, and bring it back (86). The events have been in the schema
+        // since it was written; this is the first thing to emit them.
+        .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
+        .route("/api/menu/{id}/restore", post(menu::restore::<S>))
         // How the till groups and orders those items, from the `layout` node the same publish writes
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.

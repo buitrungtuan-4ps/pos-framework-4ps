@@ -619,6 +619,24 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // Staff marked an item sold out (86) — here or on any other till — so it greys out at once.
+    case "inventory.item.sold_out": {
+      const item = str(payload, "menu_item_id");
+      if (item !== null) {
+        setSoldOut(item, true);
+      }
+      break;
+    }
+    // And brought it back. Shown sellable at once, then the price book is read again: whether it
+    // can be sold also depends on what the console published, which this event does not say.
+    case "inventory.item.restored": {
+      const item = str(payload, "menu_item_id");
+      if (item !== null) {
+        setSoldOut(item, false);
+        void loadMenu();
+      }
+      break;
+    }
     case "kitchen.ticket.bumped": {
       const ids = payload["order_line_ids"];
       if (Array.isArray(ids)) {
@@ -965,6 +983,24 @@ export async function seat(tableId: string): Promise<void> {
   );
 }
 
+// Marks an item sold out, or back, in the price book this device holds.
+function setSoldOut(menuItemId: string, soldOut: boolean): void {
+  const index = state.menu.findIndex((item) => item.menu_item_id === menuItemId);
+  if (index >= 0) {
+    setState("menu", index, { sold_out: soldOut, available: !soldOut });
+  }
+}
+
+// Staff mark an item sold out at this store (86), or bring it back. The fan-out brings the same fact
+// to every other till; this device shows it at once.
+export async function setItemSoldOut(menuItemId: string, soldOut: boolean): Promise<void> {
+  await (soldOut ? api.markSoldOut(menuItemId) : api.restoreItem(menuItemId));
+  setSoldOut(menuItemId, soldOut);
+  if (!soldOut) {
+    void loadMenu();
+  }
+}
+
 // When this table's guests sat down, or undefined for a table nobody is sitting at.
 export function seatedAt(tableId: string): string | undefined {
   return state.seatedAt[tableId];
@@ -1220,7 +1256,10 @@ export function tenderAccepted(method: string): boolean {
 export async function loadMenu(): Promise<void> {
   try {
     const response = await api.menu();
-    setState("menu", response.items);
+    // Merged by id rather than replaced, so an item that did not change keeps its place and its
+    // button: an item brought back reads the price book again, and a till mid-tap in marking mode
+    // must not have every button on the screen swapped under the next tap.
+    setState("menu", reconcile(response.items, { key: "menu_item_id" }));
     setState("currency", response.currency);
     setState("tipsEnabled", response.tips_enabled);
     setState("seatsEnabled", response.seats_enabled);
