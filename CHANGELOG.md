@@ -47,6 +47,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **On a phone or a tablet, a dish's choices open on screen.** Below a terminal the menu is under the
+  bill, and the choices a dish needs (a pizza's size) opened in the bill's column, wherever the bill
+  ended. A long menu, or a screen on its side, put them out of sight, so a server tapped the pizza
+  and saw nothing happen.
+  - They open as a sheet from the bottom of the screen now, where the thumb that tapped is.
+  - The choices scroll inside the sheet, and **Add** and **Cancel** stay under them.
+  - The page behind is washed out, and a tap on it cancels.
+  - A refusal shows inside the sheet, beside **Add**.
+  - A terminal, which draws the bill beside the menu, is unchanged.
+
+  Docs: `docs/ui-ux.md` §3 (order).
+
 - **A counter order on the kitchen board and the pass is called by the guest's number.** Both
   screens headed a counter ticket with the last four characters of the order's internal id ("Counter
   order …7K3Q"), which nobody at the counter could match to a guest holding a number. They now show
