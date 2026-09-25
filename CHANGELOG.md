@@ -66,6 +66,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The kitchen board rings when new food arrives.** A toggle in the board's header turns the sound on
+  for that device, which remembers the choice; it is off until a cook turns it on.
+  - When food reaches the board after the board's own first read of what is open, it plays two short
+    notes. It never rings for what was already there when it came on.
+  - A browser will not start sound on an untouched page, so a reloaded board asks for one tap first.
+  - The chime is made in the page, not played from a file, so it works offline.
+  - A board filtered to one station rings only for that station's food.
+
+  Docs: `docs/ui-ux.md` §3 (what `/kds` does today).
+
 - **A table's bill splits by seat in one tap.** Where the store assigns seats, the pay screen offers
   **Split by seat (3 bills)**. It makes a bill per seat from the seat each dish was ordered for, with
   nothing to pick. The table's own dishes, ordered for no seat, become a bill of their own, because

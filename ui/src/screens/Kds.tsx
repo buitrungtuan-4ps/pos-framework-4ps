@@ -1,13 +1,15 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
+import { chime, chimeReady, unlockChime } from "../lib/chime";
 import { formatQuantity } from "../lib/money";
 import { useDarkTakeover } from "../lib/screen";
 import {
   bump,
   kitchenTickets,
+  loadLiveOrders,
   modifierNames,
   queueNumberFor,
   refreshQueueNumbers,
@@ -81,6 +83,29 @@ function sameKeys(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((key, index) => key === b[index]);
 }
 
+// Whether this board rings when new food arrives, kept per device across reloads: the board over the
+// grill may want it and the one beside the pass may not. Off until a cook turns it on, because a
+// browser will not play sound until somebody has touched the page anyway (`lib/chime.ts`). Wrapped
+// for the reason the language choice is: storage can be unavailable, and a chime is not worth
+// failing a board over.
+const SOUND = "pos.kds.sound";
+
+function soundChosen(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SOUND) === "on";
+  } catch {
+    return false;
+  }
+}
+
+function rememberSound(on: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(SOUND, on ? "on" : "off");
+  } catch {
+    // Kept for this page; the next reload starts with the sound off again.
+  }
+}
+
 export function Kds() {
   useDarkTakeover();
   const now = useNow();
@@ -127,13 +152,70 @@ export function Kds() {
   const shownLineCount = () =>
     shownKeys().reduce((count, key) => count + (byKey().get(key)?.lineIds.length ?? 0), 0);
 
+  // The chime: new food on this board rings it, when the cook has turned the sound on.
+  //
+  // "New" means a line that reached the board after the board's own first read of what is open.
+  // The lines already there when it came on — a reload mid-service, a tablet waking — are not news,
+  // and a board that rang for every ticket at start-up would teach a kitchen to ignore it. Kept as
+  // the set on the board now, replaced every time, so it is never larger than the board.
+  const [sound, setSound] = createSignal(soundChosen());
+  const [soundLive, setSoundLive] = createSignal(chimeReady());
+  const [armed, setArmed] = createSignal(false);
+  let onBoard = new Set<string>();
+  const shownLines = () => shownKeys().flatMap((key) => byKey().get(key)?.lineIds ?? []);
+  onMount(() => {
+    void loadLiveOrders().finally(() => {
+      onBoard = new Set(shownLines());
+      setArmed(true);
+    });
+  });
+  createEffect(() => {
+    const lines = shownLines();
+    if (armed() && sound() && lines.some((lineId) => !onBoard.has(lineId))) {
+      chime();
+    }
+    onBoard = new Set(lines);
+  });
+  // Any tap on the board wakes the sound once it is chosen, since a board that reloaded cannot
+  // start it by itself. The toggle is a tap too, and rings once so the cook hears it working.
+  const wake = () => {
+    if (sound() && !soundLive()) {
+      void unlockChime().then(setSoundLive);
+    }
+  };
+  const toggleSound = () => {
+    const next = !sound();
+    setSound(next);
+    rememberSound(next);
+    if (next) {
+      void unlockChime().then((live) => {
+        setSoundLive(live);
+        chime();
+      });
+    }
+  };
+
   const onBump = (ticket: KitchenTicket) => {
     void bump(ticket.orderId, ticket.lineIds, ticket.stationId);
   };
 
   return (
-    <section class="p-4">
-      <PageHeader title={t("kds.title")} size="xl" />
+    <section class="p-4" onPointerDown={() => wake()}>
+      <div class="flex items-start justify-between gap-3">
+        <PageHeader title={t("kds.title")} size="xl" />
+        <button
+          type="button"
+          class="min-h-touch shrink-0 rounded-token border border-line bg-surface px-3 text-sm"
+          aria-pressed={sound()}
+          data-outcome="kds-sound"
+          onClick={() => toggleSound()}
+        >
+          {sound() ? t("kds.sound_on") : t("kds.sound_off")}
+        </button>
+      </div>
+      <Show when={sound() && !soundLive()}>
+        <p class="mb-3 text-sm text-ink-muted">{t("kds.sound_tap")}</p>
+      </Show>
       <Show when={state.stations.length > 1}>
         <div class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label={t("kds.stations")}>
           <button
