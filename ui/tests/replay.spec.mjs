@@ -1274,6 +1274,52 @@ test("a guest's QR order shows its table by the floor's label, and the queue ref
   }
 });
 
+// A manager voids a bill on a till with no keyboard at all.
+//
+// The void, the fired-line void and the discount each asked for the manager's badge and PIN in
+// plain inputs, which a fixed terminal with its on-screen keyboard switched off cannot fill — so on a
+// POS Station or Terminal touch screen none of the three could be approved. The panels now share
+// `ApproverFields`, whose credential pad appears when a field takes focus and follows it: letters
+// and digits for the badge, digits for the PIN.
+//
+// Driven with no `fill` after sign-in, like the keyboardless sign-in test, because `fill` is exactly
+// what this device class lacks. The demo employee holds every permission, so they approve their own
+// void. This is also the first browser run of the bill void, which the declared-flow harness skips
+// because its credentials are typed mid-flow.
+test("a manager voids a bill on a till with no keyboard, typing on the on-screen pad", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="askVoidBill"]').click();
+
+    const pad = page.locator("#void-bill-approver-pad");
+    await expect(pad).toHaveCount(0);
+    await page.locator("#void-bill-approver-code").click();
+    for (const key of edge.staffCode.split("")) {
+      await pad.getByRole("button", { name: key, exact: true }).click();
+    }
+    await expect(page.locator("#void-bill-approver-code")).toHaveValue(edge.staffCode);
+
+    await page.locator("#void-bill-approver-pin").click();
+    await expect(pad.getByRole("button", { name: "A", exact: true })).toHaveCount(0);
+    for (const key of edge.staffPin.split("")) {
+      await pad.getByRole("button", { name: key, exact: true }).click();
+    }
+    await expect(page.locator("#void-bill-approver-pin")).toHaveValue(edge.staffPin);
+
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter tip on a bill that is not a round number still settles.
 //
 // The table pay screen's float-division tip was fixed (the test above it here says how it failed);

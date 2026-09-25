@@ -60,6 +60,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A manager approves a void or a discount on a till with no keyboard.** The fired-line void, the
+  bill void and the discount each asked for the manager's badge and PIN in plain inputs. A fixed
+  terminal with its on-screen keyboard switched off cannot fill those, so on a POS Station or
+  Terminal touch screen none of the three could be approved. The three copies are now one component,
+  `ApproverFields`. Its credential pad appears when either field takes focus and follows it: letters
+  and digits for the badge, digits alone for the PIN. A browser test voids a bill typing only on the
+  pad; it is also the first browser run of the bill void. Docs: `docs/ui-ux.md` §2 (on-screen
+  keyboard).
+
 - **A table's bill splits evenly between its guests, each paying their own way.** A row of guest
   counts, 2 to 6, on the pay screen divides what is owed into shares. Each guest pays their share by
   cash (with its own change), card or QR. The last share settles the bill: the shares are held on

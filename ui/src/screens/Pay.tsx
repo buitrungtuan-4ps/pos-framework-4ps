@@ -1,6 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
+import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
@@ -829,25 +830,15 @@ export function Pay() {
                   data-step="discountKeypad"
                 />
                 <p class="mt-2 text-sm text-ink-muted">{t("pay.discount_manager")}</p>
-                <label class="mt-2 block text-sm">
-                  {t("pay.approver_code")}
-                  <input
-                    type="text"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverCode()}
-                    onInput={(event) => setApproverCode(event.currentTarget.value)}
-                  />
-                </label>
-                <label class="mt-2 block text-sm">
-                  {t("pay.approver_pin")}
-                  <input
-                    type="password"
-                    inputmode="numeric"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverPin()}
-                    onInput={(event) => setApproverPin(event.currentTarget.value)}
-                  />
-                </label>
+                <ApproverFields
+                  id="discount-approver"
+                  code={approverCode()}
+                  pin={approverPin()}
+                  onCode={setApproverCode}
+                  onPin={setApproverPin}
+                  codeLabel={t("pay.approver_code")}
+                  pinLabel={t("pay.approver_pin")}
+                />
                 <p class="mt-3 text-sm text-ink-muted">{t("pay.discount_reason")}</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
                   <For each={reasonsFor(DISCOUNT)}>
@@ -891,25 +882,15 @@ export function Pay() {
               <div class="mt-6 rounded-token border border-line bg-surface p-3">
                 <h2 class="font-semibold">{t("pay.void_title")}</h2>
                 <p class="mt-1 text-sm text-ink-muted">{t("pay.void_manager")}</p>
-                <label class="mt-2 block text-sm">
-                  {t("pay.approver_code")}
-                  <input
-                    type="text"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverCode()}
-                    onInput={(event) => setApproverCode(event.currentTarget.value)}
-                  />
-                </label>
-                <label class="mt-2 block text-sm">
-                  {t("pay.approver_pin")}
-                  <input
-                    type="password"
-                    inputmode="numeric"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverPin()}
-                    onInput={(event) => setApproverPin(event.currentTarget.value)}
-                  />
-                </label>
+                <ApproverFields
+                  id="void-bill-approver"
+                  code={approverCode()}
+                  pin={approverPin()}
+                  onCode={setApproverCode}
+                  onPin={setApproverPin}
+                  codeLabel={t("pay.approver_code")}
+                  pinLabel={t("pay.approver_pin")}
+                />
                 <p class="mt-3 text-sm text-ink-muted">{t("pay.void_reason")}</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
                   <For each={reasonsFor(VOID_BILL)}>

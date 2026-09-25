@@ -1,5 +1,7 @@
 {
   "app.brand": "Pizza 4P's",
+  "approver.pad_code": "Bàn phím ảo để nhập mã thẻ quản lý",
+  "approver.pad_pin": "Bàn phím số ảo để nhập mã PIN quản lý",
   "claim.claimed": "Đã nhận máy. Máy này giờ là máy chủ cửa hàng và sẽ khởi động trong giây lát.",
   "claim.connecting": "Đang kết nối tới {cloud}…",
   "claim.expires": "Mã này còn hiệu lực {minutes} phút nữa. Khi hết hạn sẽ có mã mới.",
