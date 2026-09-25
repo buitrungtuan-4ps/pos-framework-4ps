@@ -109,10 +109,25 @@ async function aWalkInToCharge(page) {
   await expect(page.locator('[data-step="charge"]').first()).toBeVisible();
 }
 
+/**
+ * Waits for a line to be on the order. On a tablet the bill waits at the bottom of the screen until
+ * it is tapped (`docs/ui-ux.md` §1 principle 9), so the line is on the page without being on screen
+ * and the bar that counts it is what shows; everywhere else the line itself shows.
+ */
+async function expectLineAdded(page) {
+  await expect(page.locator('[data-outcome="line-added"]').first()).toBeAttached();
+  await expect(
+    page
+      .locator('[data-outcome="line-added"], [data-outcome="bill-bar"]')
+      .filter({ visible: true })
+      .first(),
+  ).toBeVisible();
+}
+
 /** Adds the first item on the order screen's menu. */
 async function addItem(page) {
   await page.locator('[data-step="onItem"]').first().click();
-  await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  await expectLineAdded(page);
 }
 
 /**
@@ -140,7 +155,7 @@ async function addByName(page, query) {
   await page.locator("#menu-search").fill(query);
   await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
   await page.locator('[data-step="onItem"]').click();
-  await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  await expectLineAdded(page);
   await page.locator("#menu-search").fill("");
 }
 
@@ -1138,9 +1153,11 @@ test("a modifier marked sold out cannot be chosen, and the dish still sells with
 // it asks whether they are on screen the moment the pizza is tapped. A phone on its side is the case
 // the demo's five-dish menu can show failing. Upright, that menu is too short to push the end of
 // the bill out of view, so the upright case guards the sheet itself.
+// A phone on its side is as wide as a tablet, so it gets the tablet's layout, and its bill waits
+// behind the bar at the bottom of the screen until it is tapped.
 for (const device of [
-  { name: "a phone", width: 390, height: 844 },
-  { name: "a phone on its side", width: 844, height: 390 },
+  { name: "a phone", width: 390, height: 844, billBar: false },
+  { name: "a phone on its side", width: 844, height: 390, billBar: true },
 ]) {
   test(`on ${device.name} a dish's choices open on screen, where the thumb is`, async ({ page }) => {
     const edge = await startEdge();
@@ -1163,12 +1180,97 @@ for (const device of [
       await page.locator('[data-step="chooseModifier"]').first().click();
       await confirm.click();
       await expect(confirm).toHaveCount(0);
+      if (device.billBar) {
+        await page.locator('[data-outcome="bill-bar"]').click();
+      }
       await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
     } finally {
       await edge.stop();
     }
   });
 }
+
+// On a tablet the menu is the screen and the bill slides up from the bottom of it.
+//
+// `docs/ui-ux.md` §1 principle 9 asks a tablet for "large item grid, bill slides up; usable
+// one-handed". The order screen drew a tablet like a phone instead: the bill first and the menu
+// under it, so a server scrolled past everything already ordered to reach the next dish. Now the
+// menu is what a tablet shows, and the bill waits in a bar at the bottom of the screen, saying what
+// is on it and what it comes to, with Send and Take payment one tap away; a tap on the bar slides
+// the whole bill up, and another closes it.
+test("on a tablet the menu fills the screen, and the bill slides up from the bottom", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    const bar = page.locator('[data-outcome="bill-bar"]');
+    await expect(page.locator("#menu-search")).toBeInViewport();
+    await expect(bar).toBeInViewport();
+    await expect(bar).toHaveAttribute("aria-expanded", "false");
+    await expect(bar).toContainText("nothing yet");
+
+    // A dish goes on from the menu with the bill closed: the bar counts it and prices the bill.
+    await addByName(page, "salad");
+    await expect(bar).toContainText("1 item");
+    await expect(bar).toContainText("97,900");
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeHidden();
+    await expect(page.locator('[data-step="fireOrder"]')).toBeInViewport();
+    await expect(page.locator('[data-step="takePayment"]')).toBeInViewport();
+
+    // A tap on the bar slides the bill up, and another closes it.
+    await bar.click();
+    await expect(bar).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="check-total"]')).toBeVisible();
+    await bar.click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeHidden();
+
+    // And the order goes to the kitchen from the closed bar.
+    await page.locator('[data-step="fireOrder"]').click();
+    await expect(page.locator('[data-step="fireOrder"]')).toBeDisabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a tablet a refusal is seen with the bill open.
+//
+// The till shows a refusal at the top of the screen, and on a short tablet screen the open bill
+// covers the top of it. So a tablet shows the refusal in the bill's panel, under the bar. The test
+// checks that nothing covers it (a trial tap at it would land on it), because a message under the
+// panel is still "in the viewport" and would pass a check that only asked that.
+test("on a tablet a refusal shows under the bill's bar, where the open bill does not cover it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (const query of ["salad", "iced", "water", "pho"]) {
+      await addByName(page, query);
+    }
+    await page.locator('[data-outcome="bill-bar"]').click();
+
+    // The store refuses the next change.
+    await page.route("**/api/lines/*/quantity", (route) =>
+      route.fulfill({ status: 503, contentType: "text/plain", body: "unavailable" }),
+    );
+    await page.locator('[data-step="setQuantity"]').first().click();
+
+    const refusal = page.getByRole("alert");
+    await expect(refusal).toBeVisible();
+    await refusal.click({ trial: true, timeout: 3000 });
+  } finally {
+    await edge.stop();
+  }
+});
 
 // A tip on a bill that is not a round number still settles.
 //
