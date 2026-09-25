@@ -37,6 +37,23 @@ const DISCOUNT = "REASON_ACTION_DISCOUNT";
 // makes by tapping the nearest of three.
 const TIP_PERCENTS = [5, 10, 15] as const;
 
+// The guest counts an even split offers. One row, like the tips: a table of seven is rare enough to
+// split six ways and settle the seventh share by hand, and a second row of buttons would push the
+// tenders below the fold on a phone for every bill, split or not.
+const SPLIT_WAYS = [2, 3, 4, 5, 6] as const;
+
+// The label for a payment method in a split's list of shares.
+function methodKey(method: string): MessageKey {
+  switch (method) {
+    case "PAYMENT_METHOD_CARD":
+      return "pay.method_card";
+    case "PAYMENT_METHOD_QR":
+      return "pay.method_qr";
+    default:
+      return "pay.method_cash";
+  }
+}
+
 // Whether a set of tip keys is still worth offering: every key positive, and every key larger than
 // the one before it.
 //
@@ -100,6 +117,16 @@ export function Pay() {
   // only read while the pad is open, so tapping a quick key again puts that key back in charge.
   const [typing, setTyping] = createSignal(false);
   const [typedText, setTypedText] = createSignal("");
+  // Splitting the bill evenly between guests who each pay their own share. `ways` is how many shares
+  // and `taken` the shares already paid. They are held here until the last share lands and then
+  // sent in one settle, because the edge settles a bill in one step: its payments must add up to the
+  // total exactly (`pos_core::billing::settle`), and a half-paid bill is not a state it has. Nothing
+  // survives a reload, so a screen that reloads mid-split asks for the shares again.
+  const [ways, setWays] = createSignal<number | null>(null);
+  const [taken, setTaken] = createSignal<PaymentRequest[]>([]);
+  // The change handed back on the settle that closed the bill, summed over its payments, for the
+  // settled panel: one payment's change, or what a split's cash shares were owed between them.
+  const [givenChange, setGivenChange] = createSignal(0);
   // The tip, in minor units. Zero rather than null: there is no difference between "no tip" and "a
   // tip of nothing", and `Payment.tip` is optional on the wire so zero is what the edge would have
   // defaulted to anyway.
@@ -152,6 +179,27 @@ export function Pay() {
   // The store's currency, taken from the edge's own figure rather than assumed — a store on any other
   // currency then renders and tenders correctly with no change here.
   const currency = () => check()?.total_due.currency_code ?? "";
+  // What a split has put against the bill so far, and what is left of it.
+  const takenApplied = () =>
+    taken().reduce((sum, payment) => sum + payment.applied_to_bill.amount_minor, 0);
+  const remaining = () => total() - takenApplied();
+  // What this payment is for: the whole bill, or in a split the next guest's share. A share is what
+  // is left divided by the shares still to pay, rounded up, and the last share is whatever remains,
+  // so the shares add up to the total exactly (the edge refuses anything else) and none is more than
+  // one minor unit off another. Counted with a remainder, not a division rounded up (ADR-0028).
+  const due = () => {
+    const n = ways();
+    if (n === null) {
+      return total();
+    }
+    const left = n - taken().length;
+    const rest = remaining();
+    if (left <= 1) {
+      return rest;
+    }
+    const whole = (rest - (rest % left)) / left;
+    return rest % left === 0 ? whole : whole + 1;
+  };
   // What the guest handed over: the typed figure while "other amount" is open, otherwise the key the
   // cashier tapped. Null is "nothing chosen", which the settle reads as the exact amount; a typed
   // figure the till cannot read is null too, and the take-cash button refuses it below.
@@ -166,7 +214,7 @@ export function Pay() {
   // subtraction missing on the edge, so a till told a cashier to hand back money the guest had left.
   const change = () => {
     const chosen = offered();
-    const owed = total() + tip();
+    const owed = due() + tip();
     return chosen !== null && chosen >= owed ? chosen - owed : 0;
   };
   // How much a typed figure falls short of the sale plus the tip, or null when it covers them (or
@@ -174,7 +222,7 @@ export function Pay() {
   // back to the guest to do the subtraction the till could have done.
   const shortBy = () => {
     const typed = typing() ? typedTender() : null;
-    const owed = total() + tip();
+    const owed = due() + tip();
     return typed !== null && typed < owed ? owed - typed : null;
   };
   // A typed tender the edge would refuse: unreadable, or less than is owed. The button stays
@@ -226,7 +274,7 @@ export function Pay() {
   // Keyed on the sale *plus* the tip: with a tip added, a note that only covers the sale is not
   // enough money, and offering it would hand the cashier a key that cannot settle.
   const quickCash = () => {
-    const owed = total() + tip();
+    const owed = due() + tip();
     return [owed, ...quickCashFor(cashDenominations(), owed)];
   };
 
@@ -253,37 +301,79 @@ export function Pay() {
     }
     setError(null);
     try {
-      setDone(await settle(id, payments, buyer()));
+      const settled = await settle(id, payments, buyer());
+      setGivenChange(
+        payments.reduce(
+          (sum, payment) =>
+            sum +
+            payment.tendered.amount_minor -
+            payment.applied_to_bill.amount_minor -
+            (payment.tip?.amount_minor ?? 0),
+          0,
+        ),
+      );
+      setDone(settled);
     } catch (caught) {
       setError(errorMessage(caught));
     }
   };
 
+  // Records one payment. Outside a split, or on a split's last share, that settles the bill with
+  // every payment taken; before the last share it keeps this one and clears the pad for the next
+  // guest.
+  const record = (payment: PaymentRequest) => {
+    const n = ways();
+    if (n !== null && taken().length + 1 < n) {
+      setTaken([...taken(), payment]);
+      setTender(null);
+      setTyping(false);
+      setTypedText("");
+      return;
+    }
+    void pay([...taken(), payment]);
+  };
+
+  // Starts an even split. The tip row goes with it and the tip is cleared: a tip is taken on a
+  // tender, and which guest's tender carries it is a question this screen does not ask yet.
+  const splitEvenly = (n: number) => {
+    setWays(n);
+    setTip(0);
+    setTender(null);
+    setTyping(false);
+    setTypedText("");
+  };
+
+  const cancelSplit = () => {
+    setWays(null);
+    setTaken([]);
+  };
+
+  // Gives a taken share back: that guest has not paid it after all. The shares still to pay are
+  // worked out again from what is left.
+  const untake = (index: number) =>
+    setTaken(taken().filter((_, position) => position !== index));
+
   const payCash = () => {
     // No note chosen means "exact", and exact now means the sale plus the tip — otherwise adding a
     // tip and tapping straight through would tender less than the guest owes.
-    const chosen = offered() ?? total() + tip();
-    void pay([
-      {
-        method: "PAYMENT_METHOD_CASH",
-        tendered: money(currency(), chosen),
-        applied_to_bill: money(currency(), total()),
-        tip: money(currency(), tip()),
-      },
-    ]);
+    const chosen = offered() ?? due() + tip();
+    record({
+      method: "PAYMENT_METHOD_CASH",
+      tendered: money(currency(), chosen),
+      applied_to_bill: money(currency(), due()),
+      tip: money(currency(), tip()),
+    });
   };
 
   const payCard = () =>
-    void pay([
-      {
-        method: "PAYMENT_METHOD_CARD",
-        // A card takes the sale plus whatever tip was added — there is no note to choose and no
-        // change to give, so the tendered amount is the whole of what the terminal will capture.
-        tendered: money(currency(), total() + tip()),
-        applied_to_bill: money(currency(), total()),
-        tip: money(currency(), tip()),
-      },
-    ]);
+    record({
+      method: "PAYMENT_METHOD_CARD",
+      // A card takes the sale plus whatever tip was added — there is no note to choose and no
+      // change to give, so the tendered amount is the whole of what the terminal will capture.
+      tendered: money(currency(), due() + tip()),
+      applied_to_bill: money(currency(), due()),
+      tip: money(currency(), tip()),
+    });
 
   // A bank transfer to the store's QR, which the cashier records once they have seen it arrive. The
   // exact amount, like a card: the guest scans for what the bill says and there is no change to give.
@@ -291,14 +381,12 @@ export function Pay() {
   // for it: no integration yet has a bank or gateway tell the edge a transfer landed (roadmap B10.2
   // is India's UPI equivalent).
   const payQr = () =>
-    void pay([
-      {
-        method: "PAYMENT_METHOD_QR",
-        tendered: money(currency(), total() + tip()),
-        applied_to_bill: money(currency(), total()),
-        tip: money(currency(), tip()),
-      },
-    ]);
+    record({
+      method: "PAYMENT_METHOD_QR",
+      tendered: money(currency(), due() + tip()),
+      applied_to_bill: money(currency(), due()),
+      tip: money(currency(), tip()),
+    });
 
   const readyToVoid = () => approverCode().trim() !== "" && approverPin() !== "";
 
@@ -459,7 +547,85 @@ export function Pay() {
               )}
             </Show>
 
-            <Show when={tipsEnabled()}>
+            {/*
+              Splitting the bill evenly (the till review's first gap). A row of guest counts rather
+              than a button that opens one, so a split costs one tap before the guests' own: a
+              screen that asked "split?" first would make every split a tap longer and every other
+              settle no shorter.
+            */}
+            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
+            <div class="grid grid-cols-5 gap-2">
+              <For each={SPLIT_WAYS}>
+                {(n) => (
+                  <button
+                    type="button"
+                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
+                    classList={{ "border-accent": ways() === n }}
+                    aria-pressed={ways() === n}
+                    aria-label={t("pay.split_ways", { count: n })}
+                    disabled={taken().length > 0}
+                    data-step="splitEvenly"
+                    onClick={() => splitEvenly(n)}
+                  >
+                    {n}
+                  </button>
+                )}
+              </For>
+            </div>
+            <Show when={ways()}>
+              {(n) => (
+                <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                  <p class="text-sm text-ink-muted">
+                    {t("pay.share_of", { part: taken().length + 1, count: n() })}
+                  </p>
+                  <p class="text-2xl font-semibold tabular-nums" data-outcome="share-due">
+                    {formatAmount(money(currency(), due()))}
+                  </p>
+                  <Show when={taken().length > 0}>
+                    <ul class="mt-2 flex list-none flex-col gap-1 p-0">
+                      <For each={taken()}>
+                        {(payment, index) => (
+                          <li
+                            class="flex items-center justify-between gap-2 text-sm"
+                            data-outcome="share-taken"
+                          >
+                            <span>
+                              {t("pay.share_taken", {
+                                part: index() + 1,
+                                method: t(methodKey(payment.method)),
+                              })}
+                            </span>
+                            <span class="flex items-center gap-2">
+                              <span class="tabular-nums">{formatAmount(payment.applied_to_bill)}</span>
+                              <button
+                                type="button"
+                                class="min-h-touch rounded-token border border-line px-3"
+                                onClick={() => untake(index())}
+                              >
+                                {t("pay.share_untake")}
+                              </button>
+                            </span>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                    <p class="mt-2 text-sm text-ink-muted">
+                      {t("pay.remaining")}:{" "}
+                      <span class="tabular-nums">{formatAmount(money(currency(), remaining()))}</span>
+                    </p>
+                  </Show>
+                  <button
+                    type="button"
+                    class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+                    onClick={() => cancelSplit()}
+                  >
+                    {t("pay.split_cancel")}
+                  </button>
+                </div>
+              )}
+            </Show>
+
+            <Show when={tipsEnabled() && ways() === null}>
               <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
               <div class="grid grid-cols-4 gap-2">
                 <button
@@ -535,7 +701,7 @@ export function Pay() {
                       setTender(amount);
                     }}
                   >
-                    {amount === total() ? t("pay.exact") : formatAmount(money(currency(), amount))}
+                    {amount === due() ? t("pay.exact") : formatAmount(money(currency(), amount))}
                   </button>
                 )}
               </For>
@@ -633,7 +799,7 @@ export function Pay() {
                 <button
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                  disabled={billId() === null || reasonsFor(DISCOUNT).length === 0}
+                  disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
                   data-step="askDiscount"
                   onClick={() => askDiscount()}
                 >
@@ -711,7 +877,7 @@ export function Pay() {
                 <button
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                  disabled={billId() === null || reasonsFor(VOID_BILL).length === 0}
+                  disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
                   data-step="askVoidBill"
                   onClick={() => askVoidBill()}
                 >
@@ -778,7 +944,8 @@ export function Pay() {
               {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
             </p>
             <p class="mt-1 text-ink-muted">
-              {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
+              {t("pay.change")}:{" "}
+              <span class="tabular-nums">{formatAmount(money(currency(), givenChange()))}</span>
             </p>
             <Show when={bill().print_receipt}>
               <p
