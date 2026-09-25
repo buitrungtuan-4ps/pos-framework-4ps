@@ -92,6 +92,10 @@ struct LiveOrderResponse {
     /// bill rather than asking for a second one the domain would refuse.
     #[serde(skip_serializing_if = "Option::is_none")]
     bill_id: Option<String>,
+    /// Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part
+    /// once its bill has been split (ADR-0128). `bill_id` names only the newest, so a device that
+    /// reloads mid-split finds the other parts here. Always present, empty when nothing is open.
+    open_bill_ids: Vec<String>,
     lines: Vec<LiveLineResponse>,
 }
 
@@ -111,6 +115,11 @@ where
             order_id: order.order_id.to_string(),
             table_id: order.table_id.map(|id| id.to_string()),
             bill_id: order.bill_id.map(|id| id.to_string()),
+            open_bill_ids: order
+                .open_bill_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             lines: order
                 .lines
                 .into_iter()
