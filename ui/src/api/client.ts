@@ -17,6 +17,7 @@ import type {
   BumpResponse,
   CheckResponse,
   CountShiftRequest,
+  BillCheckResponse,
   CounterOrder,
   DiscountRequest,
   DiscountResponse,
@@ -28,6 +29,7 @@ import type {
   LayoutResponse,
   LiveOrder,
   LocaleResponse,
+  MergeRequest,
   MenuResponse,
   MintedCode,
   OpenedOrder,
@@ -39,6 +41,8 @@ import type {
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
+  SplitRequest,
+  SplitResponse,
   SyncResponse,
   TableResponse,
   TestPrintResponse,
@@ -302,6 +306,18 @@ export const api = {
     request<BillResponse>("POST", `/api/orders/${orderId}/bill`),
   settleBill: (billId: string, settle: SettleRequest) =>
     request<BillResponse>("POST", `/api/bills/${billId}/settle`, settle),
+
+  // One bill by its id: what it owes, where it has got to and the lines it covers. What the pay
+  // screen reads once a table's bill is split, because the table's own check answers for every part.
+  billCheck: (billId: string) =>
+    request<BillCheckResponse>("GET", `/api/bills/${billId}/check`),
+
+  // Splitting a bill into parts, and folding parts back together (ADR-0128). Neither carries a PIN:
+  // both move amounts already captured, and nothing is created, forgiven or taken out of the store.
+  splitBill: (billId: string, split: SplitRequest) =>
+    request<SplitResponse>("POST", `/api/bills/${billId}/split`, split),
+  mergeBills: (billId: string, merge: MergeRequest) =>
+    request<{ bill_id: string }>("POST", `/api/bills/${billId}/merge`, merge),
 
   openShift: (open: OpenShiftRequest) =>
     request<ShiftResponse>("POST", "/api/shifts", open),

@@ -159,6 +159,21 @@ export const TASKS = [
     outcome: { route: "/table/:id/pay", mark: "settled" },
   },
   {
+    task: "Split one guest's items off a dine-in bill, then settle each part by QR",
+    budget: 7,
+    note: "Seven, and every one is the guests' or the split's own. Splitting takes three: open the list, pick what this guest is paying for, split it off. That is the rare-action ceiling, and picking is one tap per line the guest takes, so a guest with one dish is the shortest shape there is. Each guest then pays with their own tender, and the next bill is one tap from the receipt that closed the last, not a trip back through the order. The list sits behind a button rather than on every bill, because on a phone it would push the tenders below the fold for every settle that never splits. Splitting evenly is four for two guests because an even share needs no picking; a partition of lines cannot be shorter than naming the lines (ADR-0128).",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "splitByItem" },
+      { route: "/table/:id/pay", action: "pickLine" },
+      { route: "/table/:id/pay", action: "splitOff" },
+      { route: "/table/:id/pay", action: "payQr" },
+      { route: "/table/:id/pay", action: "nextBill" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
     task: "Settle a dine-in table in cash, typing the amount handed over",
     budget: 3,
     note: "For the pile no quick key names. \"Other amount\" takes the place of choosing a note, so the flow costs what the cash settle costs; the figure is typed on the pad, and typing is not a tap.",

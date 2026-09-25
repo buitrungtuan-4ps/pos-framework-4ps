@@ -103,6 +103,10 @@ export interface LiveOrder {
   // A bill already open on it: the payment screen settles this one rather than asking for a second,
   // which the edge refuses with a 409.
   bill_id?: string;
+  // Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part once
+  // its bill has been split (ADR-0128). `bill_id` names only the newest. Absent from an edge older
+  // than the field, which never had a way to show a till a split table anyway.
+  open_bill_ids?: string[];
   lines: LiveLine[];
 }
 
@@ -237,6 +241,31 @@ export interface CheckResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+}
+
+// One bill read back, from `GET /api/bills/{id}/check`: the five figures, where the bill has got to,
+// and the order lines it covers — which is how the pay screen shows a guest what their part of a split
+// table is for (ADR-0128).
+export interface BillCheckResponse extends CheckResponse {
+  // `BILL_STATE_OPEN` while it still owes.
+  state: string;
+  order_line_ids: string[];
+}
+
+// A split as the till asks for it: the order lines each new bill will cover. Every line the bill
+// covers goes in exactly one part, and the edge refuses anything else.
+export interface SplitRequest {
+  parts: string[][];
+}
+
+// The bills a split produced, in the order the parts were given.
+export interface SplitResponse {
+  bill_ids: string[];
+}
+
+// The bills a merge folds into the one the path names, which survives.
+export interface MergeRequest {
+  absorbed_bill_ids: string[];
 }
 
 // A discount as the till asks for it. The amount is money, never a percentage — the edge records an

@@ -132,13 +132,39 @@ async function addItemWithAChoice(page) {
   await page.locator("#menu-search").fill("");
 }
 
-/** Adds the demo store's starter (the salad), so a course has something waiting. */
-async function addStarter(page) {
-  await page.locator("#menu-search").fill("salad");
+/**
+ * Adds the one item a search for `query` leaves on the grid, and clears the search again. By name
+ * rather than by position, so a flow that needs two different lines gets two different lines.
+ */
+async function addByName(page, query) {
+  await page.locator("#menu-search").fill(query);
   await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
   await page.locator('[data-step="onItem"]').click();
   await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
   await page.locator("#menu-search").fill("");
+}
+
+/** Adds the demo store's starter (the salad), so a course has something waiting. */
+async function addStarter(page) {
+  await addByName(page, "salad");
+}
+
+/**
+ * A table with a salad (97,900₫ with its tax) and an iced tea (43,450₫), on the pay screen with the
+ * iced tea split off into a bill of its own — the guest who only had a drink.
+ */
+async function aTableWithTheDrinkSplitOff(page) {
+  await seatTable(page);
+  await addByName(page, "salad");
+  await addByName(page, "iced");
+  await page.locator('[data-step="takePayment"]').click();
+  await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+  await page.locator('[data-step="splitByItem"]').click();
+  await expect(page.locator('[data-step="splitOff"]')).toBeDisabled();
+  await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+  await page.locator('[data-step="splitOff"]').click();
+  await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+  await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
 }
 
 /** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
@@ -230,6 +256,12 @@ const PRECONDITIONS = {
   "Split a dine-in bill evenly between two guests, each paying by QR": async (page) => {
     await seatTable(page);
     await addItem(page);
+  },
+  // Two different things, so there are two lines to split between two guests.
+  "Split one guest's items off a dine-in bill, then settle each part by QR": async (page) => {
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
   },
   // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
   // skipped for a reason the declaration states.
@@ -1140,6 +1172,134 @@ test("a bill split three ways settles with each guest's own tender, and the cash
 
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await expect(page.getByText("31,467₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A table split by item charges each guest their own part, and waits for the last one (ADR-0128).
+//
+// The guest who only had a drink pays for the drink: the iced tea is split off, its part reads what
+// it is for and its own 43,450₫, and it settles by QR. The salad's part is still open, so the table
+// is still awaiting payment on the floor — it used to go to cleaning when the first guest paid, with
+// half the bill never collected. The way back to the rest is the ordinary one, the table and then
+// Take payment, which lands on the salad's part and its 97,900₫. Only once that settles does the
+// table want cleaning.
+test("a table split by item charges each guest their own part, and waits for the last", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (1 left)");
+
+    await page.getByRole("button", { name: "Back to floor" }).click();
+    const firstDot = page.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).toHaveClass(/bg-awaiting/);
+
+    await page.locator('[data-step="onCard"]').first().click();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Back to floor" }).click();
+    await expect(firstDot).toHaveClass(/bg-cleaning/);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A split table's food stays on the kitchen board until its last part is paid.
+//
+// The board draws the orders still owing money, and a settle took the order off it. With one bill per
+// table that was right; with a split table it took the salad off the board when the guest with the
+// drink paid, while the salad was still to be made. The order leaves the board with its last part.
+test("a split table's food stays on the kitchen board until its last part is paid", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendOrder(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="splitByItem"]').click();
+    await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+    await page.locator('[data-step="splitOff"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/kds");
+    await expect(page.getByText("Garden salad").first()).toBeVisible();
+
+    await navigateTo(page, "/");
+    await page.locator('[data-step="onCard"]').first().click();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await navigateTo(page, "/kds");
+    await expect(page.getByText("Garden salad")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A split made by mistake is put back together: a merge into the bill on screen, which then owes the
+// whole table again and settles as one.
+test("a split made by mistake is put back together", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await page.getByRole("button", { name: "Put the 2 bills back together" }).click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
+    await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A till that reloads mid-split still has every part to settle.
+//
+// The live read named one bill per order, the newest open one. A till that reloaded with both parts
+// still owing learned only the salad's; it could settle that and then had no id for the drink, and
+// asking for a bill again is refused while one is open — so the rest of the table could not be
+// charged from that till. Every open part is on the read now. The reload lands on the pay screen
+// itself, which reads what is open before it asks for anything, and offers the parts oldest first.
+test("a till that reloads mid-split still has every part to settle", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+    await expect(page.getByRole("button", { name: "Put the 2 bills back together" })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (1 left)");
+    await page.locator('[data-step="nextBill"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }
