@@ -117,6 +117,24 @@ describe("the files a replacement box needs", () => {
     expect(body).toContain("rm -f /etc/systemd/system/pos-edge.service.d/vault.conf");
   });
 
+  it("has the Windows installer drop the last run's pairing code and wait for the store", () => {
+    // A re-install printed the previous process's code, because the file survives a service stop,
+    // and opened /setup before the new process listened. scripts/installer-behaviour.ps1 runs the
+    // script against a fake Windows; this pins the order in the copy a technician downloads.
+    const body = named("install-pos-edge.ps1").render(VALUES);
+    const removal = body.indexOf("Remove-Item -LiteralPath $pairingPath");
+    const start = body.indexOf("$startOutput = (& sc.exe start $service");
+    expect(removal).toBeGreaterThan(-1);
+    expect(removal).toBeLessThan(start);
+    expect(body).toContain("WaitForStatus('Stopped'");
+    expect(body).not.toContain("Start-Sleep -Seconds 2");
+    // The summary compares what answers on the port with this store, and probes this cloud.
+    expect(body).toContain(`$expectedStore = '${VALUES.storeId}'`);
+    expect(body).toContain(`$cloudOrigin = '${VALUES.cloudUrl}'`);
+    expect(body).toContain("/healthz");
+    expect(body).toContain("pos-edge setup summary");
+  });
+
   it("carries the PowerShell byte-order mark out through the render", () => {
     // Windows PowerShell 5.1 reads a BOM-less script in the machine's ANSI code page, where the
     // store name above becomes mojibake and one of its bytes is U+201D — which the parser accepts

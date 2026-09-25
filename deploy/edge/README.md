@@ -168,6 +168,39 @@ the install continues: the service runs either way, and it is the port that need
 `POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
 variable — the next section says why.
 
+### Read the summary it ends with
+
+The installer ends with **`pos-edge setup summary`**: one line per thing that can leave a store
+unreachable, each `ok`, `note`, `WARN` or `FAIL` and each saying what to do. Nothing in it fails the
+install. The service is registered either way, and most of these are fixed on the PC, not by running
+the installer again.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `ok pos-edge X is answering on port P for store S` | The store is up, on release X. | Nothing. |
+| `note this PC already had pos-edge…` | A re-run keeps the binary the edge runs, which may be one it installed over the air, so an older installer never downgrades a shop. The installer's copy goes to `pos-edge.exe`, the rescue copy, only. | To run a newer release, roll it out from the console's OTA screen. |
+| `FAIL port P is already in use by NAME (PID n)` | Another program listens on the store's port, so the edge cannot. | Stop that program, or give the store another port. |
+| `FAIL nothing answered on port P within 30 seconds` | The edge did not come up. The installer prints the last 20 lines of `pos-edge.log` above the summary. | The first error in those lines is the cause. |
+| `FAIL port P is answered by pos-edge X for store T` | A different store's edge holds the port, typically a copy started by hand. | Stop it, then `sc.exe start pos-edge`. |
+| `FAIL sc.exe start pos-edge failed with code N` | The Service Control Manager refused the start. | The message after the code says why, for example 1058 when the service is disabled. |
+| `WARN the old pos-edge process did not stop within 60 seconds` | A re-run could not restart the service cleanly. | If it is not running afterwards: `sc.exe start pos-edge`. |
+| `WARN network 'N' is Public` | Windows puts a network it has not been told about on **Public**, and the firewall rule is on Private only, so no till can reach the PC. This is the likeliest cause of every till failing to connect to a healthy store. | Run the `Set-NetConnectionProfile` command the line gives, or open Settings → Network → Properties → **Private**. |
+| `WARN network 'N' is a domain network` | The installer leaves domain firewall rules to group policy. | Allow the port there. |
+| `FAIL cannot reach the cloud at URL` | Activation needs HTTPS to the cloud. | Check the connection, a proxy or a firewall. |
+| `WARN this PC's clock is N minutes away from the cloud's` | TLS and activation fail on a clock that is far off. | Settings → Time & language → **Sync now**. |
+| `WARN no network adapter with a default gateway is up` | Nothing on the shop LAN can reach the PC yet. | Connect it to the shop network, then read `pairing-url.txt` again. |
+
+**The pairing URL it prints is one a device can open.** The edge writes only `/pair?code=NNNNNN` when
+it cannot name its own address (it listens on every interface and no `advertised_ip` is set), so the
+installer completes it with each of the PC's addresses that has a default gateway. On a re-run it
+deletes the previous process's `pairing-url.txt` before the start, so the code it prints is the one
+the new process minted. It then waits for `/healthz` before it opens `/setup`: the service reports
+`RUNNING` before the edge has opened its store and bound the port. The edge itself writes the pairing
+file only after it has bound the port, so a box that cannot bind writes no code at all.
+
+`dashboard/scripts/installer-behaviour.ps1` runs the installer against a fake Windows for each of the
+cases above, and the `dashboard` CI job runs it on every pull request.
+
 ### The byte-order mark is not decoration
 
 Both `.ps1` files here start with a UTF-8 BOM, and the generator puts it there deliberately
