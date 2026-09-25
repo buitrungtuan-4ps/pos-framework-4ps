@@ -1,11 +1,19 @@
-import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatQuantity } from "../lib/money";
 import { useDarkTakeover } from "../lib/screen";
-import { bump, kitchenTickets, modifierNames, state, type KitchenTicket } from "../state/store";
+import {
+  bump,
+  kitchenTickets,
+  modifierNames,
+  queueNumberFor,
+  refreshQueueNumbers,
+  state,
+  type KitchenTicket,
+} from "../state/store";
 
 // The kitchen display: fired lines gathered into tickets — one per order, station and course, the
 // unit a cook makes together — large, on a dark panel, oldest first. Bumping a ticket records the
@@ -86,6 +94,27 @@ export function Kds() {
     state.stations.find((candidate) => candidate.id === id)?.name ?? "";
 
   const tickets = createMemo(() => kitchenTickets());
+  // A counter ticket is called by the guest's number, which the board reads from the counter list
+  // for any order it does not yet know. It used to show the last four characters of the order's
+  // internal id, which nobody at the counter could match to a guest.
+  // It reads the board's clock too, so an order the counter list could not number yet is asked
+  // about again — no more often than `refreshQueueNumbers` allows — rather than left unnumbered
+  // until some other ticket changes.
+  createEffect(() => {
+    now();
+    const counter = tickets()
+      .filter((ticket) => ticket.tableLabel === "")
+      .map((ticket) => ticket.orderId);
+    if (counter.some((orderId) => queueNumberFor(orderId) === undefined)) {
+      void refreshQueueNumbers(counter);
+    }
+  });
+  const counterLabel = (orderId: string) => {
+    const number = queueNumberFor(orderId);
+    return number === undefined
+      ? t("kds.counter_order", { ref: orderId.slice(-4) })
+      : t("counter.queue_number", { number });
+  };
   const byKey = createMemo(() => new Map(tickets().map((ticket) => [ticket.key, ticket])));
   const shownKeys = createMemo(
     () =>
@@ -169,7 +198,7 @@ export function Kds() {
                     <span class="flex w-full items-baseline justify-between gap-3">
                       <span class="text-sm text-ink-muted">
                         {current().tableLabel === ""
-                          ? t("kds.counter_order", { ref: current().orderId.slice(-4) })
+                          ? counterLabel(current().orderId)
                           : t("common.table", { label: current().tableLabel })}
                         <Show when={station() === "" && stationName(current().stationId) !== ""}>
                           {" · "}
