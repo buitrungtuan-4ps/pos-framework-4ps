@@ -939,6 +939,16 @@ export function Tabs<K extends string>(props: {
                 move(index(), 1);
               } else if (event.key === "ArrowLeft") {
                 move(index(), -1);
+              } else if (event.key === "Home") {
+                const first = props.tabs[0];
+                if (first) {
+                  props.onSelect(first.key);
+                }
+              } else if (event.key === "End") {
+                const last = props.tabs[props.tabs.length - 1];
+                if (last) {
+                  props.onSelect(last.key);
+                }
               }
             }}
             class={`-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors ${

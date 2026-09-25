@@ -25,6 +25,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ([crates/pos-cloud/src/webhook/ssrf.rs]). Prevents SSRF bypasses using 6over4 / IPv4-compatible
   interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
 
+### Changed
+
+- **Tabs component keyboard navigation enhanced with Home and End keys.**
+  The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
+
 ### Added
 
 - **The console's Fetch from the release button works after a deploy, with nothing added by
