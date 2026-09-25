@@ -116,7 +116,10 @@ export function SignIn() {
   };
 
   return (
-    <section class="mx-auto max-w-sm p-4">
+    // Two columns on a terminal, the fields beside the pad: stacked, the pad's digit row sat below the
+    // fold of a 1366x768 till, the commonest Windows POS screen, so a PIN needed a scroll first.
+    <section class="mx-auto max-w-sm p-4 terminal:grid terminal:max-w-4xl terminal:grid-cols-2 terminal:items-start terminal:gap-8">
+      <div>
       <PageHeader title={t("signin.title")} />
       <p class="text-ink-muted">{t("signin.hint")}</p>
       <Show when={unstaffed()}>
@@ -169,6 +172,7 @@ export function SignIn() {
       >
         {t("signin.submit")}
       </button>
+      </div>
 
       <CodePad
         id="signin-pad"

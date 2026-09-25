@@ -1,9 +1,12 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
-import { A } from "@solidjs/router";
+import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
+
+// The screens a device sees before anyone is signed in on it.
+const BEFORE_SIGN_IN: ReadonlySet<string> = new Set(["/pair", "/signin", "/setup"]);
 
 // What the bar says about the cash shift, per state (the wire tokens are the edge's `SHIFT_STATE_*`).
 const SHIFT_STATE_LABELS: Readonly<Record<string, MessageKey>> = {
@@ -102,6 +105,13 @@ export function StatusBar() {
     onCleanup(() => clearInterval(timer));
   });
 
+  // Whether nobody is signed in yet: pairing, signing in, activating the store. The destinations and
+  // "Sign out" are hidden there, because every one of them only bounced back to sign-in, and a
+  // till that offers the kitchen before anyone has signed in looks like it has forgotten who you
+  // are. The language and theme stay: the first person to sign in may want them.
+  const location = useLocation();
+  const beforeSignIn = () => BEFORE_SIGN_IN.has(location.pathname);
+
   // Whether the phone's folded menu is open. Irrelevant from a tablet up, where nothing folds.
   const [menuOpen, setMenuOpen] = createSignal(false);
 
@@ -194,6 +204,7 @@ export function StatusBar() {
         class="w-full flex-col items-stretch gap-1 tablet:flex tablet:w-auto tablet:flex-1 tablet:flex-row tablet:flex-wrap tablet:items-center tablet:gap-x-3"
         classList={{ hidden: !menuOpen(), flex: menuOpen() }}
       >
+        <Show when={!beforeSignIn()}>
         <nav
           aria-label={t("nav.menu")}
           class="flex flex-col gap-1 text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center"
@@ -212,6 +223,7 @@ export function StatusBar() {
             )}
           </For>
         </nav>
+        </Show>
         <button
           type="button"
           class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
@@ -228,13 +240,15 @@ export function StatusBar() {
         >
           {theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
         </button>
-        <button
-          type="button"
-          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-          onClick={() => void signOut()}
-        >
-          {t("nav.signout")}
-        </button>
+        <Show when={!beforeSignIn()}>
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            onClick={() => void signOut()}
+          >
+            {t("nav.signout")}
+          </button>
+        </Show>
       </div>
     </header>
   );

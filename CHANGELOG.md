@@ -35,6 +35,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **Screens the till review found broken.** Docs: `docs/ui-ux.md` §1 (principle 9), §2 (on-screen
+  keyboard), §3.
+  - **Guest orders** (`/guests`, QR orders held for staff). The screen's classes were defined
+    nowhere, so it rendered unstyled; each card was headed with the table's id instead of its floor
+    label; and the queue loaded once, so an order placed after the screen opened sat unseen. It is
+    now styled like the rest of the till, shows the floor label, and reloads every 15 seconds while
+    open.
+  - **Today** named the shift by its lower-cased wire token, in English on a Vietnamese till. It now
+    uses the status bar's own sentences.
+  - **Before anyone signs in**, the status bar no longer offers destinations or **Sign out**, each of
+    which only bounced back to sign-in.
+  - **Sign-in on a terminal** sets the fields beside the pad. Stacked, the pad's digit row sat below
+    the fold of a 1366×768 till.
+  - **Touch targets.** The line's **Void** button, the back links on the order and pay screens and
+    the counter's back button were about 30px high. They are now 48px, and the layout test measures
+    every control on the order and pay screens as well as the status bar.
+
 - **A counter tip on a bill that is not a round number settles.** The counter screen computed its
   tip keys as `(total * percent) / 100`, the float division the table pay screen had already been
   fixed for. On a 43,450₫ bill the 5% key was 2,172.5₫, which the edge refuses as a money amount, so
