@@ -21,6 +21,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Refuse IPv4 special-purpose ranges 192.0.0.0/24 and 192.88.99.0/24 in webhook SSRF filter.**
   `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 6890 IETF Protocol Assignments / DS-Lite (`192.0.0.0/24`) and 6to4 Relay Anycast (`192.88.99.0/24`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
 
+- **SSRF protection in webhook URL classification now checks 6over4 / IPv4-compatible interface IDs**
+  ([crates/pos-cloud/src/webhook/ssrf.rs]). Prevents SSRF bypasses using 6over4 / IPv4-compatible
+  interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
+
 ### Added
 
 - **The console's Fetch from the release button works after a deploy, with nothing added by
