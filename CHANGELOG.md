@@ -230,6 +230,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **The Windows setup summary warns only about the network a till uses, and names both releases.**
+  Found running the 0.14.0 installer on a real office PC. Every connection profile on Public got a
+  `WARN`, so an OpenVPN adapter, which has no default gateway and which no till reaches the PC
+  through, was reported alongside the Wi-Fi that did need fixing: a false line teaches a technician
+  to skip the true one. The check now looks only at the adapters the pairing URL is built from,
+  those that are up with a default gateway, and at every network when there is none. And the `note`
+  a re-run prints named only the release that is running, which on that PC was 0.11.0, three
+  releases behind the installer. `pos-edge install` now passes its own release to the script
+  (`-CarriedVersion`), and the note says, for example, that the PC runs 0.11.0, the installer
+  carries 0.14.0, and a rollout from the OTA screen moves it on; a newer release running is kept and
+  said to be newer.
+
 - **Re-running the Windows installer prints a pairing code that works, and opens setup when the
   store is up.** Found on the first re-install of a real shop PC. The pairing file survives a
   service stop, so the installer's wait took the previous process's file for the new one: it printed

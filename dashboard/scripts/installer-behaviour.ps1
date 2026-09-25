@@ -84,25 +84,35 @@ function global:Get-NetTCPConnection {
 function global:Get-NetConnectionProfile {
     param($ErrorAction)
     [pscustomobject]@{ Name = 'Shop'; InterfaceAlias = 'Ethernet'; InterfaceIndex = 7; NetworkCategory = $global:scene.Network }
+    # A VPN adapter, which has a connection profile of its own and no default gateway.
+    if ($null -ne $global:scene.Vpn) {
+        [pscustomobject]@{ Name = 'OpenVPN TAP-Windows6'; InterfaceAlias = 'OpenVPN TAP-Windows6'; InterfaceIndex = 19; NetworkCategory = $global:scene.Vpn }
+    }
 }
 
 function global:Get-NetIPConfiguration {
     foreach ($address in $global:scene.Lan) {
         [pscustomobject]@{
+            InterfaceIndex     = 7
             IPv4DefaultGateway = [pscustomobject]@{ NextHop = '192.168.1.1' }
             IPv4Address        = [pscustomobject]@{ IPAddress = $address }
             NetAdapter         = [pscustomobject]@{ Status = 'Up' }
         }
     }
     # A virtual switch: no gateway, so it must never be offered to a till.
-    [pscustomobject]@{ IPv4DefaultGateway = $null; IPv4Address = [pscustomobject]@{ IPAddress = '172.20.0.1' }; NetAdapter = $null }
+    [pscustomobject]@{ InterfaceIndex = 9; IPv4DefaultGateway = $null; IPv4Address = [pscustomobject]@{ IPAddress = '172.20.0.1' }; NetAdapter = $null }
+    # The VPN adapter: up, but with no gateway of its own.
+    [pscustomobject]@{ InterfaceIndex = 19; IPv4DefaultGateway = $null; IPv4Address = [pscustomobject]@{ IPAddress = '10.8.0.6' }; NetAdapter = [pscustomobject]@{ Status = 'Up' } }
 }
 
 function global:Invoke-RestMethod {
     param([string] $Uri, $TimeoutSec)
     if (-not $global:scene.Listening -or -not $global:scene.Answers) { throw 'connection refused' }
     $global:scene.Events.Add('health')
-    return [pscustomobject]@{ status = 'ok'; version = '0.14.0'; store_id = $global:scene.AnsweringStore }
+    $health = [ordered]@{ status = 'ok'; store_id = $global:scene.AnsweringStore }
+    # $null: an answer with no version in it, which the installer reports as 'unknown'.
+    if ($null -ne $global:scene.Running) { $health.version = $global:scene.Running }
+    return [pscustomobject]$health
 }
 
 function global:Invoke-WebRequest {
@@ -155,7 +165,8 @@ function Invoke-Scenario {
         Registered = $true; Started = $false; Listening = $false; StartCode = 0; StopHangs = $false
         Pairing = '/pair?code=222222'; PairingPath = (Join-Path $root 'pairing-url.txt')
         Answers = $true; AnsweringStore = $store; PortHolder = $null
-        Network = 'Private'; Lan = @('192.168.1.20'); Cloud = 'ok'; ClockSkewMinutes = 0
+        Network = 'Private'; Vpn = $null; Lan = @('192.168.1.20'); Cloud = 'ok'; ClockSkewMinutes = 0
+        Running = '0.14.0'; Carried = ''
         Clock = [DateTime]::Now; Events = [System.Collections.Generic.List[string]]::new()
         Stale = $true; Kept = $true; Log = $null
     }
@@ -172,7 +183,7 @@ function Invoke-Scenario {
     # A script that stops half-way is the worst outcome for a technician, so a scenario that ends in
     # an exception is kept as text for the assertions to fail on, not left to end this run.
     try {
-        $output = & $installer -Binary $binary -StoreId $store -CloudUrl 'https://cloud.example.com' -Root $root -OpenSetup 6>&1 3>&1 2>&1 |
+        $output = & $installer -Binary $binary -StoreId $store -CloudUrl 'https://cloud.example.com' -Root $root -OpenSetup -CarriedVersion $global:scene.Carried 6>&1 3>&1 2>&1 |
             ForEach-Object { "$_" }
     } catch {
         $output = @("THE INSTALLER STOPPED: $($_.Exception.Message)")
@@ -245,6 +256,28 @@ $r = Invoke-Scenario 'F public network' @{ Network = 'Public' }
 Assert-Says $r "WARN  network 'Shop' (Ethernet) is Public"
 Assert-Says $r 'Set-NetConnectionProfile -InterfaceIndex 7 -NetworkCategory Private'
 
+# F2. The owner's PC: the Wi-Fi and an OpenVPN adapter both Public. Only the LAN is worth a line; a
+#     VPN on Public is how it should be.
+$r = Invoke-Scenario 'F2 public LAN and public VPN' @{ Network = 'Public'; Vpn = 'Public' }
+Assert-Says $r "WARN  network 'Shop' (Ethernet) is Public"
+Assert-Silent $r 'OpenVPN'
+Assert-Silent $r '10.8.0.6'
+$r = Invoke-Scenario 'F3 private LAN, public VPN' @{ Vpn = 'Public' }
+Assert-Silent $r 'WARN'
+
+# M. A re-run keeps the release that is running; the summary names both, and which way to go.
+$r = Invoke-Scenario 'M older release running' @{ Running = '0.11.0'; Carried = '0.14.0' }
+Assert-Says $r 'runs 0.11.0, which was kept; the 0.14.0 this installer carries'
+Assert-Says $r "To run 0.14.0 here, roll it out from the console's OTA screen."
+$r = Invoke-Scenario 'M newer release running' @{ Running = '0.14.0'; Carried = '0.13.0' }
+Assert-Says $r 'runs 0.14.0, newer than the 0.13.0 this installer carries, so it was kept.'
+Assert-Silent $r 'To run 0.13.0'
+$r = Invoke-Scenario 'M same release' @{ Running = '0.14.0'; Carried = '0.14.0' }
+Assert-Says $r 'the binary it runs was kept (version 0.14.0)'
+$r = Invoke-Scenario 'M running release unknown' @{ Running = $null; Carried = '0.14.0' }
+Assert-Says $r 'the binary it runs was kept (version unknown)'
+Assert-Silent $r 'newer than'
+
 # G. The cloud cannot be reached; then it answers with an error status, which still proves the network.
 $r = Invoke-Scenario 'G no cloud' @{ Cloud = 'down' }
 Assert-Says $r 'FAIL  cannot reach the cloud at https://cloud.example.com (No such host is known.)'
@@ -262,6 +295,9 @@ Assert-Says $r "WARN  this PC's clock is 10 minutes away from the cloud's"
 $r = Invoke-Scenario 'I no LAN' @{ Lan = @() }
 Assert-Says $r "http://<this PC's IPv4 address, from ipconfig>:8787/pair?code=222222"
 Assert-Says $r 'WARN  no network adapter with a default gateway is up'
+# With nothing to tell the LAN by, a Public network still gets its line.
+$r = Invoke-Scenario 'I no LAN, public network' @{ Lan = @(); Network = 'Public' }
+Assert-Says $r "WARN  network 'Shop' (Ethernet) is Public"
 
 # J. The start itself is refused.
 $r = Invoke-Scenario 'J start refused' @{ StartCode = 1058; Answers = $false; Pairing = $null }

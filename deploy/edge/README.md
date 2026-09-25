@@ -178,13 +178,13 @@ the installer again.
 | Line | What it means | What to do |
 |---|---|---|
 | `ok pos-edge X is answering on port P for store S` | The store is up, on release X. | Nothing. |
-| `note this PC already had pos-edge…` | A re-run keeps the binary the edge runs, which may be one it installed over the air, so an older installer never downgrades a shop. The installer's copy goes to `pos-edge.exe`, the rescue copy, only. | To run a newer release, roll it out from the console's OTA screen. |
+| `note this PC already had pos-edge and runs X…` | A re-run keeps the binary the edge runs, which may be one it installed over the air, so an older installer never downgrades a shop. The one-file installer names the release it carries beside the one running; its copy goes to `pos-edge.exe`, the rescue copy, only. | When the line says so, roll the newer release out from the console's OTA screen. |
 | `FAIL port P is already in use by NAME (PID n)` | Another program listens on the store's port, so the edge cannot. | Stop that program, or give the store another port. |
 | `FAIL nothing answered on port P within 30 seconds` | The edge did not come up. The installer prints the last 20 lines of `pos-edge.log` above the summary. | The first error in those lines is the cause. |
 | `FAIL port P is answered by pos-edge X for store T` | A different store's edge holds the port, typically a copy started by hand. | Stop it, then `sc.exe start pos-edge`. |
 | `FAIL sc.exe start pos-edge failed with code N` | The Service Control Manager refused the start. | The message after the code says why, for example 1058 when the service is disabled. |
 | `WARN the old pos-edge process did not stop within 60 seconds` | A re-run could not restart the service cleanly. | If it is not running afterwards: `sc.exe start pos-edge`. |
-| `WARN network 'N' is Public` | Windows puts a network it has not been told about on **Public**, and the firewall rule is on Private only, so no till can reach the PC. This is the likeliest cause of every till failing to connect to a healthy store. | Run the `Set-NetConnectionProfile` command the line gives, or open Settings → Network → Properties → **Private**. |
+| `WARN network 'N' is Public` | Windows puts a network it has not been told about on **Public**, and the firewall rule is on Private only, so no till can reach the PC. This is the likeliest cause of every till failing to connect to a healthy store. Only the adapters a till can reach the PC through, those with a default gateway, are checked: a VPN adapter on Public is as it should be. When no adapter has one, every network is. | Run the `Set-NetConnectionProfile` command the line gives, or open Settings → Network → Properties → **Private**. |
 | `WARN network 'N' is a domain network` | The installer leaves domain firewall rules to group policy. | Allow the port there. |
 | `FAIL cannot reach the cloud at URL` | Activation needs HTTPS to the cloud. | Check the connection, a proxy or a firewall. |
 | `WARN this PC's clock is N minutes away from the cloud's` | TLS and activation fail on a clock that is far off. | Settings → Time & language → **Sync now**. |

@@ -40,6 +40,10 @@
 .PARAMETER Root
     Where the store's state lives.
 
+.PARAMETER CarriedVersion
+    The release -Binary is, which the one-file installer (pos-edge install) passes. The summary
+    names it beside the release that is running when a re-run keeps the one already there.
+
 .PARAMETER OpenSetup
     Open this box's activation screen in the browser when the service is up. The one-file
     installer (pos-edge install, ADR-0140) passes it; a remote shell has no browser to open.
@@ -67,6 +71,8 @@ param(
 
     [string] $BindPort = '8787',
 
+    [string] $CarriedVersion = '',
+
     [switch] $OpenSetup,
 
     [switch] $AskSyncKey,
@@ -80,6 +86,7 @@ $ErrorActionPreference = 'Stop'
 $service = 'pos-edge'
 $expectedStore = $StoreId
 $cloudOrigin = $CloudUrl
+$installerVersion = $CarriedVersion
 
 # What the summary at the end reports: every step that can leave a store unreachable adds one line
 # saying what happened and what to do, so a technician need not read the scroll-back.
@@ -352,7 +359,17 @@ if ($null -ne $health) {
         Add-Check 'ok' "pos-edge $version is answering on port $BindPort for store $expectedStore"
     }
     if ($kept) {
-        Add-Check 'note' "this PC already had pos-edge, so the binary it runs was kept (version $version) and the copy this installer carries went to $Root\pos-edge.exe only. A newer release reaches this PC over the air, from the console's OTA screen."
+        # Which is newer decides the advice: rolling out an older release is a downgrade, never a fix.
+        # No release passed, or one that does not parse ('unknown'), claims neither.
+        $order = 0
+        try { $order = ([version][string]$installerVersion).CompareTo([version][string]$version) } catch { $order = 0 }
+        if ($order -gt 0) {
+            Add-Check 'note' "this PC already had pos-edge and runs $version, which was kept; the $installerVersion this installer carries went to $Root\pos-edge.exe only. To run $installerVersion here, roll it out from the console's OTA screen."
+        } elseif ($order -lt 0) {
+            Add-Check 'note' "this PC already had pos-edge and runs $version, newer than the $installerVersion this installer carries, so it was kept."
+        } else {
+            Add-Check 'note' "this PC already had pos-edge, so the binary it runs was kept (version $version). A newer release reaches this PC over the air, from the console's OTA screen."
+        }
     }
 } else {
     $state = Get-Service -Name $service -ErrorAction SilentlyContinue
@@ -365,11 +382,30 @@ if ($null -ne $health) {
     }
 }
 
+# The adapters a till can reach this PC through: up, and with a default gateway, which is the shop
+# LAN and not a VPN or a virtual switch. The pairing URL is completed with their addresses below,
+# and theirs are the only firewall profiles that matter.
+$lanConfigs = @()
+if (Get-Command -Name Get-NetIPConfiguration -ErrorAction SilentlyContinue) {
+    try {
+        $lanConfigs = @(Get-NetIPConfiguration | Where-Object {
+            $_.IPv4DefaultGateway -and $_.IPv4Address -and $_.NetAdapter -and $_.NetAdapter.Status -eq 'Up'
+        })
+    } catch {
+        $lanConfigs = @()
+    }
+}
+$lanIndexes = @($lanConfigs | ForEach-Object { $_.InterfaceIndex })
+$lan = @($lanConfigs | ForEach-Object { $_.IPv4Address.IPAddress })
+
 # The firewall rule above is on the Private profile only, and Windows puts a network it has not
-# been told about on Public. A store on a Public network passes every check on this PC and no
-# till can reach it, which is the failure a technician is least likely to guess.
+# been told about on Public. A store whose LAN is Public passes every check on this PC and no till
+# can reach it, which is the failure a technician is least likely to guess. A VPN adapter on
+# Public is how it should be, and saying otherwise would teach the technician to ignore this line.
+# With no adapter to tell the LAN by, every network is checked.
 if (Get-Command -Name Get-NetConnectionProfile -ErrorAction SilentlyContinue) {
-    foreach ($connection in @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)) {
+    $lanProfiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { $lanIndexes.Count -eq 0 -or $lanIndexes -contains $_.InterfaceIndex })
+    foreach ($connection in $lanProfiles) {
         if ([string]$connection.NetworkCategory -eq 'Public') {
             Add-Check 'WARN' "network '$($connection.Name)' ($($connection.InterfaceAlias)) is Public, and port $BindPort is open on Private networks only: no till can reach this PC until it is Private. Fix: Set-NetConnectionProfile -InterfaceIndex $($connection.InterfaceIndex) -NetworkCategory Private"
         } elseif ([string]$connection.NetworkCategory -eq 'DomainAuthenticated') {
@@ -418,16 +454,6 @@ if (Test-Path -LiteralPath $pairingPath) {
     $urls = @($pairing)
     if ($pairing.StartsWith('/')) {
         $urls = @("http://<this PC's IPv4 address, from ipconfig>:$BindPort$pairing")
-        $lan = @()
-        if (Get-Command -Name Get-NetIPConfiguration -ErrorAction SilentlyContinue) {
-            try {
-                $lan = @(Get-NetIPConfiguration | Where-Object {
-                    $_.IPv4DefaultGateway -and $_.IPv4Address -and $_.NetAdapter -and $_.NetAdapter.Status -eq 'Up'
-                } | ForEach-Object { $_.IPv4Address.IPAddress })
-            } catch {
-                $lan = @()
-            }
-        }
         if ($lan.Count -gt 0) {
             $urls = @($lan | ForEach-Object { "http://$($_):$BindPort$pairing" })
         } else {
