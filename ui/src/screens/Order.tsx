@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { useLocation, useNavigate, useParams } from "@solidjs/router";
 
+import { ApproverFields } from "../components/ApproverFields";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
@@ -548,25 +549,15 @@ export function Order() {
 
               <Show when={needsApproval(line())}>
                 <p class="mt-1 text-sm text-ink-muted">{t("order.void_manager")}</p>
-                <label class="mt-2 block text-sm">
-                  {t("order.approver_code")}
-                  <input
-                    type="text"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverCode()}
-                    onInput={(event) => setApproverCode(event.currentTarget.value)}
-                  />
-                </label>
-                <label class="mt-2 block text-sm">
-                  {t("order.approver_pin")}
-                  <input
-                    type="password"
-                    inputmode="numeric"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                    value={approverPin()}
-                    onInput={(event) => setApproverPin(event.currentTarget.value)}
-                  />
-                </label>
+                <ApproverFields
+                  id="void-line-approver"
+                  code={approverCode()}
+                  pin={approverPin()}
+                  onCode={setApproverCode}
+                  onPin={setApproverPin}
+                  codeLabel={t("order.approver_code")}
+                  pinLabel={t("order.approver_pin")}
+                />
               </Show>
 
               <p class="mt-3 text-sm text-ink-muted">{t("order.void_reason")}</p>

@@ -1,5 +1,7 @@
 {
   "app.brand": "Pizza 4P's",
+  "approver.pad_code": "On-screen keyboard for the manager's badge code",
+  "approver.pad_pin": "On-screen keypad for the manager's PIN",
   "claim.claimed": "Claimed. This box is now a store server; it starts in a moment.",
   "claim.connecting": "Connecting to {cloud}…",
   "claim.expires": "This code works for {minutes} more minutes. A new one appears when it expires.",
