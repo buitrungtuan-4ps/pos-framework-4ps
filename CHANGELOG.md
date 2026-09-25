@@ -66,6 +66,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A table's bill splits by item: each guest pays for what they had.** The pay screen's **Split by
+  item** lists the bill's lines. The cashier taps what one guest is paying for, and **Split off**
+  makes those lines a bill of their own; the rest stay open as the next bill.
+  - Each part reads what it is for ("For: 1 × Iced tea") and its own total, assembled by the edge.
+  - Once a part is paid, **Pay the next bill** puts the next one on screen.
+  - **Put the bills back together** undoes a split made by mistake. It is a merge; nothing is edited.
+  - A split table stays awaiting payment, and its order stays on the kitchen board, until the last
+    part is paid. The till used to track one bill per table: had a table ever been split, its first
+    guest paying would have sent it to cleaning and dropped the rest of its food off the board.
+  - A till that reloads mid-split reads every open part. A pay screen reloaded with no bill in hand
+    reads what is open before asking for one, which the edge refuses while one is open.
+  - Every tender button now waits for the edge's figure. It could be tapped before the amount had
+    loaded, which asked the edge to settle for nothing.
+
+  Declared as a seven-tap flow for two guests (`docs/ui-ux.md` §1, principle 6, says why). Docs:
+  `docs/ui-ux.md` §3 (cashier), `docs/pos-spec.md` §5.
+
 - **The edge answers for a table whose bill has been split.** Splitting has been on the edge since
   ADR-0128, but a till could not read what came of it. Three reads now can:
   - `GET /api/bills/{id}/check` is a new route. It reads one bill by its id: its state, the order lines

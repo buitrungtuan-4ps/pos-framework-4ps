@@ -1,4 +1,4 @@
-// The client's small projection: the floor, the order lines on each table, the open bill per table,
+// The client's small projection: the floor, the order lines on each table, the open bills per table,
 // and the shift — folded from the same fan-out events the edge publishes (ADR-0018), so what one
 // device does appears on every other. Actions call the typed client and lean on the fan-out to
 // reconcile; a line the operator adds shows at once and is de-duplicated when its own event returns.
@@ -10,6 +10,7 @@ import { adoptStoreLanguage } from "../i18n";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
+  BillCheckResponse,
   BillResponse,
   BuyerRequest,
   CheckResponse,
@@ -118,7 +119,15 @@ interface StoreShape {
   tableOrder: Record<string, string>;
   orderTable: Record<string, string>;
   lines: Record<string, OrderLine>;
-  openBill: Record<string, string>;
+  // The bills open on each table, oldest first: one for an ordinary table, one per unpaid part once
+  // its bill has been split (ADR-0128). A list because each part is paid on its own and the table
+  // waits for the last of them — a single bill per table sent a split table to be cleaned when its
+  // first guest paid, and dropped the rest of its order off the kitchen board.
+  openBills: Record<string, string[]>;
+  // The tables where a part of a split bill has been paid while another still owes. What a void of
+  // the last open part needs: that meal is finished, so the table goes on to be cleaned rather than
+  // back to occupied (`docs/pos-spec.md` §5). Cleared when the table's last bill closes.
+  paidPart: Record<string, true>;
   // The store's own price book, from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Empty until the edge
   // serves it — a store never guesses a price, so the till shows nothing to sell rather than a list
   // compiled into the app.
@@ -244,7 +253,8 @@ const [state, setState] = createStore<StoreShape>({
   tableOrder: {},
   orderTable: {},
   lines: {},
-  openBill: {},
+  openBills: {},
+  paidPart: {},
   menu: [],
   layout: [],
   currency: null,
@@ -387,8 +397,54 @@ export function unfiredLinesForTable(tableId: string): OrderLine[] {
   return linesForTable(tableId).filter((line) => line.state === "ORDER_LINE_STATE_ADDED");
 }
 
+// The bill the pay screen settles next on this table: the oldest one still open, so a split table's
+// parts are offered in the order they were split off.
 export function openBillFor(tableId: string): string | undefined {
-  return state.openBill[tableId];
+  return state.openBills[tableId]?.[0];
+}
+
+// Every bill still open on this table, oldest first.
+export function openBillsFor(tableId: string): readonly string[] {
+  return state.openBills[tableId] ?? [];
+}
+
+// Takes a closed bill off its table's list: settled, voided, or split or merged away. Answers with
+// the table and how many bills are still open on it, or null for a bill no table holds — a counter
+// order's, or one this device never saw open.
+function closeBill(draft: StoreShape, billId: string): { table: string; stillOpen: number } | null {
+  const table = Object.keys(draft.openBills).find((key) => draft.openBills[key]?.includes(billId));
+  if (table === undefined) {
+    return null;
+  }
+  const stillOpen = (draft.openBills[table] ?? []).filter((id) => id !== billId);
+  if (stillOpen.length === 0) {
+    delete draft.openBills[table];
+  } else {
+    draft.openBills[table] = stillOpen;
+  }
+  return { table, stillOpen: stillOpen.length };
+}
+
+// Whether any bill on this order is still open on any table.
+function orderStillOwes(draft: StoreShape, orderId: string): boolean {
+  return Object.values(draft.openBills).some((ids) =>
+    ids.some((id) => draft.billOrder[id] === orderId),
+  );
+}
+
+// What a table becomes once the last bill open on it is voided. Occupied again — the money was never
+// taken and the order is still there to be charged — unless a part of it was already paid, when that
+// meal is finished: the table wants cleaning and the order leaves the kitchen board, as on the edge.
+function afterLastVoid(draft: StoreShape, table: string, orderId: string | undefined): void {
+  if (draft.paidPart[table]) {
+    draft.tableState[table] = "TABLE_STATE_NEEDS_CLEANING";
+    if (orderId !== undefined) {
+      draft.liveOrders[orderId] = false;
+    }
+  } else {
+    draft.tableState[table] = "TABLE_STATE_OCCUPIED";
+  }
+  delete draft.paidPart[table];
 }
 
 // The bill total the operator collects, computed client-side from the captured line totals and the
@@ -530,19 +586,19 @@ export function fold(event: ServerEvent): void {
       break;
     }
     // A voided bill releases its table back to occupied: the money was never taken, and the order
-    // is still sitting there to be charged again.
+    // is still sitting there to be charged again. Only once nothing else on the table is open — a
+    // voided part of a split leaves the other parts owing.
     case "billing.bill.voided": {
       const bill = str(payload, "bill_id");
       if (bill !== null) {
-        const table = Object.keys(state.openBill).find((key) => state.openBill[key] === bill);
-        if (table !== undefined) {
-          setState(
-            produce((draft) => {
-              delete draft.openBill[table];
-              draft.tableState[table] = "TABLE_STATE_OCCUPIED";
-            }),
-          );
-        }
+        setState(
+          produce((draft) => {
+            const closed = closeBill(draft, bill);
+            if (closed !== null && closed.stillOpen === 0) {
+              afterLastVoid(draft, closed.table, draft.billOrder[bill]);
+            }
+          }),
+        );
       }
       break;
     }
@@ -571,8 +627,34 @@ export function fold(event: ServerEvent): void {
       if (bill !== null && table !== undefined) {
         setState(
           produce((draft) => {
-            draft.openBill[table] = bill;
+            const open = draft.openBills[table] ?? [];
+            if (!open.includes(bill)) {
+              draft.openBills[table] = [...open, bill];
+            }
             draft.tableState[table] = "TABLE_STATE_AWAITING_PAYMENT";
+          }),
+        );
+      }
+      break;
+    }
+    // A split closes its source, and its parts take its place (ADR-0128). The parts arrive first, on
+    // their own `billing.bill.opened` in the same commit, so all that is left is the source.
+    case "billing.bill.split": {
+      const source = str(payload, "source_bill_id");
+      if (source !== null) {
+        setState(produce((draft) => void closeBill(draft, source)));
+      }
+      break;
+    }
+    // A merge folds bills into the one the path named, which survives with their lines.
+    case "billing.bill.merged": {
+      const merged = payload["merged_bill_ids"];
+      if (Array.isArray(merged)) {
+        setState(
+          produce((draft) => {
+            for (const id of merged.filter(isString)) {
+              closeBill(draft, id);
+            }
           }),
         );
       }
@@ -614,23 +696,30 @@ export function fold(event: ServerEvent): void {
     }
     case "billing.bill.settled": {
       const bill = str(payload, "bill_id");
-      const settledOrder = bill !== null ? state.billOrder[bill] : undefined;
-      if (settledOrder !== undefined) {
-        // Paid, so off the kitchen board: its unbumped lines no longer wait on a table that is
-        // being cleaned.
-        setState("liveOrders", settledOrder, false);
+      if (bill === null) {
+        break;
       }
-      if (bill !== null) {
-        const table = Object.keys(state.openBill).find((key) => state.openBill[key] === bill);
-        if (table !== undefined) {
-          setState(
-            produce((draft) => {
-              draft.tableState[table] = "TABLE_STATE_NEEDS_CLEANING";
-              delete draft.openBill[table];
-            }),
-          );
-        }
-      }
+      setState(
+        produce((draft) => {
+          const closed = closeBill(draft, bill);
+          if (closed !== null) {
+            if (closed.stillOpen === 0) {
+              draft.tableState[closed.table] = "TABLE_STATE_NEEDS_CLEANING";
+              delete draft.paidPart[closed.table];
+            } else {
+              // One guest of a split table has paid. The table waits for the others.
+              draft.paidPart[closed.table] = true;
+            }
+          }
+          // Paid, so off the kitchen board: its unbumped lines no longer wait on a table that is
+          // being cleaned. Not while another part of it still owes — those guests' food is still
+          // coming.
+          const settledOrder = draft.billOrder[bill];
+          if (settledOrder !== undefined && !orderStillOwes(draft, settledOrder)) {
+            draft.liveOrders[settledOrder] = false;
+          }
+        }),
+      );
       break;
     }
     default:
@@ -844,7 +933,7 @@ export function tableCounts(): Record<string, number> {
 }
 
 export function openBillCount(): number {
-  return Object.keys(state.openBill).length;
+  return Object.values(state.openBills).reduce((count, ids) => count + ids.length, 0);
 }
 
 // ---- commands (call the edge, update at once, let the fan-out reconcile) -----
@@ -1252,14 +1341,18 @@ export async function loadLiveOrders(): Promise<void> {
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
       for (const order of orders) {
-        if (order.bill_id !== undefined) {
-          draft.billOrder[order.bill_id] = order.order_id;
+        // Every part still open on a split table, or on an edge older than that list, the one bill
+        // it names.
+        const open =
+          order.open_bill_ids ?? (order.bill_id !== undefined ? [order.bill_id] : []);
+        for (const id of open) {
+          draft.billOrder[id] = order.order_id;
         }
         if (order.table_id !== undefined) {
           draft.tableOrder[order.table_id] = order.order_id;
           draft.orderTable[order.order_id] = order.table_id;
-          if (order.bill_id !== undefined) {
-            draft.openBill[order.table_id] = order.bill_id;
+          if (open.length > 0) {
+            draft.openBills[order.table_id] = [...open];
           }
         }
         for (const line of order.lines) {
@@ -1490,15 +1583,14 @@ export async function voidBill(
   approval: ApproverRequest,
 ): Promise<void> {
   await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
-  const table = Object.keys(state.openBill).find((key) => state.openBill[key] === billId);
-  if (table !== undefined) {
-    setState(
-      produce((draft) => {
-        delete draft.openBill[table];
-        draft.tableState[table] = "TABLE_STATE_OCCUPIED";
-      }),
-    );
-  }
+  setState(
+    produce((draft) => {
+      const closed = closeBill(draft, billId);
+      if (closed !== null && closed.stillOpen === 0) {
+        afterLastVoid(draft, closed.table, draft.billOrder[billId]);
+      }
+    }),
+  );
 }
 
 // A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`
@@ -1526,14 +1618,21 @@ export async function bump(
 }
 
 export async function openBill(tableId: string): Promise<string> {
-  const existing = state.openBill[tableId];
+  const existing = openBillFor(tableId);
   if (existing !== undefined) {
     return existing;
   }
   const response = await api.openBill(tableId);
   setState(
     produce((draft) => {
-      draft.openBill[tableId] = response.bill_id;
+      const open = draft.openBills[tableId] ?? [];
+      if (!open.includes(response.bill_id)) {
+        draft.openBills[tableId] = [...open, response.bill_id];
+      }
+      const order = draft.tableOrder[tableId];
+      if (order !== undefined) {
+        draft.billOrder[response.bill_id] = order;
+      }
       if (response.table_state !== undefined) {
         draft.tableState[tableId] = response.table_state;
       }
@@ -1542,23 +1641,84 @@ export async function openBill(tableId: string): Promise<string> {
   return response.bill_id;
 }
 
+// What one bill owes and the lines it covers — the pay screen's figure once a table can hold more
+// than one bill (ADR-0128).
+export async function loadBillCheck(billId: string): Promise<BillCheckResponse> {
+  return api.billCheck(billId);
+}
+
+// Splits a bill into parts, each the lines one guest pays for (ADR-0128), and answers with the
+// parts' ids in the order they were given. The parts take the source's place on its table's list,
+// so the first part is the bill the pay screen offers next.
+//
+// The fan-out brings the same facts — each part's `billing.bill.opened`, then the split — and may
+// land before this answer does. Either order ends with the same list: a part already folded is not
+// added twice, and a source already folded away is simply not there to replace.
+export async function splitBill(billId: string, parts: string[][]): Promise<string[]> {
+  const response = await api.splitBill(billId, { parts });
+  const partIds = response.bill_ids;
+  setState(
+    produce((draft) => {
+      const order = draft.billOrder[billId];
+      if (order !== undefined) {
+        for (const id of partIds) {
+          draft.billOrder[id] = order;
+        }
+      }
+      const table = Object.keys(draft.openBills).find((key) => {
+        const ids = draft.openBills[key] ?? [];
+        return ids.includes(billId) || partIds.some((id) => ids.includes(id));
+      });
+      if (table === undefined) {
+        return;
+      }
+      const open = draft.openBills[table] ?? [];
+      const others = open.filter((id) => id !== billId && !partIds.includes(id));
+      const at = open.indexOf(billId);
+      draft.openBills[table] =
+        at < 0 ? [...partIds, ...others] : [...others.slice(0, at), ...partIds, ...others.slice(at)];
+    }),
+  );
+  return partIds;
+}
+
+// Folds the other bills open on a table back into this one — undoing a split is a merge, never an
+// edit (ADR-0128 decision 10).
+export async function mergeBills(billId: string, absorbed: string[]): Promise<void> {
+  await api.mergeBills(billId, { absorbed_bill_ids: absorbed });
+  setState(
+    produce((draft) => {
+      for (const id of absorbed) {
+        closeBill(draft, id);
+      }
+    }),
+  );
+}
+
 export async function settle(
   billId: string,
   payments: PaymentRequest[],
   buyer?: BuyerRequest,
 ): Promise<BillResponse> {
   const response = await api.settleBill(billId, { payments, buyer });
-  const table = Object.keys(state.openBill).find((key) => state.openBill[key] === billId);
-  if (table !== undefined) {
-    setState(
-      produce((draft) => {
-        delete draft.openBill[table];
-        if (response.table_state !== undefined) {
-          draft.tableState[table] = response.table_state;
-        }
-      }),
-    );
-  }
+  setState(
+    produce((draft) => {
+      const closed = closeBill(draft, billId);
+      if (closed === null) {
+        return;
+      }
+      if (closed.stillOpen === 0) {
+        delete draft.paidPart[closed.table];
+      } else {
+        draft.paidPart[closed.table] = true;
+      }
+      // The edge's answer, not this device's guess: it knows every part, including one opened on
+      // another till a moment ago.
+      if (response.table_state !== undefined) {
+        draft.tableState[closed.table] = response.table_state;
+      }
+    }),
+  );
   return response;
 }
 

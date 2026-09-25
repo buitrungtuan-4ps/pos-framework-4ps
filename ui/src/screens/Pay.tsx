@@ -1,21 +1,35 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
+import { ApiError } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
 import { t, type MessageKey } from "../i18n";
-import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
+import {
+  formatQuantity,
+  money,
+  parseWhole,
+  percentOf,
+  quickCashFor,
+  roundToIncrement,
+} from "../lib/money";
 import {
   applyDiscount,
   cashDenominations,
   cashRoundingIncrement,
   currencyExponent,
+  linesForTable,
+  loadBillCheck,
   loadCheck,
+  loadLiveOrders,
+  mergeBills,
   openBill,
   openBillFor,
+  openBillsFor,
   reasonsFor,
   settle,
+  splitBill,
   tenderAccepted,
   tipsEnabled,
   voidBill,
@@ -144,6 +158,14 @@ export function Pay() {
   // What the guest owes, as the edge assembled it (E5). Null until it arrives; the screen shows no
   // amount rather than a guess, because the till no longer has the means to guess one.
   const [check, setCheck] = createSignal<CheckResponse | null>(null);
+  // The order lines the bill on screen covers, from the edge's read of that bill (ADR-0128). Null
+  // until it lands, and on an edge too old to answer it: splitting by item partitions exactly these,
+  // so the choice is only offered where they are known.
+  const [covered, setCovered] = createSignal<readonly string[] | null>(null);
+  // Splitting by item: the list of the bill's lines is open, and these are the ones picked for the
+  // guest paying now. Nothing reaches the edge until the split is confirmed.
+  const [picking, setPicking] = createSignal(false);
+  const [picked, setPicked] = createSignal<ReadonlySet<string>>(new Set<string>());
   // Voiding this bill before it settles (ADR-0115, §6). Always a manager: a bill is money whether
   // or not the kitchen started, so unlike a line there is no shape of it that passes without one.
   // The badge and PIN live here for the length of the refusal and are cleared with the panel.
@@ -159,19 +181,54 @@ export function Pay() {
   // than becoming a figure the screen then reformats under the operator's fingers.
   const [discountText, setDiscountText] = createSignal("");
 
-  onMount(() => {
-    void loadCheck(params.id)
-      .then((totals) => setCheck(totals))
-      .catch((caught: unknown) =>
-        setError(errorMessage(caught)),
-      );
-    if (billId() === null) {
-      openBill(params.id)
-        .then((id) => setBillId(id))
-        .catch((caught: unknown) =>
-          setError(errorMessage(caught)),
-        );
+  // What the bill on screen owes, read by its own id. Once a table is split, the table's check is
+  // every open part together, and the guest at the till is asking about theirs (ADR-0128).
+  //
+  // An edge older than that read answers its address with the app's own page rather than a figure
+  // (ADR-0111), and its table's check is the same figure for the one bill such an edge lets a till
+  // show. Any other failure is shown rather than covered with the table's figure, which on a split
+  // table is every part at once — a figure that would settle nobody's bill.
+  const showBill = async (id: string) => {
+    try {
+      const bill = await loadBillCheck(id);
+      if (billId() === id) {
+        setCheck(bill);
+        setCovered(bill.order_line_ids);
+      }
+    } catch (caught) {
+      const olderEdge =
+        caught instanceof SyntaxError || (caught instanceof ApiError && caught.status === 404);
+      if (!olderEdge) {
+        setError(errorMessage(caught));
+        return;
+      }
+      try {
+        const totals = await loadCheck(params.id);
+        if (billId() === id) {
+          setCheck(totals);
+        }
+      } catch (caught) {
+        setError(errorMessage(caught));
+      }
     }
+  };
+
+  onMount(() => {
+    const existing = billId();
+    if (existing !== null) {
+      void showBill(existing);
+      return;
+    }
+    // No bill known for this table: the screen was reloaded, or reached by its address, before this
+    // device read what is open. Read that first. The table may already have a bill — or the open
+    // parts of a split one — and asking for another is refused while one is open.
+    loadLiveOrders()
+      .then(() => openBill(params.id))
+      .then((id) => {
+        setBillId(id);
+        return showBill(id);
+      })
+      .catch((caught: unknown) => setError(errorMessage(caught)));
   });
 
   // The edge's figure, in minor units, for the tender pad's arithmetic. Zero until the check lands,
@@ -389,6 +446,120 @@ export function Pay() {
       tip: money(currency(), tip()),
     });
 
+  // Puts another of the table's bills on screen — the part just split off, or the next one to pay —
+  // carrying nothing over from the last: its own amount, and no tender, tip, share, buyer, open
+  // panel or manager's PIN from the guest before.
+  const switchTo = (id: string) => {
+    setBillId(id);
+    setCheck(null);
+    setCovered(null);
+    setDone(null);
+    setError(null);
+    setTender(null);
+    setTyping(false);
+    setTypedText("");
+    setTip(0);
+    setWays(null);
+    setTaken([]);
+    setGivenChange(0);
+    setBuyerName("");
+    setBuyerTaxCode("");
+    setBuyerAddress("");
+    setDiscounting(false);
+    setDiscountText("");
+    setVoidingBill(false);
+    setApproverCode("");
+    setApproverPin("");
+    void showBill(id);
+  };
+
+  // The lines the bill on screen covers, as the order holds them, oldest first.
+  const coveredLines = () => {
+    const ids = covered();
+    if (ids === null) {
+      return [];
+    }
+    return linesForTable(params.id)
+      .filter((line) => ids.includes(line.orderLineId))
+      .sort((a, b) => a.orderLineId.localeCompare(b.orderLineId));
+  };
+  // Whether the bill on screen is a part of its table rather than all of it: it covers fewer lines
+  // than the table has live ones. Then the screen says what this guest is paying for.
+  const isPart = () => {
+    const ids = covered();
+    const live = linesForTable(params.id).filter((line) => line.state !== "ORDER_LINE_STATE_VOIDED");
+    return ids !== null && ids.length < live.length;
+  };
+  const partItems = () =>
+    coveredLines()
+      .map((line) => `${formatQuantity(line.quantityMilli)} × ${line.name}`)
+      .join(", ");
+
+  // Opens the bill's lines for the cashier to pick what one guest is paying for (ADR-0128).
+  const splitByItem = () => {
+    setError(null);
+    setPicked(new Set<string>());
+    setPicking(true);
+  };
+  const pickLine = (lineId: string) => {
+    const next = new Set(picked());
+    if (next.has(lineId)) {
+      next.delete(lineId);
+    } else {
+      next.add(lineId);
+    }
+    setPicked(next);
+  };
+  // Something picked and something left. A part with nothing in it is refused by the edge, and
+  // picking every line is the bill as it already is.
+  const canSplitOff = () => picked().size > 0 && picked().size < (covered()?.length ?? 0);
+  // Splits the picked lines off into a bill of their own and puts it on screen; the rest stay open
+  // on the table as the next bill. A partition of exactly what the bill covers, which is the one
+  // shape the edge accepts.
+  const splitOff = async () => {
+    const id = billId();
+    const ids = covered();
+    if (id === null || ids === null || !canSplitOff()) {
+      return;
+    }
+    const chosen = ids.filter((lineId) => picked().has(lineId));
+    const rest = ids.filter((lineId) => !picked().has(lineId));
+    setError(null);
+    try {
+      const [first] = await splitBill(id, [chosen, rest]);
+      setPicking(false);
+      if (first !== undefined) {
+        switchTo(first);
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  // The table's other open bills, which putting the bill back together folds into this one.
+  const otherParts = () => openBillsFor(params.id).filter((id) => id !== billId());
+  // Undoing a split is a merge into the bill on screen, never an edit (ADR-0128 decision 10).
+  const putBack = async () => {
+    const id = billId();
+    const others = otherParts();
+    if (id === null || others.length === 0) {
+      return;
+    }
+    setError(null);
+    try {
+      await mergeBills(id, others);
+      setTender(null);
+      setTyping(false);
+      setTypedText("");
+      await showBill(id);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
+
+  // After one guest's part is paid: the next bill still open on the table.
+  const nextBill = (id: string) => switchTo(id);
+
   const readyToVoid = () => approverCode().trim() !== "" && approverPin() !== "";
 
   const closeVoid = () => {
@@ -542,6 +713,26 @@ export function Pay() {
                 </>
               )}
             </Show>
+            {/*
+              A part of a split table says what it is for (ADR-0128), so the guest can check it
+              before paying, and the cashier is not reading out a total that matches nobody's order.
+              Putting the bill back together is the way out of a split made by mistake: a merge into
+              the bill on screen, which the edge records rather than edits.
+            */}
+            <Show when={isPart()}>
+              <p class="mt-1 text-sm text-ink-muted" data-outcome="bill-part">
+                {t("pay.part_for", { items: partItems() })}
+              </p>
+            </Show>
+            <Show when={otherParts().length > 0 && taken().length === 0}>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+                onClick={() => void putBack()}
+              >
+                {t("pay.put_back", { count: otherParts().length + 1 })}
+              </button>
+            </Show>
 
             <Show when={error()}>
               {(message) => (
@@ -567,7 +758,7 @@ export function Pay() {
                     classList={{ "border-accent": ways() === n }}
                     aria-pressed={ways() === n}
                     aria-label={t("pay.split_ways", { count: n })}
-                    disabled={taken().length > 0}
+                    disabled={taken().length > 0 || picking()}
                     data-step="splitEvenly"
                     onClick={() => splitEvenly(n)}
                   >
@@ -627,6 +818,64 @@ export function Pay() {
                   </button>
                 </div>
               )}
+            </Show>
+
+            {/*
+              Splitting by item (ADR-0128): pick the lines one guest is paying for and split them off
+              into a bill of their own, and what is left stays open as the next bill. Behind a button
+              rather than a list on every bill, because the list would push the tenders below the fold
+              on a phone for every settle that never splits.
+            */}
+            <Show when={(covered()?.length ?? 0) > 1 && !picking()}>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line bg-surface disabled:opacity-50"
+                disabled={ways() !== null || taken().length > 0}
+                data-step="splitByItem"
+                onClick={() => splitByItem()}
+              >
+                {t("pay.split_by_item")}
+              </button>
+            </Show>
+            <Show when={picking()}>
+              <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                <p class="text-sm text-ink-muted">{t("pay.split_pick")}</p>
+                <ul class="mt-2 flex list-none flex-col gap-2 p-0">
+                  <For each={coveredLines()}>
+                    {(line) => (
+                      <li>
+                        <button
+                          type="button"
+                          class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token border border-line px-3 text-left"
+                          classList={{ "border-2 border-accent font-semibold": picked().has(line.orderLineId) }}
+                          aria-pressed={picked().has(line.orderLineId)}
+                          data-step="pickLine"
+                          onClick={() => pickLine(line.orderLineId)}
+                        >
+                          <span>{`${formatQuantity(line.quantityMilli)} × ${line.name}`}</span>
+                          <span class="tabular-nums">{formatAmount(line.lineTotal)}</span>
+                        </button>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                  disabled={!canSplitOff()}
+                  data-step="splitOff"
+                  onClick={() => void splitOff()}
+                >
+                  {t("pay.split_off", { count: picked().size })}
+                </button>
+                <button
+                  type="button"
+                  class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+                  onClick={() => setPicking(false)}
+                >
+                  {t("common.cancel")}
+                </button>
+              </div>
             </Show>
 
             <Show when={tipsEnabled() && ways() === null}>
@@ -739,12 +988,18 @@ export function Pay() {
             </p>
             </Show>
 
+            {/*
+              Every tender waits for the edge's figure. Before it lands the amount owed reads as
+              nothing, and a tap then would ask the edge to settle for nothing — which it refuses, with
+              the guest's money already on the counter. A bill put on screen mid-flow (the next part of
+              a split) starts in exactly that state, so the window is not only the first load's.
+            */}
             <div class="mt-4 flex flex-col gap-2">
               <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
               <button
                 type="button"
                 class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
-                disabled={typedTenderInvalid()}
+                disabled={check() === null || typedTenderInvalid()}
                 data-step="payCash"
                 onClick={() => payCash()}
               >
@@ -754,7 +1009,8 @@ export function Pay() {
               <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
                 <button
                   type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface"
+                  class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
+                  disabled={check() === null}
                   data-step="payCard"
                   onClick={() => payCard()}
                 >
@@ -764,7 +1020,8 @@ export function Pay() {
               <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
                 <button
                   type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface"
+                  class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
+                  disabled={check() === null}
                   data-step="payQr"
                   onClick={() => payQr()}
                 >
@@ -944,9 +1201,29 @@ export function Pay() {
                 {t(receiptPrintKey(bill().receipt_print))}
               </p>
             </Show>
+            {/*
+              A split table's next guest (ADR-0128). The table waits for the last part, so the pay
+              screen offers it straight away rather than sending the cashier back through the order.
+            */}
+            <Show when={openBillFor(params.id)}>
+              {(next) => (
+                <button
+                  type="button"
+                  class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+                  data-step="nextBill"
+                  onClick={() => nextBill(next())}
+                >
+                  {t("pay.next_bill", { count: openBillsFor(params.id).length })}
+                </button>
+              )}
+            </Show>
             <button
               type="button"
-              class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+              class="mt-4 min-h-touch w-full rounded-token font-semibold"
+              classList={{
+                "bg-primary text-primary-ink": openBillFor(params.id) === undefined,
+                "border border-line": openBillFor(params.id) !== undefined,
+              }}
               onClick={() => navigate("/")}
             >
               {t("pay.back_floor")}
