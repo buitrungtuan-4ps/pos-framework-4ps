@@ -263,6 +263,14 @@ const PRECONDITIONS = {
     await addByName(page, "salad");
     await addByName(page, "iced");
   },
+  // One thing for seat 1 and one for seat 2, so there are two seats to split between.
+  "Split a dine-in bill by seat, then settle each seat's part by QR": async (page) => {
+    await seatTable(page);
+    await page.locator('[data-step="chooseSeat"]').nth(0).click();
+    await addByName(page, "salad");
+    await page.locator('[data-step="chooseSeat"]').nth(1).click();
+    await addByName(page, "iced");
+  },
   // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
   // skipped for a reason the declaration states.
   "Void an unfired line": async (page) => {
@@ -1251,6 +1259,55 @@ test("a split table's food stays on the kitchen board until its last part is pai
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await navigateTo(page, "/kds");
     await expect(page.getByText("Garden salad")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A table split by seat pays seat by seat, and the table's own dishes are a bill of their own.
+//
+// The seat each dish was ordered for is on the line, so the split is one tap with nothing to pick.
+// Seat 1 had the salad and seat 2 the iced tea; the bottled water was ordered for the table, with no
+// seat, and a line cannot be halved — so it becomes a third bill rather than landing on whichever
+// seat the code happened to sort last. Each part says whose it is.
+test("a table split by seat pays seat by seat, with the table's own dishes as a bill of their own", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const seats = page.locator('[data-step="chooseSeat"]');
+    await seats.nth(0).click();
+    await addByName(page, "salad");
+    await seats.nth(1).click();
+    await addByName(page, "iced");
+    // Tapping the chosen seat again clears it: the water is the table's.
+    await seats.nth(1).click();
+    await addByName(page, "water");
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-step="splitBySeat"]')).toHaveText("Split by seat (3 bills)");
+    await page.locator('[data-step="splitBySeat"]').click();
+
+    const part = page.locator('[data-outcome="bill-part"]');
+    await expect(part).toHaveText("Seat 1 · For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (2 left)");
+    await page.locator('[data-step="nextBill"]').click();
+
+    await expect(part).toHaveText("Seat 2 · For: 1 × Iced tea");
+    await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await page.locator('[data-step="nextBill"]').click();
+
+    await expect(part).toHaveText("For: 1 × Bottled water");
+    await expect(page.getByText("9,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }

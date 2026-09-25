@@ -28,6 +28,7 @@ import {
   openBillFor,
   openBillsFor,
   reasonsFor,
+  seatsEnabled,
   settle,
   splitBill,
   tenderAccepted,
@@ -494,6 +495,57 @@ export function Pay() {
     coveredLines()
       .map((line) => `${formatQuantity(line.quantityMilli)} × ${line.name}`)
       .join(", ");
+  // The seat every line of the part was ordered for, when they share one: a part split off by seat
+  // says whose it is.
+  const partSeat = () => {
+    const seats = new Set(coveredLines().map((line) => line.seat));
+    const [only] = [...seats];
+    return seats.size === 1 ? only : undefined;
+  };
+
+  // The bill's lines by the seat each was ordered for, seats in order and the table's own lines last:
+  // the partition a split by seat proposes (ADR-0128). Null when it would not split anything — seats
+  // off, or everything on one seat. A line this device does not know goes with the table's, so the
+  // parts still cover exactly what the bill does, which is the one shape the edge accepts.
+  const seatParts = (): string[][] | null => {
+    const ids = covered();
+    if (ids === null || !seatsEnabled()) {
+      return null;
+    }
+    const seatOf = new Map(linesForTable(params.id).map((line) => [line.orderLineId, line.seat]));
+    const bySeat = new Map<number, string[]>();
+    const tables: string[] = [];
+    for (const lineId of ids) {
+      const seat = seatOf.get(lineId);
+      if (seat === undefined) {
+        tables.push(lineId);
+      } else {
+        bySeat.set(seat, [...(bySeat.get(seat) ?? []), lineId]);
+      }
+    }
+    const parts = [...bySeat.entries()].sort(([a], [b]) => a - b).map(([, lines]) => lines);
+    if (tables.length > 0) {
+      parts.push(tables);
+    }
+    return parts.length > 1 ? parts : null;
+  };
+  // One tap: a bill per seat, from the seat each line already carries, and the first on screen.
+  const splitBySeat = async () => {
+    const id = billId();
+    const parts = seatParts();
+    if (id === null || parts === null) {
+      return;
+    }
+    setError(null);
+    try {
+      const [first] = await splitBill(id, parts);
+      if (first !== undefined) {
+        switchTo(first);
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
 
   // Opens the bill's lines for the cashier to pick what one guest is paying for (ADR-0128).
   const splitByItem = () => {
@@ -721,7 +773,9 @@ export function Pay() {
             */}
             <Show when={isPart()}>
               <p class="mt-1 text-sm text-ink-muted" data-outcome="bill-part">
-                {t("pay.part_for", { items: partItems() })}
+                {partSeat() === undefined
+                  ? t("pay.part_for", { items: partItems() })
+                  : t("pay.part_for_seat", { seat: partSeat() ?? 0, items: partItems() })}
               </p>
             </Show>
             <Show when={otherParts().length > 0 && taken().length === 0}>
@@ -827,15 +881,32 @@ export function Pay() {
               on a phone for every settle that never splits.
             */}
             <Show when={(covered()?.length ?? 0) > 1 && !picking()}>
-              <button
-                type="button"
-                class="mt-2 min-h-touch w-full rounded-token border border-line bg-surface disabled:opacity-50"
-                disabled={ways() !== null || taken().length > 0}
-                data-step="splitByItem"
-                onClick={() => splitByItem()}
-              >
-                {t("pay.split_by_item")}
-              </button>
+              <div class="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
+                  disabled={ways() !== null || taken().length > 0}
+                  data-step="splitByItem"
+                  onClick={() => splitByItem()}
+                >
+                  {t("pay.split_by_item")}
+                </button>
+                {/* By seat, where the store assigns them: the partition is already written on the
+                    lines, so it costs one tap and no picking. */}
+                <Show when={seatParts()}>
+                  {(parts) => (
+                    <button
+                      type="button"
+                      class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
+                      disabled={ways() !== null || taken().length > 0}
+                      data-step="splitBySeat"
+                      onClick={() => void splitBySeat()}
+                    >
+                      {t("pay.split_by_seat", { count: parts().length })}
+                    </button>
+                  )}
+                </Show>
+              </div>
             </Show>
             <Show when={picking()}>
               <div class="mt-3 rounded-token border border-line bg-surface p-3">

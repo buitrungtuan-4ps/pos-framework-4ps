@@ -174,6 +174,19 @@ export const TASKS = [
     outcome: { route: "/table/:id/pay", mark: "settled" },
   },
   {
+    task: "Split a dine-in bill by seat, then settle each seat's part by QR",
+    budget: 5,
+    note: "Five for two seats, and the split itself is one of them. Which seat each dish was for is already written on the line, so splitting by seat is a single tap with nothing to pick. The rest is the guests: one tender each, and one tap from the receipt that closed a seat's bill to the next. It is split by item with the picking already done, which is why it is two taps shorter.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "splitBySeat" },
+      { route: "/table/:id/pay", action: "payQr" },
+      { route: "/table/:id/pay", action: "nextBill" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
     task: "Settle a dine-in table in cash, typing the amount handed over",
     budget: 3,
     note: "For the pile no quick key names. \"Other amount\" takes the place of choosing a note, so the flow costs what the cash settle costs; the figure is typed on the pad, and typing is not a tap.",
