@@ -66,6 +66,13 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A table's bill splits by seat in one tap.** Where the store assigns seats, the pay screen offers
+  **Split by seat (3 bills)**. It makes a bill per seat from the seat each dish was ordered for, with
+  nothing to pick. The table's own dishes, ordered for no seat, become a bill of their own, because
+  a line cannot be halved. Each part says whose it is ("Seat 2 · For: 1 × Iced tea"), and the parts
+  are paid one after another as a split by item's are. Declared as a five-tap flow for two seats.
+  Docs: `docs/ui-ux.md` §3 (cashier), `docs/pos-spec.md` §5.
+
 - **A table's bill splits by item: each guest pays for what they had.** The pay screen's **Split by
   item** lists the bill's lines. The cashier taps what one guest is paying for, and **Split off**
   makes those lines a bill of their own; the rest stay open as the next bill.
