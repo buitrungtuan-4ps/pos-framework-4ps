@@ -861,6 +861,93 @@ test("the kitchen board counts how long a ticket has waited, and marks it late",
   }
 });
 
+// The kitchen board rings when new food reaches it, once a cook has turned its sound on — and not
+// for what was already on the board when it came on.
+//
+// A board in a loud kitchen is looked at when something tells the cook to look. The test cannot
+// hear, so a stand-in speaker counts the notes the board plays. Two pages share one device, as a
+// till and a board do in a store: the till sends, the board rings.
+//
+// The reload at the end is the half that keeps the chime trustworthy. The choice survives, the
+// food already on the board stays quiet, and the board asks for one tap before it can ring again —
+// a browser will not start sound on a page nobody has touched.
+test("the kitchen board rings when new food arrives, once its sound is on", async ({ context }) => {
+  const edge = await startEdge();
+  try {
+    await context.addInitScript(() => {
+      window.__notes = 0;
+      class Speaker {
+        constructor() {
+          this.state = "running";
+          this.currentTime = 0;
+          this.destination = {};
+        }
+        resume() {
+          this.state = "running";
+          return Promise.resolve();
+        }
+        createOscillator() {
+          window.__notes += 1;
+          return {
+            type: "sine",
+            frequency: { setValueAtTime() {} },
+            connect() {},
+            start() {},
+            stop() {},
+          };
+        }
+        createGain() {
+          return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} };
+        }
+      }
+      window.AudioContext = Speaker;
+    });
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+    await addItem(till);
+    await sendOrder(till);
+
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    const notes = () => board.evaluate(() => window.__notes);
+    const toggle = board.locator('[data-outcome="kds-sound"]');
+    await expect(toggle).toHaveText("Sound off");
+    await toggle.click();
+    await expect(toggle).toHaveText("Sound on");
+    // The toggle rings once, two notes, so the cook hears it working.
+    await expect.poll(notes).toBe(2);
+
+    await addByName(till, "iced");
+    await till.locator('[data-step="fireOrder"]').click();
+    await expect.poll(notes).toBe(4);
+
+    // Away and back, with the sound still live: the board comes on over food it already had, which
+    // is not news. Nothing to wait for but the absence of a note, so the wait is a fixed one.
+    await navigateTo(board, "/");
+    await navigateTo(board, "/kds");
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    await board.waitForTimeout(700);
+    expect(await notes()).toBe(4);
+
+    await board.reload();
+    await expect(toggle).toHaveText("Sound on");
+    await expect(board.getByText("Tap anywhere on the board to let it ring for new food.")).toBeVisible();
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    await board.locator("h1").click();
+    await expect(board.getByText("Tap anywhere on the board to let it ring for new food.")).toHaveCount(0);
+    expect(await notes()).toBe(0);
+
+    await addByName(till, "water");
+    await till.locator('[data-step="fireOrder"]').click();
+    await expect.poll(notes).toBe(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // And the age survives a reload, which is the whole reason the edge records it.
 //
 // This is the assertion the backend change exists for. A board could have counted from the moment
