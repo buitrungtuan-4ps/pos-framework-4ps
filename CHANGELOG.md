@@ -18,6 +18,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console's Fetch from the release button works after a deploy, with nothing added by
+  hand** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 4). The button needs a
+  `[release_source]` block in `secrets/cloud.toml`, and until now an operator had to SSH to the box
+  to add one, so a new release meant downloading six files and uploading them again. The deploy
+  workflow now passes the repository it deploys from, when that repository is public, or the
+  `owner/name` in the new optional repository variable `RELEASE_SOURCE_REPOSITORY`; `bootstrap.sh`
+  writes the block once (step 2c) and keeps it on every later deploy. A block already in the file,
+  in any TOML spelling, is never touched, so a token added by hand for a private repository
+  survives. A name that is not `owner/name` is refused with a warning, and nothing about the block
+  can fail a deploy. **Upgrade note:** a cloud deployed from a public repository gains the block on
+  its next deploy. The box calls the GitHub API only when someone with `console.ota.publish` presses
+  the button, and the upload route is unchanged. A private repository is unchanged too: its block
+  still needs a token and is added by hand (`docs/deploy-runbook.md`).
+
 - **A headless Linux box can keep its activation across a reboot**
   ([ADR-0151](docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md), gate
   P2). On Linux the device credential lived in the kernel keyring, which a reboot empties, so a box

@@ -129,22 +129,29 @@ is spent. Sign in at `/admin/login` with the password and a current code.
   the one secret here captured rather than generated — but the capture is scripted, not a step for a
   person. Watch the bootstrap log for `create garage artifact credentials`; a `warn` there means the
   block was not written and the artifact route stays off, which affects only OTA.
-- **Fetching a release from the console (optional)**: add a `[release_source]` block to
-  `secrets/cloud.toml` and the Ota screen gains a button that pulls the signed pair straight from the
-  release that published it, instead of an operator moving six files by hand
+- **Fetching a release from the console**: a `[release_source]` block in `secrets/cloud.toml` gives
+  the Ota screen a button that pulls the signed pair straight from the release that published it,
+  instead of an operator moving six files by hand
   ([ADR-0088](adr/0088-ota-artifact-hosting.md) Amendment 4, `docs/release-runbook.md` step 5).
-  `bootstrap.sh` does **not** write it — the repository is a fork's own, not something a script can
-  guess:
+  **A public repository needs nothing done**: the deploy workflow passes the repository it runs in
+  and `bootstrap.sh` writes the block once, then keeps it (watch for
+  `set    cloud.toml [release_source]` on the first deploy, `keep   release_source` after). To name
+  another repository, set the repository variable `RELEASE_SOURCE_REPOSITORY` to `owner/name` before
+  the deploy that first writes the block; once it is written, changing the variable changes nothing,
+  and the block is edited on the box. A **private** repository needs a read token, which the
+  workflow never carries, so there the variable is left unset and the block is added on the box by
+  hand. A block already in the file, in any spelling, is never touched:
 
   ```toml
   [release_source]
   repository = "your-org/your-fork"
-  # token = "ghp_…"   # only for a private repository; a public one needs none
+  token = "ghp_…"   # a private repository only; a public one needs none
   ```
 
-  The box then needs outbound HTTPS to the forge. It is an operator's path and never a store's, so a
+  The block takes effect when `pos_cloud` next starts, which every deploy of a new commit does. The
+  box then needs outbound HTTPS to the forge. It is an operator's path and never a store's, so a
   forge that is unreachable delays a release and stops no shop trading — and the upload route stays
-  as the way past it. Leave the block out and the button says so rather than failing obscurely.
+  as the way past it. Without the block the button says so rather than failing obscurely.
 - **Backups**: set `RCLONE_REMOTE` so the daily dump and WAL ship off-box, and let the nightly
   `restore-drill` prove they restore ([ADR-0046](adr/0046-backups-and-restore.md)).
 - **Certificate export cron (the two `acme-*` modes)**: add the line below so renewals reach

@@ -109,9 +109,10 @@ person decides which key the fleet trusts. Do the one-time setup below before th
    — bare, without the tag's `v`, the same string the binary reports and a rollout's `target_version`
    names — and press **Fetch from the release**. The cloud reads the release's assets, takes every
    bare executable that has a `.minisig` beside it, and hosts all three targets in one action
-   ([ADR-0088](adr/0088-ota-artifact-hosting.md) Amendment 4). It needs a `[release_source]` block in
-   `secrets/cloud.toml` (see `docs/deploy-runbook.md`); without one the button says so, and (b) is
-   the way through.
+   ([ADR-0088](adr/0088-ota-artifact-hosting.md) Amendment 4). It reads the `[release_source]` block
+   in `secrets/cloud.toml`, which the deploy writes by itself for a public repository and an
+   operator adds by hand for a private one (see `docs/deploy-runbook.md`); without it the button
+   says so, and (b) is the way through.
 
    **b. By upload (needs no outbound network and no credential).** For **each of the three targets**,
    send the bare executable and the signature line beside it. The bare executable is `.bin` on the
