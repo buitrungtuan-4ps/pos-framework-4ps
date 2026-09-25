@@ -791,6 +791,10 @@ mod tests {
                 ForbiddenReason::Loopback
             ))
         );
+    }
+
+    #[test]
+    fn v6_tunneling_and_benchmarking_prefixes_are_refused() {
         // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
         assert_eq!(
             classify_ip(ip("2001:1234:5678:9abc::127.0.0.1")),

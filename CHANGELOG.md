@@ -16,6 +16,12 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **SSRF protection in webhook URL classification now checks 6over4 / IPv4-compatible interface IDs**
+  ([crates/pos-cloud/src/webhook/ssrf.rs]). Prevents SSRF bypasses using 6over4 / IPv4-compatible
+  interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
+
 ### Added
 
 - **A headless Linux box can keep its activation across a reboot**
