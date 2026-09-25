@@ -43,6 +43,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A table's bill splits evenly between its guests, each paying their own way.** A row of guest
+  counts, 2 to 6, on the pay screen divides what is owed into shares. Each guest pays their share by
+  cash (with its own change), card or QR. The last share settles the bill: the shares are held on
+  the screen and sent together, because the edge settles a bill in one step with payments that add
+  up to the total exactly. Three ways, 655,600₫ is 218,534₫, then 218,533₫ twice. **Undo** gives a
+  taken share back. The tip row hides during a split, and the discount and void are disabled once a
+  share is taken. A screen that reloads mid-split asks for the shares again. Docs: `docs/ui-ux.md`
+  §3 (cashier).
+
 - **The till takes any amount of cash handed over, and a QR transfer.** Found in the till review
   against market restaurant POS systems.
   - **Quick-cash keys cover bills above the largest note.** The keys used to be "every note at least

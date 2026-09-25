@@ -227,6 +227,10 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  "Split a dine-in bill evenly between two guests, each paying by QR": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
   // skipped for a reason the declaration states.
   "Void an unfired line": async (page) => {
@@ -1049,6 +1053,75 @@ test("a bill larger than the largest note takes any amount handed over", async (
     await page.locator('[data-step="payCash"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await expect(page.getByText("644,400₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A bill split three ways settles with each guest's own tender, and the cash guest's change.
+//
+// The edge settles a bill in one step, with payments that add up to the total exactly, so the pay
+// screen holds each guest's share until the last one lands. A share is what is left divided by the
+// shares still to pay, rounded up: four pizzas are 655,600₫, and three ways that is 218,534₫, then
+// 218,533₫ twice, which add back up to the bill to the đồng.
+//
+// The first guest's share is taken and then given back — "Undo" — to prove the shares are worked out
+// again from what is left rather than remembered. Then QR, card, and the third guest pays cash with
+// a 250,000₫ pile, which the quick keys offer for a 218,533₫ share once the till has Vietnam's notes
+// (injected as in the test above). The settled panel's change is that guest's 31,467₫: the change
+// is summed over every payment on the bill, and only the cash share has any.
+test("a bill split three ways settles with each guest's own tender, and the cash guest's change", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          cash_denominations: [10_000, 20_000, 50_000, 100_000, 200_000, 500_000],
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (let pizza = 0; pizza < 4; pizza += 1) {
+      await addItemWithAChoice(page);
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Split between 3 guests" }).click();
+    const share = page.locator('[data-outcome="share-due"]');
+    await expect(share).toHaveText("218,534₫");
+
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    await expect(share).toHaveText("218,533₫");
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(0);
+    await expect(share).toHaveText("218,534₫");
+
+    await page.locator('[data-step="payQr"]').click();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(2);
+    await expect(share).toHaveText("218,533₫");
+    await expect(page.locator('[data-step="setTender"]')).toHaveText([
+      "Exact",
+      "250,000₫",
+      "300,000₫",
+      "400,000₫",
+      "500,000₫",
+    ]);
+    await page.locator('[data-step="setTender"]').nth(1).click();
+    await page.locator('[data-step="payCash"]').click();
+
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.getByText("31,467₫", { exact: true })).toBeVisible();
   } finally {
     await edge.stop();
   }
