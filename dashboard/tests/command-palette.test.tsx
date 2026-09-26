@@ -35,6 +35,7 @@ describe("the command palette", () => {
     const input = screen.getByRole("combobox");
     expect(input.getAttribute("aria-expanded")).toBe("true");
     expect(input.getAttribute("aria-controls")).toBe("command-palette-results");
+    expect(input.getAttribute("aria-activedescendant")).toBe("command-palette-option-0");
 
     const listbox = screen.getByRole("listbox");
     expect(listbox.id).toBe("command-palette-results");
@@ -44,11 +45,12 @@ describe("the command palette", () => {
     const firstOption = options[0];
     expect(firstOption).toBeDefined();
     if (firstOption) {
+      expect(firstOption.id).toBe("command-palette-option-0");
       expect(firstOption.getAttribute("aria-selected")).toBe("true");
     }
   });
 
-  it("navigates selection with arrow keys and updates aria-selected", async () => {
+  it("navigates selection with arrow keys and updates aria-selected and aria-activedescendant", async () => {
     mount();
     openPalette();
     await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
@@ -63,12 +65,15 @@ describe("the command palette", () => {
 
     if (opt0 && opt1) {
       expect(opt0.getAttribute("aria-selected")).toBe("true");
+      expect(input.getAttribute("aria-activedescendant")).toBe("command-palette-option-0");
 
       fireEvent.keyDown(input, { key: "ArrowDown" });
       await waitFor(() => expect(opt1.getAttribute("aria-selected")).toBe("true"));
+      expect(input.getAttribute("aria-activedescendant")).toBe("command-palette-option-1");
 
       fireEvent.keyDown(input, { key: "ArrowUp" });
       await waitFor(() => expect(opt0.getAttribute("aria-selected")).toBe("true"));
+      expect(input.getAttribute("aria-activedescendant")).toBe("command-palette-option-0");
     }
   });
 });
