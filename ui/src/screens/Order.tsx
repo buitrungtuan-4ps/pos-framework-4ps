@@ -22,6 +22,7 @@ import {
   modifierNames,
   moveTable,
   openBill,
+  openBillFor,
   reasonsFor,
   seatFor,
   seatsEnabled,
@@ -132,6 +133,10 @@ export function Order() {
   // Guests move before the bill only: once they have asked for it they pay where they sit, and the
   // edge refuses the move (`docs/pos-spec.md` §2).
   const movable = () => !walkIn() && tableState(params.id) === "TABLE_STATE_OCCUPIED";
+  // Whether a bill is open on this table. A bill names the dishes it covers when it opens, so one
+  // rung after it would be on no bill and leave with the table unpaid; the edge refuses it
+  // (`BILL_ALREADY_OPEN`), and the menu says so before the tap rather than after it.
+  const billed = () => openBillFor(key()) !== undefined;
   // Every free table on the published floor, in the floor's own order.
   const freeTables = createMemo(() =>
     floorTables().filter(
@@ -414,7 +419,7 @@ export function Order() {
     <button
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
-      disabled={!item.available}
+      disabled={!item.available || billed()}
       data-step="onItem"
       onClick={() => onItem(item)}
     >
@@ -1105,6 +1110,18 @@ export function Order() {
         <Show when={marking()}>
           <p class="mb-3 text-sm text-ink-muted" role="status">
             {t("order.mark_sold_out_hint")}
+          </p>
+        </Show>
+        {/* The bill is open, so the menu sells nothing: said here, where the tap would have gone,
+            with the way to order more. Marking a dish sold out has nothing to do with the bill and
+            stays available. */}
+        <Show when={billed() && !marking()}>
+          <p
+            class="mb-3 rounded-token border border-line bg-surface px-3 py-2 text-sm"
+            role="status"
+            data-outcome="bill-open-locked"
+          >
+            {t("order.bill_open_locked")}
           </p>
         </Show>
         {/*
