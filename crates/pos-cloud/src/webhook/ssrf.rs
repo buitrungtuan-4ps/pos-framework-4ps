@@ -361,18 +361,18 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         }
     }
 
-    // SIIT IPv4-translated IPv6 address (`::ffff:0:a.b.c.d`, RFC 6145).
-    if segments[0] == 0
-        && segments[1] == 0
-        && segments[2] == 0
-        && segments[3] == 0
-        && segments[4] == 0xffff
-        && segments[5] == 0
-    {
+    // SIIT IPv4-translated IPv6 address (`<prefix>:ffff:0:a.b.c.d`, RFC 6145).
+    if segments[4] == 0xffff && segments[5] == 0 {
         let [a, b, c, d] = ip.octets()[12..16] else {
             unreachable!()
         };
-        return classify_v4(Ipv4Addr::new(a, b, c, d));
+        let is_siit_prefix =
+            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
+        if is_siit_prefix || a != 0 {
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
+            }
+        }
     }
 
     // NAT64, well-known prefix or local-use (RFC 6052, RFC 8215) — its own function because the
@@ -759,7 +759,7 @@ mod tests {
                 ForbiddenReason::LinkLocal
             ))
         );
-        // SIIT IPv4-translated smuggling cases (`::ffff:0:a.b.c.d`).
+        // SIIT IPv4-translated smuggling cases (`<prefix>:ffff:0:a.b.c.d`).
         assert_eq!(
             classify_ip(ip("::ffff:0:127.0.0.1")),
             Err(SsrfRejection::ForbiddenAddress(
@@ -771,6 +771,20 @@ mod tests {
             classify_ip(ip("::ffff:0:169.254.169.254")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("::ffff:0:169.254.169.254"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:db8::ffff:0:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::ffff:0:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:1234:5678:9abc:ffff:0:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:1234:5678:9abc:ffff:0:169.254.169.254"),
                 ForbiddenReason::LinkLocal
             ))
         );
