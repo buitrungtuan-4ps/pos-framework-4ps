@@ -3927,9 +3927,10 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::Domain`] if the line
-    /// names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if the
-    /// modifiers break the item's rules, or [`AppError`] if the store cannot be written.
+    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::BillAlreadyOpen`] once
+    /// a bill is open on its order (that bill would not cover the line), [`AppError::Domain`] if the
+    /// line names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if
+    /// the modifiers break the item's rules, or [`AppError`] if the store cannot be written.
     pub async fn add_line(
         &self,
         actor: Actor,
@@ -3954,10 +3955,20 @@ impl<S: EventStore> Edge<S> {
         // never their names, so the names come from that book (ADR-0144).
         let modifier_display_names =
             Self::modifier_names(&session.menu, &draft.modifier_menu_item_ids);
-        let order_id = self
-            .lock_projection()
-            .order_for_table(table_id)
-            .ok_or(AppError::NoOpenOrder)?;
+        let (order_id, billed) = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(table_id);
+            let billed = order_id.and_then(|id| projection.bill_for_order(id));
+            (order_id, billed.is_some())
+        };
+        let order_id = order_id.ok_or(AppError::NoOpenOrder)?;
+        // A bill names the lines it covers when it opens (ADR-0128 decision 9), so a line rung
+        // after it is on no bill: the guest pays the old total and the line leaves with the table,
+        // unpaid. The counter path has refused this since ADR-0146; the floor refuses it too, and
+        // the way to order more is to void the bill, whose replacement covers every line.
+        if billed {
+            return Err(AppError::BillAlreadyOpen);
+        }
         self.append_line(&ctx, order_id, draft, modifier_display_names)
             .await
     }

@@ -1988,6 +1988,47 @@ test("a manager voids a bill on a till with no keyboard, typing on the on-screen
   }
 });
 
+// Once the bill is open the menu sells nothing, and says how to order more.
+//
+// A bill names the dishes it covers when it opens, so a dish rung onto the table afterwards was on no
+// bill: the guest paid the old total and the dish left with the table, unpaid. The edge refuses it
+// now (`BILL_ALREADY_OPEN`); the till does not offer it, and says what to do instead. Voiding the
+// bill (the demo employee holds every permission, so approves their own void) gives the menu back.
+test("once the bill is open the menu is locked, and voiding the bill gives it back", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.getByRole("link", { name: "← Order" }).click();
+
+    await expect(page.locator('[data-outcome="bill-open-locked"]')).toBeVisible();
+    const items = page.locator('[data-step="onItem"]');
+    await expect(items.first()).toBeVisible();
+    for (const item of await items.all()) {
+      await expect(item).toBeDisabled();
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="askVoidBill"]').click();
+    await page.locator("#void-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    await page.getByRole("button", { name: "← Order" }).click();
+
+    await expect(page.locator('[data-outcome="bill-open-locked"]')).toHaveCount(0);
+    await addItem(page);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter order on the kitchen board and the pass is called by the guest's number.
 //
 // Both screens labelled a counter ticket with the last four characters of the order's internal id

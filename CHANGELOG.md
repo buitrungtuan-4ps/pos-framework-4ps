@@ -67,6 +67,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
+  A bill names the dishes it covers when it opens, so a dish added afterwards was on no bill. The
+  guest paid the old total, the dish disappeared from the table when it was cleared, and nobody was
+  charged for it. The counter already refused this; a table now does too.
+  - The edge answers `409 BILL_ALREADY_OPEN` for `POST /api/tables/{id}/lines` once a bill is open
+    on the table's order, and writes nothing.
+  - The order screen locks its menu while the bill is open and says how to order more: **Take
+    payment**, **Void this bill** (a manager's PIN and a reason), then back to the order. The next
+    bill covers every dish.
+  - Changing the quantity of a dish already on the bill, or voiding it, is unchanged: the bill's
+    total follows the dish.
+
+  Docs: `docs/pos-spec.md` §5, `docs/ui-ux.md` §3 (order).
+
 - **On a phone or a tablet, a dish's choices open on screen.** Below a terminal the menu is under the
   bill, and the choices a dish needs (a pizza's size) opened in the bill's column, wherever the bill
   ended. A long menu, or a screen on its side, put them out of sight, so a server tapped the pizza
