@@ -416,9 +416,10 @@ where
         // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
         // till filters by the act in hand.
         .route("/api/reason-codes", get(reason_codes::list::<S>))
-        // The floor: seat, clean, read.
+        // The floor: seat, clean, move the guests to another table, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
+        .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
         .route("/api/tables/{id}", get(tables::get::<S>))
         // What the table owes right now, assembled by the edge — the till displays the figure it is
         // going to settle against rather than computing one of its own (roadmap-v3 E5).

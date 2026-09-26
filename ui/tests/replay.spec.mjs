@@ -216,6 +216,10 @@ const PRECONDITIONS = {
   },
   "Order an item for a particular seat": seatTable,
   "Mark an item sold out on every till": seatTable,
+  "Move a table's guests to another table": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   "Mark a dish sold out from the kitchen board": async (page) => {
     await navigateTo(page, "/kds");
   },
@@ -1183,6 +1187,62 @@ test("the kitchen marks a dish sold out, a till stops selling it, and the kitche
     await board.locator('[data-step="bringBack"]').click();
     await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveCount(0);
     await expect(tea).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Guests move to another table and take their order with them.
+//
+// A till, the floor on a second device, and the kitchen board share one edge. The server moves
+// table 1's guests to table 2 with a drink already sent. The till lands on table 2, says where the
+// guests came from, and still has the drink; the floor shows table 1 waiting to be cleared and
+// table 2 seated; the kitchen's ticket for the drink names table 2. The other two devices follow
+// without reloading. Moving them back is refused until table 1 is cleared, as the floor tells it.
+test("guests move to another table with their order, and every screen follows them", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    const floor = await context.newPage();
+    await floor.goto(`${edge.baseURL}/`);
+    await expect(floor.locator('[data-outcome="floor"]')).toBeVisible();
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+
+    await seatTable(till);
+    await expect(till.locator('[data-outcome="order-open"]')).toHaveText("Table 1");
+    await addByName(till, "iced");
+    await sendOrder(till);
+    const ticket = board.locator('[data-step="onBump"]');
+    await expect(ticket).toContainText("Table 1");
+
+    await till.locator('[data-step="openMove"]').click();
+    const offered = till.locator('[data-step="moveTo"]');
+    await expect(offered.first()).toBeVisible();
+    // Only the free tables: never the table they are at.
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(0);
+    await offered.filter({ hasText: "Table 2" }).click();
+
+    await expect(till.locator('[data-outcome="order-open"]')).toHaveText("Table 2");
+    await expect(till.locator('[data-outcome="table-moved"]')).toHaveText("Moved from table 1");
+    await expect(till.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+
+    const card = (label) => floor.locator('[data-step="onCard"]', { hasText: `Table ${label}` });
+    await expect(card(1)).toContainText("Needs cleaning");
+    await expect(card(2)).toContainText("Occupied");
+    await expect(ticket).toContainText("Table 2");
+
+    // Table 1 is not free until somebody clears it, so it is not offered as a way back.
+    await till.locator('[data-step="openMove"]').click();
+    await expect(offered.first()).toBeVisible();
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(0);
+    await card(1).click();
+    await expect(card(1)).toContainText("Free");
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(1);
   } finally {
     await edge.stop();
   }

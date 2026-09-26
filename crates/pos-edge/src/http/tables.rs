@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Table floor routes: seat, clean, read (P5).
+//! Table floor routes: seat, clean, move the guests to another table, read (P5).
 //!
 //! Each is a thin shell over [`Edge`](crate::app::Edge): parse the table id, call the application
 //! loop, map the outcome to a status. The loop is what actually loads state, decides, writes and
@@ -20,7 +20,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::ids::TableId;
 
-use crate::app::{AppError, Edge, TableView};
+use crate::app::{AppError, Edge, TableView, TransferView};
 use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A table as returned to a device.
@@ -100,6 +100,60 @@ where
         return bad_request("a table id is a ULID");
     };
     respond(edge.clean_table(actor, table_id).await)
+}
+
+/// Where the guests are moving to.
+#[derive(Debug, Deserialize)]
+pub(crate) struct TransferRequest {
+    /// The free table they move to, as a ULID string.
+    to_table_id: String,
+}
+
+/// What a move did, as returned to a device: the order that moved, and both tables after it.
+#[derive(Debug, Serialize)]
+pub(crate) struct TransferResponse {
+    /// The order that moved, as a ULID string.
+    order_id: String,
+    /// The table the guests left, now waiting to be cleared.
+    from_table: TableResponse,
+    /// The table they moved to, now seated with their order.
+    to_table: TableResponse,
+}
+
+/// `POST /api/tables/{id}/transfer` — move the guests at this table, and their order, to a free
+/// one (`sales.table.transferred`). The body is `{"to_table_id": "<ulid>"}`.
+pub(crate) async fn transfer<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(from_table_id) = parse_table(&id) else {
+        return bad_request("a table id is a ULID");
+    };
+    let Ok(request) = serde_json::from_slice::<TransferRequest>(&body) else {
+        return bad_request("a transfer body is {\"to_table_id\": \"<ulid>\"}");
+    };
+    let Some(to_table_id) = parse_table(&request.to_table_id) else {
+        return bad_request("a table id is a ULID");
+    };
+    match edge.transfer_table(actor, from_table_id, to_table_id).await {
+        Ok(view) => Json(TransferResponse::from(view)).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+impl From<TransferView> for TransferResponse {
+    fn from(view: TransferView) -> Self {
+        Self {
+            order_id: view.order_id.to_string(),
+            from_table: TableResponse::from(view.from),
+            to_table: TableResponse::from(view.to),
+        }
+    }
 }
 
 /// `GET /api/tables/{id}` — the table's current projected state.

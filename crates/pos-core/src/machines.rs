@@ -70,12 +70,16 @@ triggers! {
         Settle => "settle",
         /// The table is cleaned and returned to service.
         Clean => "clean",
+        /// The guests move to another table and take their order with them. The table they left
+        /// needs clearing, as it does when guests pay and go; the table they move to is seated.
+        Transfer => "transfer",
     }
 }
 
 /// The floor-plan lifecycle of a table.
 ///
-/// `Free → Occupied → AwaitingPayment → NeedsCleaning → Free`. No terminal state: a table is reused.
+/// `Free → Occupied → AwaitingPayment → NeedsCleaning → Free`, and `Occupied → NeedsCleaning` when
+/// the guests move to another table before asking for the bill. No terminal state: a table is reused.
 /// The invariant that a table holds exactly one open order at a time is enforced by the entity
 /// layer, not this machine — this machine only governs the table's own state.
 #[derive(Debug, Clone, Copy)]
@@ -102,7 +106,11 @@ impl StateMachine for Table {
         Some(match (from, trigger) {
             (TableState::Free, TableTrigger::Seat) => TableState::Occupied,
             (TableState::Occupied, TableTrigger::RequestBill) => TableState::AwaitingPayment,
-            (TableState::AwaitingPayment, TableTrigger::Settle) => TableState::NeedsCleaning,
+            // The guests leave either way: they paid, or they moved to another table with their
+            // order. Moving is only before the bill: a bill names the order it charges, and a
+            // table whose guests have asked for one pays where it sits.
+            (TableState::AwaitingPayment, TableTrigger::Settle)
+            | (TableState::Occupied, TableTrigger::Transfer) => TableState::NeedsCleaning,
             (TableState::NeedsCleaning, TableTrigger::Clean) => TableState::Free,
             _ => return None,
         })

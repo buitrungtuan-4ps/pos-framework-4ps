@@ -443,6 +443,37 @@ function orderStillOwes(draft: StoreShape, orderId: string): boolean {
   );
 }
 
+// The guests at one table moved to another and took their order: the order, the time they sat down
+// and the seat a server was ringing for go with them, and the table they left waits to be cleared —
+// the same move the edge folds from `sales.table.transferred`. The states are the caller's: the edge's
+// answer on this device, and what that answer always is on the fan-out.
+function moveOrder(
+  draft: StoreShape,
+  orderId: string,
+  from: string,
+  to: string,
+  fromState: string,
+  toState: string,
+): void {
+  if (draft.tableOrder[from] === orderId) {
+    delete draft.tableOrder[from];
+  }
+  draft.tableOrder[to] = orderId;
+  draft.orderTable[orderId] = to;
+  draft.tableState[from] = fromState;
+  draft.tableState[to] = toState;
+  const seated = draft.seatedAt[from];
+  if (seated !== undefined) {
+    draft.seatedAt[to] = seated;
+  }
+  delete draft.seatedAt[from];
+  const seat = draft.seatForTable[from];
+  if (seat !== undefined) {
+    draft.seatForTable[to] = seat;
+  }
+  delete draft.seatForTable[from];
+}
+
 // What a table becomes once the last bill open on it is voided. Occupied again — the money was never
 // taken and the order is still there to be charged — unless a part of it was already paid, when that
 // meal is finished: the table wants cleaning and the order leaves the kitchen board, as on the edge.
@@ -534,6 +565,19 @@ export function fold(event: ServerEvent): void {
             draft.tableState[table] = "TABLE_STATE_FREE";
             delete draft.seatedAt[table];
           }),
+        );
+      }
+      break;
+    }
+    case "sales.table.transferred": {
+      const order = str(payload, "order_id");
+      const from = str(payload, "from_table_id");
+      const to = str(payload, "to_table_id");
+      if (order !== null && from !== null && to !== null) {
+        setState(
+          produce((draft) =>
+            moveOrder(draft, order, from, to, "TABLE_STATE_NEEDS_CLEANING", "TABLE_STATE_OCCUPIED"),
+          ),
         );
       }
       break;
@@ -1009,6 +1053,24 @@ export function seatedAt(tableId: string): string | undefined {
 export async function clean(tableId: string): Promise<void> {
   const response = await api.cleanTable(tableId);
   setState("tableState", tableId, response.state);
+}
+
+// Moves the guests at a table, and their order, to a free table. The fan-out brings the same move to
+// every other device; this one shows it at once.
+export async function moveTable(from: string, to: string): Promise<void> {
+  const response = await api.transferTable(from, to);
+  setState(
+    produce((draft) =>
+      moveOrder(
+        draft,
+        response.order_id,
+        from,
+        to,
+        response.from_table.state,
+        response.to_table.state,
+      ),
+    ),
+  );
 }
 
 // Adds one of the store's own menu items to a table. Every amount on the line is the edge's, passed

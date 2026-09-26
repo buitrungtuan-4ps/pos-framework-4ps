@@ -174,6 +174,88 @@ async fn seating_a_table_over_http_opens_it() {
     assert_eq!(view["state"], "TABLE_STATE_OCCUPIED");
 }
 
+/// Posts a JSON body for `token`, returning the status and raw body.
+async fn send_json(
+    app: Router,
+    token: &str,
+    uri: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, String) {
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    (
+        status,
+        String::from_utf8(bytes.to_vec()).unwrap_or_default(),
+    )
+}
+
+/// Moving the guests over HTTP: their order goes with them and both tables come back. Moving onto
+/// a table that is not free is a conflict, and a body that names no table is a bad request rather
+/// than a guess.
+#[tokio::test]
+async fn moving_the_guests_over_http_takes_their_order_to_the_new_table() {
+    let (app, token) = app().await;
+    let (status, _) = send(app.clone(), &token, "POST", &table_path("/seat")).await;
+    assert_eq!(status, StatusCode::OK);
+    let from = TableId::new(Ulid::from_u128(100));
+    let to = TableId::new(Ulid::from_u128(101));
+
+    let (status, body) = send_json(
+        app.clone(),
+        &token,
+        &table_path("/transfer"),
+        &json!({ "to_table_id": to.to_string() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let moved: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert!(moved["order_id"].is_string());
+    assert_eq!(moved["from_table"]["table_id"], from.to_string());
+    assert_eq!(moved["from_table"]["state"], "TABLE_STATE_NEEDS_CLEANING");
+    assert_eq!(moved["to_table"]["table_id"], to.to_string());
+    assert_eq!(moved["to_table"]["state"], "TABLE_STATE_OCCUPIED");
+
+    let (status, body) = send(app.clone(), &token, "GET", &format!("/api/tables/{to}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: serde_json::Value = serde_json::from_str(&body).expect("json");
+    assert_eq!(view["state"], "TABLE_STATE_OCCUPIED");
+
+    let back = format!("/api/tables/{to}/transfer");
+    let (status, _) = send_json(
+        app.clone(),
+        &token,
+        &back,
+        &json!({ "to_table_id": from.to_string() }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the table they left waits to be cleared"
+    );
+    for body in [json!({}), json!({ "to_table_id": "not-a-ulid" })] {
+        let (status, _) = send_json(app.clone(), &token, &back, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    }
+}
+
 #[tokio::test]
 async fn an_illegal_move_is_a_conflict_not_a_server_error() {
     // Cleaning a fresh (free) table is not a legal transition.

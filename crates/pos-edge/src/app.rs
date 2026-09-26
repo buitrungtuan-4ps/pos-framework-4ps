@@ -51,7 +51,7 @@ use pos_proto::events::{
     EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
     SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
     SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SecurityPermissionOverridden, StoreChainAnchored,
+    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -987,6 +987,17 @@ pub struct TableView {
     pub state: TableState,
 }
 
+/// What moving guests to another table did: the order that went with them, and both tables after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferView {
+    /// The order that moved.
+    pub order_id: OrderId,
+    /// The table the guests left, now waiting to be cleared.
+    pub from: TableView,
+    /// The table they moved to, now seated with their order.
+    pub to: TableView,
+}
+
 /// A line as the caller wants it added — the amounts captured from the menu the device holds
 /// (`sales.order_line.added` §: a line never references the live menu, so these are recorded now and
 /// never looked up later). The edge does not invent prices; it records what the device supplies.
@@ -1549,6 +1560,11 @@ impl ShiftRecord {
 /// whether the order is a guest submission awaiting staff confirmation (ADR-0116). Both are
 /// `Option` for the same reason: an `UNSPECIFIED` or unrecognised channel token from a newer
 /// sender records as `None` rather than a guessed variant, and a tableless order has no table.
+///
+/// The table is the one the order is served at, so it moves when the guests do
+/// (`sales.table.transferred`, [`Projection::move_order`]). A refused guest order hands its table
+/// back to the order it displaced by looking for the orders served *there*, and an order that had
+/// moved in would otherwise be looked for at the table it left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OrderOrigin {
     channel: Option<SalesChannel>,
@@ -1704,6 +1720,19 @@ impl Projection {
             .iter()
             .find(|(_, order)| **order == order_id)
             .map(|(table, _)| *table)
+    }
+
+    /// Moves an order from the table its guests left to the one they sat down at
+    /// (`sales.table.transferred`), live and on rebuild. The tables' own states are the caller's:
+    /// the live command has the machine's answer, and the fold reads what that answer always is.
+    fn move_order(&mut self, order_id: OrderId, from_table_id: TableId, to_table_id: TableId) {
+        if self.order_for_table(from_table_id) == Some(order_id) {
+            self.table_orders.remove(&from_table_id);
+        }
+        self.open_order(to_table_id, order_id);
+        if let Some(origin) = self.orders.get_mut(&order_id) {
+            origin.table_id = Some(to_table_id);
+        }
     }
 
     /// Records where an order came from, from a live open or from the fold on rebuild.
@@ -3735,6 +3764,83 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// Moves the guests at a table, and the order they are eating from, to a free table
+    /// (`sales.table.transferred`).
+    ///
+    /// Two floor moves, both the table machine's, and one event. The table they left waits to be
+    /// cleared, as it does when guests pay and go; the table they moved to is seated with the order
+    /// they already had: its lines, its tickets in the kitchen, and the time they sat down. Nothing
+    /// is rung again and nothing is fired again. A ticket names its order, and every screen reads
+    /// the order's table from where the order is now.
+    ///
+    /// Only before the bill. A table whose guests have asked for it pays where it sits, which the
+    /// machine enforces by allowing the move from `Occupied` alone. And not while the table's order
+    /// is a guest's submission still waiting for staff (ADR-0116): it took the table over from any
+    /// order a server had started there, and refusing it hands the table back to that order, which
+    /// only works while both are at the table they opened on. Staff decide on it first.
+    ///
+    /// [`Permission::TransferOrder`], which a server holds by default and which asks for no PIN.
+    /// It mints no order, so a replaced machine still moves guests between the tables it is
+    /// draining (ADR-0123).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if the actor may not move orders, the guests' table is not occupied, or
+    /// the table they move to is not free (their own included); [`AppError::NoOpenOrder`] if the
+    /// table holds no order; [`AppError::AwaitingStaffConfirmation`] as above; or [`AppError`] if
+    /// the store cannot be written.
+    pub async fn transfer_table(
+        &self,
+        actor: Actor,
+        from_table_id: TableId,
+        to_table_id: TableId,
+    ) -> Result<TransferView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let (from_state, to_state, order_id, held) = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(from_table_id);
+            (
+                projection.table_state(from_table_id),
+                projection.table_state(to_table_id),
+                order_id,
+                order_id.is_some_and(|order_id| {
+                    projection.awaits_staff_confirmation(order_id, &session)
+                }),
+            )
+        };
+        let left = decide_table(from_state, TableCommand::Transfer, &ctx)?;
+        let seated = decide_table(to_state, TableCommand::Seat, &ctx)?;
+        let order_id = order_id.ok_or(AppError::NoOpenOrder)?;
+        if held {
+            return Err(AppError::AwaitingStaffConfirmation);
+        }
+
+        let payload = SalesTableTransferred {
+            order_id,
+            from_table_id,
+            to_table_id,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+        {
+            let mut projection = self.lock_projection();
+            projection.set_table(from_table_id, left.next_state);
+            projection.set_table(to_table_id, seated.next_state);
+            projection.move_order(order_id, from_table_id, to_table_id);
+        }
+        Ok(TransferView {
+            order_id,
+            from: TableView {
+                table_id: from_table_id,
+                state: left.next_state,
+            },
+            to: TableView {
+                table_id: to_table_id,
+                state: seated.next_state,
+            },
+        })
+    }
+
     /// The current state of a line, if the edge knows it.
     #[must_use]
     pub fn line_state(&self, order_line_id: OrderLineId) -> Option<OrderLineState> {
@@ -5485,6 +5591,19 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Replays guests moving to another table: the table they left waits to be cleared, and the one
+    /// they moved to is seated with their order ([`Edge::transfer_table`]).
+    fn fold_transfer(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesTableTransferred = envelope.data.decode().map_err(AppError::Encode)?;
+        projection.set_table(event.from_table_id, TableState::NeedsCleaning);
+        projection.set_table(event.to_table_id, TableState::Occupied);
+        projection.move_order(event.order_id, event.from_table_id, event.to_table_id);
+        Ok(())
+    }
+
     fn fold(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
@@ -5506,6 +5625,7 @@ impl<S: EventStore> Edge<S> {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_table(event.table_id, TableState::Free);
             }
+            EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
                     envelope.data.decode().map_err(AppError::Encode)?;
