@@ -226,6 +226,9 @@ export function CommandPalette() {
             aria-expanded="true"
             aria-controls="command-palette-results"
             aria-autocomplete="list"
+            aria-activedescendant={
+              matches().length > 0 ? `command-palette-option-${active()}` : undefined
+            }
             aria-label={t("palette.placeholder")}
             placeholder={t("palette.placeholder")}
             value={query()}
@@ -245,6 +248,7 @@ export function CommandPalette() {
                 {(item, index) => (
                   <li>
                     <button
+                      id={`command-palette-option-${index()}`}
                       ref={(el) => (optionRefs[index()] = el)}
                       type="button"
                       role="option"

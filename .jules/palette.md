@@ -1,3 +1,8 @@
+## 2026-09-24 - Active Option Announcement in Comboboxes via aria-activedescendant
+
+**Learning:** When keyboard focus remains on a `<input role="combobox">` while arrow keys navigate through listbox options (`role="option"`), screen reader users do not receive active item announcements unless `aria-activedescendant` on the input dynamically references the `id` of the active option element. Simply marking options with `aria-selected` is insufficient when DOM focus stays on the input field.
+**Action:** Always link the combobox input to active options using `aria-activedescendant="<option-id>"` and unique element `id`s on each `role="option"`.
+
 ## 2026-09-23 - The Fourth Copy Is The Signal To Extract, Not To Write
 
 **Learning:** Click-outside dismissal was missing from the three header dropdowns and worth adding. But the same fourteen-line effect already existed in `ComboboxField`, so inlining it three more times makes four copies of one idea — and they had already begun to disagree, the new ones calling `setTimeout(() => setOpen(false), 0)` where the original calls `close()` directly, with nothing to say why. `lib/escape.ts` is the repository's own precedent sitting one line above each of those popovers: the same behaviour for the keyboard, extracted to `lib/` for exactly this reason, with a header explaining that a helper only five files can see is a helper everyone else goes without.

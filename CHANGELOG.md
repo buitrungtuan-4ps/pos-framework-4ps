@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects SIIT IPv4-translated interface identifiers (`<prefix>:ffff:0:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via SIIT translated addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
+
 - **Refuse IPv4 special-purpose ranges 192.0.0.0/24 and 192.88.99.0/24 in webhook SSRF filter.**
   `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 6890 IETF Protocol Assignments / DS-Lite (`192.0.0.0/24`) and 6to4 Relay Anycast (`192.88.99.0/24`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
 
@@ -55,6 +58,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 - **Tabs component keyboard navigation enhanced with Home and End keys.**
   The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
+
+- **Command Palette combobox active option accessibility.**
+  Added `aria-activedescendant` to the command palette combobox input in the dashboard to convey active option focus to screen reader users during keyboard navigation.
 
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
