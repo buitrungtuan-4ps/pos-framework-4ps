@@ -463,6 +463,9 @@ export function ComboboxField(props: {
               aria-expanded={true}
               aria-controls={listId}
               aria-autocomplete="list"
+              aria-activedescendant={
+                shown().length > 0 ? `${listId}-option-${active()}` : undefined
+              }
               value={query()}
               onInput={(event) => {
                 const next = event.currentTarget.value;
@@ -480,6 +483,7 @@ export function ComboboxField(props: {
                 <For each={shown()}>
                   {(option, index) => (
                     <li
+                      id={`${listId}-option-${index()}`}
                       ref={(el) => (optionRefs[index()] = el)}
                       role="option"
                       aria-selected={option.value === props.value}
@@ -634,6 +638,9 @@ export function MultiComboboxField(props: {
           aria-expanded={true}
           aria-controls={listId}
           aria-autocomplete="list"
+          aria-activedescendant={
+            shown().length > 0 ? `${listId}-option-${active()}` : undefined
+          }
           disabled={props.disabled}
           aria-describedby={props.hint ? hintId : undefined}
           value={query()}
@@ -659,6 +666,7 @@ export function MultiComboboxField(props: {
             <For each={shown()}>
               {(option, index) => (
                 <li
+                  id={`${listId}-option-${index()}`}
                   ref={(el) => (optionRefs[index()] = el)}
                   role="option"
                   aria-selected={props.values.includes(option.value)}
