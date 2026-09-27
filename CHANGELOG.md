@@ -65,6 +65,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
 
+- **Memoize menu item captions in KDS sold-out item search.**
+  `captions` in `ui/src/screens/Kds.tsx` is now memoized with `createMemo` so filtering sold-out items on input keystrokes compares pre-folded display names rather than re-running NFD normalization and regex replaces $N$ times per keystroke.
+
 ### Fixed
 
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
