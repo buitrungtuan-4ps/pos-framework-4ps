@@ -375,6 +375,20 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         }
     }
 
+    // IPv4-mapped IPv6 interface identifier (`<prefix>:0:ffff:a.b.c.d`).
+    if segments[4] == 0 && segments[5] == 0xffff {
+        let [a, b, c, d] = ip.octets()[12..16] else {
+            unreachable!()
+        };
+        let is_v4_mapped_prefix =
+            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
+        if (is_v4_mapped_prefix || a != 0)
+            && let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d))
+        {
+            return Some(reason);
+        }
+    }
+
     // NAT64, well-known prefix or local-use (RFC 6052, RFC 8215) — its own function because the
     // two prefixes place their embedded address differently and the reason takes explaining.
     if let Some(reason) = classify_nat64(segments, ip) {
@@ -593,6 +607,21 @@ mod tests {
             classify_ip(ip("fe80::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("fe80::1"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // IPv4-mapped IPv6 interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("2001:db8::ffff:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::ffff:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:1234:5678:9abc:0:ffff:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:1234:5678:9abc:0:ffff:169.254.169.254"),
                 ForbiddenReason::LinkLocal
             ))
         );
