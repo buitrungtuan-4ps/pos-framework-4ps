@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks IPv4-mapped IPv6 interface identifiers across all prefixes.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects IPv4-mapped IPv6 interface identifiers (`<prefix>:0:ffff:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via IPv4-mapped addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
+
 - **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects SIIT IPv4-translated interface identifiers (`<prefix>:ffff:0:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via SIIT translated addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
 
