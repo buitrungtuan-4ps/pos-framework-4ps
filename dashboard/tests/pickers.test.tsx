@@ -134,11 +134,11 @@ describe("the single-choice picker", () => {
       options[1].scrollIntoView = scrollSpy;
     }
 
-    expect(search.getAttribute("aria-activedescendant")).toBe(options[0].getAttribute("id"));
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[0]?.getAttribute("id"));
 
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
-    expect(search.getAttribute("aria-activedescendant")).toBe(options[1].getAttribute("id"));
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[1]?.getAttribute("id"));
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("i2");
@@ -235,12 +235,12 @@ describe("the multi-choice picker", () => {
       options[2].scrollIntoView = scrollSpy;
     }
 
-    expect(search.getAttribute("aria-activedescendant")).toBe(options[0].getAttribute("id"));
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[0]?.getAttribute("id"));
 
     fireEvent.keyDown(search, { key: "ArrowDown" });
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
-    expect(search.getAttribute("aria-activedescendant")).toBe(options[2].getAttribute("id"));
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[2]?.getAttribute("id"));
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect([...values()]).toEqual(["i3"]);
