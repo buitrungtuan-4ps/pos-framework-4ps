@@ -348,30 +348,37 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     let segments = ip.segments();
     // 6over4 / IPv4-compatible interface identifier (`<prefix>:0:0:a.b.c.d`, RFC 2529).
     if segments[4] == 0 && segments[5] == 0 {
-        let [a, b, c, d] = ip.octets()[12..16] else {
-            unreachable!()
-        };
+        let [.., a, b, c, d] = ip.octets();
         let is_v4_compat_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         if is_v4_compat_prefix || a != 0 {
-            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
-            if reason.is_some() {
-                return reason;
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
             }
         }
     }
 
     // SIIT IPv4-translated IPv6 address (`<prefix>:ffff:0:a.b.c.d`, RFC 6145).
     if segments[4] == 0xffff && segments[5] == 0 {
-        let [a, b, c, d] = ip.octets()[12..16] else {
-            unreachable!()
-        };
+        let [.., a, b, c, d] = ip.octets();
         let is_siit_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
-        if (is_siit_prefix || a != 0)
-            && let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d))
-        {
-            return Some(reason);
+        if is_siit_prefix || a != 0 {
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
+            }
+        }
+    }
+
+    // IPv4-mapped interface identifier (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`, RFC 4291).
+    if (segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff {
+        let [.., a, b, c, d] = ip.octets();
+        let is_v4_mapped_prefix =
+            segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
+        if is_v4_mapped_prefix || a != 0 {
+            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
+                return Some(reason);
+            }
         }
     }
 
@@ -593,6 +600,21 @@ mod tests {
             classify_ip(ip("fe80::1")),
             Err(SsrfRejection::ForbiddenAddress(
                 ip("fe80::1"),
+                ForbiddenReason::LinkLocal
+            ))
+        );
+        // IPv4-mapped interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`).
+        assert_eq!(
+            classify_ip(ip("2001:db8::ffff:127.0.0.1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::ffff:127.0.0.1"),
+                ForbiddenReason::Loopback
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:1234:5678:9abc:ffff:ffff:169.254.169.254")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:1234:5678:9abc:ffff:ffff:169.254.169.254"),
                 ForbiddenReason::LinkLocal
             ))
         );
