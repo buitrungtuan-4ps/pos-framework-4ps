@@ -62,6 +62,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Command Palette combobox active option accessibility.**
   Added `aria-activedescendant` to the command palette combobox input in the dashboard to convey active option focus to screen reader users during keyboard navigation.
 
+- **Memoize active areas and subcategories in console.**
+  `activeAreas` in `dashboard/src/screens/Floor.tsx` and active subcategory lookups in `dashboard/src/screens/Layout.tsx` are now memoized with `createMemo` to avoid redundant array filtering and $O(N)$ scans on re-renders.
+
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
 
