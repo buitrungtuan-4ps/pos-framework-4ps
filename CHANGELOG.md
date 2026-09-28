@@ -30,6 +30,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **ComboboxField and MultiComboboxField combobox active option accessibility.**
+  Added `aria-activedescendant` to search inputs in `ComboboxField` and `MultiComboboxField` in `dashboard/src/components/ui.tsx` to announce active option focus to screen reader users during keyboard navigation.
+
 - **On a tablet the order screen shows the menu, and the bill slides up.** `docs/ui-ux.md` §1
   asks a tablet for "large item grid, bill slides up". A tablet was drawn like a phone instead, with
   the bill first and the menu under it, so a server scrolled past everything already ordered to reach
