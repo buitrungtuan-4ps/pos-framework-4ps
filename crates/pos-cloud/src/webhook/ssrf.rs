@@ -352,8 +352,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         let is_v4_compat_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         if is_v4_compat_prefix || a != 0 {
-            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
-                return Some(reason);
+            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
+            if reason.is_some() {
+                return reason;
             }
         }
     }
@@ -364,8 +365,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         let is_siit_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         if is_siit_prefix || a != 0 {
-            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
-                return Some(reason);
+            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
+            if reason.is_some() {
+                return reason;
             }
         }
     }
@@ -376,8 +378,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         let is_v4_mapped_prefix =
             segments[0] == 0 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0;
         if is_v4_mapped_prefix || a != 0 {
-            if let Some(reason) = classify_v4(Ipv4Addr::new(a, b, c, d)) {
-                return Some(reason);
+            let reason = classify_v4(Ipv4Addr::new(a, b, c, d));
+            if reason.is_some() {
+                return reason;
             }
         }
     }
