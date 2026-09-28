@@ -8,7 +8,7 @@
 // editor is deliberately deferred to F3; placement is set here by numeric grid column/row (or left
 // unplaced), which is enough for the plan the edge and the QR sheet consume.
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { Area, FloorTable, TableQrToken } from "../api/types";
@@ -122,7 +122,9 @@ export function Floor() {
 
   const areaName = (id: string) =>
     areas()?.find((area) => area.area_id === id)?.name ?? id;
-  const activeAreas = () => areas()?.filter((area) => area.status === "active") ?? [];
+  // Memoize active areas array filtering to prevent O(N) re-filtering on every component re-render/signal read.
+  // Declared below `areas` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
+  const activeAreas = createMemo(() => areas()?.filter((area) => area.status === "active") ?? []);
 
   const createArea = async () => {
     const name = newAreaName().trim();
