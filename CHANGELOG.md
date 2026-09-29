@@ -147,6 +147,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A tenant connects its vendors from the console, and their credentials are sealed.** New
+  `/admin/integrations/connections` routes (list and read for any console role; create, edit and
+  delete behind the new `console.integrations.manage`, granted to Owner and Admin) store a
+  *connection* per [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md): a
+  provider from the catalogue, the scope it serves (tenant, brand or store), its settings — checked
+  against the provider's own schema, every problem named at once — and its secrets. A secret is
+  sealed with XChaCha20-Poly1305 before it reaches the database, bound to its tenant, connection
+  and field, and no read, audit entry or log carries it: a read says only which secrets are set. An
+  edit that does not resend a secret keeps it; switching vendor drops it. A scope may hold one
+  enabled e-invoice or ERP connection at most. Nothing calls a vendor through a connection yet.
+  **Upgrade note:** migration `0070_integration_connections` (additive). New optional `cloud.toml`
+  key `integration_secret` (64 hex characters), which `bootstrap.sh` mints on a new box and on the
+  next run of an existing one; without it, a write carrying a credential is refused with a `503`.
+  New console permission `console.integrations.manage`.
+
 - **The cloud lists the vendors it can talk to, and what each needs.** A new
   `GET /admin/integrations/providers` (any console role) answers the provider catalogue
   [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) describes: every vendor

@@ -190,6 +190,18 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author the managed reason codes a void, discount or refund must cite",
     },
+    /// Configure a tenant's vendor connections — which e-invoice provider, gateway, courier or ERP
+    /// serves which scope, its settings, and its credentials
+    /// ([ADR-0153](../adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+    ///
+    /// Owner/Admin. A connection is where a tenant's legal invoices are submitted and its payments
+    /// confirmed, and it carries the credentials to do both: pointing one at the wrong vendor, or
+    /// replacing its key, is not a day-to-day publish.
+    ManageIntegrations {
+        id: "console.integrations.manage",
+        roles: [Owner, Admin],
+        description: "Configure the tenant's vendor connections and their credentials",
+    },
     /// Publish an OTA rollout — target version, ring, ramp, signing key, revocations — or engage its
     /// kill switch ([ADR-0078](../adr/0078-sync-and-ota-closure.md)). Owner/Admin only, above the
     /// `PublishConfig` norm that includes Ops: pushing a binary rollout to the fleet is not a
