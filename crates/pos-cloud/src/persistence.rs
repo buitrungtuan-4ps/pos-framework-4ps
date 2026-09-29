@@ -40,6 +40,7 @@ use store_postgres::{
     VoucherRow,
 };
 use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
+use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
@@ -109,6 +110,7 @@ use crate::devices::{
 };
 use pos_core::lease::LeaseGeneration;
 
+use crate::connections::{Connection, ConnectionStore, ConnectionStoreError};
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
@@ -2690,6 +2692,93 @@ impl ReasonCodeStore for PostgresReasonCodes {
         self.delete(&tenant_id.to_string(), &reason_code_id.to_string())
             .await
             .map_err(|error| ReasonCodeStoreError::new(error.to_string()))
+    }
+}
+
+/// Pairs a stored connection row with the version the read saw and the instant it was written.
+fn versioned_connection(
+    row: &ConnectionRow,
+) -> Result<Versioned<Connection>, ConnectionStoreError> {
+    let connection = serde_json::from_str(&row.doc_json).map_err(|error| {
+        ConnectionStoreError::new(format!("a stored connection could not be decoded: {error}"))
+    })?;
+    Ok(Versioned::edited(
+        connection,
+        Version::new(row.version.clone()),
+        row.updated_at_ms,
+    ))
+}
+
+/// Serializes a connection for storage. Its secrets are already sealed; nothing here sees a
+/// plaintext one.
+fn connection_doc(connection: &Connection) -> Result<String, ConnectionStoreError> {
+    serde_json::to_string(connection).map_err(|error| {
+        ConnectionStoreError::new(format!("could not serialize a connection: {error}"))
+    })
+}
+
+impl ConnectionStore for PostgresConnections {
+    async fn list(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<Versioned<Connection>>, ConnectionStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| ConnectionStoreError::new(error.to_string()))?;
+        rows.iter().map(versioned_connection).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant_id: TenantId,
+        connection_id: &str,
+    ) -> Result<Option<Versioned<Connection>>, ConnectionStoreError> {
+        let row = self
+            .fetch_one(&tenant_id.to_string(), connection_id)
+            .await
+            .map_err(|error| ConnectionStoreError::new(error.to_string()))?;
+        row.as_ref().map(versioned_connection).transpose()
+    }
+
+    async fn create(
+        &self,
+        tenant_id: TenantId,
+        connection: &Connection,
+    ) -> Result<CreateOutcome, ConnectionStoreError> {
+        let json = connection_doc(connection)?;
+        self.insert(&tenant_id.to_string(), &connection.connection_id, &json)
+            .await
+            .map(create_outcome)
+            .map_err(|error| ConnectionStoreError::new(error.to_string()))
+    }
+
+    async fn update(
+        &self,
+        tenant_id: TenantId,
+        connection: &Connection,
+        expected: &Version,
+    ) -> Result<UpdateOutcome, ConnectionStoreError> {
+        let json = connection_doc(connection)?;
+        self.update_at(
+            &tenant_id.to_string(),
+            &connection.connection_id,
+            &json,
+            expected.as_str(),
+        )
+        .await
+        .map(update_outcome)
+        .map_err(|error| ConnectionStoreError::new(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        connection_id: &str,
+    ) -> Result<(), ConnectionStoreError> {
+        PostgresConnections::delete(self, &tenant_id.to_string(), connection_id)
+            .await
+            .map_err(|error| ConnectionStoreError::new(error.to_string()))
     }
 }
 

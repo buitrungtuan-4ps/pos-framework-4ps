@@ -371,7 +371,7 @@ pub fn archive_object_key(store: StoreId, taken_at: i64) -> String {
     format!("stores/{store}/archives/{taken_at:013}.p4p")
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     let mut text = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         // Writing to a String cannot fail, and the alternative is a panic path in a helper that
@@ -389,7 +389,7 @@ fn from_hex(text: &str) -> Option<[u8; KEY_LEN]> {
     bytes.as_slice().try_into().ok()
 }
 
-fn hex_bytes(text: &str) -> Option<Vec<u8>> {
+pub(crate) fn hex_bytes(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) || !text.is_ascii() {
         return None;
     }

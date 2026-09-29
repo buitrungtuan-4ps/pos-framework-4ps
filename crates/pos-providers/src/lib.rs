@@ -105,6 +105,20 @@ impl Family {
         }
     }
 
+    /// Whether a scope may have only one enabled connection in this family.
+    ///
+    /// An e-invoice provider is the one place a store's legal invoices are submitted, and an ERP is
+    /// the one ledger the day posts to: two at once would file every invoice twice or split the
+    /// books. Every other family is plural by nature — a shop sells on two marketplaces at once,
+    /// offers two QR wallets, and books whichever courier is free.
+    #[must_use]
+    pub const fn exclusive(self) -> bool {
+        match self {
+            Self::EInvoice | Self::Erp => true,
+            Self::QrPayment | Self::CardTerminal | Self::Delivery | Self::Courier => false,
+        }
+    }
+
     /// Where this family's adapter runs (ADR-0153 decision 1): beside the vendor.
     ///
     /// A card terminal is a device on the shop's network, and only the edge can reach it. Every

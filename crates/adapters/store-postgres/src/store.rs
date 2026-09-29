@@ -261,6 +261,10 @@ const MIGRATION_0068: &str = include_str!("../migrations/0068_scheduled_publish_
 /// ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md)).
 const MIGRATION_0069: &str = include_str!("../migrations/0069_device_claims.sql");
 
+/// A tenant's vendor connections, their secrets sealed before they arrive
+/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+const MIGRATION_0070: &str = include_str!("../migrations/0070_integration_connections.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -596,6 +600,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0069)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0070)
+            .await
             .map_err(unavailable)
     }
 
@@ -834,6 +842,16 @@ impl PostgresStore {
     #[must_use]
     pub fn inventory(&self) -> crate::inventory::PostgresInventory {
         crate::inventory::PostgresInventory::new(self.pool.clone())
+    }
+
+    /// A tenant's vendor connections over this pool
+    /// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConnectionStore` seam over
+    /// it, and seals every secret before a document reaches it.
+    #[must_use]
+    pub fn connections(&self) -> crate::connections::PostgresConnections {
+        crate::connections::PostgresConnections::new(self.pool.clone())
     }
 
     /// The reason-code authoring store over this pool
