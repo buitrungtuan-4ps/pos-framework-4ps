@@ -113,10 +113,25 @@ export function Layout() {
   const itemName = (id: string) => itemMap().get(id) ?? id;
   const categoryName = (id: string) => categoryMap().get(id) ?? id;
   const activeCategories = createMemo(() => (categories() ?? []).filter((row) => row.status === "active"));
+  // Pre-group active subcategories by parent category ID using O(N) pass to allow O(1) lookups
+  // instead of re-filtering the entire subcategories array on every invocation / render pass.
+  // Declared below `subcategories` accessor to avoid Temporal Dead Zone (TDZ) runtime errors.
+  const activeSubcategoriesMap = createMemo(() => {
+    const map = new Map<string, DisplaySubcategory[]>();
+    for (const row of subcategories() ?? []) {
+      if (row.status === "active") {
+        const list = map.get(row.display_category_id);
+        if (list) {
+          list.push(row);
+        } else {
+          map.set(row.display_category_id, [row]);
+        }
+      }
+    }
+    return map;
+  });
   const activeSubcategories = (categoryId: string) =>
-    (subcategories() ?? []).filter(
-      (row) => row.status === "active" && row.display_category_id === categoryId,
-    );
+    activeSubcategoriesMap().get(categoryId) ?? [];
 
 
   /**
