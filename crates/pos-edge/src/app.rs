@@ -82,6 +82,7 @@ use crate::idgen::EdgeIdGenerator;
 use crate::lease_state::CurrentStanding;
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
+use crate::sntp::ClockStatus;
 use crate::sync_status::{OUTBOX_PLANNED_DEPTH, OutboxLevel, SyncReport, SyncStatus};
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap
@@ -2409,6 +2410,10 @@ pub struct Edge<S> {
     /// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)). Written by the
     /// outbox drain and the heartbeat, read by `GET /api/sync`.
     sync: SyncStatus,
+    /// What the SNTP probe last measured of this box's own clock (roadmap-v3 PF4,
+    /// [`crate::sntp`]). Written by the probe loop `main` starts, read by `GET /api/sync`; a
+    /// composition that starts no loop — a test, the on-fakes example — reports it unmeasured.
+    clock_status: ClockStatus,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -2491,6 +2496,15 @@ impl<S> Edge<S> {
         &self.standing
     }
 
+    /// What this box last measured of its own clock against a time server (roadmap-v3 PF4).
+    ///
+    /// Lent rather than copied out for the reason [`Self::lease`] is: the probe loop writes it and
+    /// the status route reads it.
+    #[must_use]
+    pub const fn clock_status(&self) -> &ClockStatus {
+        &self.clock_status
+    }
+
     /// Refuses a command that would **open** something new when a replacement machine has taken this
     /// store ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
@@ -2555,6 +2569,7 @@ impl<S: EventStore> Edge<S> {
             receipts,
             standing: Arc::new(CurrentStanding::new()),
             sync: SyncStatus::new(),
+            clock_status: ClockStatus::new(),
         })
     }
 

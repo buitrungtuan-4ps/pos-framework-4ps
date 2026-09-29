@@ -501,6 +501,18 @@ export interface SyncResponse {
     | "OUTBOX_LEVEL_BEYOND";
   cloud_link: "CLOUD_LINK_UNSPECIFIED" | "CLOUD_LINK_ONLINE" | "CLOUD_LINK_OFFLINE";
   last_sync_time?: string;
+  /**
+   * What the store server last measured of its own clock against a time server (roadmap-v3 PF4).
+   * `UNSPECIFIED` until a measurement succeeds. Optional because an edge older than PF4 sends none
+   * of these, and a till must not read that as a clock in step.
+   */
+  clock_drift?: "CLOCK_DRIFT_UNSPECIFIED" | "CLOCK_DRIFT_OK" | "CLOCK_DRIFT_ALARM";
+  /** The offset either way past which the clock alarms, in milliseconds. */
+  clock_drift_alarm_ms?: number;
+  /** The store server's clock minus the time server's, in milliseconds: positive is fast. */
+  clock_offset_ms?: number;
+  /** When that was measured, on the store server's clock. */
+  clock_measure_time?: string;
 }
 
 /** One item's button on the till, from `GET /api/layout` (ADR-0066, C4). */

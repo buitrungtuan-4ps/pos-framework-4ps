@@ -68,6 +68,7 @@ pub mod clock;
 pub mod cloud;
 pub mod config;
 pub mod config_tree;
+pub mod connections;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;

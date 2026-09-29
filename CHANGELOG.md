@@ -171,6 +171,45 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   Docs: `docs/architecture.md` §2, `docs/ui-ux.md` §4, `docs/roadmap-v3.md` B6.5.
 
+- **The store server checks its own clock, and says when it is wrong.** Every fifteen minutes the
+  edge asks a time server for the time over SNTP and compares it with its own clock. The trading day
+  is worked out from that clock, so a box two minutes fast files a sale made just before the day's
+  cutoff under the next day, and until now nothing noticed.
+  - The till's **Devices** screen gains *Store server clock*: how far ahead or behind the box is,
+    and when it was last checked. Past two seconds either way it says so in red, with what to do.
+  - The edge logs a warning once when the clock goes past two seconds, and once when a time server
+    cannot be reached, rather than on every check.
+  - `GET /api/sync` gains `clock_drift` (`CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM`, or
+    `CLOCK_DRIFT_UNSPECIFIED` before the first answer), `clock_drift_alarm_ms`, and, once measured,
+    `clock_offset_ms` and `clock_measure_time`. Additive: an older till ignores them.
+  - The edge measures and never sets the clock, which stays the operating system's job. The cloud
+    does not hear about drift yet.
+  - The disk-space guard PF4 also asks for is **not** in this change. Nothing the edge depends on
+    can read a disk's free space without a new crate.
+
+  **Upgrade note:** `config.toml` gains `sntp_server`, defaulting to `time.google.com`. A box now
+  sends one UDP datagram to port 123 every fifteen minutes. Where outbound UDP 123 is blocked, set
+  it to the network's own time server; `sntp_server = ""` turns the check off, with a warning at
+  start-up.
+
+  Docs: `docs/roadmap-v3.md` PF4, `docs/ui-ux.md` §4, `docs/capacity-and-reliability.md` §5,
+  `deploy/edge/README.md` (Configuration).
+
+- **A tenant connects its vendors from the console, and their credentials are sealed.** New
+  `/admin/integrations/connections` routes (list and read for any console role; create, edit and
+  delete behind the new `console.integrations.manage`, granted to Owner and Admin) store a
+  *connection* per [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md): a
+  provider from the catalogue, the scope it serves (tenant, brand or store), its settings — checked
+  against the provider's own schema, every problem named at once — and its secrets. A secret is
+  sealed with XChaCha20-Poly1305 before it reaches the database, bound to its tenant, connection
+  and field, and no read, audit entry or log carries it: a read says only which secrets are set. An
+  edit that does not resend a secret keeps it; switching vendor drops it. A scope may hold one
+  enabled e-invoice or ERP connection at most. Nothing calls a vendor through a connection yet.
+  **Upgrade note:** migration `0070_integration_connections` (additive). New optional `cloud.toml`
+  key `integration_secret` (64 hex characters), which `bootstrap.sh` mints on a new box and on the
+  next run of an existing one; without it, a write carrying a credential is refused with a `503`.
+  New console permission `console.integrations.manage`.
+
 - **The cloud lists the vendors it can talk to, and what each needs.** A new
   `GET /admin/integrations/providers` (any console role) answers the provider catalogue
   [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) describes: every vendor

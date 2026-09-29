@@ -31,6 +31,7 @@ mod catalog;
 mod claims;
 mod config_releases;
 mod config_trees;
+mod connections;
 mod devices;
 mod fleet;
 mod floor;
@@ -75,6 +76,7 @@ pub use config_trees::{
     BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
     StoredRetire, StoredSettle,
 };
+pub use connections::{ConnectionRow, PostgresConnections};
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fleet::{FleetStoreRow, PostgresFleet};
 pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};

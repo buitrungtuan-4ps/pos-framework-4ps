@@ -137,6 +137,7 @@ bind = "0.0.0.0:8080"
 internal_shared_secret = "aaaa"
 table_token_secret = "bbbb"
 archive_key_secret = "cccc"
+integration_secret = "dddd"
 
 [artifacts]
 bucket = "pos-artifacts"
