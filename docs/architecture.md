@@ -125,6 +125,8 @@ The list above is authoritative and counts **twenty** ports. [ADR-0006](adr/0006
 
 Adapters contain **only the vendor's protocol**. The legal lifecycle of an invoice lives in the country module; the store only knows "allocated numbers plus a queue".
 
+Which process runs an adapter, and how a tenant chooses a vendor, is [ADR-0153](adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md): a device on the store's network is driven by the edge, a service on the internet by the cloud, and either is picked by a *connection* the tenant configures in the console from a settings schema the adapter itself describes. A vendor's credentials stay in the cloud.
+
 ### 6.2 Public API and webhooks (outbound)
 
 Served at `api.<domain>`, versioned `/v1`, documented by generated OpenAPI.
