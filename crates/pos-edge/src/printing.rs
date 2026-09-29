@@ -63,6 +63,7 @@ use pos_proto::store_profile::StoreProfile;
 use pos_proto::ClockSource;
 
 use crate::app::{BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptLine, ShiftReport};
+use crate::line_notes::NoteText;
 use crate::paper_labels::PaperLabels;
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
 
@@ -503,6 +504,20 @@ fn bill_document(
     PrintDocument { blocks }
 }
 
+/// What a kitchen ticket says about a line's guest note
+/// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum TicketNote {
+    /// No note was written.
+    #[default]
+    None,
+    /// The note, as the server or the guest wrote it.
+    Text(String),
+    /// A note was written and the edge no longer holds it — it restarted since. The ticket says so,
+    /// because a cook who reads nothing makes the dish as the menu describes it.
+    Lost,
+}
+
 /// One line of a kitchen ticket: what to make, how many, and what was changed about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TicketLine {
@@ -513,6 +528,8 @@ pub struct TicketLine {
     pub quantity: String,
     /// The chosen modifiers, in the order they were added.
     pub modifiers: Vec<String>,
+    /// The guest's note, printed last and emphasised.
+    pub note: TicketNote,
 }
 
 /// The ticket a station's printer produces when a line fires.
@@ -520,9 +537,10 @@ pub struct TicketLine {
 /// `reference` is what the kitchen calls back across the pass — a table's name, or the tail of the
 /// order's id when there is no table. Double-size, because it is read from a metre away over a hot
 /// counter; the item is emphasised; modifiers follow indented so a cook scanning the ticket sees
-/// "what" before "how".
+/// "what" before "how". A guest note comes last and emphasised, after a `!`, because it is the part
+/// of a ticket that is most often about somebody's health.
 #[must_use]
-pub fn ticket_document(reference: &str, line: &TicketLine) -> PrintDocument {
+pub fn ticket_document(reference: &str, line: &TicketLine, labels: &PaperLabels) -> PrintDocument {
     let mut blocks = vec![
         PrintBlock::Text {
             line: reference.to_owned(),
@@ -545,6 +563,21 @@ pub fn ticket_document(reference: &str, line: &TicketLine) -> PrintDocument {
         line: format!("  + {modifier}"),
         style: TextStyle::default(),
     }));
+    let note = match &line.note {
+        TicketNote::None => None,
+        TicketNote::Text(note) => Some(note.as_str()),
+        TicketNote::Lost => Some(labels.note_lost),
+    };
+    if let Some(note) = note {
+        blocks.push(PrintBlock::Text {
+            line: format!("  ! {note}"),
+            style: TextStyle {
+                emphasised: true,
+                double_size: false,
+                centred: false,
+            },
+        });
+    }
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
 }
@@ -554,8 +587,14 @@ pub fn ticket_document(reference: &str, line: &TicketLine) -> PrintDocument {
 /// An item the menu does not name falls back to its identifier rather than to a blank: a cook can
 /// still match a ticket to a screen, and a silently empty line is how the wrong dish gets made. The
 /// same rule applies to each modifier.
+///
+/// `note` is the guest note the edge holds for the line, if it still holds one (ADR-0157).
 #[must_use]
-pub fn ticket_line(session: &EdgeSession, fired: &FiredLine) -> TicketLine {
+pub fn ticket_line(
+    session: &EdgeSession,
+    fired: &FiredLine,
+    note: Option<&NoteText>,
+) -> TicketLine {
     TicketLine {
         item: item_name(session, fired.menu_item_id),
         quantity: format_quantity(fired.quantity),
@@ -564,6 +603,11 @@ pub fn ticket_line(session: &EdgeSession, fired: &FiredLine) -> TicketLine {
             .iter()
             .map(|modifier| item_name(session, *modifier))
             .collect(),
+        note: match note {
+            Some(note) => TicketNote::Text(note.as_str().to_owned()),
+            None if fired.note_present => TicketNote::Lost,
+            None => TicketNote::None,
+        },
     }
 }
 
@@ -1279,7 +1323,7 @@ impl Printers {
             );
             return PrintOutcome::NoPrinter;
         };
-        let document = ticket_document(reference, line);
+        let document = ticket_document(reference, line, self.labels_for(session));
         self.dispatch(
             device,
             PrintJob {
@@ -1485,9 +1529,9 @@ mod tests {
     use super::TcpTransports;
     use super::{
         ASSUMED_DOTS_PER_LINE, AgentLane, MoneyStyle, PrintOutcome, Printers, TicketLine,
-        TransportFactory, assumed_capabilities, connection_of, pre_bill_document, receipt_document,
-        receipt_printer, shift_report_document, short_reference, station_printer, ticket_document,
-        ticket_line,
+        TicketNote, TransportFactory, assumed_capabilities, connection_of, pre_bill_document,
+        receipt_document, receipt_printer, shift_report_document, short_reference, station_printer,
+        ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, VIETNAMESE};
@@ -1798,6 +1842,7 @@ mod tests {
                     item: "Bún chả".to_owned(),
                     quantity: "2".to_owned(),
                     modifiers: Vec::new(),
+                    note: TicketNote::None,
                 },
             )
             .await;
@@ -1818,13 +1863,77 @@ mod tests {
                 item: "Margherita".to_owned(),
                 quantity: "2".to_owned(),
                 modifiers: vec!["Extra cheese".to_owned()],
+                note: TicketNote::None,
             },
+            &ENGLISH,
         );
         assert_eq!(
             lines_of(&document),
             vec!["A1", "2 x Margherita", "  + Extra cheese"]
         );
         assert_eq!(document.blocks.last(), Some(&PrintBlock::Cut));
+    }
+
+    #[test]
+    fn a_ticket_prints_the_guests_note_last_and_emphasised() {
+        let document = ticket_document(
+            "A1",
+            &TicketLine {
+                item: "Margherita".to_owned(),
+                quantity: "1".to_owned(),
+                modifiers: vec!["Extra cheese".to_owned()],
+                note: TicketNote::Text("no peanuts".to_owned()),
+            },
+            &ENGLISH,
+        );
+        assert_eq!(
+            lines_of(&document),
+            vec!["A1", "1 x Margherita", "  + Extra cheese", "  ! no peanuts"]
+        );
+        let note = document
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                PrintBlock::Text { line, style } if line.contains("no peanuts") => Some(style),
+                _ => None,
+            })
+            .expect("the note is printed");
+        assert!(
+            note.emphasised,
+            "a note about somebody's health is not small print"
+        );
+    }
+
+    #[test]
+    fn a_note_the_edge_lost_is_printed_as_lost_in_the_stores_language() {
+        let fired = FiredLine {
+            station_id: station(1),
+            menu_item_id: MenuItemId::new(Ulid::from_u128(11)),
+            quantity: Quantity::ONE,
+            modifier_menu_item_ids: Vec::new(),
+            note_present: true,
+        };
+        let line = ticket_line(&EdgeSession::bootstrap(), &fired, None);
+        assert_eq!(line.note, TicketNote::Lost);
+        let english = ticket_document("A1", &line, &ENGLISH);
+        assert_eq!(
+            lines_of(&english).last().copied(),
+            Some("  ! A note was written - ask the server")
+        );
+        let vietnamese = ticket_document("A1", &line, &VIETNAMESE);
+        assert_eq!(
+            lines_of(&vietnamese).last().copied(),
+            Some("  ! Có ghi chú - hỏi nhân viên phục vụ")
+        );
+
+        let unnoted = FiredLine {
+            note_present: false,
+            ..fired
+        };
+        assert_eq!(
+            ticket_line(&EdgeSession::bootstrap(), &unnoted, None).note,
+            TicketNote::None
+        );
     }
 
     #[test]
@@ -1850,7 +1959,9 @@ mod tests {
                 menu_item_id: margherita,
                 quantity: Quantity::from_milli(2_000),
                 modifier_menu_item_ids: vec![unknown],
+                note_present: false,
             },
+            None,
         );
 
         assert_eq!(line.item, "Margherita");
@@ -1870,7 +1981,9 @@ mod tests {
                 menu_item_id: MenuItemId::new(Ulid::from_u128(11)),
                 quantity: Quantity::HALF,
                 modifier_menu_item_ids: Vec::new(),
+                note_present: false,
             },
+            None,
         );
         assert_eq!(half.quantity, "0.5");
     }
@@ -2571,6 +2684,7 @@ mod tests {
                     item: "Bún chả".to_owned(),
                     quantity: "2".to_owned(),
                     modifiers: Vec::new(),
+                    note: TicketNote::None,
                 },
             )
             .await;
