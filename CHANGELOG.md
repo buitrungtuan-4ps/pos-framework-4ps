@@ -147,6 +147,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud lists the vendors it can talk to, and what each needs.** A new
+  `GET /admin/integrations/providers` (any console role) answers the provider catalogue
+  [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) describes: every vendor
+  adapter compiled into the cloud, grouped by family, with where its adapter runs, the countries it
+  serves, whether it is a sandbox, and the typed settings a connection to it needs — the schema the
+  console will draw its form from, so a new vendor needs no new screen. Each adapter now describes
+  itself (`pos-providers`, a new library crate beside `pos-country`); the Ahamove and Grab Express
+  couriers and the SAP ERP are the first three entries, and the cloud refuses to start if two
+  adapters claim one id. Nothing stores a tenant's connection yet. **Upgrade note:** none — one
+  additive read route.
+
 - **Guests move to another table, and take their order with them.** *Move table* in the order
   screen's header lists the free tables on the floor. A tap on one moves the guests' order there and
   opens the new table, which says where they came from. Before this, guests who asked for the window

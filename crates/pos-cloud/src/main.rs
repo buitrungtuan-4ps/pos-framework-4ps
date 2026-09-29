@@ -756,6 +756,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // screen's form editor renders toggles and conflict previews from — static framework data
         // behind the session guard.
         .merge(http::capabilities_router(store.admin(), SystemClock))
+        // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
+        // settings schema the console draws a connection form from. Built once at boot and refused
+        // there if two adapters claim one id, so a malformed catalogue never serves.
+        .merge(http::provider_catalogue_router(
+            Arc::new(pos_cloud::providers::registry()?),
+            store.admin(),
+            SystemClock,
+        ))
         // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
         // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned
         // through the config tree, which runs the §10 inter-flag rules.

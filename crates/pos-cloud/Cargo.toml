@@ -74,6 +74,14 @@ pos-country-vn = { path = "../../countries/vn", optional = true }
 pos-country-jp = { path = "../../countries/jp", optional = true }
 pos-country-in = { path = "../../countries/in", optional = true }
 
+# The vendor catalogue (ADR-0153): the provider registry, and the adapters whose descriptors it lists.
+# One line per adapter. Each adapter's HTTP stack is the rustls/hyper one this binary already links,
+# so these add direct-dependency lines and no new subtree.
+pos-providers        = { path = "../pos-providers" }
+shipping-ahamove     = { path = "../adapters/shipping-ahamove" }
+shipping-grabexpress = { path = "../adapters/shipping-grabexpress" }
+erp-sap              = { path = "../adapters/erp-sap" }
+
 # The async runtime and HTTP stack live at the binary layer only (ADR-0018); the dependency-rule
 # test proves they never reach pos-core.
 tokio      = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }

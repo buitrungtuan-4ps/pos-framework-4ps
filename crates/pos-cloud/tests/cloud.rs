@@ -19141,6 +19141,70 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
     );
 }
 
+/// The main app merged with the provider-catalogue router (ADR-0153).
+fn provider_catalogue_app(admin: FakeAdmin) -> axum::Router {
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    let providers = pos_cloud::providers::registry().expect("the compiled-in catalogue is valid");
+    http::router(app).merge(http::provider_catalogue_router(
+        Arc::new(providers),
+        admin,
+        clock(),
+    ))
+}
+
+#[tokio::test]
+async fn the_provider_catalogue_serves_each_vendors_form_to_any_admin() {
+    let admin = provisioned_admin();
+    let router = provider_catalogue_app(admin.clone());
+
+    // No session, no catalogue: it names the vendors a tenant could connect, which is not public.
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/integrations/providers")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("route the catalogue");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // Every console role may read it — a Viewer included — because it describes the platform.
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let response = router
+        .oneshot(get_with_cookie("/admin/integrations/providers", &viewer))
+        .await
+        .expect("route the catalogue");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let providers = body["providers"].as_array().expect("a providers list");
+    let sap = providers
+        .iter()
+        .find(|provider| provider["provider_id"] == "erp.sap")
+        .expect("the ERP adapter is listed");
+    assert_eq!(sap["family"], "INTEGRATION_FAMILY_ERP");
+    assert_eq!(
+        sap["countries"],
+        serde_json::json!([]),
+        "SAP serves every country"
+    );
+    let keys: Vec<&str> = sap["fields"]
+        .as_array()
+        .expect("a schema")
+        .iter()
+        .filter_map(|field| field["key"].as_str())
+        .collect();
+    assert_eq!(keys, vec!["base_url", "timeout_seconds"]);
+}
+
 /// The main app merged with the capability-catalogue router.
 fn capabilities_app(admin: FakeAdmin) -> axum::Router {
     let app = app_all(
