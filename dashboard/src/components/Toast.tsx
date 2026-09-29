@@ -72,20 +72,39 @@ export function ToastHost() {
 /** The top-bar bell: a count of recent notifications and a dropdown of their history. */
 export function NotificationBell() {
   const [open, setOpen] = createSignal(false);
+  const [active, setActive] = createSignal(-1);
   useEscape(open, () => setOpen(false));
 
   // Pressing anywhere else closes it, the way the pickers in the kit already close.
   let container: HTMLDivElement | undefined;
   useClickOutside(open, () => container, () => setOpen(false));
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (!open()) return;
+    const len = history().length;
+    if (len === 0) return;
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActive((idx) => (idx + 1) % len);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActive((idx) => (idx <= 0 ? len - 1 : idx - 1));
+    }
+  };
+
   return (
-    <div class="relative" ref={container}>
+    <div class="relative" ref={container} onKeyDown={onKeyDown}>
       <button
         type="button"
         aria-label={t("notifications.open")}
         aria-expanded={open()}
         aria-haspopup="true"
-        onClick={() => setOpen((value) => !value)}
-        class="flex min-h-touch items-center gap-1 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+        onClick={() => {
+          setOpen((value) => !value);
+          setActive(-1);
+        }}
+        class="flex min-h-touch items-center gap-1 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         <Icon name="bell" class="h-5 w-5 shrink-0" />
         <Show when={history().length > 0}>
@@ -104,9 +123,12 @@ export function NotificationBell() {
             <span class="text-sm font-semibold text-ink">{t("notifications.open")}</span>
             <button
               type="button"
-              class="text-sm text-ink-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+              class="rounded-token text-sm text-ink-muted transition-colors hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
               disabled={history().length === 0}
-              onClick={() => setHistory([])}
+              onClick={() => {
+                setHistory([]);
+                setActive(-1);
+              }}
             >
               {t("notifications.clear")}
             </button>
@@ -115,10 +137,17 @@ export function NotificationBell() {
             when={history().length > 0}
             fallback={<p class="px-3 py-3 text-sm text-ink-muted">{t("notifications.empty")}</p>}
           >
-            <ul class="max-h-72 overflow-y-auto p-2">
+            <ul class="max-h-72 overflow-y-auto p-2" role="list">
               <For each={history()}>
-                {(note) => (
-                  <li class="flex items-start gap-2 rounded-token px-2 py-1 text-sm">
+                {(note, index) => (
+                  <li
+                    tabIndex={0}
+                    onFocus={() => setActive(index())}
+                    class={`flex items-start gap-2 rounded-token px-2 py-1 text-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-accent ${
+                      index() === active() ? "bg-surface-raised" : ""
+                    }`}
+                    onMouseEnter={() => setActive(index())}
+                  >
                     <span
                       aria-hidden="true"
                       class={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${note.tone === "ok" ? "bg-ok" : "bg-danger"}`}

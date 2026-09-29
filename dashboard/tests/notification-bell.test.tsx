@@ -86,4 +86,29 @@ describe("the notification bell", () => {
       expect(btn.className).toContain("focus-visible:outline-accent");
     }
   });
+
+  it("navigates history items with ArrowDown and ArrowUp keys", async () => {
+    toast.ok("Nav notice A");
+    toast.ok("Nav notice B");
+
+    render(() => <NotificationBell />);
+    const button = screen.getByRole("button", { name: "Notifications" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(screen.getByText("Nav notice B")).toBeTruthy();
+    });
+
+    const items = screen.getAllByRole("listitem");
+    expect(items.length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(items[0].className).toContain("bg-surface-raised");
+
+    fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(items[1].className).toContain("bg-surface-raised");
+
+    fireEvent.keyDown(button, { key: "ArrowUp" });
+    expect(items[0].className).toContain("bg-surface-raised");
+  });
 });
