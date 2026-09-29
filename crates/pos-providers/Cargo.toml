@@ -1,0 +1,19 @@
+[package]
+name        = "pos-providers"
+version     = "0.1.0"
+description = "What a vendor is to the rest of the system: a catalogue entry its own adapter describes."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+pos-proto = { path = "../pos-proto" }
+serde     = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -91,6 +91,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "table-moved" },
   },
   {
+    task: "Print a pre-bill for a table",
+    budget: 2,
+    note: "One tap on the order screen, which is where the server is standing when the guests ask how much it is so far. No bill opens: a pre-bill is the check on paper, unnumbered and marked as not a receipt, so the guests can read it and still order dessert. A split table prints one per open part from the same tap. The pay screen carries the same button for one part of a split, and it is not declared separately because it is the same act on a smaller set.",
+    steps: [{ route: "/table/:id", action: "printPreBill" }],
+    outcome: { route: "/table/:id", mark: "pre-bill-print" },
+  },
+  {
     task: "Mark a dish sold out from the kitchen board",
     budget: 2,
     note: "Two: open the panel, tap the dish. The cook is usually the first to know something has run out, and the board is where the cook is. A panel over the board rather than a control on each ticket, because a ticket is one whole-card tap that bumps it and a second target inside it would be hit by mistake in a rush.",

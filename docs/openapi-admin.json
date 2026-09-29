@@ -538,6 +538,40 @@
         }
       }
     },
+    "/admin/integrations/providers": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Serves the provider catalogue for the console's Integrations screen.",
+        "operationId": "admin_list_providers",
+        "responses": {
+          "200": {
+            "description": "Every provider compiled into this cloud, grouped by family: its id, where its adapter runs, the countries it serves, whether it is a sandbox, and the typed fields a connection to it needs. A secret field is marked as one and has no value here or anywhere else the API answers"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/login": {
       "post": {
         "tags": [
@@ -2355,6 +2389,10 @@
     {
       "name": "store groups",
       "description": "The cohorts a tenant publishes to as one, and their membership (ADR-0122). A group holds no configuration: publishing to one calls the same per-store publish once per member, so the config tree's four layers and the store's sync path are untouched. Membership is replaced wholesale under the group's own ETag, because a cohort is a set and a delta API merges two admins' concurrent edits into one neither of them chose."
+    },
+    {
+      "name": "integrations",
+      "description": "The vendors this cloud can talk to, and what each needs (ADR-0153). Documented because it is the contract a fork's own console draws its connection forms from: the form is the provider's settings schema, so a console that hard-coded one vendor's fields would be wrong the day a second is added."
     },
     {
       "name": "reason codes",

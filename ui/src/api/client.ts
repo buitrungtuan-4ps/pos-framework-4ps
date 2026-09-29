@@ -38,6 +38,7 @@ import type {
   PairAccepted,
   PairingState,
   PrinterEntry,
+  PrintResponse,
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
@@ -325,6 +326,15 @@ export const api = {
   // screen reads once a table's bill is split, because the table's own check answers for every part.
   billCheck: (billId: string) =>
     request<BillCheckResponse>("GET", `/api/bills/${billId}/check`),
+  // The same figures on paper before payment: a pre-bill, unnumbered because nothing has settled
+  // (roadmap-v3 B2.1). By bill for the guest paying one part of a split table; by table or order for
+  // every open part at once. One outcome per piece of paper, in the order they printed.
+  printBillCheck: (billId: string) =>
+    request<PrintResponse>("POST", `/api/bills/${billId}/check/print`),
+  printTableCheck: (tableId: string) =>
+    request<PrintResponse>("POST", `/api/tables/${tableId}/check/print`),
+  printOrderCheck: (orderId: string) =>
+    request<PrintResponse>("POST", `/api/orders/${orderId}/check/print`),
 
   // Splitting a bill into parts, and folding parts back together (ADR-0128). Neither carries a PIN:
   // both move amounts already captured, and nothing is created, forgiven or taken out of the store.

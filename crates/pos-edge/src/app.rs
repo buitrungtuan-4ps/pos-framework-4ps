@@ -812,6 +812,11 @@ pub enum AppError {
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
+    /// A pre-bill was asked for where nothing is open to print one for: a free table, an order with
+    /// nothing on it, or a bill already settled, voided, split or merged. A settled bill's paper is
+    /// its receipt, not a pre-bill.
+    #[error("nothing is open to print a pre-bill for")]
+    NothingToPrint,
     /// A merge named bills that do not sit on the same table, or named the target as its own
     /// absorbed bill ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
     ///
@@ -1098,6 +1103,40 @@ pub struct ReceiptLine {
     pub modifier_display_names: Vec<DisplayName>,
 }
 
+/// What a pre-bill prints: the rows a bill or an open order covers, and what they come to.
+///
+/// The same two things a receipt is made of, read through the same projection and the same
+/// [`billing::assemble`] the settle runs, so a table that pays exactly the pre-bill's figure pays
+/// what the bill settles against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreBill {
+    /// The rows, as the receipt will print them.
+    pub lines: Vec<ReceiptLine>,
+    /// What they come to.
+    pub totals: BillTotals,
+}
+
+/// A closed shift's drawer, as the shift report prints it.
+///
+/// Every figure is one the close already computed and recorded in `cash.shift.closed`, plus the two
+/// it was computed from, so the paper adds up: the float plus the cash taken is what was expected,
+/// and the count minus the expectation is the variance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShiftReport {
+    /// The shift.
+    pub shift_id: ShiftId,
+    /// The float the drawer opened with.
+    pub opening_float: Money,
+    /// Every cash payment taken during the shift.
+    pub cash_collected: Money,
+    /// The float plus the cash taken.
+    pub expected_amount: Money,
+    /// What the cashier counted.
+    pub counted_amount: Money,
+    /// Counted minus expected. Negative means short.
+    pub variance: Money,
+}
+
 /// What a fire tells the kitchen, for the caller to turn into a ticket.
 ///
 /// The ids, not the names: resolving an item's name is the *session's* job (its published menu
@@ -1368,6 +1407,9 @@ pub struct ShiftView {
     pub variance: Option<Money>,
     /// Whether closing asked for the shift report to print, for the caller to run after commit.
     pub print_shift_report: bool,
+    /// The figures that report prints — present only on the close, which is the one command that
+    /// has them all and the last moment the shift's record exists.
+    pub report: Option<ShiftReport>,
 }
 
 /// One live order as [`Edge::live_orders`] copies it out of the projection, before the lock is
@@ -4393,6 +4435,81 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// What a pre-bill for this bill prints: the lines it covers and what they come to
+    /// (roadmap-v3 B2.1).
+    ///
+    /// Only an open bill has one. A settled bill's paper is its receipt; a voided, split or merged
+    /// one owes nothing of its own any more.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::NothingToPrint`] if it is not open;
+    /// [`AppError::Domain`] if a line's tax class has no configured rate.
+    pub fn pre_bill_for_bill(&self, bill_id: BillId) -> Result<PreBill, AppError> {
+        let session = self.session();
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        if bill.state != BillState::Open {
+            return Err(AppError::NothingToPrint);
+        }
+        let order = self.bill_snapshot(&bill, &session)?;
+        let totals = self.bill_totals(bill_id)?;
+        Ok(PreBill {
+            lines: Self::receipt_lines(&order.lines),
+            totals,
+        })
+    }
+
+    /// What a pre-bill for this order prints — one per open bill once it has bills, which is what a
+    /// split table asks for: each guest takes the part they are paying
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// Before any bill is opened it is the order itself, priced the way [`Self::order_totals`]
+    /// prices it. Empty when the order has nothing on it or its bill is already settled.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if a line's tax class has no configured rate.
+    pub fn pre_bills_for_order(&self, order_id: OrderId) -> Result<Vec<PreBill>, AppError> {
+        let open_bills = self.lock_projection().open_bills_for_order(order_id);
+        if !open_bills.is_empty() {
+            return open_bills
+                .iter()
+                .map(|bill_id| self.pre_bill_for_bill(*bill_id))
+                .collect();
+        }
+        let settled = self.lock_projection().bill_for_order(order_id);
+        if settled.is_some() {
+            return Ok(Vec::new());
+        }
+        let session = self.session();
+        let order = self.order_snapshot(order_id, &session)?;
+        if order.class_bases.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![PreBill {
+            lines: Self::receipt_lines(&order.lines),
+            totals: self.order_totals(order_id)?,
+        }])
+    }
+
+    /// The order a table is running now, for a caller that has to name it — the pre-bill prints the
+    /// same short reference its kitchen tickets carry.
+    #[must_use]
+    pub fn order_for_table(&self, table_id: TableId) -> Option<OrderId> {
+        self.lock_projection().order_for_table(table_id)
+    }
+
+    /// The order a bill belongs to, for the same reason.
+    #[must_use]
+    pub fn order_for_bill(&self, bill_id: BillId) -> Option<OrderId> {
+        self.lock_projection()
+            .bill(bill_id)
+            .map(|bill| bill.order_id)
+    }
+
     /// What a **bill** owes: its order's lines, less what has been taken off it.
     ///
     /// The settle path's arithmetic, available as a read, so the till and the receipt and the
@@ -5284,6 +5401,7 @@ impl<S: EventStore> Edge<S> {
             counted_amount: None,
             variance: None,
             print_shift_report: false,
+            report: None,
         })
     }
 
@@ -5304,6 +5422,7 @@ impl<S: EventStore> Edge<S> {
             counted_amount: record.counted,
             variance: None,
             print_shift_report: false,
+            report: None,
         })
     }
 
@@ -5347,6 +5466,7 @@ impl<S: EventStore> Edge<S> {
             counted_amount: Some(counted_amount),
             variance: None,
             print_shift_report: false,
+            report: None,
         })
     }
 
@@ -5400,6 +5520,14 @@ impl<S: EventStore> Edge<S> {
             counted_amount: Some(counted_amount),
             variance: Some(variance),
             print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
+            report: Some(ShiftReport {
+                shift_id,
+                opening_float: record.opening_float,
+                cash_collected: record.cash_collected,
+                expected_amount,
+                counted_amount,
+                variance,
+            }),
         })
     }
 

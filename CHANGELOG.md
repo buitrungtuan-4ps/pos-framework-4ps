@@ -171,6 +171,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   Docs: `docs/roadmap-v3.md` PF4, `docs/ui-ux.md` §4, `docs/capacity-and-reliability.md` §5,
   `deploy/edge/README.md` (Configuration).
 
+- **The cloud lists the vendors it can talk to, and what each needs.** A new
+  `GET /admin/integrations/providers` (any console role) answers the provider catalogue
+  [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) describes: every vendor
+  adapter compiled into the cloud, grouped by family, with where its adapter runs, the countries it
+  serves, whether it is a sandbox, and the typed settings a connection to it needs — the schema the
+  console will draw its form from, so a new vendor needs no new screen. Each adapter now describes
+  itself (`pos-providers`, a new library crate beside `pos-country`); the Ahamove and Grab Express
+  couriers and the SAP ERP are the first three entries, and the cloud refuses to start if two
+  adapters claim one id. Nothing stores a tenant's connection yet. **Upgrade note:** none — one
+  additive read route.
+
+- **A pre-bill prints from the order screen, and closing a shift prints its report.** *Print
+  pre-bill* in the order screen's header puts what the table owes on the receipt printer — its
+  lines, tax and total, headed *PRE-BILL* under the order's short reference and footed *Not a
+  receipt* — without opening a bill, so the guests can check the figure and still order more. A
+  split table prints one per open part, and the pay screen prints the part on screen. A pre-bill
+  takes no receipt number: the settle after it is still the next one in the series. Closing a cash
+  shift now prints the report it always asked for — opening float, cash taken, expected, counted,
+  and the variance in words (*Short*, *Balanced*, *Over*) — and the close response says what came of
+  it in `shift_report_print`, with the tokens a receipt uses. New edge routes
+  `POST /api/tables/{id}/check/print`, `/api/orders/{id}/check/print` and
+  `/api/bills/{id}/check/print` answer `{ "prints": [...] }`, one outcome per piece of paper, and
+  `409 NOTHING_TO_PRINT` for a table with nothing on it. The printed labels are English for now; the
+  `billing.prebill.printed` event roadmap-v3 B2.1 plans needs a `pos-proto` change and follows in
+  its own pull request. **Upgrade note:** none — the routes are additive and the close response
+  gains an optional field.
+
 - **Guests move to another table, and take their order with them.** *Move table* in the order
   screen's header lists the free tables on the floor. A tap on one moves the guests' order there and
   opens the new table, which says where they came from. Before this, guests who asked for the window
