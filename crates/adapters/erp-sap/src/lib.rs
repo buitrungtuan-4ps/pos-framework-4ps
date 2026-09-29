@@ -39,3 +39,34 @@ mod wire;
 
 pub use client::HttpSapErp;
 pub use wire::{ErpTransport, HttpResponse, Method, TlsErpTransport, TransportError};
+
+use pos_providers::{Family, ProviderDescriptor, fields};
+
+/// This adapter as the provider catalogue lists it
+/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)): the
+/// SAP ERP a tenant connects to from the console, and what they fill in to do it.
+///
+/// Only the settings [`HttpSapErp`] and its transport read today — the base URL and a request timeout.
+/// Authentication is pinned in the gated lane with the rest of the exact wire, and gains its secret
+/// field when it is: a field declared before anything reads it would be a password the console
+/// asks for and nothing sends.
+pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
+    provider_id: "erp.sap",
+    family: Family::Erp,
+    name_key: "provider.erp.sap",
+    countries: &[],
+    fields: &[fields::BASE_URL, fields::TIMEOUT_SECONDS],
+    capabilities: &[],
+    sandbox: false,
+};
+
+#[cfg(test)]
+mod provider_tests {
+    use pos_providers::Registry;
+
+    #[test]
+    fn the_catalogue_accepts_this_adapters_descriptor() {
+        let registry = Registry::new([&super::PROVIDER]).expect("a well-formed descriptor");
+        assert!(registry.get("erp.sap").is_some());
+    }
+}

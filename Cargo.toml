@@ -6,6 +6,7 @@ members = [
     "crates/pos-ports",
     "crates/pos-render",
     "crates/pos-country",
+    "crates/pos-providers",
     "countries/zz",
     "countries/vn",
     "countries/jp",
