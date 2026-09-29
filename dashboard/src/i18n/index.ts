@@ -93,3 +93,13 @@ export function t(key: MessageKey, args?: Record<string, string | number>): stri
   const formatted = formatter(active, key).format(args);
   return typeof formatted === "string" ? formatted : String(formatted);
 }
+
+/**
+ * A key the **server** names at run time — a vendor's name, a settings field's label — which this
+ * console may not ship yet. Its message when the catalogue has it, else `fallback`, so a vendor
+ * added in a newer cloud shows its id rather than nothing (ADR-0153: the form is the provider's
+ * schema, and a schema can outrun the console that draws it).
+ */
+export function tFromServer(key: string, fallback: string): string {
+  return Object.hasOwn(en, key) ? t(key as MessageKey) : fallback;
+}

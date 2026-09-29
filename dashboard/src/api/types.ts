@@ -1656,3 +1656,96 @@ export interface Alert {
   readonly resolved_at_ms: number | null;
   readonly acknowledged_at_ms: number | null;
 }
+
+/**
+ * A kind of external system the store works with (ADR-0153). The prefix of every provider id says
+ * the same thing (`einvoice.…`); this is the enum spelling the admin API uses.
+ */
+export type IntegrationFamily =
+  | "INTEGRATION_FAMILY_E_INVOICE"
+  | "INTEGRATION_FAMILY_QR_PAYMENT"
+  | "INTEGRATION_FAMILY_CARD_TERMINAL"
+  | "INTEGRATION_FAMILY_DELIVERY"
+  | "INTEGRATION_FAMILY_COURIER"
+  | "INTEGRATION_FAMILY_ERP";
+
+/** What a settings field holds, and so which input the console draws for it. */
+export type SettingKind =
+  | "SETTING_KIND_TEXT"
+  | "SETTING_KIND_URL"
+  | "SETTING_KIND_NUMBER"
+  | "SETTING_KIND_CHOICE"
+  | "SETTING_KIND_FLAG"
+  | "SETTING_KIND_SECRET";
+
+/** One field of a provider's settings schema, from `GET /admin/integrations/providers`. */
+export interface ProviderField {
+  readonly key: string;
+  /** A translation key; the console falls back to `key` when it does not ship it. */
+  readonly label_key: string;
+  readonly kind: SettingKind;
+  readonly required: boolean;
+  readonly max_length?: number;
+  readonly min?: number;
+  readonly max?: number;
+  readonly options?: readonly string[];
+}
+
+/** One vendor this cloud can talk to, with the schema its connection form is drawn from. */
+export interface Provider {
+  readonly provider_id: string;
+  readonly family: IntegrationFamily;
+  readonly runs_on: "PROVIDER_RUNTIME_EDGE" | "PROVIDER_RUNTIME_CLOUD";
+  readonly name_key: string;
+  /** ISO 3166-1 alpha-2; empty means every country. */
+  readonly countries: readonly string[];
+  readonly capabilities: readonly string[];
+  readonly sandbox: boolean;
+  readonly fields: readonly ProviderField[];
+}
+
+/** The provider catalogue. */
+export interface ProviderCatalogue {
+  readonly providers: readonly Provider[];
+}
+
+/** A setting's value as the operator typed it: the plain JSON the schema's kind implies. */
+export type SettingValue = string | number | boolean;
+
+/** Which layer of the config tree a connection serves. */
+export type ConnectionScopeLevel =
+  | "CONNECTION_SCOPE_TENANT"
+  | "CONNECTION_SCOPE_BRAND"
+  | "CONNECTION_SCOPE_STORE";
+
+/**
+ * A tenant's connection to one vendor (ADR-0153). No secret value is ever on it: `secrets_set`
+ * names the secret fields that hold one.
+ */
+export interface Connection {
+  readonly connection_id: string;
+  readonly provider_id: string;
+  readonly scope_level: ConnectionScopeLevel;
+  readonly scope_id?: string;
+  readonly display_name: string;
+  readonly enabled: boolean;
+  readonly settings: Readonly<Record<string, SettingValue>>;
+  readonly secrets_set: readonly string[];
+  readonly etag: ETag;
+  readonly updated_at_ms?: number;
+}
+
+/**
+ * A connection write. `secrets` holds only what this write sets: a secret left out keeps the stored
+ * value, and `clear_secrets` removes one on purpose.
+ */
+export interface ConnectionInput {
+  readonly provider_id: string;
+  readonly scope_level: ConnectionScopeLevel;
+  readonly scope_id?: string;
+  readonly display_name: string;
+  readonly enabled: boolean;
+  readonly settings: Record<string, SettingValue>;
+  readonly secrets: Record<string, string>;
+  readonly clear_secrets: readonly string[];
+}
