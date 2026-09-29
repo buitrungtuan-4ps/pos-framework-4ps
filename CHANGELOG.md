@@ -185,6 +185,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   Docs: `docs/pos-spec.md` §3, `docs/ui-ux.md` §3.
 
+- **A new vendor starts as a catalogue entry.** `templates/adapter-template` now exports a
+  `ProviderDescriptor` (`PROVIDER`), with a test that fails the build on a malformed one. Its
+  checklist and `docs/guides/write-an-adapter.md` spell out the rest of adding a vendor that tenants
+  can choose from the console
+  ([ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)):
+  - describe it in `PROVIDER`;
+  - register it with one line in `crates/pos-cloud/src/providers.rs`;
+  - name it in the console's `en` and `vi` catalogues.
+
+  The Integrations screen draws its form from the schema, so nothing in the core, the protocol, the
+  edge or the console changes. **Upgrade note:** none.
+
 - **A stopping edge says how its last drain ended**
   ([ADR-0113](docs/adr/0113-the-host-agent.md)). A hosted store's container and volume are removed
   together, so the host agent that stops one has to know whether events were still waiting to reach
