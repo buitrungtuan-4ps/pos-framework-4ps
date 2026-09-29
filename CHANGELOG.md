@@ -147,6 +147,38 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
+  words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
+  toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language
+  instead of always being English. On a store PC with no fonts to rasterise with they stay English,
+  so a label is never what stops a receipt printing. Other languages still print English.
+  **Upgrade note:** none — a store with no display language, or not Vietnamese, prints exactly as
+  before.
+
+- **The store server checks its own clock, and says when it is wrong.** Every fifteen minutes the
+  edge asks a time server for the time over SNTP and compares it with its own clock. The trading day
+  is worked out from that clock, so a box two minutes fast files a sale made just before the day's
+  cutoff under the next day, and until now nothing noticed.
+  - The till's **Devices** screen gains *Store server clock*: how far ahead or behind the box is,
+    and when it was last checked. Past two seconds either way it says so in red, with what to do.
+  - The edge logs a warning once when the clock goes past two seconds, and once when a time server
+    cannot be reached, rather than on every check.
+  - `GET /api/sync` gains `clock_drift` (`CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM`, or
+    `CLOCK_DRIFT_UNSPECIFIED` before the first answer), `clock_drift_alarm_ms`, and, once measured,
+    `clock_offset_ms` and `clock_measure_time`. Additive: an older till ignores them.
+  - The edge measures and never sets the clock, which stays the operating system's job. The cloud
+    does not hear about drift yet.
+  - The disk-space guard PF4 also asks for is **not** in this change. Nothing the edge depends on
+    can read a disk's free space without a new crate.
+
+  **Upgrade note:** `config.toml` gains `sntp_server`, defaulting to `time.google.com`. A box now
+  sends one UDP datagram to port 123 every fifteen minutes. Where outbound UDP 123 is blocked, set
+  it to the network's own time server; `sntp_server = ""` turns the check off, with a warning at
+  start-up.
+
+  Docs: `docs/roadmap-v3.md` PF4, `docs/ui-ux.md` §4, `docs/capacity-and-reliability.md` §5,
+  `deploy/edge/README.md` (Configuration).
+
 - **The console has an Integrations screen.** Under Settings, owners and admins see each kind of
   system the tenant can connect — e-invoicing, QR payments, card terminals, delivery marketplaces,
   couriers, accounting — with the vendors this cloud offers for each and the connections already

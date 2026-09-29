@@ -133,6 +133,23 @@ pub struct EdgeConfig {
     /// cloud without archive storage configured has nowhere to ship to, and says so.
     #[serde(default = "default_backup_interval_hours")]
     pub backup_interval_hours: u64,
+    /// The time server this box measures its own clock against (roadmap-v3 PF4, [`crate::sntp`]),
+    /// as a host name or an IP address, always on port 123. Defaults to
+    /// [`DEFAULT_SNTP_SERVER`](crate::sntp::DEFAULT_SNTP_SERVER).
+    ///
+    /// The edge only *measures*: the operating system still sets the clock. Point this at the time
+    /// server the store's network already uses when outbound UDP 123 to the internet is blocked,
+    /// or the measurement fails every time and says so once in the log.
+    ///
+    /// An empty string turns the measurement off. It is announced as a warning at start-up rather
+    /// than accepted quietly, because a clock drifting unwatched files sales under the wrong day.
+    #[serde(default = "default_sntp_server")]
+    pub sntp_server: String,
+}
+
+/// [`crate::sntp::DEFAULT_SNTP_SERVER`], owned, for serde.
+fn default_sntp_server() -> String {
+    crate::sntp::DEFAULT_SNTP_SERVER.to_owned()
 }
 
 /// Once a day, which is the recovery point ADR-0046 assumes for a store.
@@ -205,6 +222,7 @@ impl EdgeConfig {
             font_directories: default_font_directories(),
             font_size_dots: default_font_size_dots(),
             backup_interval_hours: default_backup_interval_hours(),
+            sntp_server: default_sntp_server(),
         }
     }
 
@@ -377,6 +395,16 @@ mod tests {
         // deny_unknown_fields: a typo in a config key is a mistake to surface at load, not to ignore.
         let text = "store_id = \"01JQ0000000000000000000001\"\nlisten = \"0.0.0.0:80\"";
         assert!(EdgeConfig::from_toml_str(text).is_err());
+    }
+
+    #[test]
+    fn the_clock_is_measured_against_the_default_server_unless_told_otherwise() {
+        let config =
+            EdgeConfig::from_toml_str("store_id = \"01JQ0000000000000000000001\"").expect("parses");
+        assert_eq!(config.sntp_server, crate::sntp::DEFAULT_SNTP_SERVER);
+        let text = "store_id = \"01JQ0000000000000000000001\"\nsntp_server = \"192.168.1.1\"";
+        let config = EdgeConfig::from_toml_str(text).expect("parses");
+        assert_eq!(config.sntp_server, "192.168.1.1");
     }
 
     #[test]

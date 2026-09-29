@@ -8,8 +8,9 @@
 //! precisely to force this). [`SystemClock`] is the single place the ban is lifted, because a real
 //! clock must read the OS somewhere.
 //!
-//! SNTP drift correction and the drift alarm layer on top of this in a later P5 slice
-//! ([`docs/roadmap.md`](../../../docs/roadmap.md)); `SystemClock` is the base every clock wraps.
+//! The drift alarm is [`crate::sntp`], which measures this clock against a time server and reports
+//! how far off it is (roadmap-v3 PF4). It deliberately does not correct it: setting the time stays
+//! the operating system's job, so `SystemClock` is still the clock every reader gets.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

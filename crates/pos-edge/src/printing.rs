@@ -63,6 +63,7 @@ use pos_proto::store_profile::StoreProfile;
 use pos_proto::ClockSource;
 
 use crate::app::{BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptLine, ShiftReport};
+use crate::paper_labels::PaperLabels;
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
 
 /// The store's receipt printer: the printer bound to no station.
@@ -280,6 +281,7 @@ fn percent(basis_points: u32) -> String {
 pub fn receipt_document(
     profile: &StoreProfile,
     money: &MoneyStyle,
+    labels: &PaperLabels,
     receipt_number: u64,
     lines: &[ReceiptLine],
     totals: &BillTotals,
@@ -289,6 +291,7 @@ pub fn receipt_document(
         BillDocument::Receipt { receipt_number },
         profile,
         money,
+        labels,
         lines,
         totals,
         buyer,
@@ -310,6 +313,7 @@ pub fn receipt_document(
 pub fn pre_bill_document(
     profile: &StoreProfile,
     money: &MoneyStyle,
+    labels: &PaperLabels,
     reference: &str,
     lines: &[ReceiptLine],
     totals: &BillTotals,
@@ -318,6 +322,7 @@ pub fn pre_bill_document(
         BillDocument::PreBill { reference },
         profile,
         money,
+        labels,
         lines,
         totals,
         None,
@@ -338,30 +343,35 @@ pub fn pre_bill_document(
 pub fn shift_report_document(
     profile: &StoreProfile,
     money: &MoneyStyle,
+    labels: &PaperLabels,
     report: &ShiftReport,
 ) -> PrintDocument {
     let mut blocks = Vec::new();
     if let Some(name) = profile.display_name() {
         blocks.push(centred(name, true));
     }
-    blocks.push(centred("SHIFT REPORT", true));
+    blocks.push(centred(labels.shift_report, true));
     blocks.push(centred(
         short_reference(&report.shift_id.to_string()),
         false,
     ));
-    blocks.push(amount_line("Opening float", report.opening_float, money));
-    blocks.push(amount_line("Cash taken", report.cash_collected, money));
     blocks.push(amount_line(
-        "Expected in drawer",
+        labels.opening_float,
+        report.opening_float,
+        money,
+    ));
+    blocks.push(amount_line(labels.cash_taken, report.cash_collected, money));
+    blocks.push(amount_line(
+        labels.expected_in_drawer,
         report.expected_amount,
         money,
     ));
-    blocks.push(amount_line("Counted", report.counted_amount, money));
-    blocks.push(amount_line("Variance", report.variance, money));
+    blocks.push(amount_line(labels.counted, report.counted_amount, money));
+    blocks.push(amount_line(labels.variance, report.variance, money));
     let verdict = match report.variance.amount_minor.cmp(&0) {
-        core::cmp::Ordering::Less => "Short",
-        core::cmp::Ordering::Equal => "Balanced",
-        core::cmp::Ordering::Greater => "Over",
+        core::cmp::Ordering::Less => labels.short,
+        core::cmp::Ordering::Equal => labels.balanced,
+        core::cmp::Ordering::Greater => labels.over,
     };
     blocks.push(centred(verdict, true));
     blocks.push(PrintBlock::Cut);
@@ -385,6 +395,7 @@ fn bill_document(
     kind: BillDocument<'_>,
     profile: &StoreProfile,
     money: &MoneyStyle,
+    labels: &PaperLabels,
     lines: &[ReceiptLine],
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
@@ -412,7 +423,7 @@ fn bill_document(
             blocks.push(centred(format!("#{receipt_number}"), false));
         }
         BillDocument::PreBill { reference } => {
-            blocks.push(centred("PRE-BILL", true));
+            blocks.push(centred(labels.pre_bill, true));
             blocks.push(centred(reference, false));
         }
     }
@@ -421,7 +432,7 @@ fn bill_document(
     // document, not a letterhead, and the two must not read as one block.
     if let Some(buyer) = buyer {
         blocks.push(PrintBlock::Text {
-            line: format!("Bill to: {}", buyer.name),
+            line: format!("{}: {}", labels.bill_to, buyer.name),
             style: TextStyle::default(),
         });
         for line in [buyer.tax_code.as_ref(), buyer.address.as_ref()]
@@ -466,25 +477,7 @@ fn bill_document(
         ));
     }
 
-    // What was charged. `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the
-    // column adds up on paper in both postures — which is what makes the document check out when
-    // somebody totals it by hand.
-    blocks.push(amount_line("Subtotal", totals.subtotal, money));
-    if !totals.discount_total.is_zero() {
-        blocks.push(amount_line("Discount", totals.discount_total, money));
-    }
-    if !totals.comp_total.is_zero() {
-        blocks.push(amount_line("Comps", totals.comp_total, money));
-    }
-    if !totals.service_charge.is_zero() {
-        blocks.push(amount_line("Service charge", totals.service_charge, money));
-    }
-    for line in &totals.tax_lines {
-        blocks.extend(tax_block(line, money));
-    }
-    if !totals.rounding_adjustment.is_zero() {
-        blocks.push(amount_line("Rounding", totals.rounding_adjustment, money));
-    }
+    blocks.extend(totals_blocks(totals, money, labels));
 
     blocks.push(PrintBlock::Text {
         line: format_money(totals.total_due, money),
@@ -495,7 +488,7 @@ fn bill_document(
         },
     });
     if matches!(kind, BillDocument::PreBill { .. }) {
-        blocks.push(centred("Not a receipt", false));
+        blocks.push(centred(labels.not_a_receipt, false));
     }
 
     blocks.extend(
@@ -659,6 +652,40 @@ fn format_money(amount: Money, money: &MoneyStyle) -> String {
     )
 }
 
+/// What a bill was charged, above its total: the subtotal, whatever came off or was added, each tax
+/// rate, and the rounding.
+///
+/// `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the column adds up on paper
+/// in both postures — which is what makes the document check out when somebody totals it by hand.
+/// Its own function so the document around it stays readable; the rows it prints are the same.
+fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) -> Vec<PrintBlock> {
+    let mut blocks = vec![amount_line(labels.subtotal, totals.subtotal, money)];
+    if !totals.discount_total.is_zero() {
+        blocks.push(amount_line(labels.discount, totals.discount_total, money));
+    }
+    if !totals.comp_total.is_zero() {
+        blocks.push(amount_line(labels.comps, totals.comp_total, money));
+    }
+    if !totals.service_charge.is_zero() {
+        blocks.push(amount_line(
+            labels.service_charge,
+            totals.service_charge,
+            money,
+        ));
+    }
+    for line in &totals.tax_lines {
+        blocks.extend(tax_block(line, money, labels));
+    }
+    if !totals.rounding_adjustment.is_zero() {
+        blocks.push(amount_line(
+            labels.rounding,
+            totals.rounding_adjustment,
+            money,
+        ));
+    }
+    blocks
+}
+
 /// One tax rate's line, and the components it is made of beneath it.
 ///
 /// Its own function because `receipt_document` is at the line ceiling and this is the part of it
@@ -666,9 +693,13 @@ fn format_money(amount: Money, money: &MoneyStyle) -> String {
 /// explain. They are allocated out of the *rounded* tax, so they sum to it exactly
 /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)) — which is the property
 /// that makes the block printable at all, rather than three figures that nearly add up.
-fn tax_block(line: &pos_core::billing::TaxLine, money: &MoneyStyle) -> Vec<PrintBlock> {
+fn tax_block(
+    line: &pos_core::billing::TaxLine,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+) -> Vec<PrintBlock> {
     let mut blocks = vec![amount_line(
-        &format!("Tax {}", percent(line.rate_basis_points)),
+        &format!("{} {}", labels.tax, percent(line.rate_basis_points)),
         line.tax,
         money,
     )];
@@ -1112,6 +1143,12 @@ impl Printers {
         self.renderer.is_some()
     }
 
+    /// The words this store's paper is printed in: its language when this box can draw it, English
+    /// when it cannot, so a label is never the line that stops a receipt printing.
+    fn labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
+        PaperLabels::for_store(session.display_language.as_deref(), self.can_rasterise())
+    }
+
     /// Prints the guest's receipt for a settled bill on the store's receipt printer.
     ///
     /// `job_id` is the idempotency key: pass the settle's event id and a retried settle reprints
@@ -1136,6 +1173,7 @@ impl Printers {
         let document = receipt_document(
             &session.profile,
             &MoneyStyle::of(session),
+            self.labels_for(session),
             receipt_number,
             lines,
             totals,
@@ -1173,6 +1211,7 @@ impl Printers {
         let document = pre_bill_document(
             &session.profile,
             &MoneyStyle::of(session),
+            self.labels_for(session),
             reference,
             &pre_bill.lines,
             &pre_bill.totals,
@@ -1204,7 +1243,12 @@ impl Printers {
             tracing::info!("no receipt printer is published for this store; nothing to print");
             return PrintOutcome::NoPrinter;
         };
-        let document = shift_report_document(&session.profile, &MoneyStyle::of(session), report);
+        let document = shift_report_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.labels_for(session),
+            report,
+        );
         self.dispatch(
             device,
             PrintJob {
@@ -1446,6 +1490,7 @@ mod tests {
         ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
+    use crate::paper_labels::{ENGLISH, VIETNAMESE};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
@@ -1952,6 +1997,7 @@ mod tests {
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             7,
             &lines,
             &totals_of(vnd(347_000)),
@@ -1987,6 +2033,7 @@ mod tests {
         let document = pre_bill_document(
             &StoreProfile::default(),
             &style(0),
+            &ENGLISH,
             "3K9Q2Z",
             &lines,
             &totals_of(vnd(347_000)),
@@ -2028,7 +2075,12 @@ mod tests {
             variance: vnd(counted - 1_750_000),
         };
 
-        let short = shift_report_document(&StoreProfile::default(), &style(0), &report(1_730_000));
+        let short = shift_report_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            &report(1_730_000),
+        );
         let lines = lines_of(&short);
         assert_eq!(lines[0], "SHIFT REPORT");
         assert_eq!(
@@ -2044,11 +2096,63 @@ mod tests {
         );
         assert_eq!(short.blocks.last(), Some(&PrintBlock::Cut));
 
-        let balanced =
-            shift_report_document(&StoreProfile::default(), &style(0), &report(1_750_000));
+        let balanced = shift_report_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            &report(1_750_000),
+        );
         assert_eq!(lines_of(&balanced).last(), Some(&"Balanced"));
-        let over = shift_report_document(&StoreProfile::default(), &style(0), &report(1_760_000));
+        let over = shift_report_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            &report(1_760_000),
+        );
         assert_eq!(lines_of(&over).last(), Some(&"Over"));
+    }
+
+    #[test]
+    fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
+        // The same documents, in the words a Vietnamese guest and cashier read: the heading, every
+        // total's label and the sign-off change; the rows, the amounts and their order do not.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [sold("Phở bò đặc biệt", 1_000, vnd(99_000), vnd(99_000))];
+        let pre_bill = pre_bill_document(
+            &StoreProfile::default(),
+            &style(0),
+            &VIETNAMESE,
+            "3K9Q2Z",
+            &lines,
+            &totals_of(vnd(99_000)),
+        );
+        assert_eq!(
+            lines_of(&pre_bill),
+            vec![
+                "PHIẾU TẠM TÍNH",
+                "3K9Q2Z",
+                "Phở bò đặc biệt",
+                "  1 x VND 99,000  VND 99,000",
+                "Tạm tính  VND 99,000",
+                "VND 99,000",
+                "Không phải hóa đơn thanh toán",
+            ]
+        );
+
+        let report = ShiftReport {
+            shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+            opening_float: vnd(500_000),
+            cash_collected: vnd(1_250_000),
+            expected_amount: vnd(1_750_000),
+            counted_amount: vnd(1_730_000),
+            variance: vnd(-20_000),
+        };
+        let drawer =
+            shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);
+        let drawn = lines_of(&drawer);
+        assert_eq!(drawn.first(), Some(&"BÁO CÁO CA"));
+        assert_eq!(drawn.last(), Some(&"Thiếu"));
+        assert!(drawn.contains(&"Chênh lệch  VND -20,000"));
     }
 
     #[test]
@@ -2065,6 +2169,7 @@ mod tests {
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             9,
             &lines,
             &totals_of(vnd(288_000)),
@@ -2099,6 +2204,7 @@ mod tests {
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             8,
             &lines,
             &totals_of(jpy(2_000)),
@@ -2120,6 +2226,7 @@ mod tests {
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             7,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
@@ -2146,6 +2253,7 @@ mod tests {
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
@@ -2193,6 +2301,7 @@ mod tests {
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             11,
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
@@ -2219,6 +2328,7 @@ mod tests {
             &StoreProfile::default(),
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             12,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
@@ -2282,7 +2392,7 @@ mod tests {
         // The rounding line is the other half of why the exponent is not the same fact as the
         // increment: the invoice still rounds to the whole rupee, which is what `-1.00` is, while
         // the figures it rounds are quoted in paise.
-        let document = receipt_document(&profile, &style(2), 9, &[], &totals, None);
+        let document = receipt_document(&profile, &style(2), &ENGLISH, 9, &[], &totals, None);
         assert_eq!(
             lines_of(&document),
             vec![
@@ -2324,6 +2434,7 @@ mod tests {
         let document = receipt_document(
             &profile,
             &vietnam,
+            &ENGLISH,
             5,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 1_234_567)),
@@ -2352,6 +2463,7 @@ mod tests {
         let document = receipt_document(
             &StoreProfile::default(),
             &style,
+            &ENGLISH,
             6,
             &[],
             &totals_of(Money::new(CurrencyCode::USD, 123_456)),
@@ -2377,6 +2489,7 @@ mod tests {
             &profile,
             // Zero: these fixtures are denominated in đồng and in yen, and neither has a subunit.
             &style(0),
+            &ENGLISH,
             3,
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),

@@ -81,7 +81,7 @@ At peak, latency does not change — every tier stays far below the point where 
 |---|---|---|---|---|---|
 | Store server hardware dies | That store stops selling | Staff immediately; heartbeat in 30–60 s | — | Replace machine + activation code: **5–10 min** | ≤ WAL RPO (seconds); synced events already safe |
 | Power loss mid-transaction | One store | On restart | UPS if fitted | Seconds (SQLite WAL recovery) | Only the uncommitted transaction |
-| Store disk full | One store | Threshold alert | — | Minutes | None |
+| Store disk full | One store | Threshold alert — **not built**: nothing on the edge reads free space yet (roadmap-v3 PF4) | — | Minutes | None |
 | Store network down | Store **keeps selling**; marketplaces see "busy"; **QR ordering stops** | Heartbeat | Staff take orders directly | Automatic on reconnect | None |
 | **Cloud VPS down** | Dashboards, QR, webhooks, ingest stop — **every store keeps selling** | External ping / user report | Stores are autonomous | Restore in 30–60 min | ≤ backup RPO (minutes with WAL archiving) |
 | PostgreSQL corruption | All cloud data | Integrity checks | Stores autonomous | Restore, **or replay from the edges** (the replay command is not built yet) | Recoverable within each store's retention, 90 days by default (ADR-0145) |
@@ -92,7 +92,7 @@ At peak, latency does not change — every tier stays far below the point where 
 | E-invoicing provider down | Invoices queue | Queue depth | Issue offline against pre-allocated numbers | Provider-dependent | None |
 | QR order abuse | One store's kitchen | Staff see an odd order | **Staff confirmation before firing** | Immediate | None |
 | TLS certificate expiry | HTTPS and QR stop | Monitoring | — | Caddy auto-renews | None |
-| Edge clock drift or tampering | Timestamps, shift boundaries | SNTP drift alert | `ClockSource` port | Immediate | Anomaly recorded in the audit log |
+| Edge clock drift or tampering | Timestamps, shift boundaries | SNTP drift alarm past 2 s, within 15 min: the edge log and the till's Devices screen. Not yet the cloud or the audit log | The OS's own time sync; the edge measures and never corrects | When the OS clock is put right | None; a sale already filed under the wrong day stays there |
 
 **The one property worth memorising:** no failure in this table stops a store from selling, except that store's own hardware — and that is a 5–10 minute swap. A cloud outage costs administration and QR ordering, never revenue.
 
