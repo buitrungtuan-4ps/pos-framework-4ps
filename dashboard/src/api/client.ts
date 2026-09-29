@@ -6,6 +6,9 @@
 
 import type {
   ActivationCode,
+  Connection,
+  ConnectionInput,
+  ProviderCatalogue,
   AdminIdentity,
   AdminInvite,
   AdminRole,
@@ -1571,6 +1574,29 @@ export const api = {
       tenant_id: tenantId,
       store_id: storeId,
     }),
+  // Vendor integrations (ADR-0153). The catalogue is every provider this cloud was built with, and
+  // each one's settings schema — the form below is drawn from it, so a new vendor needs no new
+  // screen. A connection's secrets are write-only: sent once, sealed by the cloud, never returned.
+  listProviders: () => requestJson<ProviderCatalogue>("GET", "/admin/integrations/providers"),
+  listConnections: (tenantId: string) =>
+    requestJson<Connection[]>("GET", `/admin/integrations/connections?${tenantQuery(tenantId)}`),
+  createConnection: (tenantId: string, input: ConnectionInput) =>
+    requestJson<Connection>("POST", "/admin/integrations/connections", {
+      tenant_id: tenantId,
+      ...input,
+    }),
+  updateConnection: (tenantId: string, id: string, etag: ETag, input: ConnectionInput) =>
+    requestJsonIfMatch<Connection>(
+      "PUT",
+      `/admin/integrations/connections/${encodeURIComponent(id)}`,
+      etag,
+      { tenant_id: tenantId, ...input },
+    ),
+  deleteConnection: (tenantId: string, id: string) =>
+    requestVoid(
+      "DELETE",
+      `/admin/integrations/connections/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),

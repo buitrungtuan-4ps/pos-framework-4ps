@@ -147,6 +147,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console has an Integrations screen.** Under Settings, owners and admins see each kind of
+  system the tenant can connect — e-invoicing, QR payments, card terminals, delivery marketplaces,
+  couriers, accounting — with the vendors this cloud offers for each and the connections already
+  made. Connecting one, editing it or switching vendor is a form drawn from that vendor's own
+  settings schema ([ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)), so a
+  vendor added to the cloud appears here with its form and nothing in the console changes. A
+  credential is typed once and never shown again: the field says a value is stored, leaving it blank
+  keeps it, and an optional one can be removed. A settings refusal names the fields to fix. Labels
+  the console does not ship yet fall back to the field's key. **Upgrade note:** none.
+
 - **A tenant connects its vendors from the console, and their credentials are sealed.** New
   `/admin/integrations/connections` routes (list and read for any console role; create, edit and
   delete behind the new `console.integrations.manage`, granted to Owner and Admin) store a
