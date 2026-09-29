@@ -1,6 +1,6 @@
 # `adapter-template` — a starting point for a new port adapter
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-21
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
 
 This directory is a **scaffold you copy**, not a crate. It is deliberately not a workspace member and
 its source files carry a `.tmpl` suffix, so Cargo, `clippy`, `rustfmt`, and `cargo test` never see it —
@@ -53,12 +53,27 @@ pull-request gate — the split every adapter here follows.
 5. Map the provider's statuses to the port's value types and its HTTP codes to `PortError`. Never
    coerce an unknown status to a known one — preserve it (see how the couriers keep an unrecognised
    `Open<ShipmentStatus>` non-terminal).
-6. Make the contract suite pass: `cargo test -p <your-adapter>`.
-7. If your provider's wire is genuinely new (not a courier or ERP), write an ADR like
+6. **Describe it.** Fill in `PROVIDER` in `src/lib.rs`
+   ([ADR-0153](../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)):
+   - an id `<family>.<vendor>`, which is never renamed;
+   - the countries it serves;
+   - the settings it reads. Start from `pos_providers::fields` and declare a credential as
+     `FieldKind::Secret`.
+
+   The test beside it fails the build on a malformed descriptor.
+7. **Register it.** Add the crate to `crates/pos-cloud/Cargo.toml` and one line to `registry()` in
+   `crates/pos-cloud/src/providers.rs`. That is the whole of the cloud's change. A driver for a device
+   on the store's network (a card terminal) registers on the edge instead, per
+   [ADR-0154](../../docs/adr/0154-a-card-is-taken-through-the-stores-terminal.md).
+8. **Name it in the console.** Add `provider.<family>.<vendor>`, and the `label_key` of any field that
+   is not shared, to `dashboard/src/i18n/en.json` and `vi.json`, in place, with no re-sorting. The
+   Integrations screen draws the form from the schema, so nothing else in the console changes.
+9. Make the contract suite pass: `cargo test -p <your-adapter>`.
+10. If your provider's wire is genuinely new (not a courier or ERP), write an ADR like
    [ADR-0058](../../docs/adr/0058-shipping-adapters.md); if it is another instance of an existing one,
    note it under that ADR instead.
-8. Add a `CHANGELOG.md` entry (the `docs-gate` check requires one for any change under `crates/`).
-9. Run `just preflight`.
+11. Add a `CHANGELOG.md` entry (the `docs-gate` check requires one for any change under `crates/`).
+12. Run `just preflight`.
 
 ## What does **not** belong in the adapter
 

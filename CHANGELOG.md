@@ -185,6 +185,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   Docs: `docs/pos-spec.md` §3, `docs/ui-ux.md` §3.
 
+- **A new vendor starts as a catalogue entry.** `templates/adapter-template` now exports a
+  `ProviderDescriptor` (`PROVIDER`), with a test that fails the build on a malformed one. Its
+  checklist and `docs/guides/write-an-adapter.md` spell out the rest of adding a vendor that tenants
+  can choose from the console
+  ([ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)):
+  - describe it in `PROVIDER`;
+  - register it with one line in `crates/pos-cloud/src/providers.rs`;
+  - name it in the console's `en` and `vi` catalogues.
+
+  The Integrations screen draws its form from the schema, so nothing in the core, the protocol, the
+  edge or the console changes. **Upgrade note:** none.
+
 - **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
   words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
   toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language

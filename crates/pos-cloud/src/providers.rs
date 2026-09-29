@@ -9,8 +9,8 @@
 //! settings schema, so nothing in the dashboard changes.
 //!
 //! The console reads the catalogue through `GET /admin/integrations/providers`. What a tenant then
-//! configures — a *connection*, with its settings and sealed secrets — is not stored yet; this is
-//! only "which vendors can this platform talk to, and what does each need".
+//! configures — a *connection*, with its settings and sealed secrets — is `crate::connections`'s;
+//! this is only "which vendors can this platform talk to, and what does each need".
 
 use pos_providers::{Family, FieldKind, ProviderDescriptor, Registry, RegistryError, SettingField};
 use serde::Serialize;

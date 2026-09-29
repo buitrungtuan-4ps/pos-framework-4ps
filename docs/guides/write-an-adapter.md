@@ -1,6 +1,6 @@
 # Write an adapter
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-21
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
 
 An adapter connects one external system — a payment terminal, a courier, a marketplace, an ERP — to a
 **port** the core already defines. You never touch `pos-core`; you implement a trait and prove it with
@@ -28,13 +28,31 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
    checklist; the load-bearing part is mapping each provider status to the right `PortError` — that is
    what the port's contract turns on.
 3. **Register the crate**: add `"crates/adapters/<your-adapter>"` to `members` in the root `Cargo.toml`.
-4. **Make the contract suite pass**:
+4. **Make it a vendor the console can offer.** This takes one descriptor, one line and two
+   translations ([ADR-0153](../adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+   - **The descriptor.** Fill in `PROVIDER` in `src/lib.rs`:
+     - the id `<family>.<vendor>`, which is stored in every connection and never renamed;
+     - the countries it serves;
+     - the settings it reads, typed as text, URL, number, choice, flag or secret.
+
+     Declare only what the adapter reads. A secret is sealed by the cloud on arrival and never
+     returned.
+   - **The line.** Add the crate to `crates/pos-cloud/Cargo.toml` and to `registry()` in
+     `crates/pos-cloud/src/providers.rs`.
+   - **The words.** Add `provider.<family>.<vendor>`, and a label for any field that is not shared, to
+     the console's `en` and `vi` catalogues.
+
+   The console's **Integrations** screen then lists the vendor under its family and draws its form
+   from the schema. A tenant connects it for every store, or for one, and the cloud checks the
+   settings against the same schema. Nothing in `pos-core`, `pos-proto`, the edge or the console
+   changes.
+5. **Make the contract suite pass**:
    ```bash
    cargo test -p <your-adapter>
    ```
-5. **Document it**: a `CHANGELOG.md` entry (required for any change under `crates/`); a new ADR only if
+6. **Document it**: a `CHANGELOG.md` entry (required for any change under `crates/`); a new ADR only if
    the provider's wire is genuinely a new shape, otherwise a note under the existing one.
-6. `just preflight`.
+7. `just preflight`.
 
 ## Learn from three worked examples
 
