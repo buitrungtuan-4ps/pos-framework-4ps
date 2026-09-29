@@ -62,7 +62,7 @@ use pos_proto::store_profile::StoreProfile;
 
 use pos_proto::ClockSource;
 
-use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine};
+use crate::app::{BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptLine, ShiftReport};
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
 
 /// The store's receipt printer: the printer bound to no station.
@@ -285,6 +285,110 @@ pub fn receipt_document(
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
 ) -> PrintDocument {
+    bill_document(
+        BillDocument::Receipt { receipt_number },
+        profile,
+        money,
+        lines,
+        totals,
+        buyer,
+    )
+}
+
+/// The check a table asks for before it pays: the rows the receipt will print and what they come to,
+/// headed as a pre-bill and with **no receipt number** (roadmap-v3 B2.1).
+///
+/// No number because nothing has been settled. The gapless receipt sequence (ADR-0025) numbers
+/// settled bills, and a pre-bill printed three times while a table argues about the wine is not three
+/// sales; printing one under a number would leave a hole in the series the day nobody paid. The
+/// `reference` is the order's short reference, the one its kitchen tickets carry, so a server holding
+/// the paper and a cook holding a ticket are talking about the same table.
+///
+/// "Not a receipt" is printed under the total because a pre-bill left on the table looks like one to
+/// a guest who is not looking closely, and the difference is whether anything was paid.
+#[must_use]
+pub fn pre_bill_document(
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    reference: &str,
+    lines: &[ReceiptLine],
+    totals: &BillTotals,
+) -> PrintDocument {
+    bill_document(
+        BillDocument::PreBill { reference },
+        profile,
+        money,
+        lines,
+        totals,
+        None,
+    )
+}
+
+/// A closed shift's drawer on paper: the float, the cash taken, what that should come to, what was
+/// counted, and the difference.
+///
+/// The drawer's own arithmetic, in the order a supervisor checks it: the first two add up to the
+/// third, and the fourth less the third is the fifth. Printed because the domain asks for it on close
+/// (`Effect::PrintShiftReport`), which it has done since the shift machine was written while nothing
+/// turned the effect into paper — a cashier handing over a drawer had only a screen to show for it.
+///
+/// "Over" or "short" is written out beside the variance rather than left to its sign, because a
+/// minus sign on thermal paper is a single dot-width wide and the word is the thing being checked.
+#[must_use]
+pub fn shift_report_document(
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    report: &ShiftReport,
+) -> PrintDocument {
+    let mut blocks = Vec::new();
+    if let Some(name) = profile.display_name() {
+        blocks.push(centred(name, true));
+    }
+    blocks.push(centred("SHIFT REPORT", true));
+    blocks.push(centred(
+        short_reference(&report.shift_id.to_string()),
+        false,
+    ));
+    blocks.push(amount_line("Opening float", report.opening_float, money));
+    blocks.push(amount_line("Cash taken", report.cash_collected, money));
+    blocks.push(amount_line(
+        "Expected in drawer",
+        report.expected_amount,
+        money,
+    ));
+    blocks.push(amount_line("Counted", report.counted_amount, money));
+    blocks.push(amount_line("Variance", report.variance, money));
+    let verdict = match report.variance.amount_minor.cmp(&0) {
+        core::cmp::Ordering::Less => "Short",
+        core::cmp::Ordering::Equal => "Balanced",
+        core::cmp::Ordering::Greater => "Over",
+    };
+    blocks.push(centred(verdict, true));
+    blocks.push(PrintBlock::Cut);
+    PrintDocument { blocks }
+}
+
+/// Which document a bill's rows and totals are printed as.
+///
+/// One body with a kind rather than two functions, because the two documents are the same rows and
+/// the same arithmetic and differ only in how they are headed and signed off. A second copy of the
+/// body is how a receipt and a pre-bill come to disagree about the tax line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BillDocument<'a> {
+    /// The guest's receipt for a settled bill, under its gapless number.
+    Receipt { receipt_number: u64 },
+    /// The check before payment: headed as such, under the order's reference, and unnumbered.
+    PreBill { reference: &'a str },
+}
+
+fn bill_document(
+    kind: BillDocument<'_>,
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    lines: &[ReceiptLine],
+    totals: &BillTotals,
+    buyer: Option<&BuyerDetails>,
+) -> PrintDocument {
     let mut blocks = Vec::new();
 
     // Who sold. The trading name leads and the legal name backs it up; the address and registration
@@ -303,7 +407,15 @@ pub fn receipt_document(
         blocks.push(centred(registration, false));
     }
 
-    blocks.push(centred(format!("#{receipt_number}"), false));
+    match kind {
+        BillDocument::Receipt { receipt_number } => {
+            blocks.push(centred(format!("#{receipt_number}"), false));
+        }
+        BillDocument::PreBill { reference } => {
+            blocks.push(centred("PRE-BILL", true));
+            blocks.push(centred(reference, false));
+        }
+    }
 
     // Who bought, on a B2B invoice. Left-aligned rather than centred: this is a party to the
     // document, not a letterhead, and the two must not read as one block.
@@ -382,6 +494,9 @@ pub fn receipt_document(
             centred: true,
         },
     });
+    if matches!(kind, BillDocument::PreBill { .. }) {
+        blocks.push(centred("Not a receipt", false));
+    }
 
     blocks.extend(
         profile
@@ -1038,6 +1153,70 @@ impl Printers {
         .await
     }
 
+    /// Prints a pre-bill on the store's receipt printer — the same device the receipt goes to, since
+    /// both are handed to the guest.
+    ///
+    /// `job_id` should be fresh for each press: a table that asks twice gets two pieces of paper, and
+    /// unlike a settle there is nothing to deduplicate against.
+    pub async fn print_pre_bill(
+        &self,
+        session: &EdgeSession,
+        store_id: StoreId,
+        job_id: EventId,
+        reference: &str,
+        pre_bill: &PreBill,
+    ) -> PrintOutcome {
+        let Some(device) = receipt_printer(&session.devices) else {
+            tracing::info!("no receipt printer is published for this store; nothing to print");
+            return PrintOutcome::NoPrinter;
+        };
+        let document = pre_bill_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            reference,
+            &pre_bill.lines,
+            &pre_bill.totals,
+        );
+        self.dispatch(
+            device,
+            PrintJob {
+                job_id,
+                store_id,
+                station_id: None,
+                document,
+            },
+        )
+        .await
+    }
+
+    /// Prints a closed shift's report on the store's receipt printer.
+    ///
+    /// Never returns an error, for the reason [`Self::print_receipt`] gives: the shift is closed
+    /// whether the paper comes out or not, and the caller tells the cashier which.
+    pub async fn print_shift_report(
+        &self,
+        session: &EdgeSession,
+        store_id: StoreId,
+        job_id: EventId,
+        report: &ShiftReport,
+    ) -> PrintOutcome {
+        let Some(device) = receipt_printer(&session.devices) else {
+            tracing::info!("no receipt printer is published for this store; nothing to print");
+            return PrintOutcome::NoPrinter;
+        };
+        let document = shift_report_document(&session.profile, &MoneyStyle::of(session), report);
+        self.dispatch(
+            device,
+            PrintJob {
+                job_id,
+                store_id,
+                station_id: None,
+                document,
+            },
+        )
+        .await
+    }
+
     /// Prints a kitchen ticket at `station`, or at the station plan's declared backup.
     ///
     /// The failover is the plan's (ADR-0072, ADR-0100): one hop, to the station an operator named.
@@ -1262,10 +1441,11 @@ mod tests {
     use super::TcpTransports;
     use super::{
         ASSUMED_DOTS_PER_LINE, AgentLane, MoneyStyle, PrintOutcome, Printers, TicketLine,
-        TransportFactory, assumed_capabilities, connection_of, receipt_document, receipt_printer,
-        short_reference, station_printer, ticket_document, ticket_line,
+        TransportFactory, assumed_capabilities, connection_of, pre_bill_document, receipt_document,
+        receipt_printer, shift_report_document, short_reference, station_printer, ticket_document,
+        ticket_line,
     };
-    use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine};
+    use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
@@ -1790,6 +1970,85 @@ mod tests {
                 "VND 347,000",
             ]
         );
+    }
+
+    #[test]
+    fn a_pre_bill_is_the_receipts_rows_under_a_reference_and_no_number() {
+        // Roadmap-v3 B2.1. The same rows and figures the receipt will print, so the guest checks
+        // what they will pay; headed as a pre-bill under the order's reference, with no receipt
+        // number (nothing is settled, and a number here would leave a hole in the gapless series);
+        // and signed off "Not a receipt", because on the table it looks like one.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [
+            sold("Phở bò đặc biệt", 2_000, vnd(99_000), vnd(198_000)),
+            sold("Margherita", 1_000, vnd(149_000), vnd(149_000)),
+        ];
+
+        let document = pre_bill_document(
+            &StoreProfile::default(),
+            &style(0),
+            "3K9Q2Z",
+            &lines,
+            &totals_of(vnd(347_000)),
+        );
+
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "PRE-BILL",
+                "3K9Q2Z",
+                "Phở bò đặc biệt",
+                "  2 x VND 99,000  VND 198,000",
+                "Margherita",
+                "  1 x VND 149,000  VND 149,000",
+                "Subtotal  VND 347,000",
+                "VND 347,000",
+                "Not a receipt",
+            ]
+        );
+        assert!(
+            !lines_of(&document).iter().any(|line| line.starts_with('#')),
+            "a pre-bill carries no receipt number"
+        );
+        assert_eq!(document.blocks.last(), Some(&PrintBlock::Cut));
+    }
+
+    #[test]
+    fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
+        // The float plus the cash taken is the expectation, and the count less the expectation is
+        // the variance — in that order, so a supervisor checks it top to bottom. The word beside
+        // the variance is what they read: a minus sign on thermal paper is one dot wide.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let report = |counted: i64| ShiftReport {
+            shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+            opening_float: vnd(500_000),
+            cash_collected: vnd(1_250_000),
+            expected_amount: vnd(1_750_000),
+            counted_amount: vnd(counted),
+            variance: vnd(counted - 1_750_000),
+        };
+
+        let short = shift_report_document(&StoreProfile::default(), &style(0), &report(1_730_000));
+        let lines = lines_of(&short);
+        assert_eq!(lines[0], "SHIFT REPORT");
+        assert_eq!(
+            lines[2..],
+            [
+                "Opening float  VND 500,000",
+                "Cash taken  VND 1,250,000",
+                "Expected in drawer  VND 1,750,000",
+                "Counted  VND 1,730,000",
+                "Variance  VND -20,000",
+                "Short",
+            ]
+        );
+        assert_eq!(short.blocks.last(), Some(&PrintBlock::Cut));
+
+        let balanced =
+            shift_report_document(&StoreProfile::default(), &style(0), &report(1_750_000));
+        assert_eq!(lines_of(&balanced).last(), Some(&"Balanced"));
+        let over = shift_report_document(&StoreProfile::default(), &style(0), &report(1_760_000));
+        assert_eq!(lines_of(&over).last(), Some(&"Over"));
     }
 
     #[test]
