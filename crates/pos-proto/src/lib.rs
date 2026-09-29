@@ -39,6 +39,7 @@ pub mod error;
 pub mod events;
 pub mod floor;
 pub mod ids;
+pub mod integrations;
 pub mod inventory;
 pub mod locale;
 pub mod menu;

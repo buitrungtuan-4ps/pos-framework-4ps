@@ -37,6 +37,7 @@ import type {
   OrderLineRequest,
   PairAccepted,
   PairingState,
+  IntegrationEntry,
   PrinterEntry,
   PrintResponse,
   ReasonCodesResponse,
@@ -349,6 +350,8 @@ export const api = {
   currentShift: () => request<ShiftResponse | null>("GET", "/api/shifts/current"),
   // The cloud link and the outbox, for the status bar (ADR-0137).
   sync: () => request<SyncResponse>("GET", "/api/sync"),
+  // The vendor connections the cloud published to this store (ADR-0153).
+  integrations: () => request<IntegrationEntry[]>("GET", "/api/integrations"),
   // The printers the store published, and a manager's test page on one.
   printers: () => request<PrinterEntry[]>("GET", "/api/printers"),
   testPrinter: (deviceId: string) =>

@@ -119,6 +119,20 @@ impl Family {
         }
     }
 
+    /// The family as the `integrations` node a store receives names it.
+    #[must_use]
+    pub const fn integration_family(self) -> pos_proto::integrations::IntegrationFamily {
+        use pos_proto::integrations::IntegrationFamily;
+        match self {
+            Self::EInvoice => IntegrationFamily::EInvoice,
+            Self::QrPayment => IntegrationFamily::QrPayment,
+            Self::CardTerminal => IntegrationFamily::CardTerminal,
+            Self::Delivery => IntegrationFamily::Delivery,
+            Self::Courier => IntegrationFamily::Courier,
+            Self::Erp => IntegrationFamily::Erp,
+        }
+    }
+
     /// Where this family's adapter runs (ADR-0153 decision 1): beside the vendor.
     ///
     /// A card terminal is a device on the shop's network, and only the edge can reach it. Every
@@ -224,6 +238,14 @@ mod tests {
             assert_eq!(Family::from_key(family.key()), Some(family));
         }
         assert_eq!(Family::from_key("fax"), None);
+    }
+
+    #[test]
+    fn the_catalogue_and_the_node_spell_each_family_the_same() {
+        use pos_proto::wire_enum::WireEnum;
+        for family in Family::ALL {
+            assert_eq!(family.integration_family().as_wire(), family.wire());
+        }
     }
 
     #[test]

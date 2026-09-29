@@ -58,6 +58,7 @@ use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
     ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
+use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::PermissionKey;
@@ -430,6 +431,14 @@ pub struct EdgeSession {
     /// What the dispatcher must never do is the thing the till did before this existed — claim
     /// "Printing receipt…" while nothing is wired.
     pub devices: PublishedDevices,
+    /// The tenant's vendor connections that serve this store, from the published `integrations`
+    /// node ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+    ///
+    /// Empty in the bootstrap, and empty is the ordinary state: every family then runs its offline
+    /// path — an invoice from the local range, a QR transfer confirmed by hand. It holds no secret
+    /// and never could: a store never talks to an internet vendor itself, and the node has no field
+    /// a credential could travel in.
+    pub integrations: PublishedIntegrations,
     /// Who this store legally is, as the receipt prints it
     /// ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
     /// address, and the tax registration number a Japanese qualified invoice or an Indian tax
@@ -601,6 +610,7 @@ impl EdgeSession {
             stations: StationPlan::new(),
             layout: DisplayPlan::new(),
             devices: PublishedDevices::default(),
+            integrations: PublishedIntegrations::default(),
             // Nothing is invented here: a receipt headed with a guessed shop name is worse than one
             // headed with nothing (ADR-0106).
             profile: StoreProfile::default(),

@@ -628,6 +628,18 @@ export type ClaimStatus =
   | { state: "CLAIMED"; store_id: string };
 
 /** One printer the store published, from `GET /api/printers`. */
+/**
+ * One vendor connection the cloud published to this store (ADR-0153), from `GET /api/integrations`.
+ * Names only: no setting, and never a credential.
+ */
+export interface IntegrationEntry {
+  connection_id: string;
+  /** `INTEGRATION_FAMILY_*`; `INTEGRATION_FAMILY_UNSPECIFIED` for one this edge does not know. */
+  family: string;
+  provider_id: string;
+  display_name: string;
+}
+
 export interface PrinterEntry {
   device_id: string;
   name: string;

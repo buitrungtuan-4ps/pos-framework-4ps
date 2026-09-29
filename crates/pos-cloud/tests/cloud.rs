@@ -26740,3 +26740,163 @@ async fn a_scope_has_one_ledger_and_only_a_manager_writes() {
         .expect("route");
     assert_eq!(write.status(), StatusCode::FORBIDDEN);
 }
+
+// --- Integrations publish (ADR-0153 decision 5) --------------------------------------------------
+
+/// A store connected to a card terminal of its own, sitting under a brand with a ledger, in a tenant
+/// with a tenant-wide ledger and courier: the publish sends it the terminal (with its settings), the
+/// brand's ledger alone (the tenant's is shadowed), and the courier (without its settings) — and no
+/// secret, which the node cannot carry.
+/// The publish router over a seeded tenant: a store under a brand, a tenant-wide ledger and courier,
+/// the brand's own ledger, and the store's own card terminal — each with a setting and a sealed
+/// secret, so what the node leaves out is as visible as what it keeps.
+fn seeded_integrations_publish() -> (axum::Router, FakeConfigTrees) {
+    use pos_cloud::connections::{Connection, ScopeLevel};
+
+    static TERMINAL: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
+        provider_id: "card.test_terminal",
+        family: pos_providers::Family::CardTerminal,
+        name_key: "provider.card.test_terminal",
+        countries: &[],
+        fields: &[],
+        capabilities: &[],
+        sandbox: true,
+    };
+    static COURIER: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
+        provider_id: "courier.test_courier",
+        family: pos_providers::Family::Courier,
+        ..TERMINAL
+    };
+
+    let brand = pos_cloud::registry::BrandId::new(Ulid::from_u128(0xB1));
+    let registry = FakeRegistry::default();
+    registry.stores.lock().expect("lock").push(Versioned::new(
+        StoreRecord {
+            store_id: store_id(),
+            tenant_id: tenant(),
+            brand_id: Some(brand),
+            name: "Store".to_owned(),
+            status: EntityStatus::Active,
+        },
+        Version::new("1"),
+    ));
+    let connection = |id: &str, provider: &str, scope: (ScopeLevel, Option<String>)| Connection {
+        connection_id: id.to_owned(),
+        provider_id: provider.to_owned(),
+        scope_level: scope.0,
+        scope_id: scope.1,
+        display_name: format!("Connection {id}"),
+        enabled: true,
+        settings: BTreeMap::from([(
+            "address".to_owned(),
+            pos_providers::SettingValue::Text("192.0.2.40".to_owned()),
+        )]),
+        sealed_secrets: BTreeMap::from([("api_key".to_owned(), "c1phertext".to_owned())]),
+    };
+    let connections = FakeConnections::default();
+    for row in [
+        connection("01A", "erp.test_ledger", (ScopeLevel::Tenant, None)),
+        connection(
+            "01B",
+            "erp.test_ledger",
+            (ScopeLevel::Brand, Some(brand.to_string())),
+        ),
+        connection("01C", "courier.test_courier", (ScopeLevel::Tenant, None)),
+        connection(
+            "01D",
+            "card.test_terminal",
+            (ScopeLevel::Store, Some(store_id().to_string())),
+        ),
+    ] {
+        connections
+            .rows
+            .lock()
+            .expect("lock")
+            .push((tenant(), Versioned::new(row, Version::new("1"))));
+    }
+
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    let providers = pos_providers::Registry::new([&TEST_LEDGER, &COURIER, &TERMINAL])
+        .expect("valid test catalogue");
+    let router = http::router(app).merge(http::config_integrations_router(
+        connections,
+        Arc::new(providers),
+        registry,
+        config_trees.clone(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    (router, config_trees)
+}
+
+#[tokio::test]
+async fn publishing_integrations_sends_a_store_what_serves_it_and_no_secret() {
+    let (router, config_trees) = seeded_integrations_publish();
+    let cookie = admin_cookie(&router).await;
+
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(json_body(published).await["integrations"], 3);
+
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.record.layers[2]["integrations"];
+    let ids: Vec<&str> = node["integrations"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|integration| integration["connection_id"].as_str())
+        .collect();
+    assert_eq!(ids, vec!["01D", "01B", "01C"]);
+    assert_eq!(
+        node["integrations"][0]["family"],
+        "INTEGRATION_FAMILY_CARD_TERMINAL"
+    );
+    assert_eq!(node["integrations"][0]["settings"]["address"], "192.0.2.40");
+    assert!(
+        node["integrations"][2].get("settings").is_none(),
+        "a courier is the cloud's to drive; its settings stay there"
+    );
+    assert!(
+        !node.to_string().contains("c1phertext"),
+        "no secret, sealed or not: {node}"
+    );
+
+    // A store the tenant does not have is refused, not published to.
+    let unknown = router
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": Ulid::from_u128(0xDEAD).to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
