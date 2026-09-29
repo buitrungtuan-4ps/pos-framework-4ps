@@ -222,6 +222,11 @@ where
     // across the chain walk above.
     pos_edge::retention::spawn(Arc::clone(&edge));
 
+    // The clock (roadmap-v3 PF4): every quarter hour, measured against a time server, and the
+    // reading put where `GET /api/sync` reports it. Started here rather than in `serve`, like
+    // retention, so the on-fakes example and the test compositions send no datagram anywhere.
+    pos_edge::sntp::spawn(Arc::clone(&edge), &config.sntp_server);
+
     serve_until(
         config,
         edge,
