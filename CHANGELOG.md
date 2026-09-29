@@ -156,6 +156,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A stopping edge says how its last drain ended**
+  ([ADR-0113](docs/adr/0113-the-host-agent.md)). A hosted store's container and volume are removed
+  together, so the host agent that stops one has to know whether events were still waiting to reach
+  the cloud. The edge now tells it in two places:
+  - **Its exit code.** `0` means stopped and drained, `10` restart wanted, and `11` stopped with events
+    still in the outbox.
+  - **`drain-status.json`**, written beside the store's database, with the store id, the outbox
+    depth, the drain budget and time spent, and when it finished. It holds a count, not events, and
+    no personal data.
+
+  On a box in a shop nothing is lost either way: the events stay in `store.sqlite` and go out at the
+  next start. The Windows service still exits `0` on any stop, so its failure action never restarts
+  a store that was asked to stop.
+
+  **Upgrade note:**
+  - On Linux a restart for an update now exits `10` instead of `0`.
+  - `deploy/edge/pos-edge.service` and the appliance's copy gain `SuccessExitStatus=10 11`.
+  - A box still on the old unit restarts exactly as before (`Restart=always`), and the journal logs
+    that exit as a failure until the unit is updated.
+  - The drain budget is unchanged at 15 seconds.
+
+  Docs: `deploy/edge/README.md`, `docs/roadmap-v3.md` Program C.
+
 - **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
   words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
   toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language
