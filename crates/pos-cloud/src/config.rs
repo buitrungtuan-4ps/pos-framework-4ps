@@ -423,11 +423,12 @@ pub struct CloudConfig {
     /// Where the console fetches a signed release pair from
     /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 4).
     ///
-    /// **Absent is a valid deployment**, and the common one: without it the `/admin` fetch route is
-    /// not merged, the upload route is unaffected, and cutting a release means moving the pair by
-    /// hand exactly as `docs/release-runbook.md` describes. Set it to give the console a button
-    /// instead — the box then needs outbound HTTPS to the forge, and a private repository needs a
-    /// token.
+    /// **Absent is a valid deployment**: the `/admin` fetch route then refuses, naming this block,
+    /// the upload route is unaffected, and cutting a release means moving the pair by hand exactly
+    /// as `docs/release-runbook.md` describes. Set, the console's button works — the box then needs
+    /// outbound HTTPS to the forge, and a private repository needs a token. `deploy/bootstrap.sh`
+    /// writes it once when the cloud is deployed from a public repository, and never touches a
+    /// block it finds.
     #[serde(default)]
     pub release_source: Option<ReleaseSourceConfig>,
 }

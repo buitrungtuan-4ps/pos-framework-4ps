@@ -77,3 +77,43 @@ The decision above let a loopback host in the file name mean plain `http`. The e
 refused its own cloud and ran LAN-only. It was found by running the whole setup flow end to end
 against a local cloud. A name now always means `https`, and `pos-edge install --cloud` refuses an
 `http` URL wherever it points.
+
+## Amendment 1 — a re-run carrying a newer release puts it in place (2026-09-25)
+
+**Found on the owner's test PC.** Its old install ran 0.11.0. Re-running the 0.14.0 one-file
+installer left it on 0.11.0, and the cloud said so. The script keeps `bin\current` on a re-run. That
+is right for an **older** installer, which must never downgrade a shop that updated itself over the
+air. It is wrong for a **newer** one, which a technician runs precisely to get the newer release.
+0.11.0 then carried a till defect that 0.11.1 had fixed (a mistyped PIN unpaired the device), and the
+PC kept it.
+
+**Options considered.**
+1. Keep the binary, and name both releases in the summary. The summary already does this; a
+   technician still has to find the OTA screen for a release that is in their hand.
+2. Overwrite a slot from PowerShell. That is a second copy of the swap logic, and it would lack the
+   database backup and the boot trial that make an over-the-air install safe.
+3. Let the carried binary put itself in place through the edge's own update steps.
+
+**Decision: option 3.** Before it stops the service, the script asks `/healthz` which release this
+store runs. It trusts only an answer for its own store. If `-CarriedVersion` is newer, it runs
+`pos-edge.exe promote` from the rescue copy with the service stopped. `SystemdInstaller::promote`
+takes the four steps an over-the-air install takes, in the same order: back up the database, stage,
+self-test, commit. So `bin\previous`, the `.pre-update` copy and the unconfirmed marker are exactly
+what an update leaves. The script ends the trial when the new release answers `/healthz`: the edge
+clears the marker only once it reaches the cloud, and a box not yet activated would otherwise count
+ordinary restarts against the new release until it reverted. A release that never answers is
+replaced by the old one after three failed starts, as a bad update is.
+
+A release that is older or equal is never put in place, and neither is one when the old process did
+not answer: its release is unknown. The summary then says to run the installer again. The console's
+downloadable script passes no release of its own, so it always keeps the binary. The Linux script is
+unchanged.
+
+**Consequences accepted.**
+- `pos-edge` gains a `promote` subcommand. It is the script's to run, not a technician's, and it
+  refuses a box with no `bin\current`.
+- A failed pre-commit self-test now discards the staged bytes rather than reverting.
+  `SystemdInstaller::rollback` did the revert in both cases. On a box that had updated before, that
+  pointed `current` at the release *before* the running one, and copied the backup over the database
+  the running store was still writing. On a first update it failed outright, leaving `staged` behind.
+  The seam and its order are unchanged; `rollback` now undoes what the install did.

@@ -17,7 +17,7 @@
 // A card's *support* line is unchanged by any of this and still carries the same fact in words — the
 // hue stays a second channel, never the only one (ADR-0020's accessibility floor).
 
-import type { FleetStore } from "../api/types";
+import type { DailyRollup, FleetStore } from "../api/types";
 import type { MessageKey } from "../i18n";
 
 /**
@@ -78,4 +78,46 @@ export function configVerdict(store: StoreFacts): Verdict {
     return { headline: "hub.config.notDelivered", tone: "idle" };
   }
   return { headline: "hub.config.behind", tone: "attention" };
+}
+
+/**
+ * What the Out of stock card can say about a store, from its activity window (oldest day first).
+ *
+ * - `no_day`: no trading day has reached the cloud.
+ * - `out`: the newest day's items marked sold out and not restored, net.
+ * - `never_marked`: none, and the store's tills have marked nothing sold out in the whole window.
+ * - `none_out`: none, from a store whose tills do mark items.
+ *
+ * The last two are why this is a rule and not a subtraction. Staff marking an item at the till is
+ * the only thing that emits `inventory.item.sold_out` (auto-86 from stock is still a follow-up), so a
+ * zero is a measurement only from a store whose tills mark. From one that has marked nothing in a
+ * month (an edge too old to mark, or a kitchen that does not) a `0` beside "items marked out" would
+ * read as "nothing is 86'd" when nobody is marking at all.
+ */
+export type StockAnswer =
+  | { readonly kind: "no_day" }
+  | { readonly kind: "out"; readonly count: number; readonly business_date: string }
+  | { readonly kind: "never_marked" }
+  | { readonly kind: "none_out"; readonly business_date: string };
+
+/** How many of `type` a day's activity rollup counted (absent means none happened). */
+function countedOn(day: DailyRollup, type: string): number {
+  return day.by_type[type] ?? 0;
+}
+
+/** The Out of stock card's answer. See [`StockAnswer`]. */
+export function stockAnswer(days: readonly DailyRollup[]): StockAnswer {
+  const day = days.at(-1);
+  if (day === undefined) {
+    return { kind: "no_day" };
+  }
+  const out =
+    countedOn(day, "inventory.item.sold_out") - countedOn(day, "inventory.item.restored");
+  if (out > 0) {
+    return { kind: "out", count: out, business_date: day.business_date };
+  }
+  if (!days.some((each) => countedOn(each, "inventory.item.sold_out") > 0)) {
+    return { kind: "never_marked" };
+  }
+  return { kind: "none_out", business_date: day.business_date };
 }

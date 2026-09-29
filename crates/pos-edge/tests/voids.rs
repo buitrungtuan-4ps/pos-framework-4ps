@@ -458,3 +458,57 @@ fn a_voided_bill_gives_the_table_back_and_the_order_bills_again() {
         assert!(edge.live_orders().is_empty());
     });
 }
+
+/// **A bill covers the lines it opened on, and no line after it.** A bill names what it covers when
+/// it opens (ADR-0128 decision 9), so a line rung onto the table afterwards was on no bill: the
+/// guest paid the old total, the line left with the table, and nobody was charged for it. The
+/// counter has refused that since ADR-0146, and the floor refuses it now too. The way to order more
+/// is the one a mistaken bill already had: void it, ring the dish, and the next bill covers both.
+#[test]
+fn a_table_whose_bill_is_open_takes_no_new_line_until_the_bill_is_voided() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        a_seated_line(&edge).await;
+        let bill = edge
+            .open_bill(server(), table())
+            .await
+            .expect("opens a bill")
+            .bill_id;
+        let owed = edge.check_totals(table()).expect("the check reads");
+
+        let refused = edge.add_line(server(), table(), a_line()).await;
+        assert!(
+            matches!(refused, Err(AppError::BillAlreadyOpen)),
+            "a line after the bill is refused, got {refused:?}"
+        );
+        assert_eq!(
+            edge.check_totals(table()).expect("reads"),
+            owed,
+            "the bill still says what it said"
+        );
+        let added = logged(&store)
+            .await
+            .iter()
+            .filter(|event| *event == "sales.order_line.added")
+            .count();
+        assert_eq!(added, 1, "the refused line was never written");
+
+        edge.void_bill(server(), bill, keyed_wrong(), Some(&approval()))
+            .await
+            .expect("the manager voids the bill");
+        edge.add_line(server(), table(), a_line())
+            .await
+            .expect("and the second round goes on");
+        let second = edge
+            .open_bill(server(), table())
+            .await
+            .expect("a fresh bill")
+            .bill_id;
+        assert_eq!(
+            edge.bill_totals(second).expect("reads").total_due,
+            vnd(330_000),
+            "which covers both pizzas, with their tax"
+        );
+    });
+}

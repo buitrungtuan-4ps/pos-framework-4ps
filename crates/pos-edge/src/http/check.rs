@@ -21,8 +21,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use pos_core::billing::BillTotals;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{OrderId, TableId};
+use pos_proto::WireEnum;
+use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 
 use crate::app::Edge;
@@ -45,6 +47,33 @@ pub(crate) struct CheckResponse {
     total_due: Money,
 }
 
+impl From<&BillTotals> for CheckResponse {
+    fn from(totals: &BillTotals) -> Self {
+        Self {
+            subtotal: totals.subtotal,
+            discount_total: totals.discount_total,
+            comp_total: totals.comp_total,
+            tax_total: totals.tax_total,
+            total_due: totals.total_due,
+        }
+    }
+}
+
+/// What one bill owes, where it has got to, and which lines it covers.
+#[derive(Debug, Serialize)]
+pub(crate) struct BillCheckResponse {
+    /// `BILL_STATE_OPEN` while it still owes. A settled, voided, split or merged bill owes nothing
+    /// more, and the figures are then what its lines came to rather than a sum to collect.
+    state: String,
+    /// The order lines it covers ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)
+    /// decision 1), so a till can show a guest what their part of a split table is for.
+    order_line_ids: Vec<String>,
+    /// The same five figures the table and order reads answer with, so a till draws all three the
+    /// same way.
+    #[serde(flatten)]
+    totals: CheckResponse,
+}
+
 /// `GET /api/tables/{id}/check` — the running check, assembled by the edge.
 pub(crate) async fn read<S>(
     State(edge): State<Arc<Edge<S>>>,
@@ -57,17 +86,7 @@ where
         return bad_request("a table id is a ULID");
     };
     match edge.check_totals(table_id) {
-        Ok(totals) => (
-            StatusCode::OK,
-            Json(CheckResponse {
-                subtotal: totals.subtotal,
-                discount_total: totals.discount_total,
-                comp_total: totals.comp_total,
-                tax_total: totals.tax_total,
-                total_due: totals.total_due,
-            }),
-        )
-            .into_response(),
+        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
         // a configuration error, and the till showing it beats the till inventing a number.
         Err(error) => error_response(&error),
@@ -92,14 +111,38 @@ where
         return bad_request("an order id is a ULID");
     };
     match edge.order_totals(order_id) {
-        Ok(totals) => (
+        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
+/// `GET /api/bills/{id}/check` — what one bill owes, where it has got to, and the lines it covers.
+///
+/// The read a split needs ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
+/// table's bill is split, the table read answers for every part still open, and the guest at the
+/// till is asking about **theirs** — so the till reads the part it is about to settle, by its id.
+/// Same [`Edge::bill_totals`](crate::app::Edge::bill_totals) the settle path assembles from.
+pub(crate) async fn read_for_bill<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Path(bill_id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&bill_id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    match edge.bill_check(bill_id) {
+        Ok(check) => (
             StatusCode::OK,
-            Json(CheckResponse {
-                subtotal: totals.subtotal,
-                discount_total: totals.discount_total,
-                comp_total: totals.comp_total,
-                tax_total: totals.tax_total,
-                total_due: totals.total_due,
+            Json(BillCheckResponse {
+                state: check.state.as_wire().to_owned(),
+                order_line_ids: check
+                    .order_line_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                totals: CheckResponse::from(&check.totals),
             }),
         )
             .into_response(),

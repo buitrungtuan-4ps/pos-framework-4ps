@@ -9,6 +9,13 @@ export interface TableResponse {
   state: string;
 }
 
+// What moving guests to another table did: the order that went with them, and both tables after.
+export interface TransferResponse {
+  order_id: string;
+  from_table: TableResponse;
+  to_table: TableResponse;
+}
+
 export interface LineRequest {
   menu_item_id: string;
   display_name: string;
@@ -103,6 +110,10 @@ export interface LiveOrder {
   // A bill already open on it: the payment screen settles this one rather than asking for a second,
   // which the edge refuses with a 409.
   bill_id?: string;
+  // Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part once
+  // its bill has been split (ADR-0128). `bill_id` names only the newest. Absent from an edge older
+  // than the field, which never had a way to show a till a split table anyway.
+  open_bill_ids?: string[];
   lines: LiveLine[];
 }
 
@@ -155,6 +166,9 @@ export interface FloorResponse {
   // What each table is doing right now, keyed by table id. Absent from an edge that predates the
   // field, which the till reads as "tell me nothing" and leaves its own map alone.
   table_states?: Record<string, string>;
+  // When each seated table's guests sat down, keyed by table id, for the tables somebody is sitting
+  // at. Absent from an edge that predates the field.
+  seated_times?: Record<string, string>;
 }
 
 // The store's own price book from `GET /api/menu` (roadmap-v3 E5, ADR-0063). Every amount is the
@@ -195,6 +209,10 @@ export interface MenuItemResponse {
   // onto the line it adds, which is what gives a fire-by-course something to match.
   course_id?: string | null;
   available: boolean;
+  // Whether staff marked it sold out at this store (86), which `available` already accounts for.
+  // Apart so the till can offer to bring it back: an item the console withdrew is not the till's
+  // to restore. Absent from an edge older than the field.
+  sold_out?: boolean;
 }
 
 export interface MenuResponse {
@@ -237,6 +255,31 @@ export interface CheckResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+}
+
+// One bill read back, from `GET /api/bills/{id}/check`: the five figures, where the bill has got to,
+// and the order lines it covers — which is how the pay screen shows a guest what their part of a split
+// table is for (ADR-0128).
+export interface BillCheckResponse extends CheckResponse {
+  // `BILL_STATE_OPEN` while it still owes.
+  state: string;
+  order_line_ids: string[];
+}
+
+// A split as the till asks for it: the order lines each new bill will cover. Every line the bill
+// covers goes in exactly one part, and the edge refuses anything else.
+export interface SplitRequest {
+  parts: string[][];
+}
+
+// The bills a split produced, in the order the parts were given.
+export interface SplitResponse {
+  bill_ids: string[];
+}
+
+// The bills a merge folds into the one the path names, which survives.
+export interface MergeRequest {
+  absorbed_bill_ids: string[];
 }
 
 // A discount as the till asks for it. The amount is money, never a percentage — the edge records an

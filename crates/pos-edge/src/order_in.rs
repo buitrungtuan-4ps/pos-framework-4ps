@@ -162,6 +162,17 @@ where
             };
             let priced = reprice_line(&session.menu, &session.tax_rates, channel, &requested)
                 .map_err(|error| port_error_from_reprice(&error))?;
+            // An item staff marked sold out at the till is refused exactly as one the console
+            // withdrew is: the menu the guest or the marketplace ordered from was published before
+            // the kitchen ran out, and does not know.
+            if let Some(sold_out) = self
+                .edge
+                .first_sold_out(line.menu_item_id, &line.modifier_menu_item_ids)
+            {
+                return Err(port_error_from_reprice(&RepriceError::Unavailable(
+                    sold_out,
+                )));
+            }
             total = total.checked_add(priced.line_total).map_err(|_ignored| {
                 PortError::internal(PortName::OrderIn, "the order total overflowed")
             })?;

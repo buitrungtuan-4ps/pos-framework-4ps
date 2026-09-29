@@ -71,6 +71,36 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-seat" },
   },
   {
+    task: "Mark an item sold out on every till",
+    budget: 2,
+    note: "Two: turn the marking on, tap the item. The kitchen has run out, and the console that publishes the menu is not where anybody is standing. Marking is a mode on the order screen rather than a control on every item button, so a tap meant to sell in a rush can never take a dish off the menu. The same tap brings it back.",
+    steps: [
+      { route: "/table/:id", action: "startMarking" },
+      { route: "/table/:id", action: "toggleSoldOut" },
+    ],
+    outcome: { route: "/table/:id", mark: "item-sold-out" },
+  },
+  {
+    task: "Move a table's guests to another table",
+    budget: 2,
+    note: "Two: open the list of free tables, tap the one they are moving to. The order goes with them (every line, what the kitchen already has, the time they sat down) and the new table opens; the table they left waits to be cleared. Nothing is rung again. No confirmation, because a move is undone the same way: clear the old table, and move them back.",
+    steps: [
+      { route: "/table/:id", action: "openMove" },
+      { route: "/table/:id", action: "moveTo" },
+    ],
+    outcome: { route: "/table/:id", mark: "table-moved" },
+  },
+  {
+    task: "Mark a dish sold out from the kitchen board",
+    budget: 2,
+    note: "Two: open the panel, tap the dish. The cook is usually the first to know something has run out, and the board is where the cook is. A panel over the board rather than a control on each ticket, because a ticket is one whole-card tap that bumps it and a second target inside it would be hit by mistake in a rush.",
+    steps: [
+      { route: "/kds", action: "openSoldOut" },
+      { route: "/kds", action: "markSoldOut" },
+    ],
+    outcome: { route: "/kds", mark: "kds-sold-out" },
+  },
+  {
     task: "Find an item by name and add it",
     budget: 2,
     note: "One tap, and the typing before it is not one — the same accounting the shift float and the manager's PIN get. That is the whole claim: a menu too long for the grid costs the flow nothing extra to sell from. Declared separately from \"Add an item\" although it taps the same control and ends the same way, because the claim is different and the harness proves it differently: the precondition types the query **and asserts the grid narrowed to one button**, so a search that stopped filtering fails here while the plain add stays green. Put search behind a button and this goes red twice over — the box the precondition fills would be gone, and the flow would have grown the tap this says it does not need.",
@@ -135,6 +165,69 @@ export const TASKS = [
       { route: "/table/:id/pay", action: "payCard" },
     ],
     outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Settle a dine-in table by QR transfer",
+    budget: 3,
+    note: "The card's shape: the guest scans for the exact amount, so there is no note to choose. The one tap on the pay screen is the cashier saying the transfer arrived; the till does not ask a bank, so a confirmation step would only repeat that tap.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Split a dine-in bill evenly between two guests, each paying by QR",
+    budget: 4,
+    note: "Four for two guests, and the count is the point: one tap to say how many, then one per guest. Each guest's tender is their own choice, so no shape of this is shorter than the guests plus the choice of how many. The guest counts are a row on the pay screen rather than behind a button, which keeps the split at one tap before the guests' own; the last guest's tender settles the bill, so there is no closing tap either.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "splitEvenly" },
+      { route: "/table/:id/pay", action: "payQr" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Split one guest's items off a dine-in bill, then settle each part by QR",
+    budget: 7,
+    note: "Seven, and every one is the guests' or the split's own. Splitting takes three: open the list, pick what this guest is paying for, split it off. That is the rare-action ceiling, and picking is one tap per line the guest takes, so a guest with one dish is the shortest shape there is. Each guest then pays with their own tender, and the next bill is one tap from the receipt that closed the last, not a trip back through the order. The list sits behind a button rather than on every bill, because on a phone it would push the tenders below the fold for every settle that never splits. Splitting evenly is four for two guests because an even share needs no picking; a partition of lines cannot be shorter than naming the lines (ADR-0128).",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "splitByItem" },
+      { route: "/table/:id/pay", action: "pickLine" },
+      { route: "/table/:id/pay", action: "splitOff" },
+      { route: "/table/:id/pay", action: "payQr" },
+      { route: "/table/:id/pay", action: "nextBill" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Split a dine-in bill by seat, then settle each seat's part by QR",
+    budget: 5,
+    note: "Five for two seats, and the split itself is one of them. Which seat each dish was for is already written on the line, so splitting by seat is a single tap with nothing to pick. The rest is the guests: one tender each, and one tap from the receipt that closed a seat's bill to the next. It is split by item with the picking already done, which is why it is two taps shorter.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "splitBySeat" },
+      { route: "/table/:id/pay", action: "payQr" },
+      { route: "/table/:id/pay", action: "nextBill" },
+      { route: "/table/:id/pay", action: "payQr" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+  },
+  {
+    task: "Settle a dine-in table in cash, typing the amount handed over",
+    budget: 3,
+    note: "For the pile no quick key names. \"Other amount\" takes the place of choosing a note, so the flow costs what the cash settle costs; the figure is typed on the pad, and typing is not a tap.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "typeTender" },
+      { route: "/table/:id/pay", action: "payCash" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "settled" },
+    unreplayable:
+      "the amount is typed on the pad between the second and third taps, and the harness types only before the first; the standalone test \"a bill larger than the largest note takes any amount handed over\" drives the whole flow, typing included",
   },
   {
     task: "Void an unfired line",
@@ -217,6 +310,16 @@ export const TASKS = [
     steps: [
       { route: "/counter", action: "charge" },
       { route: "/counter", action: "payCard" },
+    ],
+    outcome: { route: "/counter", mark: "settled" },
+  },
+  {
+    task: "Charge a counter order by QR transfer",
+    budget: 3,
+    note: "The counter's twin of the table's QR settle.",
+    steps: [
+      { route: "/counter", action: "charge" },
+      { route: "/counter", action: "payQr" },
     ],
     outcome: { route: "/counter", mark: "settled" },
   },

@@ -20,6 +20,7 @@ use serde::Serialize;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
 
@@ -44,6 +45,16 @@ pub(crate) struct FloorResponse {
     /// never saw those events — so before this, a reload drew every occupied table as free, on the
     /// home screen, and a server could seat a table that already had people at it.
     table_states: BTreeMap<String, String>,
+    /// When the guests at each seated table sat down, keyed by table id, for the tables somebody is
+    /// sitting at — how a floor plan says "seated 25 min", which a host reads to know who is due a
+    /// check and who is about to leave.
+    ///
+    /// Here rather than on the live orders, because it is a fact about the table and a table is
+    /// seated before anything is ordered: the live read lists orders with lines, so a till that
+    /// reloaded over a table sat down a minute ago would have had no time for it. Read from the
+    /// table's order id ([`Edge::seated_since`]), so every device shows the same figure however long
+    /// it has been running.
+    seated_times: BTreeMap<String, Timestamp>,
 }
 
 /// `GET /api/floor` — the store's published floor plan and kitchen stations, read from the live
@@ -65,12 +76,21 @@ where
             )
         })
         .collect();
+    let seated_times = session
+        .floor
+        .tables()
+        .filter_map(|table| {
+            edge.seated_since(table.table_id)
+                .map(|since| (table.table_id.to_string(), since))
+        })
+        .collect();
     (
         StatusCode::OK,
         Json(FloorResponse {
             floor: session.floor.clone(),
             stations: session.stations.clone(),
             table_states,
+            seated_times,
         }),
     )
         .into_response()

@@ -383,10 +383,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         },
     };
 
-    // Where the console fetches a signed release pair from (ADR-0088 Amendment 4). Absent is the
-    // common posture and costs nothing: the `/admin` upload route is unaffected, and cutting a
-    // release stays the `curl` per target `docs/release-runbook.md` documents. Configured, the box
-    // needs outbound HTTPS to the forge — which is an operator's path, never a store's.
+    // Where the console fetches a signed release pair from (ADR-0088 Amendment 4). Absent costs
+    // nothing: the `/admin` upload route is unaffected, and cutting a release stays the `curl` per
+    // target `docs/release-runbook.md` documents. Configured (the deploy writes it for a public
+    // repository), the box needs outbound HTTPS to the forge — an operator's path, never a store's.
     let release_source = match config.release_source.as_ref() {
         None => {
             tracing::info!(

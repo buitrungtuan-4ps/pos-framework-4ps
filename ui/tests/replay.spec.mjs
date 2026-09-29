@@ -109,10 +109,25 @@ async function aWalkInToCharge(page) {
   await expect(page.locator('[data-step="charge"]').first()).toBeVisible();
 }
 
+/**
+ * Waits for a line to be on the order. On a tablet the bill waits at the bottom of the screen until
+ * it is tapped (`docs/ui-ux.md` §1 principle 9), so the line is on the page without being on screen
+ * and the bar that counts it is what shows; everywhere else the line itself shows.
+ */
+async function expectLineAdded(page) {
+  await expect(page.locator('[data-outcome="line-added"]').first()).toBeAttached();
+  await expect(
+    page
+      .locator('[data-outcome="line-added"], [data-outcome="bill-bar"]')
+      .filter({ visible: true })
+      .first(),
+  ).toBeVisible();
+}
+
 /** Adds the first item on the order screen's menu. */
 async function addItem(page) {
   await page.locator('[data-step="onItem"]').first().click();
-  await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  await expectLineAdded(page);
 }
 
 /**
@@ -132,13 +147,39 @@ async function addItemWithAChoice(page) {
   await page.locator("#menu-search").fill("");
 }
 
-/** Adds the demo store's starter (the salad), so a course has something waiting. */
-async function addStarter(page) {
-  await page.locator("#menu-search").fill("salad");
+/**
+ * Adds the one item a search for `query` leaves on the grid, and clears the search again. By name
+ * rather than by position, so a flow that needs two different lines gets two different lines.
+ */
+async function addByName(page, query) {
+  await page.locator("#menu-search").fill(query);
   await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
   await page.locator('[data-step="onItem"]').click();
-  await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  await expectLineAdded(page);
   await page.locator("#menu-search").fill("");
+}
+
+/** Adds the demo store's starter (the salad), so a course has something waiting. */
+async function addStarter(page) {
+  await addByName(page, "salad");
+}
+
+/**
+ * A table with a salad (97,900₫ with its tax) and an iced tea (43,450₫), on the pay screen with the
+ * iced tea split off into a bill of its own — the guest who only had a drink.
+ */
+async function aTableWithTheDrinkSplitOff(page) {
+  await seatTable(page);
+  await addByName(page, "salad");
+  await addByName(page, "iced");
+  await page.locator('[data-step="takePayment"]').click();
+  await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+  await page.locator('[data-step="splitByItem"]').click();
+  await expect(page.locator('[data-step="splitOff"]')).toBeDisabled();
+  await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+  await page.locator('[data-step="splitOff"]').click();
+  await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+  await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
 }
 
 /** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
@@ -167,12 +208,21 @@ const PRECONDITIONS = {
   "Add an item to a counter order": startWalkIn,
   "Charge a counter (takeaway) order in cash": aWalkInToCharge,
   "Charge a counter order by card": aWalkInToCharge,
+  "Charge a counter order by QR transfer": aWalkInToCharge,
   "Charge a counter order in cash, taking a tip": aWalkInToCharge,
   "Change how many of a line": async (page) => {
     await seatTable(page);
     await addItem(page);
   },
   "Order an item for a particular seat": seatTable,
+  "Mark an item sold out on every till": seatTable,
+  "Move a table's guests to another table": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
+  "Mark a dish sold out from the kitchen board": async (page) => {
+    await navigateTo(page, "/kds");
+  },
   // The item that asks a question is deliberately *not* first on the grid — every other flow's
   // precondition taps the first item and wants a line rather than a conversation. So this one types
   // the name to bring it up, exactly as "Find an item by name" does, and typing is not a tap. Every
@@ -221,6 +271,28 @@ const PRECONDITIONS = {
   "Settle a dine-in table by card": async (page) => {
     await seatTable(page);
     await addItem(page);
+  },
+  "Settle a dine-in table by QR transfer": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
+  "Split a dine-in bill evenly between two guests, each paying by QR": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
+  // Two different things, so there are two lines to split between two guests.
+  "Split one guest's items off a dine-in bill, then settle each part by QR": async (page) => {
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+  },
+  // One thing for seat 1 and one for seat 2, so there are two seats to split between.
+  "Split a dine-in bill by seat, then settle each seat's part by QR": async (page) => {
+    await seatTable(page);
+    await page.locator('[data-step="chooseSeat"]').nth(0).click();
+    await addByName(page, "salad");
+    await page.locator('[data-step="chooseSeat"]').nth(1).click();
+    await addByName(page, "iced");
   },
   // A line to void. Unfired on purpose: that is the flow this task declares, and the fired one is
   // skipped for a reason the declaration states.
@@ -434,6 +506,64 @@ test("a refusal does not wipe the PIN the operator has already started retyping"
   }
 });
 
+// A pairing code is single-use and lives five minutes, so the one an operator is holding is often
+// spent: a second tablet given the same code, or a device sent back to pairing after it lost its
+// token. The screen used to show the edge's English sentence and nothing about where the next code
+// comes from, and the operator retyped the dead one. Asserted by text both languages carry, so
+// the test does not depend on which one the browser picks.
+test("a spent pairing code says where the next one comes from", async ({ page, browser }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+
+    const other = await browser.newPage();
+    try {
+      await other.goto(`${edge.baseURL}/pair?code=${edge.pairingCode}`);
+      await other.locator("#pair-submit").click();
+      const refusal = other.getByRole("alert");
+      await expect(refusal).toBeVisible();
+      await expect(
+        refusal,
+        "a refused code should say how to get a new one, not show the edge's own sentence",
+      ).toContainText("pairing-url.txt");
+      await expect(refusal).not.toContainText("unknown or expired");
+    } finally {
+      await other.close();
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store the console has not staffed yet: the device pairs, and every code it tries is refused as
+// a wrong one, because there is nobody to sign in as. The screen says so before anyone types.
+test("a store nobody can sign in to says so on the sign-in screen", async ({ page }) => {
+  const edge = await startEdge("unstaffed");
+  try {
+    const answered = page.waitForResponse((response) => response.url().endsWith("/api/session"));
+    await pair(page, edge);
+    expect((await (await answered).json()).sign_in_ready).toBe(false);
+    await expect(
+      page.locator("#signin-no-staff"),
+      "a store with no staff published showed a sign-in form that refuses every code, and no reason",
+    ).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a staffed store's sign-in screen carries no such notice", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    const answered = page.waitForResponse((response) => response.url().endsWith("/api/session"));
+    await pair(page, edge);
+    expect((await (await answered).json()).sign_in_ready).toBe(true);
+    await signIn(page, edge);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A device that was not running when the order was taken still learns what was chosen, and for whom.
 //
 // `GET /api/orders/live` exists for exactly this — its own doc calls it *"what a device has instead
@@ -628,6 +758,24 @@ for (const device of DEVICE_CLASSES) {
         return small;
       });
       expect(shrunk, "a status-bar control is under the 48px §1 principle 2 asks for").toEqual([]);
+
+      // The same principle on the order and pay screens, where the till review measured the line's
+      // Void button and the back links at about 30px: the controls a server meets on every table.
+      for (const path of [`/table/${table}`, `/table/${table}/pay`]) {
+        await page.goto(`${edge.baseURL}${path}`);
+        await expect(page.locator("main a").first()).toBeVisible();
+        const small = await page.evaluate(() => {
+          const found = [];
+          for (const control of document.querySelectorAll("main a, main button")) {
+            const box = control.getBoundingClientRect();
+            if (box.height > 0 && box.height < 48) {
+              found.push(`${(control.textContent ?? "").trim()} is ${Math.round(box.height)}px`);
+            }
+          }
+          return found;
+        });
+        expect(small, `a control on ${path} is under the 48px §1 principle 2 asks for`).toEqual([]);
+      }
     } finally {
       await edge.stop();
     }
@@ -736,6 +884,93 @@ test("the kitchen board counts how long a ticket has waited, and marks it late",
   }
 });
 
+// The kitchen board rings when new food reaches it, once a cook has turned its sound on — and not
+// for what was already on the board when it came on.
+//
+// A board in a loud kitchen is looked at when something tells the cook to look. The test cannot
+// hear, so a stand-in speaker counts the notes the board plays. Two pages share one device, as a
+// till and a board do in a store: the till sends, the board rings.
+//
+// The reload at the end is the half that keeps the chime trustworthy. The choice survives, the
+// food already on the board stays quiet, and the board asks for one tap before it can ring again —
+// a browser will not start sound on a page nobody has touched.
+test("the kitchen board rings when new food arrives, once its sound is on", async ({ context }) => {
+  const edge = await startEdge();
+  try {
+    await context.addInitScript(() => {
+      window.__notes = 0;
+      class Speaker {
+        constructor() {
+          this.state = "running";
+          this.currentTime = 0;
+          this.destination = {};
+        }
+        resume() {
+          this.state = "running";
+          return Promise.resolve();
+        }
+        createOscillator() {
+          window.__notes += 1;
+          return {
+            type: "sine",
+            frequency: { setValueAtTime() {} },
+            connect() {},
+            start() {},
+            stop() {},
+          };
+        }
+        createGain() {
+          return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} };
+        }
+      }
+      window.AudioContext = Speaker;
+    });
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+    await addItem(till);
+    await sendOrder(till);
+
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    const notes = () => board.evaluate(() => window.__notes);
+    const toggle = board.locator('[data-outcome="kds-sound"]');
+    await expect(toggle).toHaveText("Sound off");
+    await toggle.click();
+    await expect(toggle).toHaveText("Sound on");
+    // The toggle rings once, two notes, so the cook hears it working.
+    await expect.poll(notes).toBe(2);
+
+    await addByName(till, "iced");
+    await till.locator('[data-step="fireOrder"]').click();
+    await expect.poll(notes).toBe(4);
+
+    // Away and back, with the sound still live: the board comes on over food it already had, which
+    // is not news. Nothing to wait for but the absence of a note, so the wait is a fixed one.
+    await navigateTo(board, "/");
+    await navigateTo(board, "/kds");
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    await board.waitForTimeout(700);
+    expect(await notes()).toBe(4);
+
+    await board.reload();
+    await expect(toggle).toHaveText("Sound on");
+    await expect(board.getByText("Tap anywhere on the board to let it ring for new food.")).toBeVisible();
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    await board.locator("h1").click();
+    await expect(board.getByText("Tap anywhere on the board to let it ring for new food.")).toHaveCount(0);
+    expect(await notes()).toBe(0);
+
+    await addByName(till, "water");
+    await till.locator('[data-step="fireOrder"]').click();
+    await expect.poll(notes).toBe(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // And the age survives a reload, which is the whole reason the edge records it.
 //
 // This is the assertion the backend change exists for. A board could have counted from the moment
@@ -795,6 +1030,347 @@ test("a till that reloads still knows which tables are occupied", async ({ page 
     await page.reload();
     await expect(page.locator('[data-outcome="floor"]').first()).toBeVisible();
     await expect(firstDot).toHaveClass(/bg-occupied/);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The floor says how long each table has been seated, and a till that reloads still knows.
+//
+// A host reads it to know who is due a check and who is about to leave. The time is when the
+// table's order opened, as the edge recorded it (`opened_time` on the live read), so a reload — or a
+// second till switched on mid-service — shows the same figure rather than counting from its own
+// start. Nothing shows for the first minute: "seated 0 min" says nothing.
+test("the floor says how long a table has been seated, and a reload still knows", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await navigateTo(page, "/");
+
+    const seated = page.locator('[data-step="onCard"]').first().locator('[data-outcome="table-seated"]');
+    await expect(seated).toHaveCount(0);
+    await page.clock.fastForward(25 * 60_000);
+    await expect(seated).toHaveText("Seated 25 min");
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="floor"]').first()).toBeVisible();
+    await expect(seated).toHaveText("Seated 25 min");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Staff mark an item sold out, and every till stops selling it at once — then bring it back.
+//
+// The kitchen runs out mid-service. One till marks the iced tea sold out, a second till showing the
+// menu greys it out without reloading, the mark survives a reload (it is the edge's, not the
+// screen's), and the same tap brings it back.
+test("an item marked sold out on one till stops selling on every till, until it is brought back", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await expect(other.locator('[data-outcome="floor"]').first()).toBeVisible();
+    await other.locator('[data-step="onCard"]').nth(1).click();
+    await expect(other.locator('[data-outcome="order-open"]')).toBeVisible();
+    await other.locator("#menu-search").fill("iced");
+    const otherTea = other.locator('[data-step="onItem"]');
+    await expect(otherTea).toHaveCount(1);
+    await expect(otherTea).toBeEnabled();
+
+    await till.locator('[data-step="startMarking"]').click();
+    await till.locator("#menu-search").fill("iced");
+    await till.locator('[data-step="toggleSoldOut"]').click();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    // The other till, without reloading.
+    await expect(otherTea).toBeDisabled();
+    await expect(other.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    // The edge's fact, not the screen's: a reload still has it.
+    await other.reload();
+    await other.locator("#menu-search").fill("iced");
+    await expect(other.locator('[data-step="onItem"]')).toBeDisabled();
+
+    // The same tap brings it back, and it sells again.
+    await till.locator('[data-step="toggleSoldOut"]').click();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    await till.getByRole("button", { name: "Done" }).click();
+    await expect(other.locator('[data-step="onItem"]')).toBeEnabled();
+    await till.locator('[data-step="onItem"]').click();
+    await expect(till.locator('[data-outcome="line-added"]').first()).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A choice the kitchen has run out of cannot be picked, and the dish still sells without it.
+//
+// A modifier is an item in the price book, so the search finds the extra cheese in marking mode and
+// staff can mark it sold out. The pizza's picker then greys that choice out and says why, rather than
+// offering a choice the edge refuses once the whole pizza has been built.
+test("a modifier marked sold out cannot be chosen, and the dish still sells without it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    await page.locator('[data-step="startMarking"]').click();
+    await page.locator("#menu-search").fill("cheese");
+    await page.locator('[data-step="toggleSoldOut"]').click();
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+    await page.getByRole("button", { name: "Done" }).click();
+
+    await page.locator("#menu-search").fill("margherita");
+    await page.locator('[data-step="onItem"]').click();
+    const cheese = page.locator('[data-step="chooseModifier"]', { hasText: "Extra cheese" });
+    await expect(cheese).toBeDisabled();
+    await expect(cheese).toContainText("Sold out");
+
+    await page.locator('[data-step="chooseModifier"]').first().click();
+    await page.locator('[data-step="confirmItem"]').click();
+    await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-modifiers"]').first()).not.toContainText(
+      "Extra cheese",
+    );
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The kitchen marks a dish sold out, every till stops selling it, and the kitchen brings it back.
+//
+// The cook is usually the first to know something has run out. The board's own panel makes the
+// same mark a till makes, so a till showing the menu greys the dish out without reloading, and the
+// panel's "sold out now" list is where the kitchen brings it back from.
+test("the kitchen marks a dish sold out, a till stops selling it, and the kitchen brings it back", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+    await till.locator("#menu-search").fill("iced");
+    const tea = till.locator('[data-step="onItem"]');
+    await expect(tea).toBeEnabled();
+
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+    await board.locator('[data-step="openSoldOut"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveCount(0);
+    await board.locator("#kds-sold-out-search").fill("iced");
+    await expect(board.locator('[data-step="markSoldOut"]')).toHaveCount(1);
+    await board.locator('[data-step="markSoldOut"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveText("Iced tea");
+    // Off the list of dishes to mark once it is marked.
+    await expect(board.locator('[data-step="markSoldOut"]')).toHaveCount(0);
+
+    // The till, without reloading.
+    await expect(tea).toBeDisabled();
+    await expect(till.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    await board.locator('[data-step="bringBack"]').click();
+    await expect(board.locator('[data-outcome="kds-sold-out"]')).toHaveCount(0);
+    await expect(tea).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Guests move to another table and take their order with them.
+//
+// A till, the floor on a second device, and the kitchen board share one edge. The server moves
+// table 1's guests to table 2 with a drink already sent. The till lands on table 2, says where the
+// guests came from, and still has the drink; the floor shows table 1 waiting to be cleared and
+// table 2 seated; the kitchen's ticket for the drink names table 2. The other two devices follow
+// without reloading. Moving them back is refused until table 1 is cleared, as the floor tells it.
+test("guests move to another table with their order, and every screen follows them", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    const floor = await context.newPage();
+    await floor.goto(`${edge.baseURL}/`);
+    await expect(floor.locator('[data-outcome="floor"]')).toBeVisible();
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+
+    await seatTable(till);
+    await expect(till.locator('[data-outcome="order-open"]')).toHaveText("Table 1");
+    await addByName(till, "iced");
+    await sendOrder(till);
+    const ticket = board.locator('[data-step="onBump"]');
+    await expect(ticket).toContainText("Table 1");
+
+    await till.locator('[data-step="openMove"]').click();
+    const offered = till.locator('[data-step="moveTo"]');
+    await expect(offered.first()).toBeVisible();
+    // Only the free tables: never the table they are at.
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(0);
+    await offered.filter({ hasText: "Table 2" }).click();
+
+    await expect(till.locator('[data-outcome="order-open"]')).toHaveText("Table 2");
+    await expect(till.locator('[data-outcome="table-moved"]')).toHaveText("Moved from table 1");
+    await expect(till.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+
+    const card = (label) => floor.locator('[data-step="onCard"]', { hasText: `Table ${label}` });
+    await expect(card(1)).toContainText("Needs cleaning");
+    await expect(card(2)).toContainText("Occupied");
+    await expect(ticket).toContainText("Table 2");
+
+    // Table 1 is not free until somebody clears it, so it is not offered as a way back.
+    await till.locator('[data-step="openMove"]').click();
+    await expect(offered.first()).toBeVisible();
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(0);
+    await card(1).click();
+    await expect(card(1)).toContainText("Free");
+    await expect(offered.filter({ hasText: "Table 1" })).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a phone or a tablet, a dish's choices open on screen, where the thumb that tapped it is.
+//
+// Below a terminal the menu is under the bill, and the picker was drawn in the bill's column, so it
+// opened wherever the bill ended. A long menu, or a screen on its side, puts that out of sight: the
+// server tapped the pizza and saw nothing happen. It is a sheet from the bottom of the screen there
+// now. The test does not click its way to the choices, because a click scrolls to what it clicks;
+// it asks whether they are on screen the moment the pizza is tapped. A phone on its side is the case
+// the demo's five-dish menu can show failing. Upright, that menu is too short to push the end of
+// the bill out of view, so the upright case guards the sheet itself.
+// A phone on its side is as wide as a tablet, so it gets the tablet's layout, and its bill waits
+// behind the bar at the bottom of the screen until it is tapped.
+for (const device of [
+  { name: "a phone", width: 390, height: 844, billBar: false },
+  { name: "a phone on its side", width: 844, height: 390, billBar: true },
+]) {
+  test(`on ${device.name} a dish's choices open on screen, where the thumb is`, async ({ page }) => {
+    const edge = await startEdge();
+    try {
+      await page.setViewportSize({ width: device.width, height: device.height });
+      await pair(page, edge);
+      await signIn(page, edge);
+      await seatTable(page);
+      // A table with a few dishes on it already, as it is mid-service.
+      for (const query of ["salad", "iced", "water", "pho"]) {
+        await addByName(page, query);
+      }
+
+      await page.locator("#menu-search").fill("margherita");
+      await page.locator('[data-step="onItem"]').click();
+      const confirm = page.locator('[data-step="confirmItem"]');
+      await expect(confirm).toBeInViewport();
+      await expect(page.locator('[data-step="chooseModifier"]').first()).toBeInViewport();
+
+      await page.locator('[data-step="chooseModifier"]').first().click();
+      await confirm.click();
+      await expect(confirm).toHaveCount(0);
+      if (device.billBar) {
+        await page.locator('[data-outcome="bill-bar"]').click();
+      }
+      await expect(page.locator('[data-outcome="line-modifiers"]').first()).toBeVisible();
+    } finally {
+      await edge.stop();
+    }
+  });
+}
+
+// On a tablet the menu is the screen and the bill slides up from the bottom of it.
+//
+// `docs/ui-ux.md` §1 principle 9 asks a tablet for "large item grid, bill slides up; usable
+// one-handed". The order screen drew a tablet like a phone instead: the bill first and the menu
+// under it, so a server scrolled past everything already ordered to reach the next dish. Now the
+// menu is what a tablet shows, and the bill waits in a bar at the bottom of the screen, saying what
+// is on it and what it comes to, with Send and Take payment one tap away; a tap on the bar slides
+// the whole bill up, and another closes it.
+test("on a tablet the menu fills the screen, and the bill slides up from the bottom", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    const bar = page.locator('[data-outcome="bill-bar"]');
+    await expect(page.locator("#menu-search")).toBeInViewport();
+    await expect(bar).toBeInViewport();
+    await expect(bar).toHaveAttribute("aria-expanded", "false");
+    await expect(bar).toContainText("nothing yet");
+
+    // A dish goes on from the menu with the bill closed: the bar counts it and prices the bill.
+    await addByName(page, "salad");
+    await expect(bar).toContainText("1 item");
+    await expect(bar).toContainText("97,900");
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeHidden();
+    await expect(page.locator('[data-step="fireOrder"]')).toBeInViewport();
+    await expect(page.locator('[data-step="takePayment"]')).toBeInViewport();
+
+    // A tap on the bar slides the bill up, and another closes it.
+    await bar.click();
+    await expect(bar).toHaveAttribute("aria-expanded", "true");
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+    await expect(page.locator('[data-outcome="check-total"]')).toBeVisible();
+    await bar.click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeHidden();
+
+    // And the order goes to the kitchen from the closed bar.
+    await page.locator('[data-step="fireOrder"]').click();
+    await expect(page.locator('[data-step="fireOrder"]')).toBeDisabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a tablet a refusal is seen with the bill open.
+//
+// The till shows a refusal at the top of the screen, and on a short tablet screen the open bill
+// covers the top of it. So a tablet shows the refusal in the bill's panel, under the bar. The test
+// checks that nothing covers it (a trial tap at it would land on it), because a message under the
+// panel is still "in the viewport" and would pass a check that only asked that.
+test("on a tablet a refusal shows under the bill's bar, where the open bill does not cover it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (const query of ["salad", "iced", "water", "pho"]) {
+      await addByName(page, query);
+    }
+    await page.locator('[data-outcome="bill-bar"]').click();
+
+    // The store refuses the next change.
+    await page.route("**/api/lines/*/quantity", (route) =>
+      route.fulfill({ status: 503, contentType: "text/plain", body: "unavailable" }),
+    );
+    await page.locator('[data-step="setQuantity"]').first().click();
+
+    const refusal = page.getByRole("alert");
+    await expect(refusal).toBeVisible();
+    await refusal.click({ trial: true, timeout: 3000 });
   } finally {
     await edge.stop();
   }
@@ -915,6 +1491,597 @@ test("a tiny bill keeps its exact tip keys rather than collapsing them", async (
     await expect(page.getByText("10.000₫", { exact: true })).toBeVisible();
 
     await expect(page.locator('[data-step="setTip"]')).toHaveText(["500₫", "1.000₫", "1.500₫"]);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A bill larger than the largest note takes any amount the guest hands over.
+//
+// The quick-cash keys were "every note at least as large as the bill". That is the same answer while
+// the bill is smaller than the largest note, and no answer at all above it: Vietnam's largest note is
+// 500,000₫, so a family dinner offered "Exact" and nothing else, and a cashier handed 1,300,000₫ could
+// neither record it nor see the change. The keys are now the smallest pile of each note that covers
+// the bill, and "Other amount" takes whatever pile no key names.
+//
+// The demo store publishes no notes, and an empty list means "the exact amount only", so this hands
+// the till Vietnam's own six — the country pack's list — by changing that one field of
+// `GET /api/locale`, as the exponent test below does with its field. Four pizzas are 596,000₫ plus
+// ten percent: 655,600₫. Piles of 500,000₫, 200,000₫, 100,000₫ and 20,000₫ notes cover it at
+// 1,000,000, 800,000, 700,000 and 660,000; before the change the row was "Exact" alone.
+//
+// Then the pad: a figure short of the bill says by how much and cannot be taken, and one that covers
+// it settles with the change the screen showed.
+test("a bill larger than the largest note takes any amount handed over", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          cash_denominations: [10_000, 20_000, 50_000, 100_000, 200_000, 500_000],
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (let pizza = 0; pizza < 4; pizza += 1) {
+      await addItemWithAChoice(page);
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]')).toHaveText([
+      "Exact",
+      "660,000₫",
+      "700,000₫",
+      "800,000₫",
+      "1,000,000₫",
+    ]);
+
+    await page.locator('[data-step="typeTender"]').click();
+    const keypad = page.locator('[data-step="tenderKeypad"]');
+    for (const digit of ["6", "0", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await expect(page.locator('[data-outcome="typed-tender"]')).toHaveText("600,000₫");
+    await expect(page.getByText("Short by 55,600₫")).toBeVisible();
+    await expect(page.locator('[data-step="payCash"]')).toBeDisabled();
+
+    await keypad.getByRole("button", { name: "Clear the amount" }).click();
+    for (const digit of ["1", "3", "0", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await expect(page.locator('[data-outcome="typed-tender"]')).toHaveText("1,300,000₫");
+    await expect(page.getByText("644,400₫", { exact: true })).toBeVisible();
+
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.getByText("644,400₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A bill split three ways settles with each guest's own tender, and the cash guest's change.
+//
+// The edge settles a bill in one step, with payments that add up to the total exactly, so the pay
+// screen holds each guest's share until the last one lands. A share is what is left divided by the
+// shares still to pay, rounded up: four pizzas are 655,600₫, and three ways that is 218,534₫, then
+// 218,533₫ twice, which add back up to the bill to the đồng.
+//
+// The first guest's share is taken and then given back — "Undo" — to prove the shares are worked out
+// again from what is left rather than remembered. Then QR, card, and the third guest pays cash with
+// a 250,000₫ pile, which the quick keys offer for a 218,533₫ share once the till has Vietnam's notes
+// (injected as in the test above). The settled panel's change is that guest's 31,467₫: the change
+// is summed over every payment on the bill, and only the cash share has any.
+test("a bill split three ways settles with each guest's own tender, and the cash guest's change", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          cash_denominations: [10_000, 20_000, 50_000, 100_000, 200_000, 500_000],
+        },
+      });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    for (let pizza = 0; pizza < 4; pizza += 1) {
+      await addItemWithAChoice(page);
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByText("655,600₫", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Split between 3 guests" }).click();
+    const share = page.locator('[data-outcome="share-due"]');
+    await expect(share).toHaveText("218,534₫");
+
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    await expect(share).toHaveText("218,533₫");
+    await page.getByRole("button", { name: "Undo" }).click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(0);
+    await expect(share).toHaveText("218,534₫");
+
+    await page.locator('[data-step="payQr"]').click();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(2);
+    await expect(share).toHaveText("218,533₫");
+    await expect(page.locator('[data-step="setTender"]')).toHaveText([
+      "Exact",
+      "250,000₫",
+      "300,000₫",
+      "400,000₫",
+      "500,000₫",
+    ]);
+    await page.locator('[data-step="setTender"]').nth(1).click();
+    await page.locator('[data-step="payCash"]').click();
+
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.getByText("31,467₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A table split by item charges each guest their own part, and waits for the last one (ADR-0128).
+//
+// The guest who only had a drink pays for the drink: the iced tea is split off, its part reads what
+// it is for and its own 43,450₫, and it settles by QR. The salad's part is still open, so the table
+// is still awaiting payment on the floor — it used to go to cleaning when the first guest paid, with
+// half the bill never collected. The way back to the rest is the ordinary one, the table and then
+// Take payment, which lands on the salad's part and its 97,900₫. Only once that settles does the
+// table want cleaning.
+test("a table split by item charges each guest their own part, and waits for the last", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (1 left)");
+
+    await page.getByRole("button", { name: "Back to floor" }).click();
+    const firstDot = page.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).toHaveClass(/bg-awaiting/);
+
+    await page.locator('[data-step="onCard"]').first().click();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Back to floor" }).click();
+    await expect(firstDot).toHaveClass(/bg-cleaning/);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A split table's food stays on the kitchen board until its last part is paid.
+//
+// The board draws the orders still owing money, and a settle took the order off it. With one bill per
+// table that was right; with a split table it took the salad off the board when the guest with the
+// drink paid, while the salad was still to be made. The order leaves the board with its last part.
+test("a split table's food stays on the kitchen board until its last part is paid", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendOrder(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="splitByItem"]').click();
+    await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+    await page.locator('[data-step="splitOff"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/kds");
+    await expect(page.getByText("Garden salad").first()).toBeVisible();
+
+    await navigateTo(page, "/");
+    await page.locator('[data-step="onCard"]').first().click();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await navigateTo(page, "/kds");
+    await expect(page.getByText("Garden salad")).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A table split by seat pays seat by seat, and the table's own dishes are a bill of their own.
+//
+// The seat each dish was ordered for is on the line, so the split is one tap with nothing to pick.
+// Seat 1 had the salad and seat 2 the iced tea; the bottled water was ordered for the table, with no
+// seat, and a line cannot be halved — so it becomes a third bill rather than landing on whichever
+// seat the code happened to sort last. Each part says whose it is.
+test("a table split by seat pays seat by seat, with the table's own dishes as a bill of their own", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const seats = page.locator('[data-step="chooseSeat"]');
+    await seats.nth(0).click();
+    await addByName(page, "salad");
+    await seats.nth(1).click();
+    await addByName(page, "iced");
+    // Tapping the chosen seat again clears it: the water is the table's.
+    await seats.nth(1).click();
+    await addByName(page, "water");
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-step="splitBySeat"]')).toHaveText("Split by seat (3 bills)");
+    await page.locator('[data-step="splitBySeat"]').click();
+
+    const part = page.locator('[data-outcome="bill-part"]');
+    await expect(part).toHaveText("Seat 1 · For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (2 left)");
+    await page.locator('[data-step="nextBill"]').click();
+
+    await expect(part).toHaveText("Seat 2 · For: 1 × Iced tea");
+    await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await page.locator('[data-step="nextBill"]').click();
+
+    await expect(part).toHaveText("For: 1 × Bottled water");
+    await expect(page.getByText("9,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A split made by mistake is put back together: a merge into the bill on screen, which then owes the
+// whole table again and settles as one.
+test("a split made by mistake is put back together", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await page.getByRole("button", { name: "Put the 2 bills back together" }).click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
+    await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A till that reloads mid-split still has every part to settle.
+//
+// The live read named one bill per order, the newest open one. A till that reloaded with both parts
+// still owing learned only the salad's; it could settle that and then had no id for the drink, and
+// asking for a bill again is refused while one is open — so the rest of the table could not be
+// charged from that till. Every open part is on the read now. The reload lands on the pay screen
+// itself, which reads what is open before it asks for anything, and offers the parts oldest first.
+test("a till that reloads mid-split still has every part to settle", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+    await expect(page.getByRole("button", { name: "Put the 2 bills back together" })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveText("Pay the next bill (1 left)");
+    await page.locator('[data-step="nextBill"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Garden salad");
+    await expect(page.getByText("97,900₫", { exact: true })).toBeVisible();
+    await page.locator('[data-step="payQr"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-step="nextBill"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Before anyone signs in, the status bar offers no destinations and no sign-out.
+//
+// Every destination only bounced back to sign-in, and a till that offers the kitchen before anyone
+// has signed in looks as if it has forgotten who you are. The language and theme stay, because the
+// first person to sign in may want them.
+test("before anyone signs in, the status bar offers no destinations and no sign-out", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await expect(page.locator("header nav")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Language" })).toHaveCount(1);
+
+    await signIn(page, edge);
+    await expect(page.locator("header nav")).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Sign out" })).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// On a terminal, the sign-in pad's digits are on screen without scrolling.
+//
+// Stacked under the fields, the pad's digit row sat below the fold of a 1366x768 till — the
+// commonest Windows POS screen — so a PIN needed a scroll before its first digit. From a terminal
+// up the fields and the pad sit side by side.
+test("on a 1366x768 terminal the sign-in pad's digits are on screen without scrolling", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await pair(page, edge);
+    const zero = page.locator("#signin-pad").getByRole("button", { name: "0", exact: true });
+    await expect(zero).toBeVisible();
+    const box = await zero.boundingBox();
+    expect(box, "the pad's 0 key has a box").not.toBeNull();
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(768);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The Today screen names the shift in the till's language.
+//
+// The tile lower-cased the wire token and let CSS capitalise it, so a Vietnamese till read "Open"
+// in English. It now uses the status bar's own sentences.
+test("the Today screen names the shift in the till's language", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("none open");
+
+    await openShift(page);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("Shift open");
+    await page.getByRole("button", { name: "Language" }).click();
+    await expect(page.locator('[data-outcome="today-shift"]')).toHaveText("Đang mở ca");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A guest's QR order shows its table by the floor's label, and the queue refreshes itself.
+//
+// The screen's classes were defined nowhere, so it rendered unstyled; it headed each card with the
+// table's id rather than the label on the floor; and it loaded once, so an order placed after the
+// screen opened sat unseen. The demo store takes no QR orders (they arrive from the cloud), so the
+// queue's one route is answered here: empty on the first read, one order on the next. The page's
+// clock is driven so the fifteen-second refresh happens now rather than in fifteen seconds.
+test("a guest's QR order shows its table by the floor's label, and the queue refreshes itself", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    await page.locator('a[href="/"]').first().click();
+
+    let reads = 0;
+    await page.route("**/api/orders/awaiting-confirmation", async (route) => {
+      reads += 1;
+      const money = (amount) => ({ amount_minor: amount, currency_code: "VND" });
+      await route.fulfill({
+        json: {
+          orders:
+            reads === 1
+              ? []
+              : [
+                  {
+                    order_id: "01J0000000000000000000GUES",
+                    table_id: table,
+                    items: [
+                      {
+                        display_name: "Iced tea",
+                        quantity: { milli: 2000 },
+                        line_total: money(79_000),
+                      },
+                    ],
+                    total: money(86_900),
+                  },
+                ],
+          reject_reasons: [],
+        },
+      });
+    });
+
+    await navigateTo(page, "/guests");
+    await expect(page.getByText("No guest orders are waiting.")).toBeVisible();
+    await page.clock.fastForward(16_000);
+
+    const card = page.locator('[data-outcome="guest-order"]');
+    await expect(card).toHaveCount(1);
+    await expect(card.locator("h3")).toHaveText("Table 1");
+    const accept = card.getByRole("button", { name: "Send to kitchen" });
+    const box = await accept.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(48);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A manager voids a bill on a till with no keyboard at all.
+//
+// The void, the fired-line void and the discount each asked for the manager's badge and PIN in
+// plain inputs, which a fixed terminal with its on-screen keyboard switched off cannot fill — so on a
+// POS Station or Terminal touch screen none of the three could be approved. The panels now share
+// `ApproverFields`, whose credential pad appears when a field takes focus and follows it: letters
+// and digits for the badge, digits for the PIN.
+//
+// Driven with no `fill` after sign-in, like the keyboardless sign-in test, because `fill` is exactly
+// what this device class lacks. The demo employee holds every permission, so they approve their own
+// void. This is also the first browser run of the bill void, which the declared-flow harness skips
+// because its credentials are typed mid-flow.
+test("a manager voids a bill on a till with no keyboard, typing on the on-screen pad", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="askVoidBill"]').click();
+
+    const pad = page.locator("#void-bill-approver-pad");
+    await expect(pad).toHaveCount(0);
+    await page.locator("#void-bill-approver-code").click();
+    for (const key of edge.staffCode.split("")) {
+      await pad.getByRole("button", { name: key, exact: true }).click();
+    }
+    await expect(page.locator("#void-bill-approver-code")).toHaveValue(edge.staffCode);
+
+    await page.locator("#void-bill-approver-pin").click();
+    await expect(pad.getByRole("button", { name: "A", exact: true })).toHaveCount(0);
+    for (const key of edge.staffPin.split("")) {
+      await pad.getByRole("button", { name: key, exact: true }).click();
+    }
+    await expect(page.locator("#void-bill-approver-pin")).toHaveValue(edge.staffPin);
+
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Once the bill is open the menu sells nothing, and says how to order more.
+//
+// A bill names the dishes it covers when it opens, so a dish rung onto the table afterwards was on no
+// bill: the guest paid the old total and the dish left with the table, unpaid. The edge refuses it
+// now (`BILL_ALREADY_OPEN`); the till does not offer it, and says what to do instead. Voiding the
+// bill (the demo employee holds every permission, so approves their own void) gives the menu back.
+test("once the bill is open the menu is locked, and voiding the bill gives it back", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await page.getByRole("link", { name: "← Order" }).click();
+
+    await expect(page.locator('[data-outcome="bill-open-locked"]')).toBeVisible();
+    const items = page.locator('[data-step="onItem"]');
+    await expect(items.first()).toBeVisible();
+    for (const item of await items.all()) {
+      await expect(item).toBeDisabled();
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="askVoidBill"]').click();
+    await page.locator("#void-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    await page.getByRole("button", { name: "← Order" }).click();
+
+    await expect(page.locator('[data-outcome="bill-open-locked"]')).toHaveCount(0);
+    await addItem(page);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A counter order on the kitchen board and the pass is called by the guest's number.
+//
+// Both screens labelled a counter ticket with the last four characters of the order's internal id
+// ("Counter order …7K3Q"), which nobody at the counter can match to a guest holding a number. The
+// number lives on the counter list, not on the live orders the boards are drawn from, so the boards
+// read it from there for the counter orders they show. The first walk-in of a fresh demo day is
+// number 1.
+test("a counter order on the kitchen board and the pass is called by the guest's number", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await addItem(page);
+    await sendOrder(page);
+
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-step="onBump"]').first()).toContainText("No. 1");
+    await navigateTo(page, "/expo");
+    await expect(page.getByText("No. 1", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A counter tip on a bill that is not a round number still settles.
+//
+// The table pay screen's float-division tip was fixed (the test above it here says how it failed);
+// the counter's copy of the same line was not, and survived one file over. The iced tea's 43,450₫ is
+// the bill it fails on: five percent is 2,172.5, which the edge refuses as a money amount — so this
+// walks the whole tipped charge and asks only that it ends settled.
+test("a counter tip on a bill that is not a round number still settles", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await page.locator("#menu-search").fill("tea");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+    await page.locator('[data-step="onItem"]').click();
+    await expect(page.locator('[data-outcome="line-added"]').first()).toBeVisible();
+    await page.locator('a[href="/counter"]').first().click();
+    await page.waitForURL((url) => url.pathname === "/counter");
+
+    await page.locator('[data-step="charge"]').first().click();
+    await expect(page.getByText("43,450₫", { exact: true }).first()).toBeVisible();
+    await page.locator('[data-step="setTip"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
   } finally {
     await edge.stop();
   }
@@ -1115,6 +2282,7 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
+      "Settle a dine-in table in cash, typing the amount handed over",
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",

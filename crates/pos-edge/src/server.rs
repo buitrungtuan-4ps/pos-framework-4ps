@@ -393,6 +393,19 @@ where
         &shutdown_rx,
     );
 
+    let listener = TcpListener::bind(bind)
+        .await
+        .map_err(|source| EdgeError::Bind { addr: bind, source })?;
+    tracing::info!(
+        %bind,
+        protocol_version = pos_proto::PROTOCOL_VERSION,
+        "pos_edge listening",
+    );
+
+    // After the bind, not before: the pairing file is what the Windows installer waits for before it
+    // prints the URL and opens /setup, so it must not exist until the port accepts a connection. A
+    // box that cannot bind publishes no code at all, and the installer reports the log instead of a
+    // URL for a server that is exiting.
     announce_pairing(
         &composed.pairing,
         public_origin.as_ref(),
@@ -403,15 +416,6 @@ where
     // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
     // raw-IP pairing URL above still works (ADR-0030).
     NoopAdvertiser.advertise("pos", bind.port());
-
-    let listener = TcpListener::bind(bind)
-        .await
-        .map_err(|source| EdgeError::Bind { addr: bind, source })?;
-    tracing::info!(
-        %bind,
-        protocol_version = pos_proto::PROTOCOL_VERSION,
-        "pos_edge listening",
-    );
 
     let served = axum::serve(listener, composed.app.into_make_service())
         .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))

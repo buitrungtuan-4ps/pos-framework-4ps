@@ -401,6 +401,10 @@ where
         // The store's published price book, so the till prices from what the console published
         // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
         .route("/api/menu", get(menu::catalog::<S>))
+        // Staff mark an item sold out, and bring it back (86). The events have been in the schema
+        // since it was written; this is the first thing to emit them.
+        .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
+        .route("/api/menu/{id}/restore", post(menu::restore::<S>))
         // How the till groups and orders those items, from the `layout` node the same publish writes
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
@@ -412,9 +416,10 @@ where
         // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
         // till filters by the act in hand.
         .route("/api/reason-codes", get(reason_codes::list::<S>))
-        // The floor: seat, clean, read.
+        // The floor: seat, clean, move the guests to another table, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
+        .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
         .route("/api/tables/{id}", get(tables::get::<S>))
         // What the table owes right now, assembled by the edge — the till displays the figure it is
         // going to settle against rather than computing one of its own (roadmap-v3 E5).
@@ -452,6 +457,9 @@ where
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))
+        // What one bill owes and the lines it covers — the read a split needs, because once a
+        // table's bill is split each guest at the till is asking about their own part (ADR-0128).
+        .route("/api/bills/{id}/check", get(check::read_for_bill::<S>))
         // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
         // PIN with the request, which is the first thing in the tree to read the permission
         // registry's `pin: true`.

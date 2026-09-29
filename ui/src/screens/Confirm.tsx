@@ -1,10 +1,10 @@
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { api } from "../api/client";
 import type { RejectReason, WaitingOrder } from "../api/types";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
-import { formatAmount } from "../state/store";
+import { formatAmount, tableLabel } from "../state/store";
 import { errorMessage } from "../lib/errors";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
@@ -16,9 +16,18 @@ import { errorMessage } from "../lib/errors";
 // ever showed it: there was nothing for a member of staff to press, and nothing on the fire path
 // read it either. This screen and the fire gate are the two halves of making it real.
 //
-// The table is the heading of each card, because that is what a server walks to. The order's ULID
-// is never shown — an operator cannot read one, and the card is what turns the id into something
-// tappable.
+// The table is the heading of each card, because that is what a server walks to — by the label the
+// floor shows, not the table's id, which read as a ULID on the card until the till review. The
+// order's ULID is never shown either: an operator cannot read one.
+//
+// # It refreshes itself
+//
+// A guest's order arrives from the cloud, not from this till, so nothing on the screen would
+// otherwise say a new one is waiting: the queue loaded once, when the screen opened, and an order
+// placed a minute later sat unseen until somebody navigated away and back. It now reloads every
+// `REFRESH_MS` while it is open, which is well inside how long a guest waits before asking a server.
+const REFRESH_MS = 15_000;
+
 export function Confirm() {
   const [orders, setOrders] = createSignal<WaitingOrder[] | null>(null);
   const [reasons, setReasons] = createSignal<RejectReason[]>([]);
@@ -38,11 +47,18 @@ export function Confirm() {
         setError(null);
       })
       .catch((caught: unknown) => {
-        setOrders([]);
+        // A failed reload keeps what is on screen: a queue that blanked on one dropped request every
+        // fifteen seconds would be worse than one that is briefly stale. Only a first load that
+        // fails shows the empty state.
+        setOrders((current) => current ?? []);
         explain(caught);
       });
 
-  onMount(() => void refresh());
+  onMount(() => {
+    void refresh();
+    const timer = setInterval(() => void refresh(), REFRESH_MS);
+    onCleanup(() => clearInterval(timer));
+  });
 
   const confirm = (order: WaitingOrder) => {
     setBusy(true);
@@ -66,13 +82,13 @@ export function Confirm() {
   };
 
   return (
-    <section class="stack">
+    <section class="mx-auto max-w-xl p-4">
       <PageHeader title={t("confirm.title")} />
-      <p class="hint">{t("confirm.subtitle")}</p>
+      <p class="text-ink-muted">{t("confirm.subtitle")}</p>
 
       <Show when={error()}>
         {(message) => (
-          <p class="notice notice-warn" role="status">
+          <p class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
             {message()}
           </p>
         )}
@@ -82,33 +98,37 @@ export function Confirm() {
         when={(orders() ?? []).length > 0}
         fallback={
           <Show when={orders() !== null}>
-            <p class="empty">{t("confirm.empty")}</p>
+            <p class="mt-6 text-ink-muted">{t("confirm.empty")}</p>
           </Show>
         }
       >
-        <ul class="card-grid">
+        <ul class="mt-4 flex list-none flex-col gap-3 p-0">
           <For each={orders() ?? []}>
             {(order) => (
-              <li class="card stack">
-                <h3 class="card-title">
-                  {t("confirm.table", { table: order.table_id })}
+              <li class="rounded-token border border-line bg-surface p-4" data-outcome="guest-order">
+                <h3 class="text-lg font-semibold">
+                  {t("confirm.table", { table: tableLabel(order.table_id) })}
                 </h3>
-                <ul class="line-list">
+                <ul class="mt-2 flex list-none flex-col gap-1 p-0 text-sm">
                   <For each={order.items}>
                     {(line) => (
-                      <li>
+                      <li class="flex items-baseline justify-between gap-3">
                         <span>{line.display_name}</span>
-                        <span>{`×${String(line.quantity.milli / 1000)}`}</span>
-                        <span>{formatAmount(line.line_total)}</span>
+                        <span class="flex gap-3 tabular-nums text-ink-muted">
+                          <span>{`×${String(line.quantity.milli / 1000)}`}</span>
+                          <span>{formatAmount(line.line_total)}</span>
+                        </span>
                       </li>
                     )}
                   </For>
                 </ul>
-                <p class="card-total">{formatAmount(order.total)}</p>
-                <div class="row">
+                <p class="mt-2 text-right text-lg font-semibold tabular-nums">
+                  {formatAmount(order.total)}
+                </p>
+                <div class="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    class="btn btn-primary"
+                    class="min-h-touch rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
                     disabled={busy()}
                     onClick={() => confirm(order)}
                   >
@@ -116,7 +136,7 @@ export function Confirm() {
                   </button>
                   <button
                     type="button"
-                    class="btn"
+                    class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
                     disabled={busy() || reasons().length === 0}
                     onClick={() => setRefusing(order)}
                   >
@@ -134,25 +154,27 @@ export function Confirm() {
           dialog with nothing to choose. */}
       <Show when={refusing()}>
         {(order) => (
-          <div class="panel stack">
-            <h3 class="card-title">{t("confirm.reason_title")}</h3>
-            <ul class="line-list">
+          <div class="mt-4 rounded-token border border-line bg-surface p-4">
+            <h3 class="font-semibold">{t("confirm.reason_title")}</h3>
+            <div class="mt-2 flex flex-col gap-2">
               <For each={reasons()}>
                 {(reason) => (
-                  <li>
-                    <button
-                      type="button"
-                      class="btn"
-                      disabled={busy()}
-                      onClick={() => reject(order(), reason)}
-                    >
-                      {reason.display_name}
-                    </button>
-                  </li>
+                  <button
+                    type="button"
+                    class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                    disabled={busy()}
+                    onClick={() => reject(order(), reason)}
+                  >
+                    {reason.display_name}
+                  </button>
                 )}
               </For>
-            </ul>
-            <button type="button" class="btn" onClick={() => setRefusing(null)}>
+            </div>
+            <button
+              type="button"
+              class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+              onClick={() => setRefusing(null)}
+            >
               {t("common.cancel")}
             </button>
           </div>

@@ -518,6 +518,40 @@ else
   echo "warn   could not chown cloud.toml to $APP_UID (need root or passwordless sudo); pos_cloud may be unable to read it"
 fi
 
+# 2c. Where the console's "Fetch from the release" button reads (ADR-0088 Amendment 4). The deploy
+#     workflow passes RELEASE_SOURCE_REPOSITORY, the repository it deploys from when that
+#     repository is public (or whatever its RELEASE_SOURCE_REPOSITORY variable names), and this
+#     writes a [release_source] block naming it, once. A block already in the file is kept exactly
+#     as it is: an operator may have added a token for a private repository, which is a secret this
+#     script is never handed. Without the block the button says so and the upload route stays the
+#     way in, so nothing here is worth failing a deploy for. It takes effect when pos_cloud next
+#     starts, which every deploy of a new commit does.
+if [ -n "${RELEASE_SOURCE_REPOSITORY:-}" ]; then
+  # Any uncommented mention counts as present, not just this script's own `[release_source]`:
+  # TOML also spells the table `[ release_source ]`, `release_source.repository = …` or an inline
+  # table, and defining it twice is a parse error that pos_cloud refuses to start on. Keeping a
+  # block that was never there costs a button; writing a second one costs the cloud.
+  release_state="$(cloud_toml_state '^[^#]*release_source')"
+  if [ "$release_state" = present ]; then
+    echo "keep   release_source (already in cloud.toml)"
+  elif [ "$release_state" = unreadable ]; then
+    echo "warn   could not read $SECRETS/cloud.toml (need root or passwordless sudo); [release_source] not written"
+  elif ! [[ "$RELEASE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    # The value lands inside a TOML string: only owner/name, on one line, is let through.
+    echo "warn   RELEASE_SOURCE_REPOSITORY is not owner/name; [release_source] not written"
+  else
+    {
+      echo ""
+      echo "# The repository the console's Fetch from the release button reads (ADR-0088 Amendment 4)."
+      echo "# Written by bootstrap.sh from the deploy workflow; a private repository also needs token = \"...\"."
+      echo "[release_source]"
+      echo "repository = \"$RELEASE_SOURCE_REPOSITORY\""
+    } | cloud_toml_append &&
+      echo "set    cloud.toml [release_source] repository = $RELEASE_SOURCE_REPOSITORY" ||
+      echo "warn   could not write $SECRETS/cloud.toml (need root or passwordless sudo); [release_source] not written"
+  fi
+fi
+
 # 3. NATS: JetStream, a token, and — once a certificate exists — TLS on a published client port
 #    (ADR-0089). The monitoring port (8222) stays internal for the healthcheck, no token.
 #

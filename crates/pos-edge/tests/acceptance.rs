@@ -656,6 +656,396 @@ async fn a_device_that_missed_the_events_reads_what_is_open() {
     );
 }
 
+/// `GET uri` on the composed router, asserting it answers.
+async fn read(store: &Store, uri: &str) -> Value {
+    let (status, body) = send(store.app.clone(), Some(&store.token), "GET", uri, None).await;
+    assert_eq!(status, StatusCode::OK, "{uri} answers: {body}");
+    body
+}
+
+/// Seats `table`, sells it two things, opens its bill and splits it one line per part, all over the
+/// composed router. Returns the source bill, its two parts and the two lines, each in order.
+async fn a_table_split_two_ways(
+    store: &Store,
+    table: TableId,
+) -> (String, Vec<String>, Vec<String>) {
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut lines = Vec::new();
+    for _ in 0..2 {
+        let (status, line) = post(
+            store.app.clone(),
+            Some(&store.token),
+            &format!("/api/tables/{table}/lines"),
+            Some(a_line_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        lines.push(
+            line["order_line_id"]
+                .as_str()
+                .expect("a line id")
+                .to_owned(),
+        );
+    }
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let source = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let (status, split) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{source}/split"),
+        Some(json!({ "parts": [[lines[0]], [lines[1]]] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{split}");
+    let parts = split["bill_ids"]
+        .as_array()
+        .expect("the parts")
+        .iter()
+        .map(|id| id.as_str().expect("a bill id").to_owned())
+        .collect();
+    (source, parts, lines)
+}
+
+/// A table whose bill is split is read **part by part** over the composed edge
+/// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+///
+/// The split route has been mounted since the record was written; what a till could not do was read
+/// the result. The table's check answered with the newest part alone, so a table split two ways
+/// quoted half of what it owed, and the live read named that one part, so a till that reloaded
+/// mid-split had no id for the others. These are the reads a till settling a split table makes: each
+/// part by its own id, the table as a whole, and every part still open.
+#[tokio::test]
+async fn a_split_table_is_read_part_by_part_on_the_composed_edge() {
+    let store = a_store().await;
+    let table = TableId::new(Ulid::from_u128(705));
+    let (source, parts, lines) = a_table_split_two_ways(&store, table).await;
+
+    // Each part, by its own id: what it owes and which line it covers.
+    let first = read(&store, &format!("/api/bills/{}/check", parts[0])).await;
+    assert_eq!(first["state"], "BILL_STATE_OPEN");
+    assert_eq!(first["order_line_ids"], json!([lines[0]]));
+    assert_eq!(first["total_due"]["amount_minor"], WITH_TAX);
+    assert_eq!(first["subtotal"]["amount_minor"], UNIT_PRICE);
+
+    // The source owes nothing more, and says so.
+    let split_source = read(&store, &format!("/api/bills/{source}/check")).await;
+    assert_eq!(split_source["state"], "BILL_STATE_SPLIT");
+
+    // The table owes both parts, and the live read names both.
+    let check = read(&store, &format!("/api/tables/{table}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX * 2);
+    let live = live_orders(&store).await;
+    assert_eq!(
+        live[0]["open_bill_ids"],
+        json!(parts),
+        "every open part: {live}"
+    );
+
+    // One guest pays; the table owes the other part, and that part is the one left open.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{}/settle", parts[0]),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let check = read(&store, &format!("/api/tables/{table}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX);
+    let live = live_orders(&store).await;
+    assert_eq!(live[0]["open_bill_ids"], json!([parts[1]]), "{live}");
+
+    // A path that is not a bill id is malformed, as it is on every other bill route.
+    let (status, _) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/bills/not-a-ulid/check",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// The floor says when each seated table's guests sat down, so a floor plan can show how long a
+/// table has been sitting — and a till that reloads shows the same figure as one that watched.
+///
+/// A table is seated before anything is ordered, and the live read lists orders with lines, so the
+/// time rides on the floor read beside the table's state. The table that is sitting has a time, the
+/// free one has none, and once the table has paid and been cleaned it has none again.
+#[tokio::test]
+async fn the_floor_says_when_each_seated_table_sat_down() {
+    use pos_proto::floor::{FloorArea, FloorPlan, FloorTable};
+    use pos_proto::ids::AreaId;
+
+    let seated = TableId::new(Ulid::from_u128(706));
+    let free = TableId::new(Ulid::from_u128(707));
+    let table = |table_id: TableId, label: &str| FloorTable {
+        table_id,
+        label: DisplayName::new(label),
+        seats: 4,
+        position: None,
+    };
+    let store = a_store_where(|session| {
+        session.with_floor(FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(1)),
+            name: DisplayName::new("Main hall"),
+            tables: vec![table(seated, "6"), table(free, "7")],
+        }))
+    })
+    .await;
+
+    let before = pos_edge::SystemClock.now();
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let after = pos_edge::SystemClock.now();
+
+    let floor = read(&store, "/api/floor").await;
+    let since: pos_proto::time::Timestamp = floor["seated_times"][seated.to_string()]
+        .as_str()
+        .expect("a seated table says when: {floor}")
+        .parse()
+        .expect("a timestamp");
+    assert!(
+        before.as_milliseconds_since_epoch() <= since.as_milliseconds_since_epoch()
+            && since.as_milliseconds_since_epoch() <= after.as_milliseconds_since_epoch(),
+        "sat down while it was being seated: {before} <= {since} <= {after}"
+    );
+    assert!(
+        floor["seated_times"][free.to_string()].is_null(),
+        "nobody is sitting at a free table: {floor}"
+    );
+
+    // Paid and cleaned: the table is free again, and has no time.
+    let (_, line) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert!(line["order_line_id"].is_string(), "{line}");
+    let (_, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{seated}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(WITH_TAX),
+                "applied_to_bill": vnd(WITH_TAX),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let floor = read(&store, "/api/floor").await;
+    assert!(
+        floor["seated_times"][seated.to_string()].is_null(),
+        "a table that has paid is waiting to be cleaned, not sitting: {floor}"
+    );
+}
+
+/// Guests move to another table over the composed edge, and take their order with them.
+///
+/// The order they bring has a line the kitchen has already made, because that is when guests move:
+/// mid-meal. Every read a device boots from follows them (the floor's states and seated times, the
+/// live orders, both tables' checks), and they pay at the table they moved to.
+#[tokio::test]
+async fn guests_move_to_another_table_on_the_composed_edge() {
+    use pos_proto::floor::{FloorArea, FloorPlan, FloorTable};
+    use pos_proto::ids::AreaId;
+
+    let from = TableId::new(Ulid::from_u128(709));
+    let to = TableId::new(Ulid::from_u128(710));
+    let table = |table_id: TableId, label: &str| FloorTable {
+        table_id,
+        label: DisplayName::new(label),
+        seats: 4,
+        position: None,
+    };
+    let store = a_store_where(|session| {
+        session.with_floor(FloorPlan::new().with(FloorArea {
+            area_id: AreaId::new(Ulid::from_u128(1)),
+            name: DisplayName::new("Main hall"),
+            tables: vec![table(from, "9"), table(to, "10")],
+        }))
+    })
+    .await;
+    a_fired_and_prepared_order(&store, from).await;
+    let sat_down = read(&store, "/api/floor").await["seated_times"][from.to_string()].clone();
+    assert!(sat_down.is_string(), "a seated table says when");
+
+    let (status, moved) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{from}/transfer"),
+        Some(json!({ "to_table_id": to })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the transfer route is mounted: {moved}"
+    );
+    assert_eq!(moved["from_table"]["state"], "TABLE_STATE_NEEDS_CLEANING");
+    assert_eq!(moved["to_table"]["state"], "TABLE_STATE_OCCUPIED");
+
+    let floor = read(&store, "/api/floor").await;
+    assert_eq!(
+        floor["table_states"][from.to_string()],
+        "TABLE_STATE_NEEDS_CLEANING"
+    );
+    assert_eq!(
+        floor["table_states"][to.to_string()],
+        "TABLE_STATE_OCCUPIED"
+    );
+    assert_eq!(
+        floor["seated_times"][to.to_string()],
+        sat_down,
+        "they sat down when they did: {floor}"
+    );
+    assert!(floor["seated_times"][from.to_string()].is_null(), "{floor}");
+
+    let live = live_orders(&store).await;
+    let orders = live.as_array().expect("the live orders");
+    assert_eq!(orders.len(), 1, "{live}");
+    assert_eq!(orders[0]["order_id"], moved["order_id"]);
+    assert_eq!(orders[0]["table_id"], to.to_string(), "{live}");
+    let check = read(&store, &format!("/api/tables/{to}/check")).await;
+    assert_eq!(check["total_due"]["amount_minor"], WITH_TAX);
+    let left = read(&store, &format!("/api/tables/{from}/check")).await;
+    assert_eq!(left["total_due"]["amount_minor"], 0, "{left}");
+
+    let (status, bill) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{to}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "they pay where they sit: {bill}");
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{to}/transfer"),
+        Some(json!({ "to_table_id": from })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "and once they have asked for the bill they stay"
+    );
+}
+
+/// Staff mark an item sold out over the composed edge, and every till reading the menu sees it —
+/// then bring it back.
+///
+/// The menu read says both what can be sold (`available`) and why not (`sold_out`), so a till can
+/// offer to restore an item staff marked without offering to restore one the console withdrew.
+#[tokio::test]
+async fn an_item_is_marked_sold_out_and_restored_on_the_composed_edge() {
+    let store = a_store().await;
+    let item = MenuItemId::new(Ulid::from_u128(ITEM));
+    let listed = |menu: &Value| {
+        menu["items"]
+            .as_array()
+            .expect("the price book")
+            .iter()
+            .find(|entry| entry["menu_item_id"] == item.to_string())
+            .cloned()
+            .expect("the item is on the menu")
+    };
+
+    let (status, marked) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/menu/{item}/sold-out"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the sold-out route is mounted: {marked}"
+    );
+    assert_eq!(marked["sold_out"], true);
+    let entry = listed(&read(&store, "/api/menu").await);
+    assert_eq!(entry["available"], false, "a sold-out item is not sellable");
+    assert_eq!(entry["sold_out"], true, "and the menu says why");
+
+    // A line for it is refused, whatever the device that sent it was showing.
+    let table = TableId::new(Ulid::from_u128(708));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a sold-out item cannot be ordered"
+    );
+
+    let (status, restored) = post(
+        store.app.clone(),
+        Some(&store.token),
+        &format!("/api/menu/{item}/restore"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(restored["sold_out"], false);
+    let entry = listed(&read(&store, "/api/menu").await);
+    assert_eq!(entry["available"], true);
+    assert_eq!(entry["sold_out"], false);
+}
+
 /// One tap sends the whole order, and sending it twice is not an error.
 ///
 /// The operator's act is "send this order". It was one tap and one round trip per line, because the

@@ -48,10 +48,10 @@ use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingDiscountApplied, BillingPaymentCaptured, CashShiftClosed, CashShiftCounted,
     CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
-    EventType, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
-    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
-    SecurityPermissionOverridden, StoreChainAnchored,
+    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
+    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -234,6 +234,18 @@ impl StaffRoster {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_code.is_empty()
+    }
+
+    /// Whether anyone can sign in: at least one member has the id and the PIN a sign-in needs.
+    ///
+    /// `false` until the console has published someone with a PIN for this store, and on a box that
+    /// has not been activated and so has received no roster at all. The sign-in screen says so
+    /// rather than refusing every code as a wrong one, which is all a refusal can say.
+    #[must_use]
+    pub fn sign_in_ready(&self) -> bool {
+        self.by_code
+            .values()
+            .any(|auth| auth.employee_id.is_some() && auth.pin_phc.is_some())
     }
 
     /// Authorises a sign-in: verifies `pin` against the published Argon2id hash for `code`, returning
@@ -975,6 +987,17 @@ pub struct TableView {
     pub state: TableState,
 }
 
+/// What moving guests to another table did: the order that went with them, and both tables after.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransferView {
+    /// The order that moved.
+    pub order_id: OrderId,
+    /// The table the guests left, now waiting to be cleared.
+    pub from: TableView,
+    /// The table they moved to, now seated with their order.
+    pub to: TableView,
+}
+
 /// A line as the caller wants it added — the amounts captured from the menu the device holds
 /// (`sales.order_line.added` §: a line never references the live menu, so these are recorded now and
 /// never looked up later). The edge does not invent prices; it records what the device supplies.
@@ -1301,8 +1324,28 @@ pub struct LiveOrderView {
     /// A bill already open on it, so a device that reloads on the payment screen settles **that**
     /// bill rather than asking for a second one the domain would refuse.
     pub bill_id: Option<BillId>,
+    /// Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part once
+    /// its bill has been split ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// `bill_id` names only the newest of them, so a device that reloaded mid-split learned one part
+    /// and none of the others. It paid that one, found the table still awaiting payment, and had no
+    /// id to settle the rest with — asking for a bill again is refused while one is open.
+    pub open_bill_ids: Vec<BillId>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
+}
+
+/// One bill as the till reads it back: where it has got to, the lines it covers, and what they come
+/// to ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BillCheckView {
+    /// Open while it still owes. A settled, voided, split or merged bill owes nothing more, and its
+    /// totals are then what its lines came to rather than a sum to collect.
+    pub state: BillState,
+    /// The order lines it bills — how a till shows a guest what their part of a split table is for.
+    pub order_line_ids: Vec<OrderLineId>,
+    /// What those lines come to, less what has been taken off this bill.
+    pub totals: BillTotals,
 }
 
 /// What a cash shift looks like to a caller after a command.
@@ -1332,6 +1375,7 @@ struct LiveSnapshot {
     order_id: OrderId,
     table_id: Option<TableId>,
     bill_id: Option<BillId>,
+    open_bill_ids: Vec<BillId>,
     /// Each line with its id and whether a station has bumped it.
     lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
@@ -1516,6 +1560,11 @@ impl ShiftRecord {
 /// whether the order is a guest submission awaiting staff confirmation (ADR-0116). Both are
 /// `Option` for the same reason: an `UNSPECIFIED` or unrecognised channel token from a newer
 /// sender records as `None` rather than a guessed variant, and a tableless order has no table.
+///
+/// The table is the one the order is served at, so it moves when the guests do
+/// (`sales.table.transferred`, [`Projection::move_order`]). A refused guest order hands its table
+/// back to the order it displaced by looking for the orders served *there*, and an order that had
+/// moved in would otherwise be looked for at the table it left.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct OrderOrigin {
     channel: Option<SalesChannel>,
@@ -1614,6 +1663,13 @@ struct Projection {
     /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
     /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.
     bumped_lines: HashSet<OrderLineId>,
+    /// The items staff have marked sold out (86) at this store, until somebody restores them
+    /// (`inventory.item.sold_out`, `inventory.item.restored`). An in-store override on top of the
+    /// published menu's own availability: the kitchen runs out mid-service, and the console is not
+    /// where anybody is standing. Folded from the log, so a restart keeps them. Bounded by the
+    /// menu: only an item on it can be marked, and one a later publish drops keeps its mark,
+    /// harmlessly, until it is back on the menu to be restored.
+    sold_out: HashSet<MenuItemId>,
     /// Each order's lines, in id order: the index every order-scoped read walks.
     ///
     /// Until it existed those reads filtered `lines` — every line the store had sold since it was
@@ -1664,6 +1720,19 @@ impl Projection {
             .iter()
             .find(|(_, order)| **order == order_id)
             .map(|(table, _)| *table)
+    }
+
+    /// Moves an order from the table its guests left to the one they sat down at
+    /// (`sales.table.transferred`), live and on rebuild. The tables' own states are the caller's:
+    /// the live command has the machine's answer, and the fold reads what that answer always is.
+    fn move_order(&mut self, order_id: OrderId, from_table_id: TableId, to_table_id: TableId) {
+        if self.order_for_table(from_table_id) == Some(order_id) {
+            self.table_orders.remove(&from_table_id);
+        }
+        self.open_order(to_table_id, order_id);
+        if let Some(origin) = self.orders.get_mut(&order_id) {
+            origin.table_id = Some(to_table_id);
+        }
     }
 
     /// Records where an order came from, from a live open or from the fold on rebuild.
@@ -1911,6 +1980,15 @@ impl Projection {
         self.set_fired_time(line_id, fired_time, station_id);
     }
 
+    /// Marks an item sold out, or restores it — from a live mark and from the fold on rebuild.
+    fn set_sold_out(&mut self, menu_item_id: MenuItemId, sold_out: bool) {
+        if sold_out {
+            self.sold_out.insert(menu_item_id);
+        } else {
+            self.sold_out.remove(&menu_item_id);
+        }
+    }
+
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
     fn mark_bumped(&mut self, order_line_ids: &[OrderLineId]) {
         self.bumped_lines.extend(order_line_ids.iter().copied());
@@ -1984,6 +2062,23 @@ impl Projection {
     fn bill_for_order(&self, order_id: OrderId) -> Option<BillId> {
         self.latest_bill_in(order_id, BillState::Open)
             .or_else(|| self.latest_bill_in(order_id, BillState::Settled))
+    }
+
+    /// Every bill on an order that is still open, oldest first: one for an ordinary table, one per
+    /// unpaid part once its bill has been split (ADR-0128).
+    fn open_bills_for_order(&self, order_id: OrderId) -> Vec<BillId> {
+        self.order_bill_ids
+            .get(&order_id)
+            .map_or_else(Vec::new, |ids| {
+                ids.iter()
+                    .copied()
+                    .filter(|bill_id| {
+                        self.bills
+                            .get(bill_id)
+                            .is_some_and(|bill| bill.state == BillState::Open)
+                    })
+                    .collect()
+            })
     }
 
     /// Settles a bill, and moves its table on when nothing else on the order still owes.
@@ -2817,6 +2912,98 @@ impl<S: EventStore> Edge<S> {
         (lines, table_id)
     }
 
+    /// Marks an item sold out (86) at this store (`inventory.item.sold_out`), so every device greys it
+    /// out and the edge refuses a line for it until somebody restores it.
+    ///
+    /// The kitchen runs out mid-service, and the console that publishes the menu is not where anybody
+    /// is standing — so this is an in-store override on top of the published menu's own
+    /// availability, recorded as the event `pos-proto` has always carried for it, with `automatic`
+    /// false: a person decided, not a stock threshold. [`Permission::MarkItemUnavailable`], which a
+    /// cook, a server and a cashier hold by default and which asks for no PIN: running out of
+    /// something is a fact, and it moves no money.
+    ///
+    /// Marking an item already sold out writes nothing, so a device that taps it after another has
+    /// records no second decision. Two taps landing in the same instant can both write, as any
+    /// command here can; the fold is a set, so the item is sold out exactly as it is after one.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if the actor lacks the permission, [`AppError::ItemNotSellable`] if the
+    /// store's menu has no such item, or [`AppError`] if the store cannot be written.
+    pub async fn mark_item_sold_out(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+    ) -> Result<(), AppError> {
+        self.set_item_sold_out(actor, menu_item_id, true).await
+    }
+
+    /// Restores an item staff marked sold out (`inventory.item.restored`). The same permission, the
+    /// same idempotence: restoring an item nobody marked writes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::mark_item_sold_out`].
+    pub async fn restore_item(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+    ) -> Result<(), AppError> {
+        self.set_item_sold_out(actor, menu_item_id, false).await
+    }
+
+    /// Whether staff have marked an item sold out at this store.
+    #[must_use]
+    pub fn item_sold_out(&self, menu_item_id: MenuItemId) -> bool {
+        self.lock_projection().sold_out.contains(&menu_item_id)
+    }
+
+    /// The first of an item and its chosen modifiers that staff have marked sold out, if any.
+    ///
+    /// Every path that adds a line asks this — the table's, the counter's, and a guest's or a
+    /// marketplace's order (`crate::order_in`) — and asks it of the modifiers too: a modifier is an
+    /// item, and the extra cheese runs out as surely as the pizza does.
+    #[must_use]
+    pub fn first_sold_out(
+        &self,
+        menu_item_id: MenuItemId,
+        modifier_menu_item_ids: &[MenuItemId],
+    ) -> Option<MenuItemId> {
+        let projection = self.lock_projection();
+        std::iter::once(&menu_item_id)
+            .chain(modifier_menu_item_ids)
+            .find(|id| projection.sold_out.contains(id))
+            .copied()
+    }
+
+    async fn set_item_sold_out(
+        &self,
+        actor: Actor,
+        menu_item_id: MenuItemId,
+        sold_out: bool,
+    ) -> Result<(), AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::MarkItemUnavailable)?;
+        if self.session().menu.get(menu_item_id).is_none() {
+            return Err(AppError::ItemNotSellable);
+        }
+        if self.item_sold_out(menu_item_id) == sold_out {
+            return Ok(());
+        }
+        if sold_out {
+            let payload = InventoryItemSoldOut {
+                menu_item_id,
+                automatic: false,
+            };
+            self.commit_and_publish(&ctx, &payload).await?;
+        } else {
+            let payload = InventoryItemRestored { menu_item_id };
+            self.commit_and_publish(&ctx, &payload).await?;
+        }
+        self.lock_projection().set_sold_out(menu_item_id, sold_out);
+        Ok(())
+    }
+
     /// Releases a guest's order to the kitchen (`sales.order.confirmed_by_staff`), ADR-0116.
     ///
     /// The order's lines become fireable; nothing else about it changes. Idempotent in the sense
@@ -3462,6 +3649,25 @@ impl<S: EventStore> Edge<S> {
             .map_err(AppError::Port)
     }
 
+    /// When the guests at a table sat down, or `None` when nobody is sitting there.
+    ///
+    /// Read from the id of the order the table holds — a ULID minted at the moment it was seated,
+    /// the reading [ADR-0145](../../../docs/adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)
+    /// makes for retention — rather than from a time stored beside it. Only while somebody is
+    /// sitting there, to be served or to pay: a table waiting to be cleaned has been left.
+    #[must_use]
+    pub fn seated_since(&self, table_id: TableId) -> Option<Timestamp> {
+        if !matches!(
+            self.table_state(table_id),
+            TableState::Occupied | TableState::AwaitingPayment
+        ) {
+            return None;
+        }
+        let order_id = self.lock_projection().order_for_table(table_id)?;
+        let millis = i64::try_from(order_id.as_ulid().timestamp_ms()).ok()?;
+        Timestamp::from_milliseconds_since_epoch(millis).ok()
+    }
+
     /// The current projected state of a table.
     #[must_use]
     pub fn table_state(&self, table_id: TableId) -> TableState {
@@ -3558,6 +3764,83 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// Moves the guests at a table, and the order they are eating from, to a free table
+    /// (`sales.table.transferred`).
+    ///
+    /// Two floor moves, both the table machine's, and one event. The table they left waits to be
+    /// cleared, as it does when guests pay and go; the table they moved to is seated with the order
+    /// they already had: its lines, its tickets in the kitchen, and the time they sat down. Nothing
+    /// is rung again and nothing is fired again. A ticket names its order, and every screen reads
+    /// the order's table from where the order is now.
+    ///
+    /// Only before the bill. A table whose guests have asked for it pays where it sits, which the
+    /// machine enforces by allowing the move from `Occupied` alone. And not while the table's order
+    /// is a guest's submission still waiting for staff (ADR-0116): it took the table over from any
+    /// order a server had started there, and refusing it hands the table back to that order, which
+    /// only works while both are at the table they opened on. Staff decide on it first.
+    ///
+    /// [`Permission::TransferOrder`], which a server holds by default and which asks for no PIN.
+    /// It mints no order, so a replaced machine still moves guests between the tables it is
+    /// draining (ADR-0123).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] if the actor may not move orders, the guests' table is not occupied, or
+    /// the table they move to is not free (their own included); [`AppError::NoOpenOrder`] if the
+    /// table holds no order; [`AppError::AwaitingStaffConfirmation`] as above; or [`AppError`] if
+    /// the store cannot be written.
+    pub async fn transfer_table(
+        &self,
+        actor: Actor,
+        from_table_id: TableId,
+        to_table_id: TableId,
+    ) -> Result<TransferView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let (from_state, to_state, order_id, held) = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(from_table_id);
+            (
+                projection.table_state(from_table_id),
+                projection.table_state(to_table_id),
+                order_id,
+                order_id.is_some_and(|order_id| {
+                    projection.awaits_staff_confirmation(order_id, &session)
+                }),
+            )
+        };
+        let left = decide_table(from_state, TableCommand::Transfer, &ctx)?;
+        let seated = decide_table(to_state, TableCommand::Seat, &ctx)?;
+        let order_id = order_id.ok_or(AppError::NoOpenOrder)?;
+        if held {
+            return Err(AppError::AwaitingStaffConfirmation);
+        }
+
+        let payload = SalesTableTransferred {
+            order_id,
+            from_table_id,
+            to_table_id,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+        {
+            let mut projection = self.lock_projection();
+            projection.set_table(from_table_id, left.next_state);
+            projection.set_table(to_table_id, seated.next_state);
+            projection.move_order(order_id, from_table_id, to_table_id);
+        }
+        Ok(TransferView {
+            order_id,
+            from: TableView {
+                table_id: from_table_id,
+                state: left.next_state,
+            },
+            to: TableView {
+                table_id: to_table_id,
+                state: seated.next_state,
+            },
+        })
+    }
+
     /// The current state of a line, if the edge knows it.
     #[must_use]
     pub fn line_state(&self, order_line_id: OrderLineId) -> Option<OrderLineState> {
@@ -3644,9 +3927,10 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::Domain`] if the line
-    /// names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if the
-    /// modifiers break the item's rules, or [`AppError`] if the store cannot be written.
+    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::BillAlreadyOpen`] once
+    /// a bill is open on its order (that bill would not cover the line), [`AppError::Domain`] if the
+    /// line names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if
+    /// the modifiers break the item's rules, or [`AppError`] if the store cannot be written.
     pub async fn add_line(
         &self,
         actor: Actor,
@@ -3657,16 +3941,34 @@ impl<S: EventStore> Edge<S> {
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
+        // An item staff have marked sold out cannot be ordered, whatever a device still showing it
+        // sends: the till greys it out, and this is where that is enforced.
+        if self
+            .first_sold_out(draft.menu_item_id, &draft.modifier_menu_item_ids)
+            .is_some()
+        {
+            return Err(AppError::ItemNotSellable);
+        }
         let session = self.session();
         Self::check_modifiers(&session, &draft)?;
         // The device priced this line from the session's price book and sends the modifiers' ids,
         // never their names, so the names come from that book (ADR-0144).
         let modifier_display_names =
             Self::modifier_names(&session.menu, &draft.modifier_menu_item_ids);
-        let order_id = self
-            .lock_projection()
-            .order_for_table(table_id)
-            .ok_or(AppError::NoOpenOrder)?;
+        let (order_id, billed) = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(table_id);
+            let billed = order_id.and_then(|id| projection.bill_for_order(id));
+            (order_id, billed.is_some())
+        };
+        let order_id = order_id.ok_or(AppError::NoOpenOrder)?;
+        // A bill names the lines it covers when it opens (ADR-0128 decision 9), so a line rung
+        // after it is on no bill: the guest pays the old total and the line leaves with the table,
+        // unpaid. The counter path has refused this since ADR-0146; the floor refuses it too, and
+        // the way to order more is to void the bill, whose replacement covers every line.
+        if billed {
+            return Err(AppError::BillAlreadyOpen);
+        }
         self.append_line(&ctx, order_id, draft, modifier_display_names)
             .await
     }
@@ -3734,6 +4036,12 @@ impl<S: EventStore> Edge<S> {
         let ctx = self.decision_ctx(actor)?;
         if choice.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
+        }
+        if self
+            .first_sold_out(choice.menu_item_id, &choice.modifier_menu_item_ids)
+            .is_some()
+        {
+            return Err(AppError::ItemNotSellable);
         }
         let session = self.session();
         let (origin, bill, refused) = {
@@ -3965,6 +4273,11 @@ impl<S: EventStore> Edge<S> {
     /// the guest and the figure the bill settles against are one calculation, not two that agree
     /// until a store publishes a second tax class. A table with no open order owes nothing.
     ///
+    /// A table whose bill has been split owes what its **open parts** owe together
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). It used to answer with the
+    /// newest part alone, so a table split two ways quoted half of what it owed until the other half
+    /// was paid.
+    ///
     /// # Errors
     ///
     /// [`AppError::Domain`] if a line's tax class has no configured rate — a configuration error the
@@ -3985,11 +4298,84 @@ impl<S: EventStore> Edge<S> {
         // Bound to a local for the reason the comment above gives, and which I proved by writing it
         // the other way first: `match self.lock_projection()...` holds the guard across the arm,
         // and both arms take it again. The test suite hung rather than failed.
-        let open_bill = self.lock_projection().bill_for_order(order_id);
-        match open_bill {
+        let open_bills = self.lock_projection().open_bills_for_order(order_id);
+        if !open_bills.is_empty() {
+            return self.totals_of_bills(&open_bills);
+        }
+        let settled_bill = self.lock_projection().bill_for_order(order_id);
+        match settled_bill {
             Some(bill_id) => self.bill_totals(bill_id),
             None => self.order_totals(order_id),
         }
+    }
+
+    /// What several bills owe together — the open parts of a split table — each assembled on its
+    /// own and then added up.
+    ///
+    /// Added rather than assembled again over all their lines at once, because each part computes
+    /// its own tax and its own rounding (ADR-0128 decision 4): what the table will be asked for is
+    /// the sum of what each guest is asked for. The tax lines are listed part by part rather than
+    /// merged per class, for the same reason — a merged line would be a figure no bill computed.
+    fn totals_of_bills(&self, bill_ids: &[BillId]) -> Result<BillTotals, AppError> {
+        let mut sum = Self::nothing_owed(self.session().currency);
+        for bill_id in bill_ids {
+            let part = self.bill_totals(*bill_id)?;
+            sum.subtotal = sum
+                .subtotal
+                .checked_add(part.subtotal)
+                .map_err(DomainError::from)?;
+            sum.discount_total = sum
+                .discount_total
+                .checked_add(part.discount_total)
+                .map_err(DomainError::from)?;
+            sum.comp_total = sum
+                .comp_total
+                .checked_add(part.comp_total)
+                .map_err(DomainError::from)?;
+            sum.service_charge = sum
+                .service_charge
+                .checked_add(part.service_charge)
+                .map_err(DomainError::from)?;
+            sum.tax_total = sum
+                .tax_total
+                .checked_add(part.tax_total)
+                .map_err(DomainError::from)?;
+            sum.rounding_adjustment = sum
+                .rounding_adjustment
+                .checked_add(part.rounding_adjustment)
+                .map_err(DomainError::from)?;
+            sum.total_due = sum
+                .total_due
+                .checked_add(part.total_due)
+                .map_err(DomainError::from)?;
+            sum.tax_lines.extend(part.tax_lines);
+        }
+        Ok(sum)
+    }
+
+    /// One bill read back: its state, the lines it covers and what they come to
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
+    ///
+    /// The read a split needs. Once a table's bill is split, the table-keyed check answers for the
+    /// table as a whole, and each guest at the till is asking about **their** part — so the till
+    /// reads the part it is about to settle, by its id, from the same arithmetic the settle runs.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if a line's tax class has no
+    /// configured rate.
+    pub fn bill_check(&self, bill_id: BillId) -> Result<BillCheckView, AppError> {
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        let order_line_ids = self.covered_lines(&bill);
+        let totals = self.bill_totals(bill_id)?;
+        Ok(BillCheckView {
+            state: bill.state,
+            order_line_ids,
+            totals,
+        })
     }
 
     /// What a **bill** owes: its order's lines, less what has been taken off it.
@@ -4143,6 +4529,7 @@ impl<S: EventStore> Edge<S> {
                     order_id,
                     table_id: projection.table_for_order(order_id),
                     bill_id: projection.bill_for_order(order_id),
+                    open_bill_ids: projection.open_bills_for_order(order_id),
                     lines: projection
                         .identified_lines_for_order(order_id)
                         .into_iter()
@@ -4160,6 +4547,7 @@ impl<S: EventStore> Edge<S> {
                 order_id: order.order_id,
                 table_id: order.table_id,
                 bill_id: order.bill_id,
+                open_bill_ids: order.open_bill_ids,
                 lines: order
                     .lines
                     .into_iter()
@@ -5214,6 +5602,19 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Replays guests moving to another table: the table they left waits to be cleared, and the one
+    /// they moved to is seated with their order ([`Edge::transfer_table`]).
+    fn fold_transfer(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesTableTransferred = envelope.data.decode().map_err(AppError::Encode)?;
+        projection.set_table(event.from_table_id, TableState::NeedsCleaning);
+        projection.set_table(event.to_table_id, TableState::Occupied);
+        projection.move_order(event.order_id, event.from_table_id, event.to_table_id);
+        Ok(())
+    }
+
     fn fold(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
@@ -5235,6 +5636,7 @@ impl<S: EventStore> Edge<S> {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_table(event.table_id, TableState::Free);
             }
+            EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
                     envelope.data.decode().map_err(AppError::Encode)?;
@@ -5316,7 +5718,26 @@ impl<S: EventStore> Edge<S> {
                     envelope.data.decode().map_err(AppError::Encode)?;
                 projection.mark_bumped(&event.order_line_ids);
             }
+            EventType::InventoryItemSoldOut | EventType::InventoryItemRestored => {
+                Self::fold_sold_out(projection, envelope, known)?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// An item staff marked sold out, or brought back: the in-store 86 a restart must keep.
+    fn fold_sold_out(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::InventoryItemSoldOut {
+            let event: InventoryItemSoldOut = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_sold_out(event.menu_item_id, true);
+        } else {
+            let event: InventoryItemRestored = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.set_sold_out(event.menu_item_id, false);
         }
         Ok(())
     }
@@ -7637,5 +8058,33 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the merge returned rather than deadlocking on the projection lock");
         assert!(merged, "the merge succeeds");
+    }
+
+    #[test]
+    fn a_roster_is_ready_for_sign_in_once_someone_has_an_id_and_a_pin() {
+        use super::{StaffAuth, StaffRoster};
+        use pos_core::permission::PermissionSet;
+
+        let member = |employee_id: Option<u128>, pin_phc: Option<&str>| StaffAuth {
+            employee_id: employee_id.map(|id| EmployeeId::new(Ulid::from_u128(id))),
+            permissions: PermissionSet::default(),
+            discount_ceiling: None,
+            pin_phc: pin_phc.map(str::to_owned),
+        };
+        let mut roster = StaffRoster::new();
+        assert!(
+            !roster.sign_in_ready(),
+            "a roster nobody published signs nobody in"
+        );
+
+        roster.insert("1001", member(Some(1), None));
+        roster.insert("1002", member(None, Some("$argon2id$v=19$stand-in")));
+        assert!(
+            !roster.sign_in_ready(),
+            "a member with no PIN, or with no id, cannot sign in either"
+        );
+
+        roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
+        assert!(roster.sign_in_ready());
     }
 }

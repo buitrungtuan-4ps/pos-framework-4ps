@@ -618,6 +618,55 @@ async fn the_open_shift_is_readable_by_a_device_that_reloads() {
     assert_eq!(after, Value::Null, "a closed shift is not the current one");
 }
 
+/// A line rung onto a table after its bill opened is refused, and says why in the header a till
+/// translates: the bill named its lines when it opened, so the new one would be on no bill and
+/// leave with the table unpaid.
+#[tokio::test]
+async fn a_line_after_the_bill_is_refused_and_the_bill_is_unchanged() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(701));
+    let lines = format!("/api/tables/{table}/lines");
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(app.clone(), &token, "POST", &lines, Some(a_line_body())).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", &lines, Some(a_line_body())).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("BILL_ALREADY_OPEN"));
+
+    let (status, check) = send(
+        app,
+        &token,
+        "GET",
+        &format!("/api/tables/{table}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        check["total_due"]["amount_minor"], 165_000,
+        "one pizza and its tax, as when the bill opened"
+    );
+}
+
 #[tokio::test]
 async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
     let (app, token) = app().await;

@@ -168,6 +168,53 @@ the install continues: the service runs either way, and it is the port that need
 `POS_EDGE_CONFIG` and the store key go in the service's own registry key, not in a machine-wide
 variable — the next section says why.
 
+### Read the summary it ends with
+
+The installer ends with **`pos-edge setup summary`**: one line per thing that can leave a store
+unreachable, each `ok`, `note`, `WARN` or `FAIL` and each saying what to do. Nothing in it fails the
+install. The service is registered either way, and most of these are fixed on the PC, not by running
+the installer again.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `ok pos-edge X is answering on port P for store S` | The store is up, on release X. | Nothing. |
+| `ok upgraded from X to Y` | The PC ran an older release than the one-file installer carries, so the installer put its own in place, through the edge's update steps (below). X stays beside it as `bin\previous`. | Nothing. |
+| `WARN could not put Y in place of X…` | The carried release failed its self-test on this PC, or a file could not be written. X still runs. | The edge's reason is on the line. `pos-edge.exe --self-test` in the state directory shows a self-test failure. The release can still reach the PC over the air. |
+| `note Y was put in place of X just now and is on trial…` | The new release has not answered yet. If it cannot start three times, the service puts X back by itself. | The log lines above say why Y did not start. Run the installer again after two minutes to see which release answers. |
+| `note this PC already had pos-edge and runs X…` | A re-run keeps the binary the edge runs when the installer's release is not newer, so an older installer never downgrades a shop that updated itself over the air. It is also kept when the old process was not answering as the installer started, because its release was unknown. The installer's copy then goes to `pos-edge.exe`, the rescue copy, only. | Do what the line says: run the installer again, or roll the newer release out from the console's OTA screen. |
+| `FAIL port P is already in use by NAME (PID n)` | Another program listens on the store's port, so the edge cannot. | Stop that program, or give the store another port. |
+| `FAIL nothing answered on port P within 30 seconds` | The edge did not come up. The installer prints the last 20 lines of `pos-edge.log` above the summary. | The first error in those lines is the cause. |
+| `FAIL port P is answered by pos-edge X for store T` | A different store's edge holds the port, typically a copy started by hand. | Stop it, then `sc.exe start pos-edge`. |
+| `FAIL sc.exe start pos-edge failed with code N` | The Service Control Manager refused the start. | The message after the code says why, for example 1058 when the service is disabled. |
+| `WARN the old pos-edge process did not stop within 60 seconds` | A re-run could not restart the service cleanly. | If it is not running afterwards: `sc.exe start pos-edge`. |
+| `WARN network 'N' is Public` | Windows puts a network it has not been told about on **Public**, and the firewall rule is on Private only, so no till can reach the PC. This is the likeliest cause of every till failing to connect to a healthy store. Only the adapters a till can reach the PC through, those with a default gateway, are checked: a VPN adapter on Public is as it should be. When no adapter has one, every network is. | Run the `Set-NetConnectionProfile` command the line gives, or open Settings → Network → Properties → **Private**. |
+| `WARN network 'N' is a domain network` | The installer leaves domain firewall rules to group policy. | Allow the port there. |
+| `FAIL cannot reach the cloud at URL` | Activation needs HTTPS to the cloud. | Check the connection, a proxy or a firewall. |
+| `WARN this PC's clock is N minutes away from the cloud's` | TLS and activation fail on a clock that is far off. | Settings → Time & language → **Sync now**. |
+| `WARN no network adapter with a default gateway is up` | Nothing on the shop LAN can reach the PC yet. | Connect it to the shop network, then read `pairing-url.txt` again. |
+
+**A re-run carrying a newer release puts it in place.** Before it stops the service, the one-file
+installer asks `/healthz` which release this store runs. If its own release is newer, it runs
+`pos-edge.exe promote` from its rescue copy once the service has stopped. That takes the steps an
+over-the-air install takes: back up the database, stage the binary beside `current`, run it as
+`--self-test`, and commit, which leaves the outgoing release as `bin\previous` and the new one on
+trial. The installer ends the trial when the new release answers `/healthz`. If it never does, the
+service puts the old one back after three failed starts, as it would after a bad update. A release
+that is older or equal is never put in place, and neither is one when the old process did not
+answer, or answered for another store. The console's downloadable script passes no release of its
+own, so it always keeps the binary.
+
+**The pairing URL it prints is one a device can open.** The edge writes only `/pair?code=NNNNNN` when
+it cannot name its own address (it listens on every interface and no `advertised_ip` is set), so the
+installer completes it with each of the PC's addresses that has a default gateway. On a re-run it
+deletes the previous process's `pairing-url.txt` before the start, so the code it prints is the one
+the new process minted. It then waits for `/healthz` before it opens `/setup`: the service reports
+`RUNNING` before the edge has opened its store and bound the port. The edge itself writes the pairing
+file only after it has bound the port, so a box that cannot bind writes no code at all.
+
+`dashboard/scripts/installer-behaviour.ps1` runs the installer against a fake Windows for each of the
+cases above, and the `dashboard` CI job runs it on every pull request.
+
 ### The byte-order mark is not decoration
 
 Both `.ps1` files here start with a UTF-8 BOM, and the generator puts it there deliberately

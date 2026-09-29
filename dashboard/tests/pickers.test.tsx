@@ -134,8 +134,11 @@ describe("the single-choice picker", () => {
       options[1].scrollIntoView = scrollSpy;
     }
 
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[1]?.id);
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect(onChange).toHaveBeenCalledWith("i2");
@@ -232,9 +235,14 @@ describe("the multi-choice picker", () => {
       options[2].scrollIntoView = scrollSpy;
     }
 
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[0]?.id);
+
     fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[1]?.id);
+
     fireEvent.keyDown(search, { key: "ArrowDown" });
     expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" });
+    expect(search.getAttribute("aria-activedescendant")).toBe(options[2]?.id);
 
     fireEvent.keyDown(search, { key: "Enter" });
     expect([...values()]).toEqual(["i3"]);

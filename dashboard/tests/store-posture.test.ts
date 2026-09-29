@@ -12,7 +12,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { configVerdict, neverInstalled, onlineVerdict, type StoreFacts } from "../src/lib/posture";
+import type { DailyRollup } from "../src/api/types";
+import {
+  configVerdict,
+  neverInstalled,
+  onlineVerdict,
+  stockAnswer,
+  type StoreFacts,
+} from "../src/lib/posture";
 
 /** A store that has never once checked in: created in the console, not yet installed. */
 const PROVISIONED: StoreFacts = {
@@ -99,5 +106,48 @@ describe("configVerdict", () => {
 
   it("reads a matching store as up to date", () => {
     expect(configVerdict(reporting())).toEqual({ headline: "hub.config.current", tone: "ok" });
+  });
+});
+
+/** A trading day's activity rollup carrying only the counts a case names. */
+function day(business_date: string, by_type: Record<string, number> = {}): DailyRollup {
+  return { business_date, total_events: 0, by_type };
+}
+
+// The Out of stock card, once tills mark items sold out (the edge's 86). A zero is a measurement
+// only from a store whose tills mark; from one that never has, it is a zero nobody measured.
+describe("stockAnswer", () => {
+  it("has nothing to say before a trading day reaches the cloud", () => {
+    expect(stockAnswer([])).toEqual({ kind: "no_day" });
+  });
+
+  it("counts the newest day's items marked out and not brought back", () => {
+    const days = [
+      day("2026-09-24"),
+      day("2026-09-25", { "inventory.item.sold_out": 3, "inventory.item.restored": 1 }),
+    ];
+    expect(stockAnswer(days)).toEqual({ kind: "out", count: 2, business_date: "2026-09-25" });
+  });
+
+  it("gives no zero for a store whose tills have marked nothing in the window", () => {
+    // An edge too old to mark reports exactly this, and so does a kitchen that never marks.
+    expect(stockAnswer([day("2026-09-24"), day("2026-09-25")])).toEqual({ kind: "never_marked" });
+  });
+
+  it("gives a real zero once the store's tills are seen marking", () => {
+    const days = [
+      day("2026-09-20", { "inventory.item.sold_out": 1 }),
+      day("2026-09-25", { "cash.shift.opened": 1 }),
+    ];
+    expect(stockAnswer(days)).toEqual({ kind: "none_out", business_date: "2026-09-25" });
+  });
+
+  it("reads a day that brought back more than it marked as none out, not a negative", () => {
+    // Marked yesterday, restored today: today's net is below zero, and nothing marked today is out.
+    const days = [
+      day("2026-09-24", { "inventory.item.sold_out": 2 }),
+      day("2026-09-25", { "inventory.item.restored": 2 }),
+    ];
+    expect(stockAnswer(days)).toEqual({ kind: "none_out", business_date: "2026-09-25" });
   });
 });

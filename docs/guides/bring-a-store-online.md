@@ -356,8 +356,11 @@ stores of a brand skip most of this step.
 **The permissions node is not optional and neither is the menu.** A freshly installed store boots with
 an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the
 same `401` as a wrong PIN — there is no roster to check the PIN against — and without a menu there is
-nothing to price. That is why this step is ahead of Step 5 rather than after it: a reader who tries to
-sell first finds a till that refuses every cashier and no error that says why.
+nothing to price. That is why this step is ahead of Step 5 rather than after it. The sign-in screen
+says so when nobody on the store has a PIN (`sign_in_ready` on `GET /api/session` is `false`): *nobody
+can sign in on this store yet*, with the steps in **People** — set the PIN, assign the person to the
+store, **Publish to store**. The staff code and PIN a cashier types are the ones set there, not a
+console login.
 
 Watch the box take it: *Reading the boot log* above shows the pull. The interval is 30 seconds, so a
 publish reaches a healthy store inside a minute.
@@ -367,8 +370,11 @@ publish reaches a healthy store inside a minute.
 Open the store UI from a device on the same LAN. It needs the pairing URL, and on a store server there
 is no screen to read it off — so read it from the box:
 
-* **Windows** — `Get-Content C:\ProgramData\pos-edge\pairing-url.txt`. The Windows installer also
-  prints it before it exits.
+* **Windows** — the installer prints it before it exits, completed with the PC's LAN address, above
+  a summary of everything that can stop a till reaching the store (`deploy/edge/README.md`, *Read
+  the summary it ends with*). Later, read it with
+  `Get-Content C:\ProgramData\pos-edge\pairing-url.txt`: if it holds only `/pair?code=…`, put
+  `http://<the PC's IPv4 address, from ipconfig>:8787` in front.
 * **Linux** — `journalctl -u pos-edge | grep pair`.
 
 Either way it is `http://<ip>:8787/pair?code=NNNNNN` (or `https://<host>/pair?code=NNNNNN` on a store
@@ -380,7 +386,8 @@ a table, ring up an item. **Unplug the network — it keeps working.**
 > **The boot code pairs the first device. After that, mint from inside the store.**
 >
 > The boot code is minted once when the process starts, lives **five minutes**, and is single-use;
-> redeeming it deletes the file. For the **second and every later** device you do not restart
+> redeeming it deletes the file. A code that is wrong, spent or expired is refused on the pairing
+> screen with where the next one comes from — the two ways below. For the **second and every later** device you do not restart
 > anything: on a till that is already paired, with a **manager signed in**, open **Devices** in the
 > top bar and choose *Get a pairing code*. The six digits appear on screen, along with the URL to
 > open on the new tablet and the same URL as a **QR code** for its camera

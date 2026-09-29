@@ -136,7 +136,9 @@ pub fn from_arguments(arguments: &[String]) -> Result<InstallTarget, InstallInpu
 /// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)),
 /// so the script's `-AskSyncKey` prompt, which ADR-0141 added, is no longer passed. The switch stays on
 /// the script for anyone who still wants a store key. `-OpenSetup` makes it open the activation screen
-/// when the service is up, which is the next step and the only one left.
+/// when the service is up, which is the next step and the only one left. `-CarriedVersion` is this
+/// binary's release: a re-run keeps the binary the edge already runs, and the script's summary names
+/// both, so a technician sees that the PC still runs an older release and how to move it on.
 #[must_use]
 pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = [
@@ -160,6 +162,8 @@ pub fn installer_arguments(script: &Path, binary: &Path, target: &InstallTarget)
     // The script writes this into config.toml as given; `Url` adds a trailing slash to a bare
     // origin, which the edge's own URL handling does not want doubled.
     arguments.push(target.cloud_url.as_str().trim_end_matches('/').into());
+    arguments.push("-CarriedVersion".into());
+    arguments.push(crate::VERSION.into());
     arguments.push("-OpenSetup".into());
     arguments
 }
@@ -219,6 +223,58 @@ fn cloud_from_host(host: &str) -> Result<url::Url, InstallInputError> {
 /// cloud transport refuses any other scheme — on a loopback address too.
 fn acceptable_cloud(url: &url::Url) -> bool {
     url.scheme() == "https" && url.host_str().is_some()
+}
+
+/// The subcommand the installer script runs from the copy of the release it carries, with the
+/// service stopped, to put that release in place of an older one
+/// ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md) Amendment 1).
+pub const PROMOTE_COMMAND: &str = "promote";
+
+/// `pos-edge promote` puts this program in place as the store's next version, through the steps an
+/// over-the-air install takes ([`SystemdInstaller::promote`](crate::SystemdInstaller::promote)).
+///
+/// The store is found the way the service finds it, from the configuration at `config_path`, and
+/// the version files sit beside its database. The bytes are this program's own, so what goes in is
+/// exactly what the installer carried.
+///
+/// # Errors
+///
+/// [`crate::EdgeError::Install`] when the configuration cannot be read, the box has no installed
+/// version, a file could not be written, or these bytes failed `--self-test` on this box. The
+/// message says which, and whether the release already installed is still the one that runs.
+pub fn promote(config_path: &Path) -> Result<(), crate::EdgeError> {
+    use crate::EdgeError;
+    use crate::installer::{Promotion, SystemdInstaller, binary_directory};
+
+    let config = crate::EdgeConfig::load(config_path)?;
+    let installer = SystemdInstaller::new(
+        binary_directory(&config.store_path),
+        config.store_path.clone(),
+    );
+    let binary = std::env::current_exe()
+        .map_err(|error| EdgeError::Install(format!("cannot find this program's path: {error}")))?;
+    let bytes = std::fs::read(&binary).map_err(|error| {
+        EdgeError::Install(format!("cannot read {}: {error}", binary.display()))
+    })?;
+    match installer.promote(&bytes) {
+        Ok(Promotion::Committed) => {
+            tracing::info!(
+                version = crate::VERSION,
+                "installed in place of the previous release, which stays beside it as bin/previous; \
+                 after three failed starts the service puts that one back by itself"
+            );
+            Ok(())
+        }
+        Ok(Promotion::FailedSelfTest) => Err(EdgeError::Install(format!(
+            "pos-edge {} failed its self-test on this PC, so the release already installed was \
+             kept; run pos-edge.exe --self-test to see why",
+            crate::VERSION
+        ))),
+        Err(error) => Err(EdgeError::Install(format!(
+            "could not put pos-edge {} in place: {error}",
+            crate::VERSION
+        ))),
+    }
 }
 
 /// Runs the install: elevate if needed, then the embedded script.
@@ -447,6 +503,7 @@ mod tests {
             Some("C:\\Downloads\\setup.exe")
         );
         assert!(arguments.iter().any(|argument| argument == "-OpenSetup"));
+        assert_eq!(after("-CarriedVersion").as_deref(), Some(crate::VERSION));
         assert!(
             !arguments.iter().any(|argument| argument == "-AskSyncKey"),
             "the activation code is the only secret a technician handles (ADR-0143)"

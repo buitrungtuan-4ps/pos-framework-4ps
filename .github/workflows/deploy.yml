@@ -25,6 +25,13 @@ name: deploy
 #                     by every other mode. bootstrap.sh refuses that mode without it rather than
 #                     falling back to a challenge that cannot answer for a DNS-only record.
 #
+# Optional GitHub variable (a variable, not a secret: a repository name is not confidential):
+#   RELEASE_SOURCE_REPOSITORY  the `owner/name` the console's Fetch from the release button reads
+#                     (ADR-0088 Amendment 4). Unset means this repository when it is public and
+#                     nothing when it is not; a private one also needs a token, which bootstrap.sh
+#                     is never handed, so its operator adds the block by hand
+#                     (docs/deploy-runbook.md).
+#
 # reset_admin=true is the break-glass (ADR-0045): after bring-up it clears the super-admin and
 # every session on the box, so the operator can re-enrol at /admin/setup. It — and every
 # deploy — runs through the `production` Environment, whose required reviewer is the second
@@ -179,20 +186,32 @@ jobs:
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           CF_DNS_API_TOKEN: ${{ secrets.CF_DNS_API_TOKEN }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
+          # `visibility == 'public'` rather than `!private`, so a payload without the field reads
+          # as "not public" and writes nothing.
+          RELEASE_SOURCE_REPOSITORY: ${{ vars.RELEASE_SOURCE_REPOSITORY || (github.event.repository.visibility == 'public' && github.repository) || '' }}
         run: |
           port="${VPS_PORT:-22}"
           ssh_opts="-i $HOME/.ssh/id_deploy -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
           target="${VPS_USER}@${VPS_HOST}"
           tag="${GITHUB_SHA}"
+          # It is quoted into the remote command line below, so only `owner/name` is let through;
+          # bootstrap.sh checks it again before it writes anything.
+          if [ -n "$RELEASE_SOURCE_REPOSITORY" ] &&
+            ! [[ "$RELEASE_SOURCE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::warning::RELEASE_SOURCE_REPOSITORY is not owner/name; the console fetch stays unconfigured"
+            RELEASE_SOURCE_REPOSITORY=""
+          fi
           # Uses the images just loaded (POS_BOOTSTRAP_NO_BUILD=1 so the box never rebuilds from
           # source). CADDY_IMAGE was chosen per-TLS_MODE in "Build the images" (the plugin image
           # only for acme-dns01, stock caddy otherwise) and carried via $GITHUB_ENV.
           # bootstrap.sh keeps every generated secret, so a redeploy does not rotate them; TLS_MODE
           # and DOMAIN are supplied configuration, so changing either here does take effect.
+          # RELEASE_SOURCE_REPOSITORY is written once and then kept, token and all (step 2c).
           ssh -p "$port" $ssh_opts "$target" \
             "cd ~/pos-cloud/deploy && chmod +x bootstrap.sh reset-admin.sh tls-export.sh && \
              DOMAIN='${DOMAIN}' TLS_MODE='${TLS_MODE}' ACME_EMAIL='${ACME_EMAIL}' \
              CF_DNS_API_TOKEN='${CF_DNS_API_TOKEN}' \
+             RELEASE_SOURCE_REPOSITORY='${RELEASE_SOURCE_REPOSITORY}' \
              POS_CLOUD_IMAGE='pos-cloud:${tag}' CADDY_IMAGE='${CADDY_IMAGE}' POS_BOOTSTRAP_NO_BUILD=1 \
              ./bootstrap.sh"
 

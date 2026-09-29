@@ -1,9 +1,15 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo } from "solid-js";
 
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
-import { bump, firedLines, type KitchenLine } from "../state/store";
+import {
+  bump,
+  firedLines,
+  queueNumberFor,
+  refreshQueueNumbers,
+  type KitchenLine,
+} from "../state/store";
 
 interface TableGroup {
   orderId: string;
@@ -40,6 +46,22 @@ export function Expo() {
     );
   });
 
+  // A counter order is called by the guest's number, as on the kitchen board (see `Kds.tsx`).
+  createEffect(() => {
+    const counter = groups()
+      .filter((group) => group.label === "")
+      .map((group) => group.orderId);
+    if (counter.some((orderId) => queueNumberFor(orderId) === undefined)) {
+      void refreshQueueNumbers(counter);
+    }
+  });
+  const counterLabel = (orderId: string) => {
+    const number = queueNumberFor(orderId);
+    return number === undefined
+      ? t("kds.counter_order", { ref: orderId.slice(-4) })
+      : t("counter.queue_number", { number });
+  };
+
   const runAway = (lines: KitchenLine[]) => {
     const [first] = lines;
     if (first === undefined) {
@@ -67,7 +89,7 @@ export function Expo() {
             <div class="rounded-token border border-line bg-surface-raised p-4">
               <p class="text-lg font-semibold">
                 {group.label === ""
-                  ? t("kds.counter_order", { ref: group.orderId.slice(-4) })
+                  ? counterLabel(group.orderId)
                   : t("common.table", { label: group.label })}
               </p>
               <ul class="mt-2 flex flex-col gap-1">

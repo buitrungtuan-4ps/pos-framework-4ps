@@ -6,12 +6,12 @@ state's wire token, or `·` when the trigger is not valid in that state.
 
 ### `table`
 
-| state | seat | request_bill | settle | clean |
-|---|---|---|---|---|
-| `TABLE_STATE_FREE` | `TABLE_STATE_OCCUPIED` | · | · | · |
-| `TABLE_STATE_OCCUPIED` | · | `TABLE_STATE_AWAITING_PAYMENT` | · | · |
-| `TABLE_STATE_AWAITING_PAYMENT` | · | · | `TABLE_STATE_NEEDS_CLEANING` | · |
-| `TABLE_STATE_NEEDS_CLEANING` | · | · | · | `TABLE_STATE_FREE` |
+| state | seat | request_bill | settle | clean | transfer |
+|---|---|---|---|---|---|
+| `TABLE_STATE_FREE` | `TABLE_STATE_OCCUPIED` | · | · | · | · |
+| `TABLE_STATE_OCCUPIED` | · | `TABLE_STATE_AWAITING_PAYMENT` | · | · | `TABLE_STATE_NEEDS_CLEANING` |
+| `TABLE_STATE_AWAITING_PAYMENT` | · | · | `TABLE_STATE_NEEDS_CLEANING` | · | · |
+| `TABLE_STATE_NEEDS_CLEANING` | · | · | · | `TABLE_STATE_FREE` | · |
 
 ### `order`
 

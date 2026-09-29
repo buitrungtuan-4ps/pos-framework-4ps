@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { argv, exit } from "node:process";
+import { argv, exit, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -568,6 +568,44 @@ if (emitFlag === -1 && !existsSync(APPLIANCE)) {
   }
 }
 
+// Behaviour, not only syntax. A script that parses can still print the previous process's pairing
+// code, open the setup page before the store listens, or hand a till a URL with no address — all
+// three reached a shop PC. `installer-behaviour.ps1` runs the checked-in Windows template against a
+// fake Windows, one scenario per failure a technician can meet, and checks what it tells them.
+// PowerShell 7 runs it on any OS and every GitHub-hosted runner has it; without `pwsh` this says so
+// rather than passing quietly. Never on Windows, where a command a scenario forgot to fake would be
+// the real one, and never under `--emit`, whose only job is to hand files to the parsers.
+let behaviourChecked = false;
+if (templatesChecked && emitFlag === -1 && platform !== "win32") {
+  let pwsh = true;
+  try {
+    execFileSync("pwsh", ["-NoProfile", "-Command", "exit 0"], { stdio: "ignore" });
+  } catch {
+    pwsh = false;
+  }
+  if (pwsh) {
+    try {
+      execFileSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-File",
+          fileURLToPath(new URL("./installer-behaviour.ps1", import.meta.url)),
+          "-Script",
+          fileURLToPath(new URL("../../deploy/edge/install-pos-edge.ps1", import.meta.url)),
+        ],
+        { stdio: "inherit" },
+      );
+      behaviourChecked = true;
+    } catch {
+      console.error("✗ the Windows installer's behaviour scenarios failed (see above)");
+      failures += 1;
+    }
+  } else {
+    console.log("— skipping the Windows installer's behaviour scenarios: pwsh is not on the PATH.");
+  }
+}
+
 if (failures > 0) {
   console.error(
     `\n${failures} artifact(s) failed. These run as root on a store's only till; a parse error here is a shop that does not open.`,
@@ -580,6 +618,7 @@ if (emitFlag !== -1) {
 } else {
   console.log(
     `installer syntax: ${CASES.length} case(s) ok` +
-      (applianceChecked > 0 ? `, ${applianceChecked} appliance script(s) ok` : ""),
+      (applianceChecked > 0 ? `, ${applianceChecked} appliance script(s) ok` : "") +
+      (behaviourChecked ? ", the Windows installer's behaviour ok" : ""),
   );
 }

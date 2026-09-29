@@ -16,7 +16,286 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Security
+
+- **SSRF protection in webhook URL classification now checks IPv4-mapped IPv6 addresses across all prefixes.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects IPv4-mapped interface identifiers (`<prefix>:0:ffff:a.b.c.d` and `<prefix>:ffff:ffff:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via IPv4-mapped addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
+
+- **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects SIIT IPv4-translated interface identifiers (`<prefix>:ffff:0:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via SIIT translated addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
+
+- **Refuse IPv4 special-purpose ranges 192.0.0.0/24 and 192.88.99.0/24 in webhook SSRF filter.**
+  `classify_v4` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies RFC 6890 IETF Protocol Assignments / DS-Lite (`192.0.0.0/24`) and 6to4 Relay Anycast (`192.88.99.0/24`) as `ForbiddenReason::Reserved`, preventing SSRF bypasses to those special-purpose ranges. **Upgrade note:** none.
+
+- **SSRF protection in webhook URL classification now checks 6over4 / IPv4-compatible interface IDs**
+  ([crates/pos-cloud/src/webhook/ssrf.rs]). Prevents SSRF bypasses using 6over4 / IPv4-compatible
+  interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
+
+### Changed
+
+- **ComboboxField and MultiComboboxField combobox active option accessibility.**
+  Added `aria-activedescendant` to search inputs in `ComboboxField` and `MultiComboboxField` in `dashboard/src/components/ui.tsx` to announce active option focus to screen reader users during keyboard navigation.
+
+- **On a tablet the order screen shows the menu, and the bill slides up.** `docs/ui-ux.md` §1
+  asks a tablet for "large item grid, bill slides up". A tablet was drawn like a phone instead, with
+  the bill first and the menu under it, so a server scrolled past everything already ordered to reach
+  the next dish.
+  - The menu is now the screen, three dishes across.
+  - The bill waits in a bar at the bottom: how many dishes, and what they come to. The seat row and
+    **Send** and **Take payment** sit under it, side by side, so sending and paying stay one tap from
+    the menu.
+  - A tap on the bar slides the whole bill up over the menu, and another closes it.
+  - A phone on its side is as wide as a tablet and gets the same. A phone upright and a terminal are
+    unchanged.
+
+  Docs: `docs/ui-ux.md` §1 principle 9.
+
+- **The store hub's "Out of stock" card counts what the tills mark sold out.** It said stores do not
+  report sold-out items, which stopped being true when staff could mark them at the till.
+  - It shows the newest trading day's items marked sold out and not brought back, as before, and now
+    a real `0` when none are.
+  - A store whose tills have marked nothing in the last 30 trading days shows an em dash and says so.
+    Its edge may be too old to mark, or its kitchen may not mark; either way a zero would not have
+    been measured.
+  - The hub's activity read covers those 30 days instead of one; every other card still reads the
+    newest day.
+
+  Docs: `docs/production-readiness.md` O5.
+
+- **Tabs component keyboard navigation enhanced with Home and End keys.**
+  The `Tabs` UI component in the dashboard now supports `Home` and `End` keys to quickly jump to the first and last tabs, adhering to the WAI-ARIA tablist accessibility pattern.
+
+- **Command Palette combobox active option accessibility.**
+  Added `aria-activedescendant` to the command palette combobox input in the dashboard to convey active option focus to screen reader users during keyboard navigation.
+
+- **Memoize active areas and subcategories in console.**
+  `activeAreas` in `dashboard/src/screens/Floor.tsx` and active subcategory lookups in `dashboard/src/screens/Layout.tsx` are now memoized with `createMemo` to avoid redundant array filtering and $O(N)$ scans on re-renders.
+
+- **Memoize unfired lines and course waiting counts on the order screen.**
+  `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
+
+- **Memoize menu item captions in KDS sold-out item search.**
+  `captions` in `ui/src/screens/Kds.tsx` is now memoized with `createMemo` so filtering sold-out items on input keystrokes compares pre-folded display names rather than re-running NFD normalization and regex replaces $N$ times per keystroke.
+
+### Fixed
+
+- **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
+  A bill names the dishes it covers when it opens, so a dish added afterwards was on no bill. The
+  guest paid the old total, the dish disappeared from the table when it was cleared, and nobody was
+  charged for it. The counter already refused this; a table now does too.
+  - The edge answers `409 BILL_ALREADY_OPEN` for `POST /api/tables/{id}/lines` once a bill is open
+    on the table's order, and writes nothing.
+  - The order screen locks its menu while the bill is open and says how to order more: **Take
+    payment**, **Void this bill** (a manager's PIN and a reason), then back to the order. The next
+    bill covers every dish.
+  - Changing the quantity of a dish already on the bill, or voiding it, is unchanged: the bill's
+    total follows the dish.
+
+  Docs: `docs/pos-spec.md` §5, `docs/ui-ux.md` §3 (order).
+
+- **On a phone or a tablet, a dish's choices open on screen.** Below a terminal the menu is under the
+  bill, and the choices a dish needs (a pizza's size) opened in the bill's column, wherever the bill
+  ended. A long menu, or a screen on its side, put them out of sight, so a server tapped the pizza
+  and saw nothing happen.
+  - They open as a sheet from the bottom of the screen now, where the thumb that tapped is.
+  - The choices scroll inside the sheet, and **Add** and **Cancel** stay under them.
+  - The page behind is washed out, and a tap on it cancels.
+  - A refusal shows inside the sheet, beside **Add**.
+  - A terminal, which draws the bill beside the menu, is unchanged.
+
+  Docs: `docs/ui-ux.md` §3 (order).
+
+- **A counter order on the kitchen board and the pass is called by the guest's number.** Both
+  screens headed a counter ticket with the last four characters of the order's internal id ("Counter
+  order …7K3Q"), which nobody at the counter could match to a guest holding a number. They now show
+  "No. 12". The number is read from the counter list for the counter orders on the board, kept only
+  for those, and asked for again at most every five seconds while one is missing. Docs:
+  `docs/ui-ux.md` §3 (what `/kds` does today).
+- **Screens the till review found broken.** Docs: `docs/ui-ux.md` §1 (principle 9), §2 (on-screen
+  keyboard), §3.
+  - **Guest orders** (`/guests`, QR orders held for staff). The screen's classes were defined
+    nowhere, so it rendered unstyled; each card was headed with the table's id instead of its floor
+    label; and the queue loaded once, so an order placed after the screen opened sat unseen. It is
+    now styled like the rest of the till, shows the floor label, and reloads every 15 seconds while
+    open.
+  - **Today** named the shift by its lower-cased wire token, in English on a Vietnamese till. It now
+    uses the status bar's own sentences.
+  - **Before anyone signs in**, the status bar no longer offers destinations or **Sign out**, each of
+    which only bounced back to sign-in.
+  - **Sign-in on a terminal** sets the fields beside the pad. Stacked, the pad's digit row sat below
+    the fold of a 1366×768 till.
+  - **Touch targets.** The line's **Void** button, the back links on the order and pay screens and
+    the counter's back button were about 30px high. They are now 48px, and the layout test measures
+    every control on the order and pay screens as well as the status bar.
+
+- **A counter tip on a bill that is not a round number settles.** The counter screen computed its
+  tip keys as `(total * percent) / 100`, the float division the table pay screen had already been
+  fixed for. On a 43,450₫ bill the 5% key was 2,172.5₫, which the edge refuses as a money amount, so
+  the settle failed with the guest's money on the counter. The keys are now whole minor units,
+  snapped to the store's cash increment as the pay screen's are.
+
 ### Added
+
+- **Guests move to another table, and take their order with them.** *Move table* in the order
+  screen's header lists the free tables on the floor. A tap on one moves the guests' order there and
+  opens the new table, which says where they came from. Before this, guests who asked for the window
+  had to be seated again as a new order, while the old table kept a check nobody was sitting at.
+  - The order moves whole: every line, what the kitchen already has, and the time they sat down.
+    Nothing is rung or fired again. The floor, the kitchen board's ticket and the pass name the new
+    table on every device at once.
+  - The table they left waits to be cleared, as it does when guests pay and go.
+  - Only before the bill: once the guests have asked for it, they pay where they sit. Refused to a
+    table that is not free, and while the order is a guest's QR order still waiting for staff to
+    confirm or refuse it.
+  - New edge route `POST /api/tables/{id}/transfer` with `{"to_table_id"}`, answering with the order
+    and both tables. It writes `sales.table.transferred`, which the schema has always carried and
+    nothing emitted until now. Additive.
+  - The table state machine gains a `transfer` trigger, `OCCUPIED → NEEDS_CLEANING`
+    (`docs/state-machines.md`).
+  - A kitchen ticket already printed still names the table it was sent from; the screens show the
+    new one. Merging two tables' orders is not built.
+
+  **Upgrade note:** the existing `sales.order.transfer` permission now names an act. Its default
+  roles are unchanged: servers, supervisors, managers and owners. The edge checks it the way it
+  checks every permission that asks for no PIN today, against the store's grants rather than the
+  signed-in person's role, so in practice anyone signed in can move a table until that changes.
+
+  Docs: `docs/pos-spec.md` §2, `docs/ui-ux.md` §3 (order), `docs/state-machines.md`.
+
+- **The kitchen marks a dish sold out, and brings it back.** *Mark sold out* in the kitchen board's
+  header opens a panel over the board: the dishes sold out now, each with *Bring back*, and every
+  dish that can be marked, which a search box narrows. The cook is usually the first to know
+  something has run out.
+  - It is the same mark a till makes, under the same permission, which a cook holds by default, so
+    every till greys the dish out at once.
+  - It is a panel rather than a control on each ticket, because a ticket is one whole-card tap that
+    bumps it.
+
+  Docs: `docs/ui-ux.md` §3 (what `/kds` does today), `docs/pos-spec.md` §3.
+
+- **Staff mark an item sold out at the till (86), and bring it back.** *Mark sold out* above the
+  order screen's menu turns on a mode in which a tap on an item marks it sold out on every device
+  instead of selling it; the same tap brings it back, and *Done* ends the mode.
+  - A sold-out item greys out and says "Sold out" on every till at once, and a modifier the kitchen
+    ran out of greys out in the item's picker. A till that reloads still shows it.
+  - The edge refuses a line for a sold-out item, or for one choosing a sold-out modifier, whichever
+    way it arrives: from a table or the counter (`409 ITEM_NOT_SELLABLE`), or from a guest's QR order
+    or a marketplace (`failed_precondition`, as for an item the console withdrew).
+  - New edge routes `POST /api/menu/{id}/sold-out` and `POST /api/menu/{id}/restore`, under the
+    existing `sales.item.mark_unavailable` permission (cooks, servers, cashiers and up; no PIN).
+    `GET /api/menu` gains `sold_out`. Both additive.
+  - They write `inventory.item.sold_out` (`automatic: false`) and `inventory.item.restored`, which
+    the schema has always carried and nothing emitted until now. A second tap writes nothing, and
+    the mark lasts until somebody restores it: a restart keeps it, and the end of the day does not
+    clear it.
+  - Not yet: telling marketplaces, greying the item on the guest's QR page, and auto-86 from stock.
+
+  Docs: `docs/ui-ux.md` §3 (order), `docs/pos-spec.md` §3, `docs/production-readiness.md` O5.
+
+- **The floor says how long each table has been seated.** A seated or paying table's card reads
+  "Seated 25 min" from its first whole minute; a host uses it to see who is due a check and who is
+  about to leave.
+  - The time comes from the edge. `GET /api/floor` gains `seated_times`, when each seated table's
+    guests sat down, read from the table's order id (a ULID minted at the moment of seating).
+  - So a till that reloads, or one switched on mid-service, shows the same figure as one that
+    watched. The live orders could not carry it, because a table is seated before anything is ordered.
+  - Additive: an older till ignores the field.
+
+  Docs: `docs/ui-ux.md` §3 (order), `docs/pos-spec.md` §2.
+
+- **The kitchen board rings when new food arrives.** A toggle in the board's header turns the sound on
+  for that device, which remembers the choice; it is off until a cook turns it on.
+  - When food reaches the board after the board's own first read of what is open, it plays two short
+    notes. It never rings for what was already there when it came on.
+  - A browser will not start sound on an untouched page, so a reloaded board asks for one tap first.
+  - The chime is made in the page, not played from a file, so it works offline.
+  - A board filtered to one station rings only for that station's food.
+
+  Docs: `docs/ui-ux.md` §3 (what `/kds` does today).
+
+- **A table's bill splits by seat in one tap.** Where the store assigns seats, the pay screen offers
+  **Split by seat (3 bills)**. It makes a bill per seat from the seat each dish was ordered for, with
+  nothing to pick. The table's own dishes, ordered for no seat, become a bill of their own, because
+  a line cannot be halved. Each part says whose it is ("Seat 2 · For: 1 × Iced tea"), and the parts
+  are paid one after another as a split by item's are. Declared as a five-tap flow for two seats.
+  Docs: `docs/ui-ux.md` §3 (cashier), `docs/pos-spec.md` §5.
+
+- **A table's bill splits by item: each guest pays for what they had.** The pay screen's **Split by
+  item** lists the bill's lines. The cashier taps what one guest is paying for, and **Split off**
+  makes those lines a bill of their own; the rest stay open as the next bill.
+  - Each part reads what it is for ("For: 1 × Iced tea") and its own total, assembled by the edge.
+  - Once a part is paid, **Pay the next bill** puts the next one on screen.
+  - **Put the bills back together** undoes a split made by mistake. It is a merge; nothing is edited.
+  - A split table stays awaiting payment, and its order stays on the kitchen board, until the last
+    part is paid. The till used to track one bill per table: had a table ever been split, its first
+    guest paying would have sent it to cleaning and dropped the rest of its food off the board.
+  - A till that reloads mid-split reads every open part. A pay screen reloaded with no bill in hand
+    reads what is open before asking for one, which the edge refuses while one is open.
+  - Every tender button now waits for the edge's figure. It could be tapped before the amount had
+    loaded, which asked the edge to settle for nothing.
+
+  Declared as a seven-tap flow for two guests (`docs/ui-ux.md` §1, principle 6, says why). Docs:
+  `docs/ui-ux.md` §3 (cashier), `docs/pos-spec.md` §5.
+
+- **The edge answers for a table whose bill has been split.** Splitting has been on the edge since
+  ADR-0128, but a till could not read what came of it. Three reads now can:
+  - `GET /api/bills/{id}/check` is a new route. It reads one bill by its id: its state, the order lines
+    it covers, and the same five figures the table and order reads give. A till settling a split
+    table reads the part in front of it this way.
+  - `GET /api/tables/{id}/check` answers with what every open part owes together. It used to give
+    the newest part alone, so a table split two ways quoted half of what it owed.
+  - `GET /api/orders/live` carries `open_bill_ids`, every bill still open on the order, oldest
+    first. `bill_id` names only the newest, so a till that reloaded mid-split had no id for the
+    other parts. `bill_id` is unchanged.
+
+  All three are additive, and the route snapshot gains its one line. Docs: `docs/pos-spec.md` §5
+  (split).
+
+- **A manager approves a void or a discount on a till with no keyboard.** The fired-line void, the
+  bill void and the discount each asked for the manager's badge and PIN in plain inputs. A fixed
+  terminal with its on-screen keyboard switched off cannot fill those, so on a POS Station or
+  Terminal touch screen none of the three could be approved. The three copies are now one component,
+  `ApproverFields`. Its credential pad appears when either field takes focus and follows it: letters
+  and digits for the badge, digits alone for the PIN. A browser test voids a bill typing only on the
+  pad; it is also the first browser run of the bill void. Docs: `docs/ui-ux.md` §2 (on-screen
+  keyboard).
+
+- **A table's bill splits evenly between its guests, each paying their own way.** A row of guest
+  counts, 2 to 6, on the pay screen divides what is owed into shares. Each guest pays their share by
+  cash (with its own change), card or QR. The last share settles the bill: the shares are held on
+  the screen and sent together, because the edge settles a bill in one step with payments that add
+  up to the total exactly. Three ways, 655,600₫ is 218,534₫, then 218,533₫ twice. **Undo** gives a
+  taken share back. The tip row hides during a split, and the discount and void are disabled once a
+  share is taken. A screen that reloads mid-split asks for the shares again. Docs: `docs/ui-ux.md`
+  §3 (cashier).
+
+- **The till takes any amount of cash handed over, and a QR transfer.** Found in the till review
+  against market restaurant POS systems.
+  - **Quick-cash keys cover bills above the largest note.** The keys used to be "every note at least
+    as large as the bill", which left a bill above Vietnam's 500,000₫ note with "Exact" alone. They
+    are now the smallest pile of each published note that covers the bill, up to four: a 655,600₫
+    bill offers 660,000, 700,000, 800,000 and 1,000,000.
+  - **Other amount** opens a keypad for the figure the guest handed over. The change shows as it is
+    typed; a short figure shows how much is missing and the take-cash button stays disabled.
+  - **QR transfer received** records a `PAYMENT_METHOD_QR` payment for the exact amount, on the table
+    pay screen and the counter. The cashier taps it once the transfer shows in the store's account:
+    nothing asks a bank yet, and the screen says so. A store whose accepted tenders leave QR out does
+    not see the button.
+  - Docs: `docs/ui-ux.md` §3 (cashier).
+
+- **The console's Fetch from the release button works after a deploy, with nothing added by
+  hand** ([ADR-0088](docs/adr/0088-ota-artifact-hosting.md) Amendment 4). The button needs a
+  `[release_source]` block in `secrets/cloud.toml`, and until now an operator had to SSH to the box
+  to add one, so a new release meant downloading six files and uploading them again. The deploy
+  workflow now passes the repository it deploys from, when that repository is public, or the
+  `owner/name` in the new optional repository variable `RELEASE_SOURCE_REPOSITORY`; `bootstrap.sh`
+  writes the block once (step 2c) and keeps it on every later deploy. A block already in the file,
+  in any TOML spelling, is never touched, so a token added by hand for a private repository
+  survives. A name that is not `owner/name` is refused with a warning, and nothing about the block
+  can fail a deploy. **Upgrade note:** a cloud deployed from a public repository gains the block on
+  its next deploy. The box calls the GitHub API only when someone with `console.ota.publish` presses
+  the button, and the upload route is unchanged. A private repository is unchanged too: its block
+  still needs a token and is added by hand (`docs/deploy-runbook.md`).
 
 - **A headless Linux box can keep its activation across a reboot**
   ([ADR-0151](docs/adr/0151-a-headless-linux-box-seals-its-secrets-with-systemd-creds.md), gate
@@ -216,6 +495,68 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **`store-sqlite`'s page-size test no longer races the store's writer thread.** Dropping the last
+  `SqliteStore` handle closes the writer's channel. The thread closes its connection afterwards, and
+  that close is what checkpoints the WAL into the file. The test measured the file, and then rebuilt
+  it, straight after the drop. On a loaded runner the events were still in the WAL, and `test` went
+  red on a pull request that did not touch the crate (#482). Run 16 at a time on four cores it
+  failed 233 of 240 times. It now waits, bounded, until the writer has closed the file, and the same
+  load gives 0 of 240. `rebuild_page_size` itself is unchanged: the edge calls it before the store
+  opens, as its documentation requires.
+
+- **A refused pairing code, and a store nobody can sign in to, say what to do.** Found on the owner's
+  test PC, where a device sent back to pairing retyped a single-use code that was already spent. The
+  pairing screen showed the edge's English sentence (*unknown or expired pairing code*) and nothing
+  about where the next code comes from. It now says, in the till's language, that the code is wrong,
+  spent or older than five minutes, and names both ways to a new one: *Devices → Get a pairing code*
+  on a paired till, or a service restart and `pairing-url.txt`. Too many wrong codes get their own
+  line. The sign-in screen used to refuse every code as a wrong one on a store the console had not
+  staffed yet. `GET /api/session` now carries `sign_in_ready`, which is `false` while no published
+  member of staff has a PIN, and the screen then says so before anyone types, with the steps in the
+  console's **People** screen. An older edge that does not send the field shows no notice.
+  `POS_DEMO_PROFILE=unstaffed` publishes the demo store with nobody to sign in as, which is what the
+  browser gate runs it against.
+
+- **A release that fails its self-test before an over-the-air install no longer moves the store
+  back a release.** `SystemdInstaller::rollback` reverted in both of its cases. After a failed
+  pre-commit self-test it pointed `current` at `previous`, which on a box that had updated before is
+  the release *before* the running one, so the next restart ran that. It also copied the backup over
+  the database the running store was still writing. On a box that had never updated it failed
+  outright and left the staged bytes behind for the next attempt. A rollback now discards bytes that
+  were never committed and touches nothing else; after a commit it reverts, as before.
+
+- **The Windows setup summary warns only about the network a till uses, and names both releases.**
+  Found running the 0.14.0 installer on a real office PC. Every connection profile on Public got a
+  `WARN`, so an OpenVPN adapter, which has no default gateway and which no till reaches the PC
+  through, was reported alongside the Wi-Fi that did need fixing: a false line teaches a technician
+  to skip the true one. The check now looks only at the adapters the pairing URL is built from,
+  those that are up with a default gateway, and at every network when there is none. And the `note`
+  a re-run prints named only the release that is running, which on that PC was 0.11.0, three
+  releases behind the installer. `pos-edge install` now passes its own release to the script
+  (`-CarriedVersion`), and the note says, for example, that the PC runs 0.11.0, the installer
+  carries 0.14.0, and a rollout from the OTA screen moves it on; a newer release running is kept and
+  said to be newer.
+
+- **Re-running the Windows installer prints a pairing code that works, and opens setup when the
+  store is up.** Found on the first re-install of a real shop PC. The pairing file survives a
+  service stop, so the installer's wait took the previous process's file for the new one: it printed
+  a code nothing could redeem, then opened `/setup` before the new process listened, and the page
+  failed until it was refreshed. The installer now deletes that file before the start, waits for the
+  service to reach `STOPPED` rather than sleeping two seconds (a start sent during a slow drain was
+  refused, silently), and opens `/setup` only once `/healthz` answers. The edge now writes the
+  pairing file only after it has bound its port, so a box that cannot bind writes no code at all. A
+  pairing URL the edge could only write as `/pair?code=…` is printed complete, with each of the PC's
+  addresses that has a default gateway. The installer also ends with a **setup summary**: one
+  `ok`/`note`/`WARN`/`FAIL` line each for the release answering and the store it serves, a port
+  another program holds, a store that never came up (with the last lines of its log), another
+  store's edge on the port, a refused start, a network Windows has classed as Public (where the
+  firewall rule does not apply), the cloud's reachability and the clock's skew from it, and a PC with
+  no LAN address. `dashboard/scripts/installer-behaviour.ps1` runs the installer against a fake
+  Windows for each case, and the installer gate runs it whenever `pwsh` is present. **Upgrade
+  note:** the one-file installer is `pos-edge install`, which carries the script inside the binary,
+  so the fix reaches a PC with the next edge release. The console's downloadable `.ps1` gets it with
+  the next cloud deploy.
+
 - **POS Station recognises the store PC it runs on.** It looked for the PC's own edge at
   `127.0.0.1:8080`, while the edge, every installer and the setup file bind `8787`. So on a store
   PC installed the default way the app never chose Station mode: it opened the connect page, and a
@@ -336,6 +677,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   and a settled table's unbumped lines lingered.
 
 ### Changed
+
+- **Re-running the Windows one-file installer with a newer release puts that release in place**
+  ([ADR-0140](docs/adr/0140-a-store-pc-installs-itself-from-one-file.md) Amendment 1). Found on the
+  owner's test PC, which ran 0.11.0 from an old install and stayed on it after the 0.14.0 installer
+  ran, so it kept a till defect 0.11.1 had fixed. The installer now asks the running store its
+  release before it stops the service. If its own is newer, it runs the new `pos-edge promote` from
+  its rescue copy: the edge's own update steps (database backup, stage, `--self-test`, commit), so the
+  old release stays as `bin\previous` and comes back by itself after three failed starts. The
+  summary says `ok upgraded from X to Y`, or why it could not. An older or equal release is never put
+  in place, and neither is one when the old process did not answer. **Upgrade note:** this arrives
+  with the installer of the next release. A 0.14.x installer still keeps an older binary, so move
+  such a PC with an over-the-air rollout, or stop the service, delete `bin\current` and run the
+  installer again.
 
 - **The console stops saying a store needs a key to sync.** Since
   [ADR-0143](docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md) a machine

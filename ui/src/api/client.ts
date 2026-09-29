@@ -17,6 +17,7 @@ import type {
   BumpResponse,
   CheckResponse,
   CountShiftRequest,
+  BillCheckResponse,
   CounterOrder,
   DiscountRequest,
   DiscountResponse,
@@ -28,6 +29,7 @@ import type {
   LayoutResponse,
   LiveOrder,
   LocaleResponse,
+  MergeRequest,
   MenuResponse,
   MintedCode,
   OpenedOrder,
@@ -39,9 +41,12 @@ import type {
   ReasonCodesResponse,
   SettleRequest,
   ShiftResponse,
+  SplitRequest,
+  SplitResponse,
   SyncResponse,
   TableResponse,
   TestPrintResponse,
+  TransferResponse,
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
@@ -146,6 +151,10 @@ export interface SessionState {
   signed_in: boolean;
   employee_id?: string;
   lease_standing: LeaseStanding;
+  // Whether anyone can sign in on this box: the console has published at least one member of staff
+  // with a PIN. Absent from an edge too old to send it, which the sign-in screen reads as "ready",
+  // because a hint that the store has no staff must never be shown on a guess.
+  sign_in_ready?: boolean;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
@@ -193,6 +202,12 @@ export const api = {
     request<TableResponse>("POST", `/api/tables/${tableId}/seat`),
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
+  // Moves the guests at a table, and their order, to a free one; the table they left waits to be
+  // cleared (`sales.table.transferred`).
+  transferTable: (tableId: string, toTableId: string) =>
+    request<TransferResponse>("POST", `/api/tables/${tableId}/transfer`, {
+      to_table_id: toTableId,
+    }),
   getTable: (tableId: string) => request<TableResponse>("GET", `/api/tables/${tableId}`),
 
   // The store's published floor plan and kitchen stations (ADR-0072). The app reads this at start to
@@ -207,6 +222,13 @@ export const api = {
   // The store's published price book (roadmap-v3 E5, ADR-0063). Empty until the cloud publishes a
   // menu — a store never guesses a price, and neither does the till.
   menu: () => request<MenuResponse>("GET", "/api/menu"),
+
+  // Staff mark an item sold out at this store (86), and bring it back. Every device folds the
+  // event and greys the item out; the edge refuses a line for it in the meantime.
+  markSoldOut: (menuItemId: string) =>
+    request<{ menu_item_id: string; sold_out: boolean }>("POST", `/api/menu/${menuItemId}/sold-out`),
+  restoreItem: (menuItemId: string) =>
+    request<{ menu_item_id: string; sold_out: boolean }>("POST", `/api/menu/${menuItemId}/restore`),
 
   // How the till groups and orders those items, from the `layout` node published beside the price
   // book (ADR-0066, production-readiness C4). A separate node, so a separate read: a price change
@@ -298,6 +320,18 @@ export const api = {
     request<BillResponse>("POST", `/api/orders/${orderId}/bill`),
   settleBill: (billId: string, settle: SettleRequest) =>
     request<BillResponse>("POST", `/api/bills/${billId}/settle`, settle),
+
+  // One bill by its id: what it owes, where it has got to and the lines it covers. What the pay
+  // screen reads once a table's bill is split, because the table's own check answers for every part.
+  billCheck: (billId: string) =>
+    request<BillCheckResponse>("GET", `/api/bills/${billId}/check`),
+
+  // Splitting a bill into parts, and folding parts back together (ADR-0128). Neither carries a PIN:
+  // both move amounts already captured, and nothing is created, forgiven or taken out of the store.
+  splitBill: (billId: string, split: SplitRequest) =>
+    request<SplitResponse>("POST", `/api/bills/${billId}/split`, split),
+  mergeBills: (billId: string, merge: MergeRequest) =>
+    request<{ bill_id: string }>("POST", `/api/bills/${billId}/merge`, merge),
 
   openShift: (open: OpenShiftRequest) =>
     request<ShiftResponse>("POST", "/api/shifts", open),

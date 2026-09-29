@@ -14,7 +14,9 @@
 //!
 //! Subcommands: `claim`, which a box installed with no store runs to claim itself
 //! ([ADR-0148](../../../docs/adr/0148-an-unclaimed-box-shows-a-code-and-the-console-claims-it.md));
-//! `install` ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md)); and
+//! `install` ([ADR-0140](../../../docs/adr/0140-a-store-pc-installs-itself-from-one-file.md));
+//! `promote`, which that installer's script runs to put a newer release in place of the one a
+//! re-run finds (ADR-0140 Amendment 1); and
 //! `archive`, which seals, opens and checks a store archive
 //! ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). It is here rather than in
 //! a tool of its own because the place a store archive is restored *to* is a till, and a till has
@@ -61,6 +63,13 @@ fn main() -> Result<(), EdgeError> {
     // waits for the console to bind it, and writes this box's config.toml (ADR-0148).
     if std::env::args().nth(1).as_deref() == Some(pos_edge::claim::CLAIM_COMMAND) {
         return pos_edge::claim::run(&std::env::args().skip(2).collect::<Vec<_>>(), &path);
+    }
+
+    // `promote`, which the installer script runs from the copy of the release it carries, with the
+    // service stopped, to put that release in place of an older one (ADR-0140 Amendment 1).
+    // Before `install`'s name check, so a tagged file handed this subcommand promotes itself.
+    if std::env::args().nth(1).as_deref() == Some(pos_edge::setup::PROMOTE_COMMAND) {
+        return pos_edge::setup::promote(&path);
     }
 
     // And `install`, which sets this machine up as the store's service (ADR-0140) — asked for by

@@ -4,7 +4,7 @@
 // SVG (no chart library, so nothing to load past the CSP). The operator sets the tenant/store in the
 // top bar; the date-range window defaults to the server's most recent 90 trading days.
 
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { DailyRevenue, DailyRollup, Store, XzReport } from "../api/types";
@@ -161,8 +161,9 @@ export function Reports() {
       .map(([type, count]) => `${type} ${formatCount(count)}`)
       .join(", ");
 
-  // Aggregate the product mix across the window: item id → {name, value}, top 10 by ordered value.
-  const productMix = () => {
+  // Optimization: Memoize the aggregated product mix calculation with createMemo to avoid
+  // re-aggregating and sorting O(D * I) product items across all days on every render / state update.
+  const productMix = createMemo(() => {
     const totals = new Map<string, { name: string; value: number }>();
     for (const day of revenue()) {
       for (const [id, mix] of Object.entries(day.by_item)) {
@@ -173,7 +174,7 @@ export function Reports() {
       }
     }
     return [...totals.values()].sort((a, b) => b.value - a.value).slice(0, 10);
-  };
+  });
 
   const revenueCurrency = () => revenue().find((day) => day.currency_code)?.currency_code ?? "";
 
