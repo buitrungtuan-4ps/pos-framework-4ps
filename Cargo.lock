@@ -700,6 +700,7 @@ dependencies = [
  "pos-contract-tests",
  "pos-ports",
  "pos-proto",
+ "pos-providers",
  "serde",
  "serde_json",
  "thiserror",
@@ -1716,6 +1717,7 @@ dependencies = [
  "bytes",
  "chacha20poly1305",
  "csv",
+ "erp-sap",
  "getrandom 0.4.3",
  "hmac",
  "http-body-util",
@@ -1734,11 +1736,14 @@ dependencies = [
  "pos-fakes",
  "pos-ports",
  "pos-proto",
+ "pos-providers",
  "rust-embed",
  "serde",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "shipping-ahamove",
+ "shipping-grabexpress",
  "store-postgres",
  "thiserror",
  "tokio",
@@ -1930,6 +1935,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "pos-providers"
+version = "0.1.0"
+dependencies = [
+ "pos-proto",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2599,6 +2613,7 @@ dependencies = [
  "pos-contract-tests",
  "pos-ports",
  "pos-proto",
+ "pos-providers",
  "serde",
  "serde_json",
  "thiserror",
@@ -2619,6 +2634,7 @@ dependencies = [
  "pos-contract-tests",
  "pos-ports",
  "pos-proto",
+ "pos-providers",
  "serde",
  "serde_json",
  "thiserror",

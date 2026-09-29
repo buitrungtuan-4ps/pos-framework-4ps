@@ -13,6 +13,8 @@ repository.workspace   = true
 # Paths, not versions.
 pos-ports = { path = "../../pos-ports" }
 pos-proto = { path = "../../pos-proto" }
+# The provider catalogue this adapter describes itself to (ADR-0153).
+pos-providers = { path = "../../pos-providers" }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }

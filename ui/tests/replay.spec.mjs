@@ -220,6 +220,10 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  "Print a pre-bill for a table": async (page) => {
+    await seatTable(page);
+    await addItem(page);
+  },
   "Mark a dish sold out from the kitchen board": async (page) => {
     await navigateTo(page, "/kds");
   },

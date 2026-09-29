@@ -92,6 +92,7 @@ pub mod paging;
 pub mod people;
 pub mod people_compiler;
 mod persistence;
+pub mod providers;
 pub mod qr;
 pub mod qr_http;
 pub mod reason_codes;

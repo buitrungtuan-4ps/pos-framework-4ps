@@ -24,6 +24,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   UNKNOWN_ORDER: "error.unknown_record",
   UNKNOWN_BILL: "error.unknown_record",
   BILL_ALREADY_OPEN: "error.bill_already_open",
+  NOTHING_TO_PRINT: "error.nothing_to_print",
   BILLS_ON_DIFFERENT_TABLES: "error.bills_on_different_tables",
   UNROUTABLE_LINE: "error.unroutable_line",
   AWAITING_STAFF_CONFIRMATION: "error.awaiting_staff_confirmation",

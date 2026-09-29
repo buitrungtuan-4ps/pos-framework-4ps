@@ -114,6 +114,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_recovery_codes_status,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
+        crate::http::admin_list_providers,
         crate::http::admin_list_reason_codes,
         crate::http::admin_get_reason_code,
         crate::http::admin_create_reason_code,
@@ -163,6 +164,14 @@ pub(crate) struct ErrorResponse {
                            and the store's sync path are untouched. Membership is replaced wholesale \
                            under the group's own ETag, because a cohort is a set and a delta API \
                            merges two admins' concurrent edits into one neither of them chose."
+        ),
+        (
+            name = "integrations",
+            description = "The vendors this cloud can talk to, and what each needs (ADR-0153). \
+                           Documented because it is the contract a fork's own console draws its \
+                           connection forms from: the form is the provider's settings schema, so a \
+                           console that hard-coded one vendor's fields would be wrong the day a \
+                           second is added."
         ),
         (
             name = "reason codes",

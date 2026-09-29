@@ -4,8 +4,9 @@ import { api } from "../api/client";
 import type { MintedCode, PairedDevice, PrinterEntry } from "../api/types";
 import { QrCode } from "../components/QrCode";
 import { PageHeader } from "../components/ui";
-import { type MessageKey, locale, t } from "../i18n";
+import { locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
+import { printOutcomeKey } from "../lib/print";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -47,27 +48,6 @@ function pairingUrl(code: string): string {
 function onLoopback(): boolean {
   const host = window.location.hostname;
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
-}
-
-// What a test page's outcome tells a manager, in the words the pay screen uses for a receipt —
-// except success, which is a test page rather than a receipt.
-function testPrintKey(outcome: string): MessageKey {
-  switch (outcome) {
-    case "PRINTED":
-      return "devices.test_printed";
-    case "NO_PRINTER":
-      return "pay.print_no_printer";
-    case "UNPRINTABLE_TEXT":
-      return "pay.print_unprintable";
-    case "QUEUED_TO_AGENT":
-      return "pay.print_queued";
-    case "PRINT_AGENT_UNAVAILABLE":
-      return "pay.print_agent_unavailable";
-    case "PRINT_QUEUE_FULL":
-      return "pay.print_queue_full";
-    default:
-      return "pay.print_unavailable";
-  }
 }
 
 export function Devices() {
@@ -298,7 +278,7 @@ export function Devices() {
                   <Show when={tested()[printer.device_id]}>
                     {(outcome) => (
                       <span class="text-sm text-ink-muted" role="status" data-outcome="test-print">
-                        {t(testPrintKey(outcome()))}
+                        {t(printOutcomeKey(outcome(), "devices.test_printed"))}
                       </span>
                     )}
                   </Show>
