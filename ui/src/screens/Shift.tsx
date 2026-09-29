@@ -14,6 +14,7 @@ import {
   storeCurrency,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { printOutcomeKey } from "../lib/print";
 
 // The cash shift: open with a float, enter the blind count (the screen shows nothing about what is
 // expected), then close to reveal the variance. The blindness is the control — counting before the
@@ -151,6 +152,13 @@ export function Shift() {
             >
               {t("shift.variance")} <span class="tabular-nums">{formatAmount(variance())}</span>
             </p>
+            <Show when={shift()?.reportPrint}>
+              {(outcome) => (
+                <p class="mt-2 text-sm text-ink-muted" role="status" data-outcome="shift-report-print">
+                  {t(printOutcomeKey(outcome(), "shift.report_printed"))}
+                </p>
+              )}
+            </Show>
           </div>
         )}
       </Show>

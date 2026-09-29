@@ -553,6 +553,8 @@ export interface ShiftResponse {
   counted_amount?: Money;
   variance?: Money;
   print_shift_report: boolean;
+  /** What came of printing the shift report, on the close that printed one (ADR-0100 tokens). */
+  shift_report_print?: string;
 }
 
 export interface PairRequest {
@@ -636,4 +638,9 @@ export interface PrinterEntry {
 /** What came of a test page — the same tokens a receipt's print reports. */
 export interface TestPrintResponse {
   print: string;
+}
+
+/** What printing pre-bills came to: one outcome per document, in the order they were sent. */
+export interface PrintResponse {
+  prints: string[];
 }

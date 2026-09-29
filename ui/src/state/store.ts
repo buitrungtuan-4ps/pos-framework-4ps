@@ -104,6 +104,8 @@ export interface ShiftInfo {
   expected?: Money;
   counted?: Money;
   variance?: Money;
+  // What came of printing the shift report, on the close that printed one (ADR-0100 tokens).
+  reportPrint?: string;
 }
 
 interface StoreShape {
@@ -1570,6 +1572,7 @@ function replaceShift(info: ShiftInfo | null): void {
           expected: info.expected,
           counted: info.counted,
           variance: info.variance,
+          reportPrint: info.reportPrint,
         },
   );
 }
@@ -1879,6 +1882,7 @@ export async function closeShift(shiftId: string): Promise<ShiftInfo> {
     expected: response.expected_amount,
     counted: response.counted_amount,
     variance: response.variance,
+    reportPrint: response.shift_report_print,
   };
   setState("shift", info);
   return info;

@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 
+import { api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
@@ -38,6 +39,7 @@ import {
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { printOutcomeKey } from "../lib/print";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
@@ -159,6 +161,24 @@ export function Order() {
     setMoving(false);
     navigate(`/table/${to}?moved_from=${from}`);
   };
+
+  // A pre-bill: what the order comes to, on paper, before anyone pays (roadmap-v3 B2.1). No bill
+  // opens, so the guests can check the total and still order dessert; a split table prints one per
+  // open part. What each piece of paper came to, or null before the first press.
+  const [preBill, setPreBill] = createSignal<readonly string[] | null>(null);
+  const printPreBill = () =>
+    guard(async () => {
+      setPreBill(null);
+      const printed = walkIn()
+        ? await api.printOrderCheck(params.id)
+        : await api.printTableCheck(params.id);
+      setPreBill(printed.prints);
+    });
+  // One sentence per distinct outcome: two parts that both printed say so once.
+  const preBillOutcome = (prints: readonly string[]) =>
+    [...new Set(prints.map((outcome) => t(printOutcomeKey(outcome, "order.pre_bill_printed"))))].join(
+      " · ",
+    );
 
   // A walk-in is paid on the counter screen, whose pad charges any counter order; it opens this
   // order's bill there, so a bill is never left open on an order nobody went on to pay.
@@ -518,7 +538,26 @@ export function Order() {
               {t("order.move_table")}
             </button>
           </Show>
+          <Show when={billCount() > 0}>
+            <button
+              type="button"
+              class="min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
+              classList={{ "ml-auto": !movable() }}
+              data-step="printPreBill"
+              onClick={() => void printPreBill()}
+            >
+              {t("order.pre_bill")}
+            </button>
+          </Show>
         </div>
+
+        <Show when={preBill()}>
+          {(prints) => (
+            <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">
+              {preBillOutcome(prints())}
+            </p>
+          )}
+        </Show>
 
         {/* The guests' new table says where they came from, once, on the screen they land on. */}
         <Show when={!walkIn() && search.moved_from}>
