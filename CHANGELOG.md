@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks RFC 6666 Discard-Only (`100::/64`) and RFC 4843 / RFC 7343 ORCHIDv1/v2 (`2001:10::/28` and `2001:20::/28`) IPv6 ranges.**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `100::/64` Discard-Only and `2001:10::/28` / `2001:20::/28` ORCHID/ORCHIDv2 addresses as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
+
 - **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now inspects SIIT IPv4-translated interface identifiers (`<prefix>:ffff:0:a.b.c.d`) across all 64-bit IPv6 prefixes, preventing SSRF bypasses via SIIT translated addresses attached to arbitrary non-zero prefixes. **Upgrade note:** none.
 

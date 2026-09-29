@@ -433,6 +433,12 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && second == 0x0002 {
         // 2001:2::/48 benchmarking (RFC 5180).
         Some(ForbiddenReason::Benchmarking)
+    } else if first == 0x0100 && second == 0 && third == 0 && segments[3] == 0 {
+        // 100::/64 Discard-Only Address Block (RFC 6666).
+        Some(ForbiddenReason::Reserved)
+    } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
+        // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
+        Some(ForbiddenReason::Reserved)
     } else {
         None
     }
@@ -864,6 +870,36 @@ mod tests {
             Err(SsrfRejection::ForbiddenAddress(
                 ip("2001:2::1"),
                 ForbiddenReason::Benchmarking
+            ))
+        );
+        // Discard-Only IPv6 range (100::/64, RFC 6666).
+        assert_eq!(
+            classify_ip(ip("100::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("100::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("100::dead:beef")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("100::dead:beef"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        // ORCHIDv1 (2001:10::/28, RFC 4843) and ORCHIDv2 (2001:20::/28, RFC 7343) IPv6 ranges.
+        assert_eq!(
+            classify_ip(ip("2001:10::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:10::1"),
+                ForbiddenReason::Reserved
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("2001:20::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:20::1"),
+                ForbiddenReason::Reserved
             ))
         );
     }
