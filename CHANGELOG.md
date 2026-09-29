@@ -156,6 +156,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A guest note reaches the kitchen.** The order screen has *Note for the next item* under the
+  search box. Whatever is typed there goes with the next dish added, then clears. The line shows the
+  note, and so do the kitchen board and the printed ticket, last and in bold.
+
+  Until now nothing held a note's text. The till had no way to write one, and a delivery or QR order's
+  note ("no peanuts, allergy") was dropped at the edge: the log recorded that a note existed and the
+  kitchen never saw it. Inbound notes are kept now as well. A line break in one becomes a space, and
+  one past 200 characters is cut rather than refused.
+
+  **Where the note is kept, and where it is not**
+  ([ADR-0157](docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)):
+  - The note is personal data and often health data, so the edge holds it **in memory only**.
+  - It holds at most 2,048 notes, and keeps each one only while its line is on a screen: it is
+    dropped when the line is voided or its order is settled or refused.
+  - Nothing writes a note to the database, the event log, the outbox, a backup, a log line or
+    telemetry. `sales.order_line.added` still carries only `note_present`.
+  - After a restart the text is gone and the flag is not. The till and the board then say *A note was
+    written — ask the server*, and the ticket prints the same line in the store's language.
+
+  **Upgrade note:**
+  - `POST /api/tables/{id}/lines` and `POST /api/orders/{id}/lines` take an optional `note`: at most
+    200 characters, one line. Anything else is a `400`.
+  - `note_present` alone is still accepted.
+  - `GET /api/orders/live` lines gain `note_present` and, while held, `note`.
+  - The `/ws` frame for `sales.order_line.added` carries `note` in its payload.
+  - All of this is additive, with no event, permission, migration or `PROTOCOL_VERSION` change.
+
+  Docs: `docs/pos-spec.md` §3, `docs/ui-ux.md` §3.
+
 - **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
   words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
   toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language

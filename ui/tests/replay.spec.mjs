@@ -253,6 +253,14 @@ const PRECONDITIONS = {
     await page.locator("#menu-search").fill("dac");
     await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
   },
+  // The note first, then a dish that asks no question, so the declared tap adds it straight away
+  // and the note has exactly one line to land on.
+  "Add a dish with a note for the kitchen": async (page) => {
+    await seatTable(page);
+    await page.locator("#line-note").fill("No ice, please");
+    await page.locator("#menu-search").fill("iced tea");
+    await expect(page.locator('[data-step="onItem"]')).toHaveCount(1);
+  },
   "Fire the open lines to the kitchen": async (page) => {
     await seatTable(page);
     await addItem(page);
@@ -2200,6 +2208,34 @@ test("a counter order on the kitchen board and the pass is called by the guest's
     await expect(page.locator('[data-step="onBump"]').first()).toContainText("No. 1");
     await navigateTo(page, "/expo");
     await expect(page.getByText("No. 1", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A guest note reaches the kitchen board, and the next dish does not inherit it (ADR-0157).
+//
+// The note is typed before the tap and rides with that one add. The board reads it from the frame the
+// add fanned out, and again from the live orders when it reloads, which is the path a board switched
+// on mid-service takes. The second dish is added with the field empty, so a note that stuck to the
+// screen instead of the line would show twice.
+test("a note typed at the till is on the kitchen board, under that dish only", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await page.locator("#line-note").fill("No ice, please");
+    await addByName(page, "iced tea");
+    await expect(page.locator('[data-outcome="line-note"]')).toHaveCount(1);
+    await expect(page.locator("#line-note")).toHaveValue("");
+    await addItem(page);
+    await expect(page.locator('[data-outcome="line-note"]')).toHaveCount(1);
+    await sendOrder(page);
+
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-outcome="ticket-note"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No ice, please");
   } finally {
     await edge.stop();
   }

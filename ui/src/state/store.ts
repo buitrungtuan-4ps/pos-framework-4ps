@@ -69,6 +69,11 @@ export interface OrderLine {
   // The kitchen station the line was fired to, from the firing event. Absent while it is on the pad,
   // and on a line an older edge fired without saying — the board shows those under "all stations".
   stationId?: string;
+  // Whether a guest note was written for the line, and its text while the edge holds it (ADR-0157).
+  // The text never enters the log, so after the edge restarts `notePresent` stays and `note` is gone:
+  // `noteLost` is that case, and every screen says it rather than drawing nothing.
+  notePresent?: boolean;
+  note?: string;
 }
 
 // A kitchen station the store published (`GET /api/floor`), for the board's station filter.
@@ -835,7 +840,15 @@ function readLine(payload: Record<string, unknown>): OrderLine | null {
     // *second* till has instead of the add it did not make, and without it that till's course
     // controls would not know which of its lines are starters.
     courseId: isString(payload["course_id"]) ? payload["course_id"] : undefined,
+    // The frame carries the note beside the event's own fields; the log never does (ADR-0157).
+    notePresent: payload["note_present"] === true,
+    note: isString(payload["note"]) ? payload["note"] : undefined,
   };
+}
+
+/** Whether a line had a guest note the edge no longer holds — it restarted since (ADR-0157). */
+export function noteLost(line: OrderLine): boolean {
+  return line.notePresent === true && line.note === undefined;
 }
 
 // The words for a line's chosen modifiers, in the order they were added.
@@ -1105,13 +1118,14 @@ export async function addItem(
   tableId: string,
   item: MenuItemResponse,
   modifiers: string[] = [],
+  note?: string,
 ): Promise<void> {
   if (!item.available || item.tax_rate === undefined || item.tax_rate === null) {
     throw new Error(`${item.display_name} is not sellable`);
   }
   const walkIn = walkInOrder(tableId);
   if (walkIn !== undefined) {
-    return addItemToWalkIn(walkIn, tableId, item, modifiers);
+    return addItemToWalkIn(walkIn, tableId, item, modifiers, note);
   }
   const line: LineRequest = {
     menu_item_id: item.menu_item_id,
@@ -1137,7 +1151,9 @@ export async function addItem(
     // The choices a guest made, which the edge validates against the published groups before it
     // writes anything (ADR-0127 decision 5). Empty on every item that attaches none.
     modifier_menu_item_ids: modifiers,
-    note_present: false,
+    // The flag as well as the text, so an edge older than the note still records that one exists.
+    note_present: note !== undefined,
+    note,
   };
   const response = await api.addLine(tableId, line);
   setState(
@@ -1154,6 +1170,8 @@ export async function addItem(
         seat: line.seat,
         modifierMenuItemIds: modifiers,
         courseId: line.course_id,
+        notePresent: note !== undefined,
+        note,
       };
     }),
   );
@@ -1201,13 +1219,15 @@ async function addItemToWalkIn(
   key: string,
   item: MenuItemResponse,
   modifiers: string[],
+  note: string | undefined,
 ): Promise<void> {
   const line: OrderLineRequest = {
     menu_item_id: item.menu_item_id,
     quantity: { milli: 1000 },
     course_id: state.coursesEnabled ? (item.course_id ?? undefined) : undefined,
     modifier_menu_item_ids: modifiers,
-    note_present: false,
+    note_present: note !== undefined,
+    note,
   };
   const response = await api.addOrderLine(orderId, line);
   setState(
@@ -1223,6 +1243,8 @@ async function addItemToWalkIn(
         seat: undefined,
         modifierMenuItemIds: modifiers,
         courseId: line.course_id,
+        notePresent: note !== undefined,
+        note,
       };
     }),
   );
@@ -1504,6 +1526,8 @@ export async function loadLiveOrders(): Promise<void> {
             // fired: both mean the board has no age to show, and it draws the same row either way.
             firedTime: line.fired_time ?? undefined,
             stationId: line.station_id ?? undefined,
+            notePresent: line.note_present ?? false,
+            note: line.note ?? undefined,
           };
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;

@@ -227,7 +227,7 @@ fn a_counter_bill_survives_the_restart_that_used_to_drop_it() {
                     actor().device_id,
                     Open::from_known(SalesChannel::Takeaway),
                     None,
-                    &[(a_priced_line(), false)],
+                    &[(a_priced_line(), None)],
                     None,
                 )
                 .await
