@@ -79,6 +79,12 @@ struct LiveLineResponse {
     /// the bar's tickets and not the grill's.
     #[serde(skip_serializing_if = "Option::is_none")]
     station_id: Option<String>,
+    /// Whether a guest note was written for the line. Always present, because `true` with no `note`
+    /// is a note the edge lost to a restart, which a screen must say rather than hide (ADR-0157).
+    note_present: bool,
+    /// The guest's note while the edge holds it. Omitted when absent, for the reason `seat` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 /// One open order.
@@ -139,6 +145,8 @@ where
                     seat: line.seat,
                     course_id: line.course_id.map(|id| id.to_string()),
                     station_id: line.station_id.map(|id| id.to_string()),
+                    note_present: line.note_present,
+                    note: line.note.map(|note| note.as_str().to_owned()),
                 })
                 .collect(),
         })

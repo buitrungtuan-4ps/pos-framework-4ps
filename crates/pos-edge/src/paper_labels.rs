@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The words a receipt, a pre-bill and a shift report are printed in.
+//! The words a receipt, a pre-bill, a shift report and a kitchen ticket are printed in.
 //!
 //! The till's screens translate through their catalogue. Paper had no catalogue at all: every label
 //! was English, so a Vietnamese guest's receipt said "Subtotal" and "Tax 10.00%" in a shop whose
@@ -56,6 +56,9 @@ pub struct PaperLabels {
     pub balanced: &'static str,
     /// The verdict when it is over.
     pub over: &'static str,
+    /// What a kitchen ticket prints for a guest note the edge no longer holds — it restarted since
+    /// the note was written ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+    pub note_lost: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -78,6 +81,7 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     short: "Short",
     balanced: "Balanced",
     over: "Over",
+    note_lost: "A note was written - ask the server",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -100,6 +104,7 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     short: "Thiếu",
     balanced: "Khớp",
     over: "Thừa",
+    note_lost: "Có ghi chú - hỏi nhân viên phục vụ",
 };
 
 impl PaperLabels {

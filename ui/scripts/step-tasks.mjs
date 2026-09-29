@@ -115,6 +115,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "line-added" },
   },
   {
+    task: "Add a dish with a note for the kitchen",
+    budget: 2,
+    note: "The same one tap as any add: the note is typed into the field above the menu first, and typing is not a tap. It rides with the next item added and then clears, so it cannot land on a second dish by accident. The kitchen reads it on its board and its ticket; the log records only that a note existed (ADR-0157). The precondition types the note **and narrows the grid to one dish that asks no question**, so the tap adds it at once and the note must be on the line that appears.",
+    steps: [{ route: "/table/:id", action: "onItem" }],
+    outcome: { route: "/table/:id", mark: "line-note" },
+  },
+  {
     task: "Fire the open lines to the kitchen",
     budget: 2,
     note: "The send button is fixed on the order screen and shows the unsent count. This note described a button that did not exist: the screen carried a Send on every row, so this task really cost one tap per line and the gate could not see it — a declaration naming an action is satisfied by any element calling it, however many of them there are. One button now sends the whole order in one transaction, which is what makes the two honest.",

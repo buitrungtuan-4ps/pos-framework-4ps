@@ -10,9 +10,10 @@
 //! letting the till imply a ticket came out.
 //!
 //! The edge does not invent prices: the device sends the amounts it captured from the menu it holds
-//! (`sales.order_line.added` §14.2), and this shell records them. A line's guest note is a boolean
-//! (`note_present`) and never its text — the text is PII and stays out of the event log
-//! ([`pos_proto::pii`]).
+//! (`sales.order_line.added` §14.2), and this shell records them. A line's guest note reaches the
+//! event log as a boolean (`note_present`) and never as its text — the text is personal data, held in
+//! the edge's memory for the kitchen and printed on the ticket
+//! ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
 
 use std::sync::Arc;
 
@@ -35,6 +36,7 @@ use pos_proto::ids::EventId;
 
 use crate::app::{Approval, Edge, LineDraft, LineView};
 use crate::http::{bad_request, error_response, parse_ulid};
+use crate::line_notes::NoteText;
 use crate::printing::{PrintOutcome, Printers, ticket_line};
 
 /// A line as a device asks for it to be added — the amounts captured from the menu it holds.
@@ -57,8 +59,12 @@ pub(crate) struct LineRequest {
     /// line that omits them is a line whose extras are never taken off the shelf.
     #[serde(default)]
     modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Deprecated by `note`: a device that sends only the flag still records that a note exists.
     #[serde(default)]
     note_present: bool,
+    /// The guest's note for the kitchen: at most 200 characters, one line (ADR-0157).
+    #[serde(default)]
+    note: Option<String>,
 }
 
 impl From<LineRequest> for LineDraft {
@@ -132,7 +138,14 @@ where
     let Some(table_id) = parse_ulid(&id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
-    respond(edge.add_line(actor, table_id, request.into()).await)
+    let note = match NoteText::parse(request.note.as_deref()) {
+        Ok(note) => note,
+        Err(refused) => return bad_request(refused.message()),
+    };
+    respond(
+        edge.add_noted_line(actor, table_id, request.into(), note)
+            .await,
+    )
 }
 
 /// `POST /api/lines/{id}/fire` — fire a line to its station.
@@ -324,7 +337,7 @@ where
             EventId::new(view.order_line_id.as_ulid()),
             fired.station_id,
             &crate::printing::short_reference(&view.order_id.to_string()),
-            &ticket_line(&session, fired),
+            &ticket_line(&session, fired, edge.line_note(view.order_line_id).as_ref()),
         )
         .await
 }

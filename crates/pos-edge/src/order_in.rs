@@ -29,6 +29,7 @@ use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
 use crate::app::{AppError, Edge, InboundOrderOpened, IntakeIntent};
+use crate::line_notes::NoteText;
 use crate::queue::QueueNumberAuthority;
 
 /// The edge's [`OrderIn`]: reprice from the store's menu, open the order in the local log, dedupe on
@@ -150,7 +151,8 @@ where
                 "this store does not accept orders on that sales channel",
             ));
         }
-        let mut priced_lines: Vec<(PricedLine, bool)> = Vec::with_capacity(order.lines.len());
+        let mut priced_lines: Vec<(PricedLine, Option<NoteText>)> =
+            Vec::with_capacity(order.lines.len());
         let mut total = Money::zero(session.currency);
         let mut repriced = false;
         for line in &order.lines {
@@ -177,7 +179,14 @@ where
                 PortError::internal(PortName::OrderIn, "the order total overflowed")
             })?;
             repriced |= priced.repriced;
-            priced_lines.push((priced, line.note.is_some()));
+            // The note is kept for the kitchen, in memory only (ADR-0157). It used to be dropped
+            // here, so a delivery order's "no peanuts" reached the log as "a note existed" and the
+            // kitchen never read it.
+            let note = line
+                .note
+                .as_ref()
+                .and_then(|note| NoteText::lenient(note.as_str()));
+            priced_lines.push((priced, note));
         }
 
         // Open the order and record the idempotency row in ONE transaction: `sales.order.opened` +

@@ -14,6 +14,7 @@ import {
   kitchenTickets,
   loadLiveOrders,
   modifierNames,
+  noteLost,
   queueNumberFor,
   refreshQueueNumbers,
   setItemSoldOut,
@@ -452,6 +453,10 @@ export function Kds() {
                             const held = line();
                             return held === undefined ? [] : modifierNames(held);
                           };
+                          const lost = () => {
+                            const held = line();
+                            return held !== undefined && noteLost(held);
+                          };
                           return (
                             <li>
                               <span class="text-xl font-semibold">
@@ -472,6 +477,23 @@ export function Kds() {
                                 <ul class="text-base text-ink-muted" data-outcome="ticket-modifiers">
                                   <For each={modifiers()}>{(modifier) => <li>+ {modifier}</li>}</For>
                                 </ul>
+                              </Show>
+                              {/* The guest's note, last and the loudest thing under the dish, because
+                                  it is the part of a ticket most often about somebody's health
+                                  (ADR-0157). One the edge lost to a restart says so in the danger
+                                  colour and in words: a cook who reads nothing makes the dish as the
+                                  menu describes it. */}
+                              <Show when={line()?.note}>
+                                {(text) => (
+                                  <p class="text-base font-semibold" data-outcome="ticket-note">
+                                    ! {text()}
+                                  </p>
+                                )}
+                              </Show>
+                              <Show when={lost()}>
+                                <p class="text-base font-semibold text-danger" data-outcome="ticket-note-lost">
+                                  {t("kds.note_lost")}
+                                </p>
                               </Show>
                             </li>
                           );
