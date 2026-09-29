@@ -460,6 +460,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // them back for the console. One handle, so the screen shows what the ingest actually recorded.
     let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
 
+    // The vendor catalogue (ADR-0153), built once at boot and refused here if two adapters claim
+    // one id, so a malformed catalogue never serves. Shared by the catalogue read and the
+    // connection routes, which check every write against it.
+    let providers = Arc::new(pos_cloud::providers::registry()?);
+    if config.integration_secret.is_none() {
+        tracing::warn!(
+            "cloud.toml has no integration_secret: vendor connections can be configured, but \
+             any write that carries a credential is refused (ADR-0153)"
+        );
+    }
+
     let service = http::router(app)
         .merge(http::chain_router(
             Arc::clone(&chain_anchors),
@@ -757,12 +768,22 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // behind the session guard.
         .merge(http::capabilities_router(store.admin(), SystemClock))
         // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
-        // settings schema the console draws a connection form from. Built once at boot and refused
-        // there if two adapters claim one id, so a malformed catalogue never serves.
+        // settings schema the console draws a connection form from.
         .merge(http::provider_catalogue_router(
-            Arc::new(pos_cloud::providers::registry()?),
+            Arc::clone(&providers),
             store.admin(),
             SystemClock,
+        ))
+        // A tenant's vendor connections (ADR-0153): per-record CRUD, every write checked against
+        // the provider's schema and every secret sealed under integration_secret before it is
+        // stored. Reads answer which secrets are set, never their values.
+        .merge(http::connection_router(
+            store.connections(),
+            Arc::clone(&providers),
+            config.integration_secret.clone(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
         ))
         // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
         // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned

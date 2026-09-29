@@ -334,6 +334,17 @@ pub struct CloudConfig {
     /// the box. It is emphatically not a store's key: a till receives only its own, over `/sync`.
     #[serde(default)]
     pub archive_key_secret: Option<crate::archive::ArchiveSecret>,
+    /// The box-local key every vendor connection's secret fields are sealed under
+    /// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 4).
+    /// 64 hexadecimal characters — `openssl rand -hex 32`.
+    ///
+    /// **Optional.** Without it the connection routes still read and write settings, and refuse a
+    /// write that carries a secret with a `503` that names this key, rather than store a password
+    /// in the clear. Kept out of the database for the reason `archive_key_secret` is: the off-box
+    /// `pg_dump` must not carry a key beside the ciphertext it opens. `bootstrap.sh` mints it, and
+    /// losing it orphans every secret sealed under it, so it is never rotated in place.
+    #[serde(default)]
+    pub integration_secret: Option<crate::connections::ConnectionSecret>,
     /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
     /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
     /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of
@@ -543,6 +554,21 @@ impl CloudConfig {
         toml::from_str(text)
     }
 
+    /// `integration_secret` is optional, and malformed is refused: absent is a posture (a secret is
+    /// refused on the route that would store it, and says so), while a typo would make every sealed
+    /// credential unopenable and would not be noticed until a vendor call failed.
+    fn validate_integration_secret(&self) -> Result<(), String> {
+        match &self.integration_secret {
+            Some(secret) if !secret.is_well_formed() => Err(format!(
+                "integration_secret must be exactly {} hexadecimal characters — it is a 32-byte \
+                 key, not a passphrase. Generate one with `openssl rand -hex 32`. Remove the key \
+                 entirely to run without sealed vendor credentials (ADR-0153)",
+                crate::connections::KEY_TEXT_LEN
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// Checks the values that are only *meaningful* in a range serde cannot express.
     ///
     /// Kept separate from [`Self::from_toml`] because a range violation is not a parse error and
@@ -591,6 +617,7 @@ impl CloudConfig {
                 crate::archive::KEY_TEXT_LEN
             ));
         }
+        self.validate_integration_secret()?;
         // Zero would delete an archive on the sweep that follows the upload, which is a backup that
         // never existed — and would look, in the file, like the tidy choice.
         if self.archive_retention_days == 0 {
