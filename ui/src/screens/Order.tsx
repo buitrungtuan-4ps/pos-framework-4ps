@@ -21,6 +21,7 @@ import {
   setQuantity,
   loadCheck,
   modifierNames,
+  noteLost,
   moveTable,
   openBill,
   openBillFor,
@@ -361,11 +362,24 @@ export function Order() {
       : [],
   );
 
+  // A guest note for the next item added (ADR-0157): typed before the tap rather than after it, so
+  // adding an item stays one tap and a note costs no tap at all — typing is not a tap (§6). It goes
+  // with the next add and clears, so it can never ride on a second dish by accident.
+  const [note, setNote] = createSignal("");
+  const pendingNote = () => {
+    const trimmed = note().trim();
+    return trimmed === "" ? undefined : trimmed;
+  };
+  const addWithNote = async (item: MenuItemResponse, modifiers: string[]) => {
+    await addItem(key(), item, modifiers, pendingNote());
+    setNote("");
+  };
+
   // Tapping an item: sell it, or ask first. The question is the store's, not this screen's — an
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
     if (groupsFor(item).length === 0) {
-      void guard(() => addItem(key(), item));
+      void guard(() => addWithNote(item, []));
       return;
     }
     setError(null);
@@ -402,7 +416,7 @@ export function Order() {
   // a `409` off a guest's eyeline.
   const confirmItem = (item: MenuItemResponse) =>
     guard(async () => {
-      await addItem(key(), item, chosen());
+      await addWithNote(item, chosen());
       closeChoosing();
     });
 
@@ -677,6 +691,21 @@ export function Order() {
                         data-outcome="line-modifiers"
                       >
                         {modifierNames(line).join(" · ")}
+                      </span>
+                    </Show>
+                    {/* The guest's note, which the kitchen reads on its board and its ticket
+                        (ADR-0157). A note the edge lost to a restart says so, because a server who
+                        sees nothing assumes nothing was asked for. */}
+                    <Show when={line.note}>
+                      {(text) => (
+                        <span class="text-sm font-semibold text-ink" data-outcome="line-note">
+                          {t("order.note", { note: text() })}
+                        </span>
+                      )}
+                    </Show>
+                    <Show when={noteLost(line)}>
+                      <span class="text-sm text-danger" data-outcome="line-note-lost">
+                        {t("order.note_lost")}
                       </span>
                     </Show>
                   </span>
@@ -1183,6 +1212,24 @@ export function Order() {
             value={query()}
             onInput={(event) => setQuery(event.currentTarget.value)}
           />
+        </label>
+        {/* The note rides with the next item added and then clears. 200 characters is the edge's
+            limit; the field stops there rather than letting the edge refuse the add. */}
+        <label class="mb-3 block">
+          <span class="text-sm text-ink-muted">{t("order.note_for_next")}</span>
+          <input
+            id="line-note"
+            type="text"
+            maxLength={200}
+            class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
+            aria-describedby="line-note-hint"
+            value={note()}
+            disabled={billed() || marking()}
+            onInput={(event) => setNote(event.currentTarget.value)}
+          />
+          <span id="line-note-hint" class="text-xs text-ink-muted">
+            {t("order.note_hint")}
+          </span>
         </label>
 
         <Show when={!searching()} fallback={searchResults()}>

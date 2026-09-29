@@ -57,6 +57,7 @@ pub mod http;
 pub mod idgen;
 pub mod installer;
 pub mod lease_state;
+pub mod line_notes;
 pub mod order_in;
 pub mod origins;
 pub mod ota;
