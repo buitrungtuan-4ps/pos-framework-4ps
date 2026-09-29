@@ -213,17 +213,30 @@ export function Kds() {
   const [soldOutError, setSoldOutError] = createSignal<string | null>(null);
   const soldOutNeedle = createMemo(() => fold(soldOutQuery().trim()));
   const soldOutNow = createMemo(() => state.menu.filter((item) => item.sold_out === true));
+
+  // Memoize pre-folded display names for menu items so filtering on keystrokes does not
+  // re-normalize NFD and lower-case strings N times per keystroke.
+  const captions = createMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const item of state.menu) {
+      map.set(item.menu_item_id, [fold(item.display_name)]);
+    }
+    return map;
+  });
+
   // Every dish that can be marked, or the ones the box names. The whole price book, choices
   // included: the extra cheese runs out as surely as the pizza does. An item the console withdrew is
   // not the kitchen's to mark.
-  const markable = createMemo(() =>
-    state.menu.filter(
+  const markable = createMemo(() => {
+    const needle = soldOutNeedle();
+    const map = captions();
+    return state.menu.filter(
       (item) =>
         item.sold_out !== true &&
         item.available &&
-        (soldOutNeedle() === "" || matches(soldOutNeedle(), [fold(item.display_name)])),
-    ),
-  );
+        (needle === "" || matches(needle, map.get(item.menu_item_id) ?? [fold(item.display_name)])),
+    );
+  });
   const openSoldOut = () => {
     setSoldOutError(null);
     setSoldOutQuery("");
