@@ -6,6 +6,11 @@
 //!
 //! `docs/ui-ux.md` §4: a store that lost the internet reads *"Offline — selling normally"*, counts
 //! its pending events, and blocks nothing. This is the read that lets a device say so.
+//!
+//! It also carries what the box last measured of its own clock (roadmap-v3 **PF4**,
+//! [`crate::sntp`]), which the Devices screen draws. A second route would have been a second poll
+//! for one more fact about the same box, and the fields are additive: a device that predates them
+//! reads the outbox exactly as before.
 
 use std::sync::Arc;
 
@@ -19,6 +24,7 @@ use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
 use crate::http::error_response;
+use crate::sntp::{ClockReading, drift_alarm_ms};
 use crate::sync_status::{OUTBOX_PLANNED_DEPTH, SyncReport};
 
 /// The cloud link and the outbox, as a device draws them.
@@ -35,27 +41,46 @@ pub(crate) struct SyncResponse {
     /// When the outbox drain last reached the cloud; absent if it has not since the edge started.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_sync_time: Option<Timestamp>,
+    /// `CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM` past `clock_drift_alarm_ms`, or
+    /// `CLOCK_DRIFT_UNSPECIFIED` when no probe has succeeded since the edge started.
+    clock_drift: &'static str,
+    /// The offset either way past which the clock alarms, in milliseconds.
+    clock_drift_alarm_ms: u64,
+    /// This box's clock minus the time server's, in milliseconds; absent until measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_offset_ms: Option<i64>,
+    /// When that was measured, on this box's own clock; absent until measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_measure_time: Option<Timestamp>,
 }
 
-impl From<SyncReport> for SyncResponse {
-    fn from(report: SyncReport) -> Self {
+impl SyncResponse {
+    fn new(report: SyncReport, clock: Option<ClockReading>) -> Self {
         Self {
             outbox_depth: report.outbox_depth,
             outbox_planned_depth: OUTBOX_PLANNED_DEPTH,
             outbox_level: report.outbox_level.as_wire(),
             cloud_link: report.cloud_link.as_wire(),
             last_sync_time: report.last_sync_time,
+            clock_drift: clock.map_or("CLOCK_DRIFT_UNSPECIFIED", |reading| {
+                reading.drift().as_wire()
+            }),
+            clock_drift_alarm_ms: drift_alarm_ms(),
+            clock_offset_ms: clock.map(|reading| reading.offset_ms),
+            clock_measure_time: clock.map(|reading| reading.measure_time),
         }
     }
 }
 
-/// `GET /api/sync` — the outbox depth, its level, and the cloud link.
+/// `GET /api/sync` — the outbox depth, its level, the cloud link, and the box's clock.
 pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     match edge.sync_report().await {
-        Ok(report) => Json(SyncResponse::from(report)).into_response(),
+        Ok(report) => {
+            Json(SyncResponse::new(report, edge.clock_status().reading())).into_response()
+        }
         Err(error) => error_response(&error),
     }
 }

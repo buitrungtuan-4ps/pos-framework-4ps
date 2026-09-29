@@ -459,6 +459,27 @@ scope is granted. A box with no store key uses its device credential, which carr
 link always presents the device credential, so a key never needs `publish_events` for the edge's
 own sake.
 
+### The clock is measured against a time server
+
+Every fifteen minutes the edge asks a time server what time it is, over SNTP (outbound UDP 123), and
+compares the answer with its own clock (roadmap-v3 PF4). The trading day is worked out from that
+clock, so a box two minutes fast files a sale made just before the day's cutoff under the next day.
+The edge only measures. It never sets the clock, which stays the operating system's job:
+`systemd-timesyncd` on Linux, the Windows Time service on Windows.
+
+```toml
+sntp_server = "time.google.com"   # the default; a host name or an IP address, always port 123
+```
+
+Point it at the time server the shop's network already uses when outbound UDP 123 to the internet is
+blocked. `sntp_server = ""` turns the measurement off, and the edge logs a warning at every start
+saying so. The reading is on the till's **Devices** screen, under *Store server clock*, and in the log:
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN clock: this box's clock is off by more than the drift alarm` (`offset_ms`, `alarm_ms`) | The clock is more than two seconds fast (positive) or slow (negative). | Turn on automatic time. On Windows: Settings → Time & language → **Sync now**. On Linux: `timedatectl set-ntp true`. |
+| `WARN clock: cannot measure this box's clock against the time server` | The server did not answer, or its answer could not be trusted. Logged once, until it answers again. | Check that outbound UDP 123 is allowed, or set `sntp_server` to one the network can reach. The store trades either way. |
+
 ## Printing: fonts, and the cable
 
 Two deployment facts the store needs and the binary cannot supply.

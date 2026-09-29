@@ -367,7 +367,10 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **PF1** — Latency budget as a CI gate: p99 per operation on a standard weak box (2-core/2GB) — add item <30 ms, fire <40 ms, settle <60 ms, `/ws` fan-out <50 ms (kept from P5), config apply <200 ms. Criterion + in-process HTTP benches; a regressing PR goes red.
 - **PF2** — Real CCU load test: one edge under 30 devices + 200 QR sessions + vendor intake at peak; cloud under 500 stores long-polling + NATS ingest. Nightly 8-hour soak with p99 + zero-loss thresholds.
 - **PF3** — Resource ceilings: edge RSS <300 MB, idle CPU <5 %, edge-UI bundle <250 kB gzip; SQLite/WAL tuning; dashboard code-split.
-- **PF4** — Long-run durability: SNTP `ClockSource` + clock-drift alert; prune synced events (the log must not grow without bound); disk-space guard + early alert.
+- **PF4** — Long-run durability: SNTP `ClockSource` + clock-drift alert; prune synced events (the log must not grow without bound); disk-space guard + early alert. **Two of the three are done.**
+  - *Pruning* is retention ([ADR-0145](adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)).
+  - *The clock* is measured against a time server every quarter hour (`pos_edge::sntp`; `sntp_server` in `config.toml`, default `time.google.com`, empty to turn it off). An offset past two seconds either way logs once, and `GET /api/sync` carries the reading, which the till's **Devices** screen shows. It is measured, **not corrected**: setting the time stays the operating system's job, and `SystemClock` is still what every reader gets. It does not reach the cloud yet. [ADR-0073](adr/0073-alerting.md)'s `ClockDrift` alert waits on a heartbeat field and a cloud-side reader.
+  - *The disk-space guard is open.* Nothing in the edge's dependency set can read a volume's free space. `std` has no call for it, and `pos-edge` forbids the `unsafe` that a `statvfs` or `GetDiskFreeSpaceExW` binding needs. It waits on a decision to admit a crate that wraps both.
 
 ### A·P5 — Pilot (ops, gated)
 - **P1** — WS-F security review + human/hardware gate register. **The register is done**
