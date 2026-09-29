@@ -7,6 +7,7 @@ import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { loadSync, state } from "../state/store";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -71,6 +72,15 @@ function familyKey(family: string): MessageKey {
   }
 }
 
+// Which way the store server's clock is off, in words. The figure is shown unsigned beside it: "340 ms
+// behind" reads, "-340 ms" makes a manager work out which of the two clocks the sign is about.
+function clockOffsetKey(offsetMs: number): MessageKey {
+  if (offsetMs > 0) {
+    return "devices.clock_ahead";
+  }
+  return offsetMs < 0 ? "devices.clock_behind" : "devices.clock_exact";
+}
+
 export function Devices() {
   const [devices, setDevices] = createSignal<readonly PairedDevice[]>([]);
   const [durable, setDurable] = createSignal(true);
@@ -95,8 +105,26 @@ export function Devices() {
     }
   };
 
+  // The store server's clock, as it last measured it against a time server (roadmap-v3 PF4). It
+  // rides `GET /api/sync`, which the status bar already polls, so this reads the bar's answer rather
+  // than asking a second time; the read on mount only saves waiting for the bar's next poll. Null
+  // until a measurement has succeeded, which is not the same as a clock in step.
+  const clock = () => {
+    const sync = state.sync;
+    if (sync?.clock_offset_ms === undefined || sync.clock_measure_time === undefined) {
+      return null;
+    }
+    return {
+      offsetMs: sync.clock_offset_ms,
+      measuredMs: Date.parse(sync.clock_measure_time),
+      alarm: sync.clock_drift === "CLOCK_DRIFT_ALARM",
+      limitMs: sync.clock_drift_alarm_ms ?? 0,
+    };
+  };
+
   onMount(() => {
     void load();
+    void loadSync();
     // Forgiving: an edge that predates the route, or a store with nothing published, lists none.
     void api
       .printers()
@@ -341,6 +369,31 @@ export function Devices() {
             )}
           </For>
         </ul>
+      </div>
+
+      <div class="mt-6 rounded-token border border-line p-3">
+        <p class="font-semibold text-ink">{t("devices.clock_title")}</p>
+        <p class="mt-1 text-sm text-ink-muted">{t("devices.clock_hint")}</p>
+        <Show
+          when={clock()}
+          fallback={<p class="mt-2 text-sm text-ink-muted">{t("devices.clock_unmeasured")}</p>}
+        >
+          {(reading) => (
+            <>
+              <p class="mt-2 tabular-nums text-ink">
+                {t(clockOffsetKey(reading().offsetMs), { offset: Math.abs(reading().offsetMs) })}
+              </p>
+              <p class="text-sm text-ink-muted">
+                {t("devices.clock_checked", { moment: pairedAt(reading().measuredMs) })}
+              </p>
+              <Show when={reading().alarm}>
+                <p class="mt-2 rounded-token border border-danger px-3 py-2 text-danger" role="status">
+                  {t("devices.clock_alarm", { limit: reading().limitMs })}
+                </p>
+              </Show>
+            </>
+          )}
+        </Show>
       </div>
 
       <div class="mt-6 rounded-token border border-danger p-3">

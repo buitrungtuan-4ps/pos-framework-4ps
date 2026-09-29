@@ -211,11 +211,10 @@ pub const LAST_SEEN_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
 ///
 /// # Fails closed on a clock that misbehaves
 ///
-/// Worth being explicit, because it is easy to assume otherwise: **no SNTP poll runs on the edge
-/// today.** `pos-edge`'s `sntp` module has no production caller, and
-/// [ADR-0073](../../../docs/adr/0073-alerting.md) already records the drift signal as
-/// computed-but-unread with no producer. So the clock behind this comparison is the host OS clock,
-/// which a system NTP daemon or a person with `date` can step at any moment, in either direction.
+/// Worth being explicit, because it is easy to assume otherwise: **the edge measures its clock but
+/// never corrects it.** The SNTP probe ([`crate::sntp`]) reports drift and leaves setting the time
+/// to the operating system. So the clock behind this comparison is the host OS clock, which a
+/// system NTP daemon or a person with `date` can step at any moment, in either direction.
 ///
 /// So: a **negative** interval (the clock went backwards, or the row was written by a box whose
 /// clock was ahead) and an **implausibly large** one both expire the session. A clock that jumps
@@ -668,8 +667,8 @@ mod tests {
 
     #[test]
     fn a_clock_that_jumps_cannot_hold_a_session_open() {
-        // No SNTP poll runs today, so the host clock is what this reads and a daemon or a person can
-        // step it either way. Both directions must expire rather than extend.
+        // The SNTP probe measures and never corrects, so the host clock is what this reads and a
+        // daemon or a person can step it either way. Both directions must expire rather than extend.
         use super::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, has_gone_idle};
 
         let last_seen = at(1_000_000);
