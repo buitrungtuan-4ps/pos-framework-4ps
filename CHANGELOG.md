@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Notification Bell Keyboard Navigation & Focus Indicators.**
+  `NotificationBell` in `dashboard/src/components/Toast.tsx` now supports `ArrowDown` and `ArrowUp` key navigation through notification history items and carries enhanced focus-visible outline indicators.
+
 ### Security
 
 - **SSRF protection in webhook URL classification now checks SIIT IPv4-translated IPv6 addresses across all prefixes.**

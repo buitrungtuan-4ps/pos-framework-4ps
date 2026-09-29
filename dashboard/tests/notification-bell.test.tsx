@@ -102,13 +102,17 @@ describe("the notification bell", () => {
     const items = screen.getAllByRole("listitem");
     expect(items.length).toBeGreaterThanOrEqual(2);
 
-    fireEvent.keyDown(button, { key: "ArrowDown" });
-    expect(items[0].className).toContain("bg-surface-raised");
+    const firstItem = items[0];
+    const secondItem = items[1];
+    if (firstItem && secondItem) {
+      fireEvent.keyDown(button, { key: "ArrowDown" });
+      expect(firstItem.className).toContain("bg-surface-raised");
 
-    fireEvent.keyDown(button, { key: "ArrowDown" });
-    expect(items[1].className).toContain("bg-surface-raised");
+      fireEvent.keyDown(button, { key: "ArrowDown" });
+      expect(secondItem.className).toContain("bg-surface-raised");
 
-    fireEvent.keyDown(button, { key: "ArrowUp" });
-    expect(items[0].className).toContain("bg-surface-raised");
+      fireEvent.keyDown(button, { key: "ArrowUp" });
+      expect(firstItem.className).toContain("bg-surface-raised");
+    }
   });
 });
