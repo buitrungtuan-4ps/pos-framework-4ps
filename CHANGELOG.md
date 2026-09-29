@@ -36,6 +36,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The notification bell's history can be read from the keyboard.** In the console's top bar, the
+  arrow keys move focus through the open history, wrapping at either end, so a screen reader reads
+  each notification in turn; each one shows a focus ring, Escape from inside the history hands focus
+  back to the bell, and the bell and its clear button carry the kit's focus-visible outline.
+
 - **ComboboxField and MultiComboboxField combobox active option accessibility.**
   Added `aria-activedescendant` to search inputs in `ComboboxField` and `MultiComboboxField` in `dashboard/src/components/ui.tsx` to announce active option focus to screen reader users during keyboard navigation.
 
