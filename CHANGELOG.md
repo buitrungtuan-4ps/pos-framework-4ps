@@ -80,6 +80,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize menu item captions in KDS sold-out item search.**
   `captions` in `ui/src/screens/Kds.tsx` is now memoized with `createMemo` so filtering sold-out items on input keystrokes compares pre-folded display names rather than re-running NFD normalization and regex replaces $N$ times per keystroke.
 
+- **Memoize permission catalogue grouping and active role options in People screen.**
+  `groupedCatalogue` and `activeRoleOptions` are now memoized with `createMemo` in `dashboard/src/screens/People.tsx` to avoid $O(P)$ re-grouping of permissions and re-filtering/mapping of active roles on every input stroke / checkbox toggle when authoring roles.
+
 ### Fixed
 
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
