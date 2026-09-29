@@ -839,3 +839,186 @@ async fn a_test_page_needs_a_manager() {
         "no paper for a refusal"
     );
 }
+
+/// A table asks to see its bill before paying: the pre-bill reaches the receipt printer, says it is
+/// not a receipt, and takes no receipt number — the settle that follows is still receipt one.
+#[tokio::test]
+async fn a_table_prints_its_pre_bill_and_the_receipt_number_is_untouched() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer()]),
+    )))
+    .await;
+    let table = TableId::new(Ulid::from_u128(703));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    let (status, printed) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/check/print"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(printed["prints"], json!(["PRINTED"]));
+    {
+        let written = recorder.written.lock().expect("the recorder");
+        assert_eq!(written.len(), 1, "one pre-bill");
+        let bytes = written.first().expect("the pre-bill");
+        let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+        assert!(contains(b"PRE-BILL"), "it says what it is");
+        assert!(contains(b"Not a receipt"), "and what it is not");
+        assert!(!contains(b"#1"), "it carries no receipt number");
+    }
+
+    // Asking again prints again: a guest who lost the first copy gets a second.
+    let (_, again) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/check/print"),
+        None,
+    )
+    .await;
+    assert_eq!(again["prints"], json!(["PRINTED"]));
+    assert_eq!(recorder.written.lock().expect("the recorder").len(), 2);
+
+    let (_, settled) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(165_000),
+                "applied_to_bill": vnd(165_000),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(settled["receipt_number"], 1, "a pre-bill used no number");
+}
+
+/// A table with nothing on it has nothing to print, and a till is told so rather than being handed
+/// an empty success it would read as paper on the way.
+#[tokio::test]
+async fn a_pre_bill_for_a_free_table_is_nothing_to_print() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(704));
+    let (status, reason) = send_for_reason(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/check/print"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("NOTHING_TO_PRINT"));
+
+    // Seated with a line and no dispatcher: the pre-bill is honest about the missing printer.
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let (status, printed) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/check/print"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(printed["prints"], json!(["NO_PRINTER"]));
+}
+
+/// Closing a shift puts its report on the receipt printer, and says so in the close response.
+#[tokio::test]
+async fn closing_a_shift_prints_its_report() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer()]),
+    )))
+    .await;
+    let (_, opened) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    let shift_id = opened["shift_id"].as_str().expect("a shift id").to_owned();
+    assert!(
+        opened.get("shift_report_print").is_none(),
+        "only a close prints"
+    );
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/count"),
+        Some(json!({ "counted_minor": 480_000 })),
+    )
+    .await;
+
+    let (status, closed) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(closed["shift_report_print"], "PRINTED");
+    let written = recorder.written.lock().expect("the recorder");
+    assert_eq!(written.len(), 1, "one close, one report");
+    let bytes = written.first().expect("the report");
+    let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    assert!(contains(b"SHIFT REPORT"));
+    assert!(contains(b"Short"), "20k under the float reads as short");
+}

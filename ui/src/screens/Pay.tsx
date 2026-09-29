@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
-import { ApiError } from "../api/client";
+import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
 import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
@@ -37,6 +37,7 @@ import {
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { printOutcomeKey } from "../lib/print";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
 // store can hold reasons for one and not the other — and the picker here offers only the entries
@@ -99,27 +100,9 @@ function distinctAndSpendable(keys: readonly number[]): boolean {
  * till genuinely does not know whether paper came out.
  */
 function receiptPrintKey(outcome: string | undefined): MessageKey {
-  switch (outcome) {
-    case "PRINTED":
-      return "pay.printed";
-    case "NO_PRINTER":
-      return "pay.print_no_printer";
-    case "PRINTER_UNAVAILABLE":
-      return "pay.print_unavailable";
-    case "UNPRINTABLE_TEXT":
-      return "pay.print_unprintable";
-    // A printer whose transport belongs to another device (ADR-0112). Three answers rather than
-    // one, because they send a cashier to three different places: wait, go and look at the
-    // terminal, or go and look at the printer.
-    case "QUEUED_TO_AGENT":
-      return "pay.print_queued";
-    case "PRINT_AGENT_UNAVAILABLE":
-      return "pay.print_agent_unavailable";
-    case "PRINT_QUEUE_FULL":
-      return "pay.print_queue_full";
-    default:
-      return "pay.printing";
-  }
+  return outcome === undefined
+    ? "pay.printing"
+    : printOutcomeKey(outcome, "pay.printed", "pay.print_unavailable");
 }
 
 export function Pay() {
@@ -181,6 +164,24 @@ export function Pay() {
   // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
   // than becoming a figure the screen then reformats under the operator's fingers.
   const [discountText, setDiscountText] = createSignal("");
+
+  // This bill's pre-bill, for the guest who wants to check it on paper before paying — on a split
+  // table, their own part (roadmap-v3 B2.1). What came of it, or null before the first press.
+  const [preBill, setPreBill] = createSignal<string | null>(null);
+  const printPreBill = async () => {
+    const id = billId();
+    if (id === null) {
+      return;
+    }
+    setError(null);
+    setPreBill(null);
+    try {
+      const printed = await api.printBillCheck(id);
+      setPreBill(printed.prints[0] ?? null);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
 
   // What the bill on screen owes, read by its own id. Once a table is split, the table's check is
   // every open part together, and the guest at the till is asking about theirs (ADR-0128).
@@ -786,6 +787,26 @@ export function Pay() {
               >
                 {t("pay.put_back", { count: otherParts().length + 1 })}
               </button>
+            </Show>
+
+            {/* Before any money is taken: once a payment is against the bill, the guest has agreed
+                the figure and the receipt is the paper that follows. */}
+            <Show when={taken().length === 0}>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+                disabled={billId() === null || check() === null}
+                onClick={() => void printPreBill()}
+              >
+                {t("order.pre_bill")}
+              </button>
+            </Show>
+            <Show when={preBill()}>
+              {(outcome) => (
+                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="bill-pre-bill-print">
+                  {t(printOutcomeKey(outcome(), "order.pre_bill_printed"))}
+                </p>
+              )}
             </Show>
 
             <Show when={error()}>

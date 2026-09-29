@@ -17,11 +17,12 @@ use serde::{Deserialize, Serialize};
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::ids::ShiftId;
+use pos_proto::ids::{EventId, ShiftId};
 use pos_proto::money::Money;
 
 use crate::app::{Edge, ShiftView};
 use crate::http::{bad_request, error_response, parse_ulid};
+use crate::printing::{PrintOutcome, Printers};
 
 /// Opening a shift with a starting float.
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,10 @@ pub(crate) struct ShiftResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     variance: Option<Money>,
     print_shift_report: bool,
+    /// What came of printing the shift report, on the close that asked for one — the same wire
+    /// tokens a settle reports its receipt with. Absent on every other command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shift_report_print: Option<String>,
 }
 
 impl From<ShiftView> for ShiftResponse {
@@ -61,6 +66,7 @@ impl From<ShiftView> for ShiftResponse {
             counted_amount: view.counted_amount,
             variance: view.variance,
             print_shift_report: view.print_shift_report,
+            shift_report_print: None,
         }
     }
 }
@@ -112,10 +118,15 @@ where
     )
 }
 
-/// `POST /api/shifts/{id}/close` — close a counted shift, revealing the variance.
+/// `POST /api/shifts/{id}/close` — close a counted shift, revealing the variance, and print the
+/// shift report when the domain asks for one.
+///
+/// The report prints after the commit, never before, for the reason a receipt does: a printer that
+/// is down must not reopen a shift, and a close that failed must never have printed.
 pub(crate) async fn close<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
     Path(id): Path<String>,
 ) -> Response
 where
@@ -124,7 +135,31 @@ where
     let Some(shift_id) = parse_ulid(&id).map(ShiftId::new) else {
         return bad_request("a shift id is a ULID");
     };
-    respond(edge.close_shift(actor, shift_id).await)
+    let view = match edge.close_shift(actor, shift_id).await {
+        Ok(view) => view,
+        Err(error) => return error_response(&error),
+    };
+    let printed = match (view.print_shift_report, view.report.as_ref()) {
+        (true, Some(report)) => Some(match printers.as_deref() {
+            // The shift's own id as the idempotency key: a close retried after an ambiguous failure
+            // prints one report, not two.
+            Some(printers) => {
+                printers
+                    .print_shift_report(
+                        &edge.session(),
+                        edge.store_id(),
+                        EventId::new(report.shift_id.as_ulid()),
+                        report,
+                    )
+                    .await
+            }
+            None => PrintOutcome::NoPrinter,
+        }),
+        _ => None,
+    };
+    let mut response = ShiftResponse::from(view);
+    response.shift_report_print = printed.map(|outcome| outcome.as_wire().to_owned());
+    Json(response).into_response()
 }
 
 /// Maps a shift command outcome to a response.
