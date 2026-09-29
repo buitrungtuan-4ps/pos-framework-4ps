@@ -65,6 +65,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize unfired lines and course waiting counts on the order screen.**
   `unfiredLinesForTable` is now memoized with `createMemo` in `ui/src/screens/Order.tsx`, and waiting line counts per course are pre-aggregated in a single $O(N)$ pass (`courseWaitingCounts`) to avoid $O(C \cdot N)$ array filtering per course inside JSX loops.
 
+- **Memoize permission catalogue grouping and active role options in People screen.**
+  `groupedCatalogue` and `activeRoleOptions` are now memoized with `createMemo` in `dashboard/src/screens/People.tsx` to avoid $O(P)$ re-grouping of permissions and re-filtering/mapping of active roles on every input stroke / checkbox toggle when authoring roles.
+
 ### Fixed
 
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
