@@ -8,7 +8,7 @@
 // affordances are gated on the operator holding console.people.manage (owner/admin) — the server
 // re-checks every route; the gate here only hides what a role cannot do.
 
-import { createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
@@ -470,7 +470,9 @@ export function People() {
     }
   };
 
-  const groupedCatalogue = () => {
+  // Optimization: Memoize permission catalogue grouping using createMemo to avoid re-grouping,
+  // Map allocations, and entry transformations on every keystroke/checkbox toggle in the role drawer.
+  const groupedCatalogue = createMemo(() => {
     const groups = new Map<string, PermissionInfo[]>();
     for (const info of catalogue()) {
       const list = groups.get(info.group) ?? [];
@@ -478,7 +480,15 @@ export function People() {
       groups.set(info.group, list);
     }
     return [...groups.entries()].map(([group, items]) => ({ group, items }));
-  };
+  });
+
+  // Optimization: Memoize active role options using createMemo to avoid re-filtering and re-mapping
+  // roles on every render of the assignments section.
+  const activeRoleOptions = createMemo(() =>
+    roles()
+      .filter((role) => role.status === "active")
+      .map((role) => ({ value: role.role_template_id, label: role.name })),
+  );
 
   // `sortField` is the server's token (`EmployeeSort`), `sortValue` the local comparator. Both are
   // given: the table is server-sorted, so only `sortField` is consulted, and `sortValue` is what the
@@ -786,9 +796,7 @@ export function People() {
                     <SelectField
                       label={t("people.role")}
                       value={assignRole()}
-                      options={roles()
-                        .filter((role) => role.status === "active")
-                        .map((role) => ({ value: role.role_template_id, label: role.name }))}
+                      options={activeRoleOptions()}
                       onChange={setAssignRole}
                       placeholder={t("people.choose")}
                     />
