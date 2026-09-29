@@ -38,6 +38,11 @@
 **Learning:** SIIT IPv4-translated addresses embed an IPv4 address in the low 32 bits when `segments[4] == 0xffff && segments[5] == 0`, regardless of the routing prefix in the upper 64 bits. Similar to 6over4, zero padding (`a == 0` in `a.b.c.d`) on non-zero 64-bit prefixes represents standard IPv6 host suffixes rather than embedded IPv4 addresses.
 **Prevention:** Inspect interface identifiers with `segments[4] == 0xffff && segments[5] == 0` across all IPv6 prefixes, evaluating `a.b.c.d` through `classify_v4` when `a != 0` or when `segments[0..4]` is all-zero.
 
+## 2026-09-25 - [SSRF IPv6 Discard-Only and ORCHID Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check RFC 6666 Discard-Only (`100::/64`) or RFC 4843 / RFC 7343 ORCHIDv1/v2 (`2001:10::/28` and `2001:20::/28`) IPv6 ranges, allowing non-globally-routable IPv6 destinations to fall through `classify_v6` as public unicast addresses.
+**Learning:** Standard IPv6 unicast classification must account for non-routable special-purpose IPv6 blocks like `100::/64` (Discard-Only) and `2001:10::/28` / `2001:20::/28` (ORCHID / ORCHIDv2) in addition to loopback, link-local, and documentation ranges.
+**Prevention:** Check `first == 0x0100 && second == 0 && third == 0 && segments[3] == 0` (`100::/64`) and `first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020)` (`2001:10::/28`, `2001:20::/28`) in `classify_v6` to refuse non-routable special-purpose IPv6 addresses.
+
 ## 2026-09-26 - [IPv4-Mapped IPv6 Subnet SSRF Bypass]
 **Vulnerability:** Webhook destinations could bypass SSRF IPv6 checks when hostnames/IPs were provided using IPv4-mapped interface identifiers (`0:ffff:a.b.c.d` or `ffff:ffff:a.b.c.d`, RFC 4291) attached to arbitrary non-zero 64-bit IPv6 prefixes (such as `2001:db8::ffff:127.0.0.1` or `2001:1234:5678:9abc:ffff:ffff:169.254.169.254`), because Rust std's `to_ipv4_mapped()` requires the prefix to be all-zero (`::ffff:a.b.c.d`).
 **Learning:** IPv4-mapped interface identifiers embed an IPv4 address in the low 32 bits when `(segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff`, regardless of the upper 64-bit routing prefix.
