@@ -138,6 +138,13 @@ pub const MAX_UNCONFIRMED_BOOTS: u32 = 3;
 /// and two of them rotating one file would cost the running store its log — ADR-0117 decision 1).
 pub const SELF_TEST_FLAG: &str = "--self-test";
 
+/// How many times a *text file busy* refusal to start the staged binary is retried — see
+/// [`SystemdInstaller::spawn_self_test`]. The window it waits out closes in microseconds.
+const SPAWN_BUSY_RETRIES: u32 = 10;
+
+/// How long to wait before each of those retries.
+const SPAWN_BUSY_BACKOFF: Duration = Duration::from_millis(20);
+
 /// How long the staged binary gets to answer `--self-test` before the attempt is judged failed.
 ///
 /// The check itself is a config parse and a read-only database open, so this is generous by an order
@@ -397,6 +404,43 @@ impl SystemdInstaller {
         PathBuf::from(name)
     }
 
+    /// Starts the staged binary as `pos-edge --self-test`, riding out a *text file busy* refusal.
+    ///
+    /// `execve` refuses a file some process still holds open for writing, and a file this process
+    /// just wrote can be held that way by a process it did not write it in: another thread's
+    /// `fork`, between the fork and its own `exec`, carries a copy of every descriptor open at that
+    /// instant — the staged file's included, for the moment [`Self::apply`] had it open. The copy
+    /// closes at that child's `exec`, microseconds later. So the refusal is transient and says
+    /// nothing about the release, and reading it as a failed self-test would roll back a good
+    /// update. It is retried a bounded number of times; any other failure to spawn is returned at
+    /// once, because a binary for the wrong architecture does not get better by waiting.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the install seam is synchronous (ADR-0055); the wait between attempts is a few \
+                  tens of milliseconds on the updater's own thread, and only after a refusal"
+    )]
+    fn spawn_self_test(staged: &Path) -> std::io::Result<std::process::Child> {
+        let mut attempts = 0_u32;
+        loop {
+            let spawned = std::process::Command::new(staged)
+                .arg(SELF_TEST_FLAG)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match spawned {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy
+                        && attempts < SPAWN_BUSY_RETRIES =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(SPAWN_BUSY_BACKOFF);
+                }
+                result => return result,
+            }
+        }
+    }
+
     /// Waits for `child` through at most [`SELF_TEST_POLLS`] polls, killing it and reporting failure
     /// if it overruns.
     ///
@@ -483,13 +527,7 @@ impl UpdateInstaller for SystemdInstaller {
     /// check exists to catch, and it is a routine rollback rather than a fault of the installer.
     fn self_test(&self) -> Result<bool, InstallError> {
         let staged = self.bin.join(STAGED);
-        let spawned = std::process::Command::new(&staged)
-            .arg(SELF_TEST_FLAG)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        match spawned {
+        match Self::spawn_self_test(&staged) {
             Ok(mut child) => Self::wait_bounded(&mut child),
             Err(error) => {
                 tracing::warn!(

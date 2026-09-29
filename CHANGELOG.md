@@ -90,6 +90,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A good update is no longer rolled back because its file was briefly "busy".** The store server
+  starts a downloaded release with `--self-test` before switching to it. If another part of the
+  process started a program at the same instant, the operating system could refuse to run the file
+  just written ("text file busy"), and the updater read that as a failed self-test and discarded a
+  release that was fine. That refusal clears within microseconds, so starting the self-test now
+  retries it a few times; any other failure to start is still a failed self-test at once. It also
+  made `installer::tests::promote_puts_the_bytes_in_the_spare_slot_on_trial` fail at random in CI.
+  **Upgrade note:** none.
+
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
   A bill names the dishes it covers when it opens, so a dish added afterwards was on no bill. The
   guest paid the old total, the dish disappeared from the table when it was cleared, and nobody was
