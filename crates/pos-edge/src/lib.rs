@@ -63,6 +63,7 @@ pub mod ota;
 pub mod ota_client;
 pub mod ota_state;
 pub mod pairing;
+pub mod paper_labels;
 pub mod print_agent;
 pub mod print_queue;
 pub mod print_wake;

@@ -147,6 +147,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
+  words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
+  toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language
+  instead of always being English. On a store PC with no fonts to rasterise with they stay English,
+  so a label is never what stops a receipt printing. Other languages still print English.
+  **Upgrade note:** none — a store with no display language, or not Vietnamese, prints exactly as
+  before.
+
 - **The store server checks its own clock, and says when it is wrong.** Every fifteen minutes the
   edge asks a time server for the time over SNTP and compares it with its own clock. The trading day
   is worked out from that clock, so a box two minutes fast files a sale made just before the day's
