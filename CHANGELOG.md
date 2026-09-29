@@ -147,6 +147,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A device whose link drops picks up where it left off.** A till or kitchen display that lost
+  Wi-Fi for twenty seconds used to come back to the live stream and nothing else. The fires, bumps
+  and settles from those twenty seconds never reached it, nothing said so, and only a reload brought
+  them back.
+  - Every frame on `/ws` now carries the edge's `stream_id` and a `sequence`. A device that
+    reconnects names the last one it applied, as `/ws?stream_id=…&after_sequence=…`. The edge sends
+    it every frame after that one, then carries on live.
+  - The edge keeps the last 1,024 frames in memory for this: one buffer shared by every device,
+    about a megabyte. Sometimes it cannot replay: the device was away for longer, the edge restarted
+    since (a restart starts a new stream), or the device dropped before it saw a single frame. Then
+    it answers `resync`, and the till re-reads what is open, as it already did for a device that fell
+    behind.
+  - The till also reloads when a frame does not follow the one before it, rather than trusting a
+    stream with a hole in it.
+  - A device that sends neither parameter is served exactly as before.
+
+  **Upgrade note:** additive, with no `PROTOCOL_VERSION` change and no route, event, permission or
+  migration change. Each `/ws` frame gains two fields, which a client that does not know them
+  ignores, and the two query parameters are optional. A till running against an edge from before
+  this release sees no positions, and it behaves on a reconnect as it did before. Resuming across an
+  edge restart, from the durable log, is still roadmap-v3 B6.5.
+
+  Docs: `docs/architecture.md` §2, `docs/ui-ux.md` §4, `docs/roadmap-v3.md` B6.5.
+
 - **Guests move to another table, and take their order with them.** *Move table* in the order
   screen's header lists the free tables on the floor. A tap on one moves the guests' order there and
   opens the new table, which says where they came from. Before this, guests who asked for the window

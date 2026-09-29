@@ -1003,6 +1003,151 @@ test("a kitchen board that reloads still knows when the food was ordered", async
   }
 });
 
+/**
+ * Puts a board's live link where a test can cut it and hold it down, as a Wi-Fi blip does.
+ *
+ * Every `/ws` the page opens is routed through here and on to the real edge, and each is recorded
+ * with the frames the edge sent on it (`heard[n]` for the n-th socket). Once `drop()` has cut the
+ * socket that is open, the page's next one waits until `restore()`, so whatever the edge publishes
+ * in between reaches this device on no socket at all. That leaves two ways for it to arrive: the
+ * edge's replay after the position the board names, or a reload. `readsSinceRestore()` counts the
+ * reloads, so a test can tell the two apart — from the restore on, because a till's actions while
+ * the link is down take long enough that no boot read is still in flight by then.
+ */
+async function aLinkThatCanDrop(page) {
+  const links = [];
+  const heard = [];
+  let reads = 0;
+  let readsAtRestore = 0;
+  let restore = () => {};
+  let restored = null;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/orders/live") {
+      reads += 1;
+    }
+  });
+  await page.routeWebSocket(
+    (url) => url.pathname === "/ws",
+    async (link) => {
+      links.push(link);
+      const frames = [];
+      heard.push(frames);
+      if (restored !== null) {
+        await restored;
+      }
+      const edgeSide = link.connectToServer();
+      edgeSide.onMessage((message) => {
+        frames.push(message);
+        link.send(message);
+      });
+    },
+  );
+  return {
+    links,
+    heard,
+    reads: () => reads,
+    readsSinceRestore: () => reads - readsAtRestore,
+    async drop() {
+      restored = new Promise((resolve) => {
+        restore = resolve;
+      });
+      const count = links.length;
+      await links[count - 1].close();
+      // The board notices, and its next socket is waiting.
+      await expect.poll(() => links.length).toBe(count + 1);
+    },
+    restore() {
+      readsAtRestore = reads;
+      restore();
+    },
+  };
+}
+
+// A kitchen board whose link drops for a moment still gets the food fired while it was gone, and it
+// gets it from the edge's replay, not from a reload.
+//
+// The board hears the table open, which gives it a position. Its link drops, the till sends the
+// order while it is down, and the board's next socket names that position. The fire reaches the
+// board with no read of what is open, which is the difference between resuming and reloading.
+test("a kitchen board that drops its link gets the food fired meanwhile, without reloading", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+
+    const board = await context.newPage();
+    const link = await aLinkThatCanDrop(board);
+    await board.goto(`${edge.baseURL}/kds`);
+    await expect(board.getByText("Store connected")).toBeVisible();
+    await seatTable(till);
+    await addItem(till);
+    await expect.poll(() => link.heard[0].length).toBeGreaterThan(0);
+    const seen = JSON.parse(link.heard[0][0]);
+    expect(typeof seen.stream_id, "every frame says which stream it is on").toBe("string");
+    expect(typeof seen.sequence, "and where on it").toBe("number");
+    await expect(board.locator('[data-outcome="ticket-waiting"]')).toHaveCount(0);
+
+    await link.drop();
+    await sendOrder(till);
+    link.restore();
+
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    const resumed = new URL(link.links[1].url()).searchParams;
+    expect(resumed.get("stream_id")).toBe(seen.stream_id);
+    expect(Number(resumed.get("after_sequence"))).toBeGreaterThanOrEqual(seen.sequence);
+    const replayed = link.heard[1].map((frame) => JSON.parse(frame));
+    expect(replayed.map((frame) => frame.event_type)).toContain("sales.order_line.fired");
+    expect(replayed.some((frame) => frame.type === "resync"), "nothing was a gap").toBe(false);
+    expect(link.readsSinceRestore(), "replayed, not reloaded").toBe(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A board whose link drops before it has seen a single change has no position to name. It must not
+// trust the live stream alone, so it reloads, and the food fired while it was gone is still there.
+//
+// The gap path through the real edge: the board asks to resume from nothing, the edge answers
+// `resync` once the socket is subscribed, and the board makes the read a restarting device makes.
+test("a kitchen board that drops its link before it heard anything reloads, and misses nothing", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+
+    const board = await context.newPage();
+    const link = await aLinkThatCanDrop(board);
+    await board.goto(`${edge.baseURL}/kds`);
+    await expect(board.getByText("Store connected")).toBeVisible();
+    await expect.poll(link.reads).toBeGreaterThan(0);
+    expect(link.heard[0], "the board has heard nothing it could name").toHaveLength(0);
+
+    await link.drop();
+    await seatTable(till);
+    await addItem(till);
+    await sendOrder(till);
+    link.restore();
+
+    await expect(board.locator('[data-outcome="ticket-waiting"]').first()).toBeVisible();
+    const resumed = new URL(link.links[1].url()).searchParams;
+    expect(resumed.get("stream_id"), "it has no stream to name").toBeNull();
+    expect(resumed.get("after_sequence")).toBe("0");
+    await expect.poll(() => link.heard[1].length).toBeGreaterThan(0);
+    expect(JSON.parse(link.heard[1][0]).type, "the edge said it cannot resume the board").toBe(
+      "resync",
+    );
+    expect(link.readsSinceRestore(), "so the board reloaded").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A till that reloads still knows which tables have people at them.
 //
 // The floor is the home screen, and it drew every table free after a refresh. `GET /api/floor`
