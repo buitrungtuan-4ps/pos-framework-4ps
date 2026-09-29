@@ -94,6 +94,9 @@ const Fleet = lazy(() =>
 const Inventory = lazy(() =>
   import("./screens/Inventory").then((module) => ({ default: module.Inventory })),
 );
+const Integrations = lazy(() =>
+  import("./screens/Integrations").then((module) => ({ default: module.Integrations })),
+);
 const ReasonCodes = lazy(() =>
   import("./screens/ReasonCodes").then((module) => ({ default: module.ReasonCodes })),
 );
@@ -185,6 +188,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   campaigns: Campaigns,
   inventory: Inventory,
   reasonCodes: ReasonCodes,
+  integrations: Integrations,
   storeGroups: StoreGroups,
   releases: Releases,
   channels: Channels,

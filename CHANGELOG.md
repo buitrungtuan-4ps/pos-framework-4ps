@@ -90,6 +90,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A good update is no longer rolled back because its file was briefly "busy".** The store server
+  starts a downloaded release with `--self-test` before switching to it. If another part of the
+  process started a program at the same instant, the operating system could refuse to run the file
+  just written ("text file busy"), and the updater read that as a failed self-test and discarded a
+  release that was fine. That refusal clears within microseconds, so starting the self-test now
+  retries it a few times; any other failure to start is still a failed self-test at once. It also
+  made `installer::tests::promote_puts_the_bytes_in_the_spare_slot_on_trial` fail at random in CI.
+  **Upgrade note:** none.
+
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
   A bill names the dishes it covers when it opens, so a dish added afterwards was on no bill. The
   guest paid the old total, the dish disappeared from the table when it was cleared, and nobody was
@@ -155,6 +164,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   **Upgrade note:** none — a store with no display language, or not Vietnamese, prints exactly as
   before.
 
+- **A device whose link drops picks up where it left off.** A till or kitchen display that lost
+  Wi-Fi for twenty seconds used to come back to the live stream and nothing else. The fires, bumps
+  and settles from those twenty seconds never reached it, nothing said so, and only a reload brought
+  them back.
+  - Every frame on `/ws` now carries the edge's `stream_id` and a `sequence`. A device that
+    reconnects names the last one it applied, as `/ws?stream_id=…&after_sequence=…`. The edge sends
+    it every frame after that one, then carries on live.
+  - The edge keeps the last 1,024 frames in memory for this: one buffer shared by every device,
+    about a megabyte. Sometimes it cannot replay: the device was away for longer, the edge restarted
+    since (a restart starts a new stream), or the device dropped before it saw a single frame. Then
+    it answers `resync`, and the till re-reads what is open, as it already did for a device that fell
+    behind.
+  - The till also reloads when a frame does not follow the one before it, rather than trusting a
+    stream with a hole in it.
+  - A device that sends neither parameter is served exactly as before.
+
+  **Upgrade note:** additive, with no `PROTOCOL_VERSION` change and no route, event, permission or
+  migration change. Each `/ws` frame gains two fields, which a client that does not know them
+  ignores, and the two query parameters are optional. A till running against an edge from before
+  this release sees no positions, and it behaves on a reconnect as it did before. Resuming across an
+  edge restart, from the durable log, is still roadmap-v3 B6.5.
+
+  Docs: `docs/architecture.md` §2, `docs/ui-ux.md` §4, `docs/roadmap-v3.md` B6.5.
+
 - **The store server checks its own clock, and says when it is wrong.** Every fifteen minutes the
   edge asks a time server for the time over SNTP and compares it with its own clock. The trading day
   is worked out from that clock, so a box two minutes fast files a sale made just before the day's
@@ -178,6 +211,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
   Docs: `docs/roadmap-v3.md` PF4, `docs/ui-ux.md` §4, `docs/capacity-and-reliability.md` §5,
   `deploy/edge/README.md` (Configuration).
+
+- **The console has an Integrations screen.** Under Settings, owners and admins see each kind of
+  system the tenant can connect — e-invoicing, QR payments, card terminals, delivery marketplaces,
+  couriers, accounting — with the vendors this cloud offers for each and the connections already
+  made. Connecting one, editing it or switching vendor is a form drawn from that vendor's own
+  settings schema ([ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)), so a
+  vendor added to the cloud appears here with its form and nothing in the console changes. A
+  credential is typed once and never shown again: the field says a value is stored, leaving it blank
+  keeps it, and an optional one can be removed. A settings refusal names the fields to fix. Labels
+  the console does not ship yet fall back to the field's key. **Upgrade note:** none.
 
 - **A store is told which vendor connections serve it.** A new `integrations` config node
   (`pos_proto::integrations`, [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)

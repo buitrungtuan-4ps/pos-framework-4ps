@@ -191,6 +191,19 @@ export const SCREENS = {
     tenantScoped: true,
     icon: "clipboard-list",
   },
+  // Vendor integrations (ADR-0153): which e-invoice provider, QR gateway, marketplace, courier or ERP
+  // serves the tenant, configured from each provider's own schema. Owner/admin only, matching the
+  // server's console.integrations.manage — a connection carries the credentials legal invoices and
+  // payments go out under.
+  integrations: {
+    path: "/integrations",
+    key: "nav.integrations",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "plug-zap",
+  },
   channels: {
     path: "/channels",
     key: "nav.channels",
@@ -402,7 +415,7 @@ export const NAV_GROUPS: readonly {
   // their lifecycle; this one is about what runs on them.
   {
     key: "nav.group.settings",
-    items: ["config", "storeGroups", "releases", "storeSettings", "translations"],
+    items: ["config", "storeGroups", "releases", "storeSettings", "integrations", "translations"],
   },
   // Who and what may reach this console: console users, machine keys, and the endpoints it calls
   // out to. All three answer "who is allowed in, or out".
