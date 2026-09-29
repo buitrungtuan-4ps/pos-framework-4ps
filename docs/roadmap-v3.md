@@ -422,7 +422,7 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 - **B6.2** — Cloud webhooks: event-type filter.
 - **B6.3** — `vendor_id` + external↔internal item map + generic delivery address on intake.
 - **B6.4** — Wire `DeliveryVendor` + live `vendors` node + staff-confirm release; device gains an address field (pre-configure a printer IP).
-- **B6.5** — Production realtime contract: a read-only GET snapshot for integrators + monotonic sequence on `/ws` + `?from_seq=` resume from the durable event log + a versioned contract doc. (Today `/ws` is a live fan-out with no replay — a reconnecting KDS loses events.)
+- **B6.5** — Production realtime contract: a read-only GET snapshot for integrators + monotonic sequence on `/ws` + resume from the durable event log + a versioned contract doc. **The in-memory half has landed**: every `/ws` frame carries `stream_id` and `sequence`, and `?stream_id=…&after_sequence=…` replays from the last 1,024 frames or answers `resync` ([`architecture.md`](architecture.md) §2), so a KDS that drops Wi-Fi no longer loses what happened meanwhile. What remains is riding out an edge *restart*, which needs the durable log, plus the snapshot and the contract doc. The log pages by `event_id`, which is not commit order, so that resume is a read the event-store port does not offer today.
 
 ### B·W7 — Config platform v2 (cloud is the single source, with force, with visible drift)
 - **B7.1** — Shared tenant/brand layers + real fan-out (today the tree is per `(tenant, store)`, so publishing "tenant" touches one store).
