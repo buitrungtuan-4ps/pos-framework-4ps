@@ -90,6 +90,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A good update is no longer rolled back because its file was briefly "busy".** The store server
+  starts a downloaded release with `--self-test` before switching to it. If another part of the
+  process started a program at the same instant, the operating system could refuse to run the file
+  just written ("text file busy"), and the updater read that as a failed self-test and discarded a
+  release that was fine. That refusal clears within microseconds, so starting the self-test now
+  retries it a few times; any other failure to start is still a failed self-test at once. It also
+  made `installer::tests::promote_puts_the_bytes_in_the_spare_slot_on_trial` fail at random in CI.
+  **Upgrade note:** none.
+
 - **A dish rung onto a table after its bill was opened is refused, instead of never being charged.**
   A bill names the dishes it covers when it opens, so a dish added afterwards was on no bill. The
   guest paid the old total, the dish disappeared from the table when it was cleared, and nobody was
@@ -146,6 +155,14 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   snapped to the store's cash increment as the pay screen's are.
 
 ### Added
+
+- **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
+  words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh
+  toán*, *BÁO CÁO CA*, *Chênh lệch*, *Thiếu / Khớp / Thừa* — follow the store's display language
+  instead of always being English. On a store PC with no fonts to rasterise with they stay English,
+  so a label is never what stops a receipt printing. Other languages still print English.
+  **Upgrade note:** none — a store with no display language, or not Vietnamese, prints exactly as
+  before.
 
 - **A device whose link drops picks up where it left off.** A till or kitchen display that lost
   Wi-Fi for twenty seconds used to come back to the live stream and nothing else. The fires, bumps

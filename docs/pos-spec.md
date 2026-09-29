@@ -136,6 +136,8 @@ Items carry `sku`, `barcode`, and variant fields from day one so enabling retail
 
 **Thermal printer caveat:** most ESC/POS printers lack full Unicode fonts, so Vietnamese diacritics and CJK print as garbage. Any line containing characters outside the printer's code page is **rendered as a bitmap** before printing — a few milliseconds slower, correct on every model.
 
+**The words on paper.** The fixed labels a receipt, a pre-bill and a shift report print ("Subtotal", "Tax", "PRE-BILL", "Variance"…) come from a table per language in the edge (`crates/pos-edge/src/paper_labels.rs`), chosen by the store's display language — Vietnamese and English today. When the store PC has no fonts to rasterise with, the labels fall back to English, because a label must never be the line that stops a receipt printing. Printing in the *guest's* language rather than the store's is not built yet.
+
 Cloud screen: a translation grid (English ↔ target), a "missing only" filter, completion percentage, and CSV import/export.
 
 ## 13. QR ordering (cloud module)
