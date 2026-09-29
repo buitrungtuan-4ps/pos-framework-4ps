@@ -51,8 +51,8 @@ can grow into C later without changing what a device sees.
 3. **The kitchen and the till read it where they already read the line.**
    - The kitchen ticket prints the note under the item, emphasised.
    - `GET /api/orders/live` gains `note` on each line.
-   - The `/ws` frame for `sales.order_line.added` gains `note` beside the event's payload. The frame
-     is the edge talking to its own devices; the event in the log is unchanged.
+   - The `/ws` frame for `sales.order_line.added` carries `note` in its payload. The frame is the
+     edge talking to its own devices; the event written to the log is unchanged.
 4. **A lost note is said to be lost.** After a restart, a line's `note_present` survives in the log
    and its text does not. The till, the board and the ticket then show *"A note was written for this
    line — ask the server"* instead of nothing. A lost note is visible, never silent.
