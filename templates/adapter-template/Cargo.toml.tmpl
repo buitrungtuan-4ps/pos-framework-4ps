@@ -15,6 +15,8 @@ repository.workspace   = true
 # The backbone this adapter implements: the port, its value types, and PortError. Paths, not versions.
 pos-ports = { path = "../../pos-ports" }
 pos-proto = { path = "../../pos-proto" }
+# The provider catalogue (ADR-0153): the descriptor this adapter exports as `PROVIDER`.
+pos-providers = { path = "../../pos-providers" }
 
 serde      = { workspace = true }
 serde_json = { workspace = true }
