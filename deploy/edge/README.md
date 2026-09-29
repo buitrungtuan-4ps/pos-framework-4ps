@@ -50,6 +50,21 @@ never reaches a healthy boot, the edge counts its attempts, and past three it po
 at `previous`, restores the `.pre-update` database and exits again — so a bad release heals itself
 instead of needing somebody at the shop.
 
+**How the edge exits says why** ([ADR-0113](../../docs/adr/0113-the-host-agent.md)):
+
+| Code | Meaning |
+|---|---|
+| `0` | Stopped, and its outbox drained |
+| `10` | Restart wanted: an update was installed, or a bad one rolled back |
+| `11` | Stopped with events still in the outbox |
+
+With code `11` the events are safe in `store.sqlite` and go out at the next start. The edge also
+writes `drain-status.json` beside the database: the store, the outbox depth it stopped at, the drain
+budget and time spent, and when it finished. The unit lists `10` and `11` under `SuccessExitStatus`,
+so an update is not logged as a failure. A hosted placement's host agent reads the code and the file
+before it removes a container's volume. The Windows service reports `0` for a stop either way,
+because a non-zero code there runs the failure action and would start a stopped store again.
+
 `/usr/local/bin/pos-edge` is still worth keeping: it is the operator's rescue copy and what
 `pos-edge --self-test` is run from by hand. It is simply not what the service runs.
 

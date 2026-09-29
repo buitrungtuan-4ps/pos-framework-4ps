@@ -354,11 +354,15 @@ ExecStart=/var/lib/pos-edge/bin/current
 # SIGTERM triggers graceful shutdown; give in-flight requests time to drain before SIGKILL.
 KillSignal=SIGTERM
 TimeoutStopSec=30
-# A clean exit is how the edge asks to be restarted into a binary it just installed — and how it
-# steps back onto the previous one when a new version never reaches a healthy boot. `always`, not
+# An exit is how the edge asks to be restarted into a binary it just installed — and how it steps
+# back onto the previous one when a new version never reaches a healthy boot. `always`, not
 # `on-failure`, is therefore load-bearing: `on-failure` would leave a store stopped after an update.
 Restart=always
 RestartSec=2
+# The edge's exit codes (ADR-0113): 0 stopped and drained, 10 restart wanted, 11 stopped with events
+# still in the outbox, which stay safe in the database and go out at the next start. Neither 10 nor
+# 11 is a failure, so the journal does not report one on every update.
+SuccessExitStatus=10 11
 
 # Hardening: the edge needs no privilege beyond its own state directory.
 NoNewPrivileges=true

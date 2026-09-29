@@ -654,6 +654,18 @@ end:
 **Not started:** the edge container image and the host agent — and the two spikes above still gate
 every estimate on them.
 
+**The edge's half of ADR-0113's drain contract is in.** A stop now says how its last drain ended,
+in the two places ADR-0113 lets a host agent read:
+- **the exit code:** `0` stopped and drained, `10` restart wanted, `11` stopped with events still in
+  the outbox (`ServeOutcome::DrainIncomplete`);
+- **`drain-status.json`** beside the store's database: the store, the outbox depth, the budget, the
+  time spent, and when it finished.
+
+The systemd unit counts `10` and `11` as clean exits. The Windows service still reports `0` for any
+stop, because its failure action would restart a stopped store. The budget stays `STOP_GRACE`
+(15 s): ADR-0113's 60 s is for a hosted placement, and it waits on the host agent that will run one,
+because Windows' Service Control Manager expects a service to stop well inside that.
+
 ## Debates settled
 
 The full debate log (D1–D25) lives in the planning artifact. The load-bearing ones:

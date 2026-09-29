@@ -48,6 +48,7 @@ pub mod countries;
 pub mod demo;
 pub mod device_revocations;
 pub mod discovery;
+pub mod drain_status;
 pub mod durable_auth;
 pub mod error;
 pub mod event_publish;
