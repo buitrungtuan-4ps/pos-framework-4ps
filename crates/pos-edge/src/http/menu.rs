@@ -52,14 +52,22 @@
 //! kitchen board, including the ones that have neither.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
+//!
+//! # A channel may be named
+//!
+//! `?channel=SALES_CHANNEL_TAKEAWAY` serves that channel's price book, with its tax rates, as the
+//! edge prices an order on it ([`EdgeSession::menu_for`](crate::app::EdgeSession::menu_for)). The
+//! counter reads the takeaway book this way, so the price on a button is the price the line is
+//! charged at. With no channel named the route serves the store's own channel, as it always has.
 
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Extension, Path, State};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use pos_core::capability::Capability;
 use pos_core::decision::Actor;
@@ -280,16 +288,36 @@ impl ModifierGroupResponse {
     }
 }
 
+/// Whose price book the till asks `GET /api/menu` for.
+#[derive(Debug, Deserialize)]
+pub(crate) struct MenuQuery {
+    /// A sales channel's wire token. Read as text and parsed here, so an unknown one is refused
+    /// with a sentence rather than the extractor's.
+    channel: Option<String>,
+}
+
 /// `GET /api/menu` — the store's published price book, read from the live session.
-pub(crate) async fn catalog<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn catalog<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    query: Result<Query<MenuQuery>, QueryRejection>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     let session = edge.session();
-    let channel = session.sales_channel;
+    let named = match query {
+        Ok(Query(query)) => query.channel,
+        Err(_) => return bad_request("the query string is not one this route reads"),
+    };
+    let channel = match named.as_deref().map(SalesChannel::from_wire) {
+        None => session.sales_channel,
+        Some(Some(channel)) if channel != SalesChannel::UNSPECIFIED => channel,
+        // Refused, never guessed: the channel sets the price and the tax.
+        Some(_) => return bad_request("channel is not a sales channel this edge knows"),
+    };
+    let menu = session.menu_for(channel);
     let language = session.display_language.clone().unwrap_or_default();
-    let items = session
-        .menu
+    let items = menu
         .items()
         .iter()
         .map(|entry| {
@@ -316,8 +344,7 @@ where
                 .map(|methods| methods.iter().map(|method| method.as_wire()).collect()),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
-            modifier_groups: session
-                .menu
+            modifier_groups: menu
                 .modifier_groups()
                 .iter()
                 .map(|group| ModifierGroupResponse::from_group(group, &language))
@@ -325,8 +352,7 @@ where
             courses_enabled: session.capabilities.enabled(Capability::Courses),
             // The compiler's order, passed through untouched. Sorting here would be a second place
             // for the service sequence to be decided, and the two would eventually disagree.
-            courses: session
-                .menu
+            courses: menu
                 .courses()
                 .iter()
                 .map(|course| CourseResponse::from_course(course, &language))

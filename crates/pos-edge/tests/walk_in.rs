@@ -17,9 +17,9 @@ use pos_edge::{AppError, Edge, EdgeSession, InMemoryReceipts, OrderLineChoice, S
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StoreId};
+use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, OrderId, StoreId};
 use pos_proto::locale::{TaxRate, TaxRateTable};
-use pos_proto::menu::{MenuCatalog, MenuEntry};
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
@@ -55,6 +55,46 @@ fn session() -> EdgeSession {
     EdgeSession::bootstrap()
         .with_menu(menu)
         .with_tax_rates(rates)
+}
+
+/// A dish only the takeaway book carries: a lunch box the dining room does not serve.
+fn lunch_box() -> MenuItemId {
+    MenuItemId::new(Ulid::from_u128(501))
+}
+
+fn entry(menu_item_id: MenuItemId, name: &str, minor: i64) -> MenuEntry {
+    MenuEntry::new(
+        menu_item_id,
+        DisplayName::new(name),
+        vnd(minor),
+        EdgeSession::standard_tax_class(),
+    )
+}
+
+/// [`session`]'s rates over a published book: bánh mì at 50,000 dine-in and 45,000 for takeaway,
+/// and a lunch box sold only for takeaway.
+fn session_with_a_takeaway_book() -> EdgeSession {
+    let book = MenuBook::new()
+        .with(
+            SalesChannel::DineIn,
+            MenuCatalog::new().with(entry(item(), "Bánh mì", 50_000)),
+        )
+        .with(
+            SalesChannel::Takeaway,
+            MenuCatalog::new()
+                .with(entry(item(), "Bánh mì", 45_000))
+                .with(entry(lunch_box(), "Cơm hộp", 60_000)),
+        );
+    session().with_menu_book(book)
+}
+
+/// What each line of `order_id` was charged, from the live orders read.
+fn charged(edge: &Edge<FakeStore>, order_id: OrderId) -> Vec<Money> {
+    edge.live_orders()
+        .into_iter()
+        .find(|order| order.order_id == order_id)
+        .map(|order| order.lines.iter().map(|line| line.line_total).collect())
+        .unwrap_or_default()
 }
 
 fn edge_over(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
@@ -161,7 +201,7 @@ fn what_the_store_cannot_sell_is_refused() {
         let nowhere = edge
             .add_line_to_order(
                 actor(),
-                pos_proto::ids::OrderId::new(Ulid::from_u128(0xDEAD)),
+                OrderId::new(Ulid::from_u128(0xDEAD)),
                 one_of(item()),
             )
             .await;
@@ -200,5 +240,112 @@ fn a_walk_in_survives_a_restart() {
             vnd(54_000),
             "still taxed as takeaway"
         );
+    });
+}
+
+/// A store that prices takeaway on its own charges a walk-in the takeaway price: 45,000 at 8% owes
+/// 48,600. It used to be charged 50,000, the dining room's price, taxed at the takeaway rate.
+#[test]
+fn a_walk_in_is_charged_its_own_channel_s_price() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), session_with_a_takeaway_book());
+        let opened = edge
+            .open_counter_order(actor(), SalesChannel::Takeaway)
+            .await
+            .expect("opens");
+        edge.add_line_to_order(actor(), opened.order_id, one_of(item()))
+            .await
+            .expect("adds");
+        assert_eq!(
+            charged(&edge, opened.order_id),
+            [vnd(45_000)],
+            "the takeaway book's price"
+        );
+        assert_eq!(
+            edge.order_totals(opened.order_id)
+                .expect("totals")
+                .total_due,
+            vnd(48_600)
+        );
+
+        // The same dish on an order that came in to eat is still the dining room's price.
+        let dine_in = edge
+            .open_counter_order(actor(), SalesChannel::DineIn)
+            .await
+            .expect("opens");
+        edge.add_line_to_order(actor(), dine_in.order_id, one_of(item()))
+            .await
+            .expect("adds");
+        assert_eq!(charged(&edge, dine_in.order_id), [vnd(50_000)]);
+    });
+}
+
+/// A book that prices only the dining room leaves takeaway at the prices it always sold at, rather
+/// than refusing every dish at the counter on the day the store upgrades.
+#[test]
+fn a_channel_nobody_priced_keeps_the_store_s_own_prices() {
+    run_ready(async {
+        let book = MenuBook::new().with(
+            SalesChannel::DineIn,
+            MenuCatalog::new().with(entry(item(), "Bánh mì", 50_000)),
+        );
+        let edge = edge_over(FakeStore::default(), session().with_menu_book(book));
+        let opened = edge
+            .open_counter_order(actor(), SalesChannel::Takeaway)
+            .await
+            .expect("opens");
+        edge.add_line_to_order(actor(), opened.order_id, one_of(item()))
+            .await
+            .expect("adds");
+        assert_eq!(charged(&edge, opened.order_id), [vnd(50_000)]);
+    });
+}
+
+/// A book that does price a channel is the whole of what that channel sells: a dish it leaves off
+/// is refused there, and still sells where it is priced.
+#[test]
+fn a_dish_a_channel_s_book_leaves_off_is_refused_on_that_channel() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), session_with_a_takeaway_book());
+        let dine_in = edge
+            .open_counter_order(actor(), SalesChannel::DineIn)
+            .await
+            .expect("opens");
+        let refused = edge
+            .add_line_to_order(actor(), dine_in.order_id, one_of(lunch_box()))
+            .await;
+        assert!(
+            matches!(refused, Err(AppError::ItemNotSellable)),
+            "the dining room does not serve it: {refused:?}"
+        );
+
+        let takeaway = edge
+            .open_counter_order(actor(), SalesChannel::Takeaway)
+            .await
+            .expect("opens");
+        edge.add_line_to_order(actor(), takeaway.order_id, one_of(lunch_box()))
+            .await
+            .expect("takeaway sells it");
+        assert_eq!(charged(&edge, takeaway.order_id), [vnd(60_000)]);
+    });
+}
+
+/// A dish sold only for takeaway is on no dine-in catalogue, and the kitchen board still names it
+/// rather than showing its id.
+#[test]
+fn a_dish_sold_on_one_channel_only_is_named_on_the_board() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), session_with_a_takeaway_book());
+        let opened = edge
+            .open_counter_order(actor(), SalesChannel::Takeaway)
+            .await
+            .expect("opens");
+        edge.add_line_to_order(actor(), opened.order_id, one_of(lunch_box()))
+            .await
+            .expect("adds");
+
+        let live = edge.live_orders();
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].lines[0].display_name, DisplayName::new("Cơm hộp"));
     });
 }

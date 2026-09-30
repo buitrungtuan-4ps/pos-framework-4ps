@@ -632,7 +632,7 @@ fn format_quantity(quantity: Quantity) -> String {
 }
 
 fn item_name(session: &EdgeSession, item: MenuItemId) -> String {
-    session.menu.get(item).map_or_else(
+    session.menu_entry(item).map_or_else(
         || item.to_string(),
         |entry| entry.display_name.as_str().to_owned(),
     )

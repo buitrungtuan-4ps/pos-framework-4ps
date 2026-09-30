@@ -53,7 +53,7 @@ use pos_proto::ids::ConfigVersionId;
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::{NumberFormat, TaxRateTable};
-use pos_proto::menu::MenuBook;
+use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
 use pos_proto::reason_codes::PublishedReasonCodes;
@@ -178,12 +178,27 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
         .collect()
 }
 
+/// `book` with every channel's names resolved to `language` (ADR-0074), as
+/// [`MenuCatalog::localized`](pos_proto::menu::MenuCatalog::localized) resolves one catalogue's.
+fn localized_book(book: &MenuBook, language: &str) -> MenuBook {
+    MenuBook::from_channels(
+        book.channels()
+            .iter()
+            .map(|row| ChannelCatalog {
+                sales_channel: row.sales_channel.clone(),
+                catalog: row.catalog.localized(language),
+            })
+            .collect(),
+    )
+    .with_fallback(book.fallback().localized(language))
+}
+
 /// Rebuilds an [`EdgeSession`] from a synced config document, on top of a base session.
 ///
-/// Reads the compiled `menu` node (a [`MenuBook`], ADR-0066) and installs the catalog for the
-/// session's channel, and the `permissions` node (ADR-0070) into the staff roster the edge authorises
-/// against. Any node that is absent or does not parse is left as the base has it — a bad or partial
-/// publish never blanks a field, it just does not change it.
+/// Reads the compiled `menu` node (a [`MenuBook`], ADR-0066) and installs the whole book, with the
+/// catalog for the session's channel as its menu, and the `permissions` node (ADR-0070) into the
+/// staff roster the edge authorises against. Any node that is absent or does not parse is left as
+/// the base has it — a bad or partial publish never blanks a field, it just does not change it.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -212,14 +227,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<MenuBook>(&text).ok())
     {
-        let catalog = book.catalog_for(channel);
         // Resolve each entry's display name to the store's language once, here (ADR-0074): the priced
         // line and receipt then read in the store's language, and an item with no translation for it
         // keeps its default name (never-blank).
-        session.menu = match display_language.as_deref() {
-            Some(language) => catalog.localized(language),
-            None => catalog.clone(),
+        let book = match display_language.as_deref() {
+            Some(language) => localized_book(&book, language),
+            None => book,
         };
+        // The store's own channel's catalogue, and the whole book beside it: an order on another
+        // channel is priced from that channel's prices (`EdgeSession::menu_for`).
+        session.menu = book.catalog_for(channel).clone();
+        session.menu_book = book;
     }
     // Kept as well as applied: a compiled menu can be resolved once here, but a list the binary
     // ships — ADR-0116's refusal reasons, from `PublishedReasonCodes::framework_default` — has no
@@ -2024,6 +2042,33 @@ mod tests {
                 .display_name
                 .as_str(),
             "Margherita",
+        );
+    }
+
+    /// Every channel's price book is installed, each in the store's language, so an order on
+    /// another channel is priced and named as the store's own channel is (ADR-0066, ADR-0074).
+    #[test]
+    fn every_channel_s_book_is_installed_in_the_store_s_language() {
+        let base = EdgeSession::bootstrap();
+        let rebuilt = session_from_config(
+            &base,
+            &document_with_translated_menu(SalesChannel::Takeaway, Some("vi")),
+        );
+
+        // The book prices takeaway only, so the dining room's catalogue stays as empty as it was.
+        assert!(rebuilt.menu.is_empty());
+        let takeaway = rebuilt
+            .menu_for(SalesChannel::Takeaway)
+            .get(item())
+            .expect("takeaway prices it");
+        assert_eq!(takeaway.display_name.as_str(), "Bánh Margherita");
+        assert_eq!(takeaway.unit_price, Money::new(CurrencyCode::VND, 99_000));
+        assert_eq!(
+            rebuilt
+                .menu_entry(item())
+                .map(|entry| entry.display_name.as_str()),
+            Some("Bánh Margherita"),
+            "named from whichever channel carries it"
         );
     }
 

@@ -259,9 +259,14 @@ export function Order() {
       closeVoid();
     });
 
+  // The price book this order is sold from. A walk-in is priced by the edge at its own channel, so
+  // it shows that channel's book (ADR-0066); a table is the dining room's.
+  const menuItems = () => (walkIn() ? state.walkInMenu : state.menu);
+  const menuGroups = () => (walkIn() ? state.walkInModifierGroups : state.modifierGroups);
+
   // Pre-index menu items by ID using createMemo to allow O(1) lookups instead of O(N) linear scans.
   const menuItemMap = createMemo(
-    () => new Map(state.menu.map((item) => [item.menu_item_id, item])),
+    () => new Map(menuItems().map((item) => [item.menu_item_id, item])),
   );
 
   // The flat fallback's items: the price book without the ones that are only ever a choice inside a
@@ -269,8 +274,8 @@ export function Order() {
   // of their own beside the pizzas, and a topping could be sold alone with nothing to go on. Search
   // still finds them — an operator who types a name gets what the price book holds.
   const headlineItems = createMemo(() => {
-    const choices = new Set(state.modifierGroups.flatMap((group) => group.member_menu_item_ids));
-    return state.menu.filter((item) => !choices.has(item.menu_item_id));
+    const choices = new Set(menuGroups().flatMap((group) => group.member_menu_item_ids));
+    return menuItems().filter((item) => !choices.has(item.menu_item_id));
   });
 
   // Layout names the item; the price book prices it; the two meet only at the id (ADR-0066).
@@ -334,7 +339,7 @@ export function Order() {
   // scan the same text twice.
   const captions = createMemo(() => {
     const byItem = new Map<string, string[]>(
-      state.menu.map((item) => [item.menu_item_id, [fold(item.display_name)]]),
+      menuItems().map((item) => [item.menu_item_id, [fold(item.display_name)]]),
     );
     const record = (button: LayoutButton) => {
       const known = byItem.get(button.menu_item_id);
@@ -361,7 +366,7 @@ export function Order() {
   const needle = createMemo(() => fold(query().trim()));
   const results = createMemo(() =>
     searching()
-      ? state.menu.filter((item) =>
+      ? menuItems().filter((item) =>
           matches(needle(), captions().get(item.menu_item_id) ?? [fold(item.display_name)]),
         )
       : [],
@@ -383,7 +388,7 @@ export function Order() {
   // Tapping an item: sell it, or ask first. The question is the store's, not this screen's — an
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
-    if (groupsFor(item).length === 0) {
+    if (groupsFor(item, menuGroups()).length === 0) {
       void guard(() => addWithNote(item, []));
       return;
     }
@@ -907,7 +912,7 @@ export function Order() {
                     <h2 class="font-semibold">
                       {t("order.choose_title", { item: item().display_name })}
                     </h2>
-                    <For each={groupsFor(item())}>
+                    <For each={groupsFor(item(), menuGroups())}>
                       {(group) => (
                         <div class="mt-3">
                           <p class="text-sm text-ink-muted">
@@ -982,7 +987,7 @@ export function Order() {
                     <button
                       type="button"
                       class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
-                      disabled={!modifiersSatisfied(item(), chosen())}
+                      disabled={!modifiersSatisfied(item(), chosen(), menuGroups())}
                       data-step="confirmItem"
                       onClick={() => void confirmItem(item())}
                     >

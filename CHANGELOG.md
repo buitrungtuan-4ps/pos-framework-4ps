@@ -127,6 +127,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   **Upgrade note:** a counter kitchen that never bumps sees the day's paid orders stay on its board
   until the day ends. Today it shows none of them once they are paid.
 
+- **Takeaway, delivery and QR orders are charged their own channel's prices.** The console prices
+  an item per channel, and the store read only the dining room's book, so a takeaway, QR or
+  marketplace order was charged dine-in prices, taxed at its own channel's rate.
+  - The edge keeps every channel's book the console publishes, and prices a walk-in, a QR order and
+    a relayed order from its own channel's book.
+  - A dish that channel's book leaves off is refused there.
+  - A channel the store has not priced keeps the dining room's prices, as before.
+  - The counter's order screen reads its channel's book (`GET /api/menu?channel=`), so a button
+    shows the price the line is charged at.
+  - The kitchen board and the ticket name a dish sold on one channel only, instead of showing its
+    id.
+
+  **Upgrade note:** a store whose console prices a channel apart from the dining room starts
+  charging those prices when it takes this release. Check the channel columns of each menu's
+  prices first. A store that prices only the dining room sees no change.
+
 - **A good update is no longer rolled back because its file was briefly "busy".** The store server
   starts a downloaded release with `--self-test` before switching to it. If another part of the
   process started a program at the same instant, the operating system could refuse to run the file
@@ -13203,16 +13219,4 @@ unit (`ExecStartPre=/bin/stty …`).
 ## [1.4.0] — 2026-09-01
 
 **Product version** 1.4.0 · **Protocol version** 3 · **MSRV** 1.83
-**For restaurant staff:** split bills now always add up to the original total; nothing else changes on screen.
-
-### Added
-- Seat-level ordering behind the `seats_enabled` capability flag. (#204)
-
-### Fixed
-- Rounding remainder on uneven bill splits is assigned to the final split. (#231)
-
-### Upgrade notes
-- Migration `0042_add_seat_to_order_lines` is additive; rollback to 1.3.x is safe.
-- New permission `sales.order_line.assign_seat` is granted to the Server template by default.
-- No protocol change; cloud 1.4.0 serves edge 1.2.x and 1.3.x.
-```
+**For restaurant staff:** split bills now always 

@@ -162,8 +162,13 @@ where
                 modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
                 quoted_unit_price: line.quoted_unit_price,
             };
-            let priced = reprice_line(&session.menu, &session.tax_rates, channel, &requested)
-                .map_err(|error| port_error_from_reprice(&error))?;
+            let priced = reprice_line(
+                session.menu_for(channel),
+                &session.tax_rates,
+                channel,
+                &requested,
+            )
+            .map_err(|error| port_error_from_reprice(&error))?;
             // An item staff marked sold out at the till is refused exactly as one the console
             // withdrew is: the menu the guest or the marketplace ordered from was published before
             // the kitchen ran out, and does not know.
