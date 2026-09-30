@@ -39,6 +39,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The cloud's API documents are generated with utoipa 6** (#537). The `/v1` API is unchanged. In
+  `docs/openapi.json` the two choices for an order line's `quoted_unit_price` swap places, so
+  `MoneyDto` now comes before `null`. The admin document is unchanged.
+
 - **AccountMenu theme selector keyboard navigation.**
   Added arrow key navigation (`ArrowRight`, `ArrowDown`, `ArrowLeft`, `ArrowUp`), roving `tabindex`, and focus-visible indicators to the theme selector `role="radiogroup"` in `dashboard/src/components/AccountMenu.tsx`.
 
@@ -291,6 +295,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   credential is typed once and never shown again: the field says a value is stored, leaving it blank
   keeps it, and an optional one can be removed. A settings refusal names the fields to fix. Labels
   the console does not ship yet fall back to the field's key. **Upgrade note:** none.
+
+- **A store is told which vendor connections serve it.** A new `integrations` config node
+  (`pos_proto::integrations`, [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)
+  decision 5) carries, per connection, its id, family, provider and name — and, for a card terminal
+  the store drives itself, the non-secret settings its driver needs. It never carries a secret, nor a
+  setting of a family the cloud drives. `PUT /admin/config/integrations` (behind
+  `console.config.publish`) resolves a store's connections — its own, its brand's, its tenant's,
+  keeping only the most specific e-invoice or ERP connection — and publishes the node. The edge
+  applies it (an absent or malformed node keeps the last one, so a bad publish never switches a
+  store off mid-service), lists it at `GET /api/integrations`, and the till's Devices screen shows
+  *Connected services*. **Upgrade note:** additive — a new config node key and two new routes; an
+  older edge ignores the node.
 
 - **A tenant connects its vendors from the console, and their credentials are sealed.** New
   `/admin/integrations/connections` routes (list and read for any console role; create, edit and

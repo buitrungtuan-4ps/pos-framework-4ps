@@ -21,6 +21,7 @@ pub mod check;
 mod counter;
 pub mod floor;
 pub mod health;
+mod integrations;
 pub mod kds;
 pub mod layout;
 pub mod lines;
@@ -495,6 +496,9 @@ where
         .route("/api/sync", get(sync::read::<S>))
         // The published printers, and a manager's test page on one — how a new store learns a
         // printer is wired before a guest's receipt tells it.
+        // The vendor connections the cloud published to this store (ADR-0153): which e-invoice
+        // provider, card terminal or courier it is set up for. Names only, never a setting.
+        .route("/api/integrations", get(integrations::list::<S>))
         .route("/api/printers", get(printers::list::<S>))
         .route("/api/printers/{id}/test", post(printers::test::<S>))
         .layer(axum::middleware::from_fn_with_state(

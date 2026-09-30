@@ -50,6 +50,7 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::LayoutBook;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
+use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::inventory::PublishedInventory;
 use pos_proto::locale::{NumberFormat, TaxRateTable};
 use pos_proto::menu::MenuBook;
@@ -315,6 +316,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<PublishedDevices>(&text).ok())
     {
         session.devices = devices;
+    }
+    // The `integrations` node (ADR-0153): the vendor connections that serve this store. Absent
+    // leaves the session's as the base has it — empty on a box that never synced, which keeps every
+    // family on its offline path; unparseable does the same, so a bad publish never switches a
+    // store's e-invoicing or card terminal off mid-service.
+    if let Some(integrations) = document
+        .get("integrations")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedIntegrations>(&text).ok())
+    {
+        session.integrations = integrations;
     }
     // The `store_profile` node (ADR-0106): who this store legally is, as the receipt prints it. An
     // absent or unparseable node leaves the previous profile in place, which is the never-blank rule
@@ -1142,6 +1154,37 @@ mod tests {
             rebuilt.layout.is_empty(),
             "the till falls back to the flat price book, not another channel's arrangement"
         );
+    }
+
+    #[test]
+    fn an_integrations_node_is_applied_and_a_malformed_one_keeps_the_last() {
+        use pos_proto::integrations::IntegrationFamily;
+
+        let base = EdgeSession::bootstrap();
+        assert!(
+            base.integrations.is_empty(),
+            "a box that never synced runs every offline path"
+        );
+        let document = serde_json::json!({ "integrations": { "integrations": [{
+            "connection_id": "01J0000000000000000000CONN",
+            "family": "INTEGRATION_FAMILY_CARD_TERMINAL",
+            "provider_id": "card.sandbox",
+            "display_name": "Counter terminal",
+            "settings": { "address": "192.0.2.40" },
+        }]}});
+        let applied = session_from_config(&base, &document);
+        assert_eq!(
+            applied
+                .integrations
+                .in_family(IntegrationFamily::CardTerminal)
+                .count(),
+            1
+        );
+
+        // A publish that broke the node must not switch the store's terminal off mid-service.
+        let broken = serde_json::json!({ "integrations": "not a node" });
+        let kept = session_from_config(&applied, &broken);
+        assert_eq!(kept.integrations, applied.integrations);
     }
 
     #[test]
