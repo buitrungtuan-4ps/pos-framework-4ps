@@ -100,6 +100,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A counter order paid before the kitchen made it stays on the kitchen board, with its note.**
+  A counter, a delivery or a QR takeaway order is paid first and cooked after, and the board
+  dropped every order the moment its bill settled. The ticket vanished while the food was still to
+  make, and the guest's note went with it ([ADR-0161](docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
+  - A paid order with no table stays on the board and the pass until a station bumps it, or until
+    its business day ends.
+  - Its guest note stays for as long as the card, still held in memory only, and is forgotten once
+    the line is bumped.
+  - `GET /api/orders/kitchen` (new) lists what the kitchen still has to make, so a board that
+    reloads after the payment keeps the card.
+  - A table's card still leaves when the table's bill settles, as before.
+
+  **Upgrade note:** a counter kitchen that never bumps sees the day's paid orders stay on its board
+  until the day ends. Today it shows none of them once they are paid.
+
 - **Takeaway, delivery and QR orders are charged their own channel's prices.** The console prices
   an item per channel, and the store read only the dining room's book, so a takeaway, QR or
   marketplace order was charged dine-in prices, taxed at its own channel's rate.
@@ -181,6 +196,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   snapped to the store's cash increment as the pay screen's are.
 
 ### Added
+
+- **A table seated by mistake goes back to the floor** ([ADR-0163](docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
+  A seated table could leave the floor only by a bill, and a bill on nothing could never be paid, so
+  a table seated by mistake, or whose every dish was voided, stayed taken until the store was set up
+  again.
+  - With nothing sold on the table, the order screen offers **Release table** where **Take payment**
+    would be. One tap frees the table on every device.
+  - `POST /api/tables/{id}/release` (new) ends the table's order owing nothing and frees the table,
+    and is refused with `409 ORDER_NOT_EMPTY` while a dish or a bill is on it.
+  - A bill is no longer opened on an order with nothing on it: `409 NOTHING_TO_BILL`.
+  - A table already stuck waiting on an empty bill is recovered once: a manager voids the bill, and
+    the table is released.
+
+  **Upgrade note:** asking for the bill of a table with nothing on it was answered with a bill that
+  could never settle, and is now refused with `409 NOTHING_TO_BILL`.
 
 - **A guest note reaches the kitchen.** The order screen has *Note for the next item* under the
   search box. Whatever is typed there goes with the next dish added, then clears. The line shows the

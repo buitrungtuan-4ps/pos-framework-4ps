@@ -645,6 +645,9 @@ pub enum TableCommand {
     /// The guests moved to another table, taking their order: occupied → needs cleaning. The table
     /// they moved to is [`Self::Seat`]ed.
     Transfer,
+    /// The table was seated by mistake and nothing is sold on it: occupied → free (ADR-0163). The
+    /// caller checks that nothing is sold; this machine only allows the move from `Occupied`.
+    Release,
 }
 
 impl TableCommand {
@@ -657,6 +660,7 @@ impl TableCommand {
             Self::Settle => TableTrigger::Settle,
             Self::Clean => TableTrigger::Clean,
             Self::Transfer => TableTrigger::Transfer,
+            Self::Release => TableTrigger::Release,
         }
     }
 }
@@ -674,8 +678,8 @@ pub fn decide_table(
     ctx: &DecisionCtx,
 ) -> Result<TableDecision, DomainError> {
     ctx.require_capability(Capability::Tables)?;
-    // Moving guests and their order to another table is `sales.order.transfer`. Seating, billing
-    // and clearing a table are serving it, and ask for nothing beyond the capability.
+    // Moving guests and their order to another table is `sales.order.transfer`. Seating, billing,
+    // clearing and releasing a table are serving it, and ask for nothing beyond the capability.
     if matches!(command, TableCommand::Transfer) {
         ctx.require(Permission::TransferOrder)?;
     }
@@ -1416,6 +1420,34 @@ mod tests {
         // Seating the table they move to asks for nothing more than it ever did.
         let seated = decide_table(TableState::Free, TableCommand::Seat, &ctx).expect("seat");
         assert_eq!(seated.next_state, TableState::Occupied);
+    }
+
+    #[test]
+    fn a_table_seated_by_mistake_goes_straight_back_to_service() {
+        // Releasing moves no money, so it asks for nothing beyond the capability, as seating does.
+        let ctx = ctx_with(
+            PermissionSet::EMPTY,
+            CapabilityContext::NONE.with(Capability::Tables),
+        );
+        let released =
+            decide_table(TableState::Occupied, TableCommand::Release, &ctx).expect("release");
+        assert_eq!(released.next_state, TableState::Free);
+        assert!(released.effects.is_empty());
+        // Only from a seated table: one waiting for payment pays or is voided first, and a table
+        // that is free or being cleared has nobody to send away.
+        for from in [
+            TableState::AwaitingPayment,
+            TableState::Free,
+            TableState::NeedsCleaning,
+        ] {
+            assert!(
+                matches!(
+                    decide_table(from, TableCommand::Release, &ctx),
+                    Err(DomainError::Transition(_))
+                ),
+                "{from:?} cannot be released"
+            );
+        }
     }
 
     #[test]

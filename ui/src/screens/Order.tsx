@@ -26,6 +26,7 @@ import {
   openBill,
   openBillFor,
   reasonsFor,
+  releaseTable,
   seatFor,
   seatsEnabled,
   setItemSoldOut,
@@ -211,6 +212,10 @@ export function Order() {
   // it comes to. The total is read in the markup, not handed back from a `<Show>` child, which runs
   // untracked and would print the first figure it saw for good. A dash until the edge has priced it.
   const billCount = createMemo(() => linesForTable(key()).filter((line) => !voided(line)).length);
+
+  // A table with nothing sold on it is given back to the floor rather than billed (ADR-0163): a bill
+  // on nothing could never settle, and the table would wait for a payment that cannot come.
+  const releasable = () => !walkIn() && billCount() === 0 && !billed();
   const billTotal = () => {
     const totals = check();
     return totals ? formatAmount(totals.total_due) : "—";
@@ -1142,14 +1147,33 @@ export function Order() {
                 : t("order.send_count", { count: unfired().length })}
             </button>
 
-            <button
-              type="button"
-              class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
-              data-step="takePayment"
-              onClick={() => void takePayment()}
+            <Show
+              when={releasable()}
+              fallback={
+                <button
+                  type="button"
+                  class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
+                  data-step="takePayment"
+                  onClick={() => void takePayment()}
+                >
+                  {t("order.take_payment")}
+                </button>
+              }
             >
-              {t("order.take_payment")}
-            </button>
+              <button
+                type="button"
+                class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
+                data-step="releaseTable"
+                onClick={() =>
+                  void guard(async () => {
+                    await releaseTable(params.id);
+                    navigate("/");
+                  })
+                }
+              >
+                {t("order.release_table")}
+              </button>
+            </Show>
           </div>
         </div>
       </div>

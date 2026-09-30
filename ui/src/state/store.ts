@@ -231,6 +231,10 @@ interface StoreShape {
   // settled table's unbumped lines stayed on the board until somebody sat there, and a takeaway
   // order the kitchen had to cook never appeared on it.
   liveOrders: Record<string, boolean>;
+  // Paid orders with no table whose food the kitchen has not bumped yet (ADR-0161): a counter or
+  // delivery order is paid before it is cooked, so paying must not take it off the board. From
+  // `GET /api/orders/kitchen` at boot, and from a settle of an order that sits on no table.
+  kitchenOrders: Record<string, boolean>;
   // Which order each bill bills, so a settle — which names only the bill — can end its order.
   billOrder: Record<string, string>;
   // The kitchen stations the store published, for the board's filter.
@@ -298,6 +302,7 @@ const [state, setState] = createStore<StoreShape>({
   bumped: {},
   queueNumbers: {},
   liveOrders: {},
+  kitchenOrders: {},
   billOrder: {},
   stations: [],
   shift: null,
@@ -572,6 +577,25 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    case "sales.order.closed": {
+      // An order that ended owing nothing: a table released with nothing sold on it (ADR-0163), or
+      // a guest order staff refused. Either way it is off every board, and a table still showing it
+      // lets go, as the edge's does.
+      const order = str(payload, "order_id");
+      if (order !== null) {
+        setState(
+          produce((draft) => {
+            draft.liveOrders[order] = false;
+            const table = draft.orderTable[order];
+            if (table !== undefined && draft.tableOrder[table] === order) {
+              delete draft.tableOrder[table];
+            }
+            delete draft.orderTable[order];
+          }),
+        );
+      }
+      break;
+    }
     case "sales.table.closed": {
       const table = str(payload, "table_id");
       if (table !== null) {
@@ -807,10 +831,14 @@ export function fold(event: ServerEvent): void {
           }
           // Paid, so off the kitchen board: its unbumped lines no longer wait on a table that is
           // being cleaned. Not while another part of it still owes — those guests' food is still
-          // coming.
+          // coming. An order with no table is paid before it is cooked, so its food stays on the
+          // board until a station bumps it (ADR-0161).
           const settledOrder = draft.billOrder[bill];
           if (settledOrder !== undefined && !orderStillOwes(draft, settledOrder)) {
             draft.liveOrders[settledOrder] = false;
+            if (draft.orderTable[settledOrder] === undefined) {
+              draft.kitchenOrders[settledOrder] = true;
+            }
           }
         }),
       );
@@ -938,12 +966,13 @@ export interface KitchenLine {
   modifiers: string[];
 }
 
-// Whether a line is one the kitchen still has to make: fired, on an order still owing money, and not
-// yet bumped by any station.
+// Whether a line is one the kitchen still has to make: fired, not yet bumped by any station, and on
+// an order still owing money or on a paid order with no table, which is cooked after it is paid
+// (ADR-0161).
 function onTheBoard(line: OrderLine): boolean {
   return (
     line.state === "ORDER_LINE_STATE_FIRED" &&
-    state.liveOrders[line.orderId] === true &&
+    (state.liveOrders[line.orderId] === true || state.kitchenOrders[line.orderId] === true) &&
     state.bumped[line.orderLineId] !== true
   );
 }
@@ -1084,6 +1113,25 @@ export function seatedAt(tableId: string): string | undefined {
 export async function clean(tableId: string): Promise<void> {
   const response = await api.cleanTable(tableId);
   setState("tableState", tableId, response.state);
+}
+
+// Gives a table seated by mistake straight back to the floor, while nothing is sold on it
+// (ADR-0163). The edge ends its order owing nothing; the fan-out brings the same to every other
+// device, and this one shows it at once.
+export async function releaseTable(tableId: string): Promise<void> {
+  const response = await api.releaseTable(tableId);
+  setState(
+    produce((draft) => {
+      draft.tableState[tableId] = response.state;
+      delete draft.seatedAt[tableId];
+      const order = draft.tableOrder[tableId];
+      if (order !== undefined) {
+        draft.liveOrders[order] = false;
+        delete draft.tableOrder[tableId];
+        delete draft.orderTable[order];
+      }
+    }),
+  );
 }
 
 // Moves the guests at a table, and their order, to a free table. The fan-out brings the same move to
@@ -1521,12 +1569,23 @@ export async function loadLiveOrders(): Promise<void> {
     // early. Neither is worth emptying a screen over.
     return;
   }
+  // What the kitchen still has to make: the live orders again, plus each paid order with no table
+  // whose food no station has bumped (ADR-0161). An edge that predates the route answers 404, and
+  // the board then works from the live orders alone, as it always did.
+  const kitchen = await api.kitchenOrders().catch(() => null);
+  const live = new Set(orders.map((order) => order.order_id));
+  const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
     produce((draft) => {
       // The answer is the whole live set, so it replaces the one held rather than merging into it:
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
-      for (const order of orders) {
+      // The same for the kitchen's own set, when the edge answered: a paid order it no longer
+      // lists has been bumped, or its day has ended.
+      if (kitchen !== null) {
+        draft.kitchenOrders = Object.fromEntries(waiting.map((order) => [order.order_id, true]));
+      }
+      for (const order of [...orders, ...waiting]) {
         // Every part still open on a split table, or on an edge older than that list, the one bill
         // it names.
         const open =
