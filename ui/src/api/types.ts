@@ -677,3 +677,36 @@ export interface TestPrintResponse {
 export interface PrintResponse {
   prints: string[];
 }
+
+/**
+ * One of today's settled bills, from `GET /api/bills/settled`: the list the till prints a copy of a
+ * receipt from ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+ * Newest first, and at most 200 of them.
+ */
+export interface SettledBill {
+  bill_id: string;
+  order_id: string;
+  /** The table it was paid at. Absent for a counter order, which carries its queue number. */
+  table_id?: string;
+  /** A counter order's number for the day, when it was given one. */
+  queue_number?: number;
+  receipt_number: number;
+  total_due: Money;
+  settle_time: string;
+  /**
+   * The shop's wall clock when it settled, `HH:MM` in the store's timezone. The edge sends it
+   * because a till's own clock may keep another zone.
+   */
+  settle_clock?: string;
+  /** How many copies have been printed. */
+  copies: number;
+}
+
+/** What a copy's press reports (ADR-0164): which copy it was, and what came of the printing. */
+export interface ReprintResponse {
+  bill_id: string;
+  receipt_number: number;
+  copy_number: number;
+  /** The same outcomes as a settle's `receipt_print`. The copy is counted whichever it is. */
+  receipt_print: string;
+}

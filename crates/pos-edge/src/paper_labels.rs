@@ -24,6 +24,11 @@ pub struct PaperLabels {
     pub pre_bill: &'static str,
     /// The line under a pre-bill's total, so it is not taken for a receipt.
     pub not_a_receipt: &'static str,
+    /// The heading under a copy's receipt number, so a copy is never taken for a second sale
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    pub copy: &'static str,
+    /// The word before a copy's number and the time it was printed.
+    pub reprint: &'static str,
     /// The corporate buyer's line on a B2B invoice, before their name.
     pub bill_to: &'static str,
     /// The sum of the lines.
@@ -65,6 +70,8 @@ pub struct PaperLabels {
 pub static ENGLISH: PaperLabels = PaperLabels {
     pre_bill: "PRE-BILL",
     not_a_receipt: "Not a receipt",
+    copy: "COPY",
+    reprint: "Reprint",
     bill_to: "Bill to",
     subtotal: "Subtotal",
     discount: "Discount",
@@ -88,6 +95,8 @@ pub static ENGLISH: PaperLabels = PaperLabels {
 pub static VIETNAMESE: PaperLabels = PaperLabels {
     pre_bill: "PHIẾU TẠM TÍNH",
     not_a_receipt: "Không phải hóa đơn thanh toán",
+    copy: "BẢN SAO",
+    reprint: "In lại lần",
     bill_to: "Người mua",
     subtotal: "Tạm tính",
     discount: "Giảm giá",
@@ -149,6 +158,8 @@ mod tests {
         for label in [
             ENGLISH.pre_bill,
             ENGLISH.not_a_receipt,
+            ENGLISH.copy,
+            ENGLISH.reprint,
             ENGLISH.bill_to,
             ENGLISH.subtotal,
             ENGLISH.discount,

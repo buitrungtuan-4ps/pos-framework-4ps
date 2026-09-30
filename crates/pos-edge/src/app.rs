@@ -46,12 +46,13 @@ use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingPaymentCaptured, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
-    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
+    BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted, CashShiftClosed,
+    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted,
+    DeviceAdmissionRevoked, EventType, InventoryItemRestored, InventoryItemSoldOut,
+    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
+    SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
+    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened, SalesTableTransferred,
+    SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -885,6 +886,15 @@ pub enum AppError {
     /// (ADR-0163). It could never settle, and its table would wait for a payment that cannot come.
     #[error("that order has nothing to bill")]
     NothingToBill,
+    /// A copy was asked of a bill that has not settled, or was voided since
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
+    /// there is no receipt to copy. A bill still open prints its check as a pre-bill.
+    #[error("that bill has no receipt to copy, because it has not settled")]
+    NotSettled,
+    /// A copy was asked of a receipt settled on an earlier business day (ADR-0164 decision 3).
+    /// The till copies today's receipts; older ones are reprinted from the console.
+    #[error("that receipt is from another business day")]
+    ReceiptFromAnotherDay,
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
@@ -1308,7 +1318,74 @@ impl BuyerDetails {
         }
         fields
     }
+
+    /// The buyer back from the subject store, the inverse of [`Self::fields`]: what a receipt
+    /// copy prints again (ADR-0164). `None` for a record with no name left in it.
+    #[must_use]
+    pub fn from_record(record: &SubjectRecord) -> Option<Self> {
+        let field = |key: &str| {
+            record
+                .fields
+                .get(key)
+                .filter(|value| !value.trim().is_empty())
+                .cloned()
+        };
+        Some(Self {
+            name: field("name")?,
+            tax_code: field("tax_code"),
+            address: field("address"),
+            email: field("email"),
+        })
+    }
 }
+
+/// A bill this store settled today, as the till's list of recent bills shows it
+/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledBillView {
+    /// The bill.
+    pub bill_id: BillId,
+    /// Its order, which a counter's queue number is kept against.
+    pub order_id: OrderId,
+    /// Its table, or `None` for a counter order.
+    pub table_id: Option<TableId>,
+    /// The receipt's number.
+    pub receipt_number: u64,
+    /// What the guest paid.
+    pub total_due: Money,
+    /// When it settled.
+    pub settle_time: Timestamp,
+    /// How many copies have been printed.
+    pub copies: u32,
+}
+
+/// A copy of a settled bill's receipt, counted and ready to print (ADR-0164).
+///
+/// No `PartialEq`: it carries the print job's id, which is fresh for every copy.
+#[derive(Debug, Clone)]
+pub struct ReceiptCopy {
+    /// The bill.
+    pub bill_id: BillId,
+    /// The receipt's own number: a copy never takes a new one.
+    pub receipt_number: u64,
+    /// Which copy this is, counting from 1.
+    pub copy_number: u32,
+    /// When it was asked for, which the copy prints under its heading.
+    pub reprinted_time: Timestamp,
+    /// The rows the receipt printed.
+    pub lines: Vec<ReceiptLine>,
+    /// The totals, as the settle recorded them ([`SettledReceipt::totals`]).
+    pub totals: BillTotals,
+    /// The corporate buyer, whose details the copy prints again from the subject store.
+    pub buyer_subject_id: Option<SubjectId>,
+    /// The copy's own event id: its print job's idempotency key, so a copy retried after an
+    /// ambiguous failure prints once, and the next press prints another.
+    pub job_id: pos_proto::ids::EventId,
+}
+
+/// How many of today's settled bills the till's list shows, newest first (ADR-0164). A bound, as
+/// every in-memory list has one, and more than a busy day's service at a till.
+pub const MAX_SETTLED_LISTED: usize = 200;
 
 /// What a bill looks like to a caller after a command.
 ///
@@ -1753,6 +1830,105 @@ enum StaffStanding {
     Fireable,
 }
 
+/// What a settle recorded of a bill, kept so its receipt can be printed again as a copy
+/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+///
+/// The figures are the ones `billing.bill.settled` carried, because a copy never prints a figure
+/// the settle did not record: the rate table can change after a bill is paid, and a copy computed
+/// afresh would then disagree with the paper the guest already holds.
+#[derive(Debug, Clone, Copy)]
+struct SettledReceipt {
+    /// The receipt's gapless number, which every copy prints too.
+    receipt_number: u64,
+    /// The sum of the lines, as settled.
+    subtotal: Money,
+    /// Discounts and comps together, as the settled event records them.
+    reduction_total: Money,
+    /// The service charge, as settled.
+    service_charge: Money,
+    /// The tax, as settled.
+    tax_total: Money,
+    /// The cash rounding, as settled.
+    rounding_adjustment: Money,
+    /// What the guest paid.
+    total_due: Money,
+    /// The corporate buyer, whose details stay in the subject store (ADR-0107).
+    buyer_subject_id: Option<SubjectId>,
+    /// The business day the bill settled on: a copy is printed only on the same day.
+    business_date: BusinessDate,
+    /// When it settled, for the list of today's bills.
+    settle_time: Timestamp,
+    /// How many copies have been printed, from `billing.receipt.reprinted`.
+    copies: u32,
+}
+
+impl SettledReceipt {
+    fn of(event: &BillingBillSettled, business_date: BusinessDate, settle_time: Timestamp) -> Self {
+        Self {
+            receipt_number: event.receipt_number,
+            subtotal: event.subtotal,
+            reduction_total: event.reduction_total,
+            service_charge: event.service_charge,
+            tax_total: event.tax_total,
+            rounding_adjustment: event.rounding_adjustment,
+            total_due: event.total_due,
+            buyer_subject_id: event.buyer_subject_id,
+            business_date,
+            settle_time,
+            copies: 0,
+        }
+    }
+
+    /// The totals a copy prints: `recomputed` when it agrees with every figure the settle
+    /// recorded, which is every day the rate table has not changed since, and otherwise the
+    /// recorded figures with the tax as one total, because the per-rate lines are not recorded
+    /// yet ([ADR-0162](../../../docs/adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md)
+    /// item 3). Either way the paper adds up to what the guest paid.
+    fn totals(&self, recomputed: Option<&BillTotals>) -> BillTotals {
+        let agrees = |totals: &BillTotals| {
+            totals.subtotal == self.subtotal
+                && totals
+                    .discount_total
+                    .checked_add(totals.comp_total)
+                    .is_ok_and(|reduction| reduction == self.reduction_total)
+                && totals.service_charge == self.service_charge
+                && totals.tax_total == self.tax_total
+                && totals.rounding_adjustment == self.rounding_adjustment
+                && totals.total_due == self.total_due
+        };
+        if let Some(totals) = recomputed.filter(|totals| agrees(totals)) {
+            return totals.clone();
+        }
+        // The event records discounts and comps as one figure. The split is taken from the
+        // recomputation when it still adds up to that figure, and otherwise the copy prints one
+        // line for both rather than guessing how it divided.
+        let (discount_total, comp_total) = recomputed
+            .filter(|totals| {
+                totals
+                    .discount_total
+                    .checked_add(totals.comp_total)
+                    .is_ok_and(|reduction| reduction == self.reduction_total)
+            })
+            .map_or(
+                (
+                    self.reduction_total,
+                    Money::zero(self.total_due.currency_code),
+                ),
+                |totals| (totals.discount_total, totals.comp_total),
+            );
+        BillTotals {
+            subtotal: self.subtotal,
+            discount_total,
+            comp_total,
+            service_charge: self.service_charge,
+            tax_lines: Vec::new(),
+            tax_total: self.tax_total,
+            rounding_adjustment: self.rounding_adjustment,
+            total_due: self.total_due,
+        }
+    }
+}
+
 /// The in-memory projection: the current state of each aggregate, folded from the event log.
 ///
 /// Durable truth is the event log in the store; this is a cache rebuilt at boot and updated as
@@ -1794,6 +1970,9 @@ struct Projection {
     /// on it (ADR-0163), and a guest order staff refused. A closed order is not live, whatever lines
     /// it still names.
     closed_orders: HashSet<OrderId>,
+    /// Each settled bill's receipt as the settle recorded it, for printing a copy (ADR-0164). Folded
+    /// from the log like the rest, so it holds what the log holds and no more.
+    settled: HashMap<BillId, SettledReceipt>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
@@ -2341,6 +2520,40 @@ impl Projection {
                     })
                     .collect()
             })
+    }
+
+    /// Keeps what a settle recorded, live and replayed alike, so the receipt can be copied.
+    fn record_settled(&mut self, bill_id: BillId, receipt: SettledReceipt) {
+        self.settled.insert(bill_id, receipt);
+    }
+
+    /// Counts a copy (`billing.receipt.reprinted`). The highest number seen wins, so a replay that
+    /// meets the copies in any order ends where the live box did.
+    fn record_copy(&mut self, bill_id: BillId, copy_number: u32) {
+        if let Some(receipt) = self.settled.get_mut(&bill_id) {
+            receipt.copies = receipt.copies.max(copy_number);
+        }
+    }
+
+    /// The receipts settled on `business_date`, newest first, at most `limit` of them.
+    fn settled_on(
+        &self,
+        business_date: BusinessDate,
+        limit: usize,
+    ) -> Vec<(BillId, SettledReceipt)> {
+        let mut receipts: Vec<(BillId, SettledReceipt)> = self
+            .settled
+            .iter()
+            .filter(|(_, receipt)| receipt.business_date == business_date)
+            .map(|(bill_id, receipt)| (*bill_id, *receipt))
+            .collect();
+        receipts.sort_unstable_by(|(_, a), (_, b)| {
+            b.settle_time
+                .cmp(&a.settle_time)
+                .then(b.receipt_number.cmp(&a.receipt_number))
+        });
+        receipts.truncate(limit);
+        receipts
     }
 
     /// Settles a bill, and moves its table on when nothing else on the order still owes.
@@ -5703,6 +5916,11 @@ impl<S: EventStore> Edge<S> {
         let table_state = {
             let mut projection = self.lock_projection();
             projection.settle_bill_record(bill_id);
+            // What the envelope carries, so a box that replays the log keeps the same record.
+            projection.record_settled(
+                bill_id,
+                SettledReceipt::of(&settled, ctx.business_date, ctx.now),
+            );
             projection.collect_cash(cash_taken)?;
             bill.table_id
                 .map(|table_id| projection.table_state(table_id))
@@ -5719,6 +5937,137 @@ impl<S: EventStore> Edge<S> {
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
             lines: Self::receipt_lines(&order.lines),
         })
+    }
+
+    /// The bills this store settled in the current business day, newest first, at most
+    /// [`MAX_SETTLED_LISTED`] of them: what the till lists to reprint a receipt from
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    ///
+    /// A bill voided after it settled has no receipt to copy, so it is not listed.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Clock`] if the business date cannot be derived.
+    pub fn settled_bills(&self) -> Result<Vec<SettledBillView>, AppError> {
+        let session = self.session();
+        let today = derive_business_date(self.clock.now(), &session.timezone, session.cutoff)
+            .map_err(|_ignored| AppError::Clock)?;
+        let projection = self.lock_projection();
+        Ok(projection
+            .settled_on(today, MAX_SETTLED_LISTED)
+            .into_iter()
+            .filter_map(|(bill_id, receipt)| {
+                let bill = projection.bill(bill_id)?;
+                (bill.state == BillState::Settled).then_some(SettledBillView {
+                    bill_id,
+                    order_id: bill.order_id,
+                    table_id: bill.table_id,
+                    receipt_number: receipt.receipt_number,
+                    total_due: receipt.total_due,
+                    settle_time: receipt.settle_time,
+                    copies: receipt.copies,
+                })
+            })
+            .collect())
+    }
+
+    /// Counts a copy of a settled bill's receipt (`billing.receipt.reprinted`) and hands back what
+    /// to print, marked as a copy under the receipt's own number
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    ///
+    /// Under `billing.receipt.reprint`, which asks no PIN: every copy is counted, and flagging the
+    /// outliers is the dashboard's job. The copy is counted when it is asked for, not when paper
+    /// comes out, and its print job is keyed on the copy's own event, so a retried job prints once.
+    /// The printing itself is the caller's, after the commit, as the settle's is.
+    ///
+    /// The figures are the settle's own ([`SettledReceipt::totals`]): the lines are the ones the
+    /// bill covered, and the totals are recomputed only to recover the per-rate tax lines, which
+    /// the copy prints when they still add up to what was recorded.
+    ///
+    /// Two tills pressing at the same moment can both print copy *n*. Each is still its own event,
+    /// so the count the dashboard reads stays right.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::NotSettled`] for one
+    /// that has not settled, or was voided since; [`AppError::ReceiptFromAnotherDay`] for one
+    /// settled on an earlier business day; [`AppError::Domain`] without the permission; or
+    /// [`AppError`] if the store cannot be written.
+    pub async fn reprint_receipt(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+    ) -> Result<ReceiptCopy, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::ReprintReceipt)?;
+        let (bill, receipt) = {
+            let projection = self.lock_projection();
+            let bill = projection.bill(bill_id).ok_or(AppError::UnknownBill)?;
+            let receipt = projection.settled.get(&bill_id).copied();
+            (bill, receipt)
+        };
+        let Some(receipt) = receipt.filter(|_| bill.state == BillState::Settled) else {
+            return Err(AppError::NotSettled);
+        };
+        if receipt.business_date != ctx.business_date {
+            return Err(AppError::ReceiptFromAnotherDay);
+        }
+
+        let session = self.session();
+        let order = self.bill_snapshot(&bill, &session)?;
+        // Recomputed only for the per-rate tax lines, which the settle did not record; a rate
+        // table that no longer prices one of these classes leaves the copy with the recorded
+        // total alone.
+        let recomputed = billing::assemble(&Self::bill_input(
+            &session,
+            &order.class_bases,
+            order.sales_channel,
+            bill.reductions(session.currency),
+        ))
+        .ok();
+        let totals = receipt.totals(recomputed.as_ref());
+
+        let copy_number = receipt.copies.saturating_add(1);
+        let reprinted = BillingReceiptReprinted {
+            bill_id,
+            receipt_number: receipt.receipt_number,
+            copy_number,
+        };
+        let (envelope, message) = self.prepare(&ctx, &reprinted)?;
+        let job_id = envelope.event_id;
+        self.append_and_publish(vec![envelope], vec![message])
+            .await?;
+        self.lock_projection().record_copy(bill_id, copy_number);
+        Ok(ReceiptCopy {
+            bill_id,
+            receipt_number: receipt.receipt_number,
+            copy_number,
+            reprinted_time: ctx.now,
+            lines: Self::receipt_lines(&order.lines),
+            totals,
+            buyer_subject_id: receipt.buyer_subject_id,
+            job_id,
+        })
+    }
+
+    /// The buyer a copy prints again, read back from the subject store (ADR-0107), or `None` when
+    /// there was none, or its record has since been scrubbed by the retention sweep.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Port`] if the subject store cannot be read.
+    pub async fn buyer_of(&self, subject_id: SubjectId) -> Result<Option<BuyerDetails>, AppError>
+    where
+        S: SubjectStore,
+    {
+        let record = self
+            .store
+            .fetch(self.identity.store_id, subject_id)
+            .await
+            .map_err(AppError::Port)?;
+        Ok(record
+            .filter(|record| !record.is_masked())
+            .and_then(|record| BuyerDetails::from_record(&record)))
     }
 
     /// One `billing.payment.captured` per tender, prepared for the settle's transaction.
@@ -6139,8 +6488,17 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.settle_bill_record(event.bill_id);
+                projection.record_settled(
+                    event.bill_id,
+                    SettledReceipt::of(&event, envelope.business_date, envelope.event_time),
+                );
             }
-            // Unreachable: `fold` delegates only the three arms above.
+            EventType::BillingReceiptReprinted => {
+                let event: BillingReceiptReprinted =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.record_copy(event.bill_id, event.copy_number);
+            }
+            // Unreachable: `fold` delegates only the arms above.
             _ => {}
         }
         Ok(())
@@ -6255,6 +6613,7 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingBillOpened
             | EventType::BillingPaymentCaptured
             | EventType::BillingBillSettled
+            | EventType::BillingReceiptReprinted
             | EventType::BillingDiscountApplied => {
                 Self::fold_billing(projection, envelope, known)?;
             }
@@ -6721,7 +7080,7 @@ mod tests {
     use super::{BuyerDetails, Edge, EdgeSession, LineDraft, StoreIdentity};
     use crate::queue::{InMemoryQueueNumbers, QueueNumberAuthority};
     use crate::receipt::InMemoryReceipts;
-    use pos_core::billing::Payment;
+    use pos_core::billing::{BillTotals, Payment, TaxLine};
     use pos_core::capability::{Capability, CapabilityContext};
     use pos_core::decision::Actor;
     use pos_core::inventory::{Recipe, RecipeBook, RecipeLine};
@@ -6730,18 +7089,20 @@ mod tests {
     use pos_ports::subject_store::{SubjectRecord, SubjectStore};
     use pos_ports::{Transactional, TxContext};
     use pos_proto::envelope::EventPayload;
-    use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured, StoreChainAnchored};
+    use pos_proto::events::{
+        BillingBillSettled, BillingPaymentCaptured, BillingReceiptReprinted, StoreChainAnchored,
+    };
     use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
     use pos_proto::ids::{
-        CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId, StoreId,
-        TableId,
+        BillId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId, OrderId, StationId,
+        StoreId, TableId,
     };
     use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::MenuCatalog;
     use pos_proto::money::{CurrencyCode, Money, Ratio};
     use pos_proto::quantity::Quantity;
     use pos_proto::text::DisplayName;
-    use pos_proto::time::Timestamp;
+    use pos_proto::time::{BusinessDate, Timestamp};
     use pos_proto::ulid::Ulid;
     use pos_proto::{
         BillState, EventType, Open, OrderLineState, PaymentMethod, SalesChannel, ShiftState,
@@ -8194,7 +8555,7 @@ mod tests {
             let refused = edge
                 .settle_bill(
                     actor(),
-                    pos_proto::ids::BillId::new(Ulid::from_u128(999)),
+                    BillId::new(Ulid::from_u128(999)),
                     vec![cash(1)],
                     None,
                 )
@@ -8748,7 +9109,6 @@ mod tests {
         use argon2::password_hash::PasswordHasher as _;
         use pos_core::error::DomainError;
         use pos_core::permission::{Permission, PermissionSet};
-        use pos_proto::ids::BillId;
         use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 
         fn session() -> EdgeSession {
@@ -8873,5 +9233,297 @@ mod tests {
             edge.lock_projection().cooking.is_empty(),
             "the read ended the day for it, so it does not come back"
         );
+    }
+
+    /// The reprint tests' bill: one pizza on `table`, paid in cash, with `buyer` on it if any.
+    async fn a_settled_pizza(
+        edge: &Edge<FakeStore>,
+        table: TableId,
+        buyer: Option<&BuyerDetails>,
+    ) -> BillId {
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+        edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], buyer)
+            .await
+            .expect("settles");
+        opened.bill_id
+    }
+
+    /// How many `billing.receipt.reprinted` the store holds.
+    async fn copies_logged(edge: &Edge<FakeStore>) -> usize {
+        edge.store
+            .read(&EventQuery::first(
+                edge.identity.store_id,
+                NonZeroU32::new(100).expect("100 is not zero"),
+            ))
+            .await
+            .expect("reads the log")
+            .iter()
+            .filter(|envelope| {
+                envelope.event_type.as_str() == BillingReceiptReprinted::EVENT_TYPE.as_str()
+            })
+            .count()
+    }
+
+    /// A receipt as the settle recorded it, for the tests of what a copy prints.
+    fn a_settled_receipt(
+        receipt_number: u64,
+        business_date: BusinessDate,
+        settle_ms: i64,
+    ) -> super::SettledReceipt {
+        super::SettledReceipt {
+            receipt_number,
+            subtotal: vnd(150_000),
+            reduction_total: vnd(20_000),
+            service_charge: vnd(0),
+            tax_total: vnd(13_000),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(143_000),
+            buyer_subject_id: None,
+            business_date,
+            settle_time: Timestamp::from_milliseconds_since_epoch(settle_ms)
+                .expect("a valid instant"),
+            copies: 0,
+        }
+    }
+
+    fn a_day(day: u8) -> BusinessDate {
+        BusinessDate::from_ymd(2026, 9, day).expect("a real date")
+    }
+
+    /// Only today's receipts are copied at the till (ADR-0164 decision 3). One settled on an
+    /// earlier business day is refused and left out of today's list, and nothing is counted.
+    #[test]
+    fn a_receipt_from_an_earlier_day_is_not_copied_at_the_till() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let bill_id = a_settled_pizza(&edge, TableId::new(Ulid::from_u128(330)), None).await;
+            assert_eq!(edge.settled_bills().expect("the list reads").len(), 1);
+
+            // The record as the box holds it on a later day: the clock cannot be moved, and the
+            // point under test is the business day, not the clock.
+            edge.lock_projection()
+                .settled
+                .get_mut(&bill_id)
+                .expect("the settle was recorded")
+                .business_date = BusinessDate::from_ymd(2000, 1, 1).expect("a real date");
+
+            let refused = edge.reprint_receipt(actor(), bill_id).await;
+            assert!(
+                matches!(refused, Err(super::AppError::ReceiptFromAnotherDay)),
+                "got {refused:?}"
+            );
+            assert!(
+                edge.settled_bills().expect("the list reads").is_empty(),
+                "an earlier day's bill is not in today's list"
+            );
+            assert_eq!(
+                copies_logged(&edge).await,
+                0,
+                "a refused copy is not counted"
+            );
+        });
+    }
+
+    /// A copy prints the settle's own figures (ADR-0164 decision 5). The recomputation lends its
+    /// per-rate lines only when it agrees with every recorded figure, and its discount and comp
+    /// split only when that split still adds up to the recorded reduction. Whichever it is, the
+    /// paper adds up to what the guest paid.
+    #[test]
+    fn a_copy_prints_what_the_settle_recorded_whatever_the_rates_say_now() {
+        let settled = a_settled_receipt(7, a_day(30), 1);
+        let recomputed = |discount: i64, comp: i64, tax: i64| BillTotals {
+            subtotal: vnd(150_000),
+            discount_total: vnd(discount),
+            comp_total: vnd(comp),
+            service_charge: vnd(0),
+            tax_lines: vec![TaxLine {
+                tax_class_id: EdgeSession::standard_tax_class(),
+                taxable_base: vnd(150_000 - discount - comp),
+                rate_basis_points: 1_000,
+                tax: vnd(tax),
+                components: Vec::new(),
+            }],
+            tax_total: vnd(tax),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(150_000 - discount - comp + tax),
+        };
+        let adds_up = |totals: &BillTotals| {
+            totals.subtotal.amount_minor
+                - totals.discount_total.amount_minor
+                - totals.comp_total.amount_minor
+                + totals.service_charge.amount_minor
+                + totals.tax_total.amount_minor
+                + totals.rounding_adjustment.amount_minor
+                == totals.total_due.amount_minor
+        };
+
+        // The rates have not moved: the recomputation is the receipt, per-rate line and all.
+        let unchanged = recomputed(15_000, 5_000, 13_000);
+        assert_eq!(settled.totals(Some(&unchanged)), unchanged);
+
+        // The rate has moved: the recorded tax, as one total, with the split that still holds.
+        let moved = settled.totals(Some(&recomputed(15_000, 5_000, 10_400)));
+        assert!(
+            moved.tax_lines.is_empty(),
+            "no line at a rate that did not apply"
+        );
+        assert_eq!(moved.tax_total, vnd(13_000));
+        assert_eq!(
+            (moved.discount_total, moved.comp_total),
+            (vnd(15_000), vnd(5_000))
+        );
+        assert_eq!(moved.total_due, vnd(143_000));
+
+        // A split that no longer adds up is printed as one reduction rather than guessed at.
+        let regrouped = settled.totals(Some(&recomputed(10_000, 0, 14_000)));
+        assert_eq!(
+            (regrouped.discount_total, regrouped.comp_total),
+            (vnd(20_000), vnd(0))
+        );
+
+        // Nothing could be recomputed: the recorded figures alone.
+        let alone = settled.totals(None);
+        assert_eq!(
+            (alone.discount_total, alone.comp_total),
+            (vnd(20_000), vnd(0))
+        );
+        assert!(alone.tax_lines.is_empty());
+
+        for totals in [&unchanged, &moved, &regrouped, &alone] {
+            assert!(adds_up(totals), "{totals:?} does not add up");
+        }
+    }
+
+    /// Today's list is bounded and newest first, with no other day's receipt in it (ADR-0164). Two
+    /// settled in the same instant list the later number first.
+    #[test]
+    fn today_s_receipts_are_listed_newest_first_and_bounded() {
+        let mut projection = super::Projection::default();
+        let bill = |n: u64| BillId::new(Ulid::from_u128(u128::from(n)));
+        let bound = u64::try_from(super::MAX_SETTLED_LISTED).expect("a small bound");
+        for n in 1..=bound + 1 {
+            let ms = i64::try_from(n).expect("a small count");
+            projection.record_settled(bill(n), a_settled_receipt(n, a_day(30), 1_000 + ms));
+        }
+        // The same instant as the newest, one number later.
+        projection.record_settled(
+            bill(bound + 2),
+            a_settled_receipt(
+                bound + 2,
+                a_day(30),
+                1_000 + i64::try_from(bound + 1).expect("small"),
+            ),
+        );
+        // Yesterday's, settled at the latest instant of all.
+        projection.record_settled(bill(9_999), a_settled_receipt(9_999, a_day(29), 9_999_999));
+
+        let listed = projection.settled_on(a_day(30), super::MAX_SETTLED_LISTED);
+        let numbers: Vec<u64> = listed
+            .iter()
+            .map(|(_, receipt)| receipt.receipt_number)
+            .collect();
+        assert_eq!(numbers.len(), super::MAX_SETTLED_LISTED);
+        assert_eq!(
+            numbers.first().copied(),
+            Some(bound + 2),
+            "a tie on the instant lists the later number first"
+        );
+        assert_eq!(numbers.get(1).copied(), Some(bound + 1));
+        assert!(
+            !numbers.contains(&1) && !numbers.contains(&2),
+            "the oldest give way to the bound"
+        );
+        assert!(
+            !numbers.contains(&9_999),
+            "yesterday's receipt is not today's"
+        );
+    }
+
+    /// The count only goes up: a replay that meets the copies out of order ends where the live box
+    /// did, and a copy of a bill with no settle on record changes nothing.
+    #[test]
+    fn a_receipt_s_copies_are_counted_by_the_highest_number_seen() {
+        let mut projection = super::Projection::default();
+        let bill = BillId::new(Ulid::from_u128(5));
+        projection.record_settled(bill, a_settled_receipt(1, a_day(30), 1));
+        projection.record_copy(bill, 3);
+        projection.record_copy(bill, 2);
+        assert_eq!(
+            projection.settled.get(&bill).map(|receipt| receipt.copies),
+            Some(3)
+        );
+
+        let unknown = BillId::new(Ulid::from_u128(6));
+        projection.record_copy(unknown, 1);
+        assert!(!projection.settled.contains_key(&unknown));
+    }
+
+    /// A copy prints its buyer again from the subject store (ADR-0107). Once the retention sweep
+    /// has scrubbed the record there is no buyer left to print, and the copy still prints.
+    #[test]
+    fn a_copy_reads_its_buyer_back_until_the_record_is_scrubbed() {
+        pos_fakes::executor::run_ready(async {
+            let session = EdgeSession {
+                retention_days: 1,
+                ..EdgeSession::bootstrap()
+            };
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let buyer = BuyerDetails {
+                name: "Example Trading Co.".to_owned(),
+                tax_code: Some("0000000000".to_owned()),
+                address: Some("1 Example Street".to_owned()),
+                email: None,
+            };
+            let bill_id =
+                a_settled_pizza(&edge, TableId::new(Ulid::from_u128(331)), Some(&buyer)).await;
+
+            let copy = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("a copy");
+            let subject_id = copy.buyer_subject_id.expect("the copy names its buyer");
+            let read = edge
+                .buyer_of(subject_id)
+                .await
+                .expect("the subject store answers");
+            assert!(
+                read.as_ref() == Some(&buyer),
+                "the copy prints the buyer the original did"
+            );
+
+            // Aged past the window and swept, as the retention test does.
+            let aged = SubjectRecord::new(
+                Timestamp::from_milliseconds_since_epoch(0).expect("the epoch is representable"),
+                buyer.fields(),
+            );
+            let mut tx = edge.store.begin().await.expect("begins");
+            edge.store
+                .record(&mut tx, edge.identity.store_id, subject_id, &aged)
+                .await
+                .expect("re-files the aged record");
+            tx.commit().await.expect("commits");
+            assert_eq!(edge.sweep_expired_subjects().await.expect("sweeps"), 1);
+
+            assert!(
+                edge.buyer_of(subject_id)
+                    .await
+                    .expect("the subject store answers")
+                    .is_none(),
+                "a scrubbed buyer is not printed again"
+            );
+            let next = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("the receipt is still copied");
+            assert_eq!(next.copy_number, 2);
+        });
     }
 }

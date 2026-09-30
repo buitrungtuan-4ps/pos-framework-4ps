@@ -509,6 +509,22 @@ event_catalogue! {
         /// Why.
         reason_code_id: ReasonCodeId,
     },
+    /// A settled bill's receipt was printed again, as a copy marked COPY
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    ///
+    /// One event per copy, so a reprint rate is a count: the envelope already names the employee
+    /// and the device, which is what `docs/pos-spec.md` §11 item 3 compares against peers. A copy is
+    /// printed under the receipt's own number and never takes a new one, so the gapless series
+    /// (ADR-0025) counts sales, not pieces of paper. No PII: a buyer's details stay in the subject
+    /// store, as they do for the original.
+    BillingReceiptReprinted => "billing.receipt.reprinted", version = 1 {
+        /// The settled bill whose receipt was printed again.
+        bill_id: BillId,
+        /// Its receipt number: the one the original printed.
+        receipt_number: u64,
+        /// Which copy this is, counting from 1 for the first reprint.
+        copy_number: u32,
+    },
     /// A price reduction was applied.
     BillingDiscountApplied => "billing.discount.applied", version = 1 {
         /// The bill.

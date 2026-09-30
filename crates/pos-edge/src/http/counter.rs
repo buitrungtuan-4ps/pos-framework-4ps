@@ -3,7 +3,9 @@
 
 //! The counter: its order list, `GET /api/orders/open` ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)),
 //! and the two routes that let it start its own orders, `POST /api/orders` and
-//! `POST /api/orders/{id}/lines` ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)).
+//! `POST /api/orders/{id}/lines` ([ADR-0146](../../../docs/adr/0146-a-counter-store-starts-its-own-orders.md)),
+//! and today's settled bills, `GET /api/bills/settled`, which lists a counter order by its queue
+//! number ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 //!
 //! The counter's equivalent of `GET /api/floor`. A relayed or QR-counter order is tableless by
 //! design ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)), so it appears on no floor plan —
@@ -25,11 +27,13 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 
+use pos_core::business_date::{StoreTimeZone, local_time};
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{CourseId, MenuItemId, OrderId};
+use pos_proto::ids::{BillId, CourseId, MenuItemId, OrderId, TableId};
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
+use pos_proto::time::Timestamp;
 use pos_proto::{Open, SalesChannel};
 
 use crate::app::{Edge, OrderLineChoice};
@@ -101,6 +105,78 @@ where
         // configuration error, and the counter showing it beats the counter inventing a number.
         Err(error) => error_response(&error),
     }
+}
+
+/// One of today's settled bills, as the till lists it to print a copy from
+/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+#[derive(Debug, Serialize)]
+struct SettledBillResponse {
+    bill_id: BillId,
+    order_id: OrderId,
+    /// The table it was paid at, which the till shows by the floor's label. Absent for a counter
+    /// order, which shows its queue number instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    table_id: Option<TableId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_number: Option<u64>,
+    receipt_number: u64,
+    total_due: Money,
+    settle_time: Timestamp,
+    /// The shop's wall clock when it settled, `HH:MM` in the store's timezone, for the list to show
+    /// as it is: a till's own clock may keep another zone, and the list is today's, so the date
+    /// would say nothing. Absent in the one case the calendar cannot read the instant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settle_clock: Option<String>,
+    /// How many copies have been printed.
+    copies: u32,
+}
+
+/// The wall clock an instant reads in the store's timezone, `HH:MM`.
+fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<String> {
+    let local = local_time(instant, zone).ok()?.to_string();
+    local.split_once(' ').map(|(_date, clock)| clock.to_owned())
+}
+
+/// `GET /api/bills/settled` — the bills this store settled today, newest first, at most
+/// [`crate::MAX_SETTLED_LISTED`] (ADR-0164). Here rather than beside the other bill routes because a
+/// counter order is listed by the queue number staff shouted, which only this router's authority
+/// holds.
+async fn settled_bills<S, Q>(State(deps): State<Arc<CounterDeps<S, Q>>>) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
+{
+    let bills = match deps.edge.settled_bills() {
+        Ok(bills) => bills,
+        Err(error) => return error_response(&error),
+    };
+    let session = deps.edge.session();
+    let mut body = Vec::with_capacity(bills.len());
+    for bill in bills {
+        // A table's order has no queue number, and a number that cannot be read leaves the row
+        // with its receipt number alone rather than failing the list.
+        let queue_number = match bill.table_id {
+            Some(_) => None,
+            None => deps
+                .queue
+                .queue_number_for(deps.edge.store_id(), bill.order_id)
+                .await
+                .ok()
+                .flatten(),
+        };
+        body.push(SettledBillResponse {
+            bill_id: bill.bill_id,
+            order_id: bill.order_id,
+            table_id: bill.table_id,
+            queue_number,
+            receipt_number: bill.receipt_number,
+            total_due: bill.total_due,
+            settle_time: bill.settle_time,
+            settle_clock: wall_clock(bill.settle_time, &session.timezone),
+            copies: bill.copies,
+        });
+    }
+    (StatusCode::OK, Json(body)).into_response()
 }
 
 /// A walk-in order as the counter asks for it (ADR-0146). The channel defaults to takeaway, the
@@ -226,7 +302,24 @@ where
 {
     Router::new()
         .route("/api/orders/open", get(open_orders::<S, Q>))
+        .route("/api/bills/settled", get(settled_bills::<S, Q>))
         .route("/api/orders", post(open_order::<S, Q>))
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
         .with_state(Arc::new(CounterDeps { edge, queue }))
+}
+
+#[cfg(test)]
+mod tests {
+    use pos_core::business_date::StoreTimeZone;
+
+    use super::wall_clock;
+
+    /// Today's list shows the shop's clock, not the instant's own text (ADR-0164): a bill paid at
+    /// half past seven in the evening in Ho Chi Minh City settled at half past twelve UTC.
+    #[test]
+    fn a_settled_bill_is_listed_at_the_shop_s_time() {
+        let saigon = StoreTimeZone::from_iana_name("Asia/Ho_Chi_Minh").expect("a real zone");
+        let settled = "2026-09-30T12:30:00Z".parse().expect("an instant");
+        assert_eq!(wall_clock(settled, &saigon).as_deref(), Some("19:30"));
+    }
 }

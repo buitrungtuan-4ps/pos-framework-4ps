@@ -705,6 +705,110 @@ async fn a_table_seated_by_mistake_is_released_over_http() {
     assert_eq!(reason.as_deref(), Some("ORDER_NOT_EMPTY"));
 }
 
+/// A settled bill's receipt is printed again over HTTP, on the store's receipt printer, as a copy
+/// marked COPY under its own number (ADR-0164). Today's list names the bill and counts its copies;
+/// a bill still open has no receipt to copy, and says so in the header a till translates.
+#[tokio::test]
+async fn a_receipt_is_copied_over_http_from_today_s_bills() {
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let (app, token) = app_with(Some((
+        printers,
+        PublishedDevices::new(vec![counter_printer()]),
+    )))
+    .await;
+    let table = TableId::new(Ulid::from_u128(703));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let reprint = format!("/api/bills/{bill_id}/receipt/reprint");
+
+    let (status, reason) = send_for_reason(app.clone(), &token, "POST", &reprint, None).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "an open bill has no receipt yet"
+    );
+    assert_eq!(reason.as_deref(), Some("NOT_SETTLED"));
+
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(165_000),
+                "applied_to_bill": vnd(165_000),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, listed) = send(app.clone(), &token, "GET", "/api/bills/settled", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["bill_id"], json!(bill_id));
+    assert_eq!(listed[0]["table_id"], json!(table));
+    assert_eq!(listed[0]["receipt_number"], 1);
+    assert_eq!(listed[0]["total_due"], json!(vnd(165_000)));
+    assert_eq!(listed[0]["copies"], 0);
+    assert!(
+        listed[0].get("queue_number").is_none(),
+        "a table's bill is named by its table"
+    );
+
+    let (status, copy) = send(app.clone(), &token, "POST", &reprint, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        copy["receipt_number"], 1,
+        "a copy keeps the receipt's number"
+    );
+    assert_eq!(copy["copy_number"], 1);
+    assert_eq!(copy["receipt_print"], "PRINTED");
+    {
+        let written = recorder.written.lock().expect("the recorder");
+        assert_eq!(written.len(), 2, "the receipt, then its copy");
+        let paper = written.last().expect("the copy");
+        assert!(
+            paper.windows(4).any(|window| window == b"COPY"),
+            "the copy says so"
+        );
+        assert!(
+            paper.windows(2).any(|window| window == b"#1"),
+            "under the original's number"
+        );
+    }
+
+    let (_, again) = send(app.clone(), &token, "POST", &reprint, None).await;
+    assert_eq!(again["copy_number"], 2);
+    let (_, listed) = send(app, &token, "GET", "/api/bills/settled", None).await;
+    assert_eq!(listed[0]["copies"], 2);
+}
+
 #[tokio::test]
 async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
     let (app, token) = app().await;

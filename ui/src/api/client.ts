@@ -41,7 +41,9 @@ import type {
   PrinterEntry,
   PrintResponse,
   ReasonCodesResponse,
+  ReprintResponse,
   SettleRequest,
+  SettledBill,
   ShiftResponse,
   SplitRequest,
   SplitResponse,
@@ -336,6 +338,11 @@ export const api = {
     request<BillResponse>("POST", `/api/orders/${orderId}/bill`),
   settleBill: (billId: string, settle: SettleRequest) =>
     request<BillResponse>("POST", `/api/bills/${billId}/settle`, settle),
+  // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
+  // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
+  settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),
+  reprintReceipt: (billId: string) =>
+    request<ReprintResponse>("POST", `/api/bills/${billId}/receipt/reprint`),
 
   // One bill by its id: what it owes, where it has got to and the lines it covers. What the pay
   // screen reads once a table's bill is split, because the table's own check answers for every part.

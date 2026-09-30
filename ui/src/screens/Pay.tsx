@@ -4,7 +4,13 @@ import { useNavigate, useParams } from "@solidjs/router";
 import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { Keypad } from "../components/Keypad";
-import type { BillResponse, BuyerRequest, CheckResponse, PaymentRequest } from "../api/types";
+import type {
+  BillResponse,
+  BuyerRequest,
+  CheckResponse,
+  PaymentRequest,
+  ReprintResponse,
+} from "../api/types";
 import { t, type MessageKey } from "../i18n";
 import {
   formatQuantity,
@@ -168,6 +174,18 @@ export function Pay() {
   // This bill's pre-bill, for the guest who wants to check it on paper before paying — on a split
   // table, their own part (roadmap-v3 B2.1). What came of it, or null before the first press.
   const [preBill, setPreBill] = createSignal<string | null>(null);
+  // A copy of the receipt just settled, for the guest who asks for one before they leave
+  // (ADR-0164): what came of the last press, or null before the first. The same act as the Today
+  // screen's reprint, marked COPY and counted the same way.
+  const [copy, setCopy] = createSignal<ReprintResponse | null>(null);
+  const printAgain = async (id: string) => {
+    setError(null);
+    try {
+      setCopy(await api.reprintReceipt(id));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  };
   const printPreBill = async () => {
     const id = billId();
     if (id === null) {
@@ -457,6 +475,7 @@ export function Pay() {
     setCovered(null);
     setDone(null);
     setError(null);
+    setCopy(null);
     setTender(null);
     setTyping(false);
     setTypedText("");
@@ -1292,6 +1311,30 @@ export function Pay() {
               >
                 {t(receiptPrintKey(bill().receipt_print))}
               </p>
+            </Show>
+            <button
+              type="button"
+              class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
+              data-step="printAgain"
+              onClick={() => void printAgain(bill().bill_id)}
+            >
+              {t("pay.print_again")}
+            </button>
+            <Show when={copy()}>
+              {(printed) => (
+                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="receipt-reprinted">
+                  {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
+                    number: printed().copy_number,
+                  })}
+                </p>
+              )}
+            </Show>
+            <Show when={error()}>
+              {(message) => (
+                <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                  {message()}
+                </p>
+              )}
             </Show>
             {/*
               A split table's next guest (ADR-0128). The table waits for the last part, so the pay

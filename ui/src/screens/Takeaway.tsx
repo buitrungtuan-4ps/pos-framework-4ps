@@ -2,7 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { BillResponse, CounterOrder, PaymentRequest } from "../api/types";
+import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from "../api/types";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
@@ -18,6 +18,7 @@ import {
   tipsEnabled,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { printOutcomeKey } from "../lib/print";
 
 // The table pay screen's tip shares and its guard on the cash snap, repeated rather than shared: this
 // is their second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx` carries the
@@ -49,6 +50,9 @@ export function Takeaway() {
   const [tip, setTip] = createSignal(0);
   const [done, setDone] = createSignal<BillResponse | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+  // A copy of the receipt just settled, as on the table pay screen (ADR-0164): what came of the last
+  // press, or null before the first.
+  const [copy, setCopy] = createSignal<ReprintResponse | null>(null);
   const navigate = useNavigate();
   // `?charge=<order>` is how the order screen hands a walk-in over to be paid (ADR-0146): the list
   // loads, and that order's pad opens as if its card had been tapped.
@@ -140,8 +144,18 @@ export function Takeaway() {
     setTyping(false);
     setTypedText("");
     setDone(null);
+    setCopy(null);
     setError(null);
     void refresh();
+  };
+
+  const printAgain = async (billId: string) => {
+    setError(null);
+    try {
+      setCopy(await api.reprintReceipt(billId));
+    } catch (caught) {
+      explain(caught);
+    }
   };
 
   // Open a bill on the order — or resume the one already open on it. Resuming matters: a screen that
@@ -449,6 +463,37 @@ export function Takeaway() {
                     {t("pay.change")}:{" "}
                     <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
                   </p>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
+                    data-step="printAgain"
+                    onClick={() => void printAgain(settled().bill_id)}
+                  >
+                    {t("pay.print_again")}
+                  </button>
+                  <Show when={copy()}>
+                    {(printed) => (
+                      <p
+                        class="mt-1 text-sm text-ink-muted"
+                        role="status"
+                        data-outcome="receipt-reprinted"
+                      >
+                        {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
+                          number: printed().copy_number,
+                        })}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={error()}>
+                    {(message) => (
+                      <p
+                        class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
+                        role="alert"
+                      >
+                        {message()}
+                      </p>
+                    )}
+                  </Show>
                   <button
                     type="button"
                     class="mt-4 min-h-touch w-full rounded-token border border-line bg-surface"

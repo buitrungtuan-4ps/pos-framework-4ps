@@ -62,10 +62,13 @@ use pos_proto::store_profile::StoreProfile;
 
 use pos_proto::ClockSource;
 
-use crate::app::{BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptLine, ShiftReport};
+use crate::app::{
+    BuyerDetails, EdgeSession, FiredLine, PreBill, ReceiptCopy, ReceiptLine, ShiftReport,
+};
 use crate::line_notes::NoteText;
 use crate::paper_labels::PaperLabels;
 use crate::print_agent::{AGENT_SILENCE, JOB_TTL, MAX_QUEUED_PER_PRINTER};
+use pos_core::business_date::local_time;
 
 /// The store's receipt printer: the printer bound to no station.
 ///
@@ -299,6 +302,43 @@ pub fn receipt_document(
     )
 }
 
+/// A copy of a settled bill's receipt
+/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
+/// the receipt as it printed, under the same number, with **COPY** and which copy it is, and when
+/// it was printed, under that number. `reprinted` is the store's local time, as the caller formats
+/// it.
+#[must_use]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the receipt's own arguments plus the two a copy adds; a struct for them would be \
+              built at one call site and taken apart at the next"
+)]
+pub fn receipt_copy_document(
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    receipt_number: u64,
+    copy_number: u32,
+    reprinted: &str,
+    lines: &[ReceiptLine],
+    totals: &BillTotals,
+    buyer: Option<&BuyerDetails>,
+) -> PrintDocument {
+    bill_document(
+        BillDocument::ReceiptCopy {
+            receipt_number,
+            copy_number,
+            reprinted,
+        },
+        profile,
+        money,
+        labels,
+        lines,
+        totals,
+        buyer,
+    )
+}
+
 /// The check a table asks for before it pays: the rows the receipt will print and what they come to,
 /// headed as a pre-bill and with **no receipt number** (roadmap-v3 B2.1).
 ///
@@ -388,6 +428,12 @@ pub fn shift_report_document(
 enum BillDocument<'a> {
     /// The guest's receipt for a settled bill, under its gapless number.
     Receipt { receipt_number: u64 },
+    /// A copy of that receipt, under the same number and marked as a copy (ADR-0164).
+    ReceiptCopy {
+        receipt_number: u64,
+        copy_number: u32,
+        reprinted: &'a str,
+    },
     /// The check before payment: headed as such, under the order's reference, and unnumbered.
     PreBill { reference: &'a str },
 }
@@ -422,6 +468,20 @@ fn bill_document(
     match kind {
         BillDocument::Receipt { receipt_number } => {
             blocks.push(centred(format!("#{receipt_number}"), false));
+        }
+        // The number the original printed, then what this paper is: a copy, which copy, and when it
+        // was printed. A copy the guest takes away must not read as a second sale.
+        BillDocument::ReceiptCopy {
+            receipt_number,
+            copy_number,
+            reprinted,
+        } => {
+            blocks.push(centred(format!("#{receipt_number}"), false));
+            blocks.push(centred(labels.copy, true));
+            blocks.push(centred(
+                format!("{} {copy_number} - {reprinted}", labels.reprint),
+                false,
+            ));
         }
         BillDocument::PreBill { reference } => {
             blocks.push(centred(labels.pre_bill, true));
@@ -719,6 +779,11 @@ fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) 
     }
     for line in &totals.tax_lines {
         blocks.extend(tax_block(line, money, labels));
+    }
+    // A copy whose per-rate lines could not be recovered prints the tax the settle recorded as one
+    // figure (ADR-0164 decision 5). `assemble` always fills the lines, so no other document gets here.
+    if totals.tax_lines.is_empty() && !totals.tax_total.is_zero() {
+        blocks.push(amount_line(labels.tax, totals.tax_total, money));
     }
     if !totals.rounding_adjustment.is_zero() {
         blocks.push(amount_line(
@@ -1235,6 +1300,51 @@ impl Printers {
         .await
     }
 
+    /// Prints a copy of a settled bill's receipt on the store's receipt printer
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)),
+    /// marked as a copy with the store's local time it was printed at.
+    ///
+    /// The job is keyed on the copy's own event ([`ReceiptCopy::job_id`]), so a job retried after an
+    /// ambiguous failure prints once and the next press, which is a new copy, prints again.
+    pub async fn print_receipt_copy(
+        &self,
+        session: &EdgeSession,
+        store_id: StoreId,
+        copy: &ReceiptCopy,
+        buyer: Option<&BuyerDetails>,
+    ) -> PrintOutcome {
+        let Some(device) = receipt_printer(&session.devices) else {
+            tracing::info!("no receipt printer is published for this store; nothing to print");
+            return PrintOutcome::NoPrinter;
+        };
+        // An instant always reads as a local time; the empty fallback is for a timestamp outside
+        // what the calendar can represent, which a copy printed now cannot have.
+        let reprinted = local_time(copy.reprinted_time, &session.timezone)
+            .map(|time| time.to_string())
+            .unwrap_or_default();
+        let document = receipt_copy_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.labels_for(session),
+            copy.receipt_number,
+            copy.copy_number,
+            &reprinted,
+            &copy.lines,
+            &copy.totals,
+            buyer,
+        );
+        self.dispatch(
+            device,
+            PrintJob {
+                job_id: copy.job_id,
+                store_id,
+                station_id: None,
+                document,
+            },
+        )
+        .await
+    }
+
     /// Prints a pre-bill on the store's receipt printer — the same device the receipt goes to, since
     /// both are handed to the guest.
     ///
@@ -1530,8 +1640,8 @@ mod tests {
     use super::{
         ASSUMED_DOTS_PER_LINE, AgentLane, MoneyStyle, PrintOutcome, Printers, TicketLine,
         TicketNote, TransportFactory, assumed_capabilities, connection_of, pre_bill_document,
-        receipt_document, receipt_printer, shift_report_document, short_reference, station_printer,
-        ticket_document, ticket_line,
+        receipt_copy_document, receipt_document, receipt_printer, shift_report_document,
+        short_reference, station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, VIETNAMESE};
@@ -2171,6 +2281,103 @@ mod tests {
             "a pre-bill carries no receipt number"
         );
         assert_eq!(document.blocks.last(), Some(&PrintBlock::Cut));
+    }
+
+    #[test]
+    fn a_copy_is_the_receipt_under_its_own_number_marked_as_a_copy() {
+        // ADR-0164 decision 5. The same rows and figures under the same number, so the copy matches
+        // the paper the guest already holds; under the number, COPY in bold and which copy it is,
+        // so a copy taken away is never read as a second sale.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [sold("Margherita", 1_000, vnd(149_000), vnd(149_000))];
+        let totals = totals_of(vnd(149_000));
+        let copy = |labels| {
+            receipt_copy_document(
+                &StoreProfile::default(),
+                &style(0),
+                labels,
+                42,
+                2,
+                "2026-09-30 19:05",
+                &lines,
+                &totals,
+                None,
+            )
+        };
+
+        let english = copy(&ENGLISH);
+        assert_eq!(
+            lines_of(&english),
+            vec![
+                "#42",
+                "COPY",
+                "Reprint 2 - 2026-09-30 19:05",
+                "Margherita",
+                "  1 x VND 149,000  VND 149,000",
+                "Subtotal  VND 149,000",
+                "VND 149,000",
+            ]
+        );
+        assert!(
+            english.blocks.iter().any(|block| matches!(
+                block,
+                PrintBlock::Text { line, style } if line == "COPY" && style.emphasised
+            )),
+            "COPY is printed in bold"
+        );
+        let original = receipt_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            42,
+            &lines,
+            &totals,
+            None,
+        );
+        let mut unmarked = lines_of(&english);
+        unmarked.retain(|line| *line != "COPY" && !line.starts_with("Reprint "));
+        assert_eq!(
+            unmarked,
+            lines_of(&original),
+            "apart from the marking, the copy is the original"
+        );
+        assert_eq!(english.blocks.last(), Some(&PrintBlock::Cut));
+
+        let vietnamese = copy(&VIETNAMESE);
+        assert_eq!(
+            lines_of(&vietnamese)[..3],
+            ["#42", "BẢN SAO", "In lại lần 2 - 2026-09-30 19:05"]
+        );
+    }
+
+    #[test]
+    fn a_copy_without_its_per_rate_lines_prints_the_recorded_tax_as_one_figure() {
+        // ADR-0164 decision 5: when the rates in force no longer give the tax the settle recorded,
+        // the copy prints that tax as one figure rather than a line at a rate that did not apply,
+        // and the paper still adds up to what the guest paid.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [sold("Margherita", 1_000, vnd(150_000), vnd(150_000))];
+        let totals = BillTotals {
+            tax_total: vnd(15_000),
+            total_due: vnd(165_000),
+            ..totals_of(vnd(150_000))
+        };
+
+        let document = receipt_copy_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            7,
+            1,
+            "2026-09-30 19:05",
+            &lines,
+            &totals,
+            None,
+        );
+        assert_eq!(
+            lines_of(&document)[5..],
+            ["Subtotal  VND 150,000", "Tax  VND 15,000", "VND 165,000"]
+        );
     }
 
     #[test]

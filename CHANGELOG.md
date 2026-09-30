@@ -209,6 +209,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A guest's receipt can be printed again, as a marked copy**
+  ([ADR-0164](docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+  Nothing printed a settled bill's receipt twice, so a guest who came back for a copy for their
+  expenses could not have one, and the reprint count the spec asks for had nothing to count.
+  - The pay screen and the counter's settled screen offer **Print again**. The Today screen lists
+    **Recent bills**, today's settled bills newest first, and a tap on one, then **Reprint**, prints
+    it.
+  - The copy is the original under the same receipt number, headed **COPY** (**BẢN SAO**) with
+    which copy it is and when it printed. It prints the figures the settle recorded. If the tax rates
+    have changed since, it prints the recorded tax as one total, never a line at a rate that did not
+    apply.
+  - Every press writes the new event `billing.receipt.reprinted` with its copy number, under the
+    existing `billing.receipt.reprint` permission, which asks no PIN.
+  - `GET /api/bills/settled` (new) lists today's settled bills, at most 200, with how many copies
+    each has had. `POST /api/bills/{id}/receipt/reprint` (new) counts and prints a copy. It refuses a
+    bill that has not settled with `409 NOT_SETTLED` and an earlier day's receipt with
+    `409 RECEIPT_FROM_ANOTHER_DAY`.
+
+  **Upgrade note:** a new event type, `billing.receipt.reprinted`, is additive, and
+  `PROTOCOL_VERSION` is unchanged. A receiver that does not know it stores and forwards it. Nothing
+  reports it yet; the dashboard's reprint rate reads it in a later change.
+
 - **A table seated by mistake goes back to the floor** ([ADR-0163](docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
   A seated table could leave the floor only by a bill, and a bill on nothing could never be paid, so
   a table seated by mistake, or whose every dish was voided, stayed taken until the store was set up

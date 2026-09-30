@@ -105,6 +105,23 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "pre-bill-print" },
   },
   {
+    task: "Reprint a receipt from today's bills",
+    budget: 3,
+    note: "Two taps on the Today screen: the bill, then *Reprint*. For the guest who comes back for a copy of their receipt. The copy is the original under the same number, marked COPY with which copy it is, and each press is counted (ADR-0164), so there is no confirmation: a copy printed by mistake costs paper and one more on the count. Choosing first, rather than a *Reprint* on every row, is so that a tap on a crowded list prints the bill that was meant. Rare, so its ceiling is three.",
+    steps: [
+      { route: "/today", action: "chooseBill" },
+      { route: "/today", action: "reprintReceipt" },
+    ],
+    outcome: { route: "/today", mark: "receipt-reprinted" },
+  },
+  {
+    task: "Print a guest's receipt again right after they pay",
+    budget: 3,
+    note: "One tap under the settled figures, which is where the cashier is when the guest asks. The same act as the Today screen's reprint, counted the same way (ADR-0164). The counter's settled screen carries the same button, and it is not declared separately because it is the same act on the other pay screen.",
+    steps: [{ route: "/table/:id/pay", action: "printAgain" }],
+    outcome: { route: "/table/:id/pay", mark: "receipt-reprinted" },
+  },
+  {
     task: "Mark a dish sold out from the kitchen board",
     budget: 2,
     note: "Two: open the panel, tap the dish. The cook is usually the first to know something has run out, and the board is where the cook is. A panel over the board rather than a control on each ticket, because a ticket is one whole-card tap that bumps it and a second target inside it would be hit by mistake in a rush.",

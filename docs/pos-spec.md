@@ -122,7 +122,7 @@ Items carry `sku`, `barcode`, and variant fields from day one so enabling retail
 1. **Blind shift close** (§6) — removes "count until it matches".
 2. **Mandatory reasons** from a cloud-managed list for: voiding fired lines, discounts, comps, refunds, bill voids, opening the drawer outside a sale.
 3. **Per-employee analytics** on the dashboard: void, discount, refund, drawer-open, and reprint rates against peers, with automatic outlier flags.
-4. **Reprints** are marked COPY, counted, and permissioned. **Price override** is a separate permission with its own ceiling.
+4. **Reprints** are marked COPY, counted, and permissioned ([ADR-0164](adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)). A copy is the settled receipt under its own number, headed **COPY** and "Reprint *n* - *time*", printed from the figures `billing.bill.settled` recorded; when the rates in force no longer give the recorded tax, the copy prints that tax as one total. Every press writes `billing.receipt.reprinted` with its copy number, under `billing.receipt.reprint`, which asks no PIN. The till copies a bill settled in the current business day, from the Today screen's recent bills (`GET /api/bills/settled`, newest first, at most 200) or **Print again** on the pay screens, through `POST /api/bills/{id}/receipt/reprint`; a bill that has not settled has nothing to copy (`409 NOT_SETTLED`), and an earlier day's receipt is refused (`409 RECEIPT_FROM_ANOTHER_DAY`). **Price override** is a separate permission with its own ceiling.
 5. Immutable audit log plus NTP-synchronised clocks, so records line up with store camera footage where it exists.
 6. **No training mode.** "Sell without recording" is a classic fraud vector. Training happens in a demo store with a sample menu.
 7. **A manager's PIN is limited like a sign-in PIN.** A wrong PIN at an approval prompt counts against that manager exactly as a wrong one at sign-in does, in one count per person: five in a row lock both for five minutes, and a right PIN clears it (ADR-0030).
@@ -219,7 +219,7 @@ delivery.shipment.created / .status_changed
 config.version.published · device.activation.completed · fleet.update.rolled_out
 ```
 
-**Eleven further types complete the set.** Each exists because a rule stated elsewhere in
+**Twelve further types complete the set.** Each exists because a rule stated elsewhere in
 this document had no event able to carry it, and the asymmetry of the naming standard is
 what makes declaring them early correct: adding an event type is additive and free, while
 removing one is forbidden. So the cost of declaring one now is near zero, and the cost of
@@ -229,7 +229,7 @@ bump.
 ```
 sales.order.closed · sales.order_line.held
 sales.table.opened / .closed
-billing.bill.opened
+billing.bill.opened · billing.receipt.reprinted
 cash.shift.counted
 inventory.stock.received / .wasted
 promotion.voucher.reserved
@@ -245,6 +245,7 @@ config.version.activated
 | `inventory.stock.received` | §8 names receipt as one of the five ledger entry kinds |
 | `promotion.voucher.reserved` | §7 makes redemption an atomic check-and-mark, so reserve and redeem are distinct states. With only redemption, a settlement that then failed would burn the voucher |
 | `billing.bill.opened` | Split, merged, settled and voided all presuppose a bill that nothing created |
+| `billing.receipt.reprinted` | §11.4 counts every reprint and §11.3 puts each employee's reprint rate on the dashboard. A copy printed with no event could be counted by nothing |
 | `sales.order.closed`, `sales.order_line.held` | §3 requires hold; the order lifecycle had no terminal event distinct from settlement |
 | `sales.table.opened`, `sales.table.closed` | §2's table cycles through five states; only two transitions had events |
 | `config.version.activated` | Published is not the same as running. The fleet view needs to know which store is actually on which version |
