@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Bill routes: open a bill on a table, open one on an order, settle it (P5, ADR-0093).
+//! Bill routes: open a bill on a table, open one on an order, settle it (P5, ADR-0093), and print a
+//! settled bill's receipt again as a copy (ADR-0164).
 //!
 //! Settling proves the payments sum **exactly** to what the bill assembles to (ADR-0028) and
 //! allocates the gapless per-store receipt number (ADR-0025). The response carries the receipt
@@ -258,6 +259,62 @@ where
         response.receipt_print = Some(printed.as_wire().to_owned());
     }
     Json(response).into_response()
+}
+
+/// What a copy's press reports back to the till (ADR-0164).
+#[derive(Debug, Serialize)]
+struct ReprintResponse {
+    bill_id: BillId,
+    receipt_number: u64,
+    /// Which copy this was, counting from 1.
+    copy_number: u32,
+    /// What came of the printing, as the settle reports it: `PRINTED`, `NO_PRINTER`, and so on.
+    receipt_print: &'static str,
+}
+
+/// `POST /api/bills/{id}/receipt/reprint` — print a settled bill's receipt again, as a copy marked
+/// COPY under the same number, and count it
+/// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+///
+/// The copy is counted when it is asked for (`billing.receipt.reprinted`), then printed, so a
+/// printer that is down still leaves the copy on the record, and the answer says what came out.
+pub(crate) async fn reprint<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + SubjectStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    let copy = match edge.reprint_receipt(actor, bill_id).await {
+        Ok(copy) => copy,
+        Err(error) => return error_response(&error),
+    };
+    // The buyer's details are read again from the subject store, never from the log. A record the
+    // retention sweep has scrubbed leaves the copy without them, which is what the law asked for.
+    let buyer = match copy.buyer_subject_id {
+        Some(subject_id) => edge.buyer_of(subject_id).await.ok().flatten(),
+        None => None,
+    };
+    let printed = match printers.as_deref() {
+        Some(printers) => {
+            printers
+                .print_receipt_copy(&edge.session(), edge.store_id(), &copy, buyer.as_ref())
+                .await
+        }
+        None => PrintOutcome::NoPrinter,
+    };
+    Json(ReprintResponse {
+        bill_id: copy.bill_id,
+        receipt_number: copy.receipt_number,
+        copy_number: copy.copy_number,
+        receipt_print: printed.as_wire(),
+    })
+    .into_response()
 }
 
 /// Whether a buyer's registration number is well formed for the country this binary carries.

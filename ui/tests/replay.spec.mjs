@@ -188,6 +188,19 @@ async function sendOrder(page) {
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
 }
 
+/**
+ * A table paid in cash, with the pay screen still showing what it settled for: the bill a guest
+ * asks for a copy of.
+ */
+async function aSettledTable(page) {
+  await seatTable(page);
+  await addItem(page);
+  await page.locator('[data-step="takePayment"]').click();
+  await page.locator('[data-step="setTender"]').first().click();
+  await page.locator('[data-step="payCash"]').click();
+  await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+}
+
 /** Opens the cash shift with a float, so a count and a close have something to act on. */
 async function openShift(page) {
   await navigateTo(page, "/shift");
@@ -225,6 +238,14 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  // Today's list reads the edge when the screen opens, so the bill is settled first and the screen
+  // opened after, by its link, as an operator does.
+  "Reprint a receipt from today's bills": async (page) => {
+    await aSettledTable(page);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-step="chooseBill"]').first()).toBeVisible();
+  },
+  "Print a guest's receipt again right after they pay": aSettledTable,
   "Mark a dish sold out from the kitchen board": async (page) => {
     await navigateTo(page, "/kds");
   },
@@ -1450,6 +1471,50 @@ test("a table seated by mistake is released, and every till follows", async ({ c
     await floor.reload();
     await expect(floor.locator('[data-outcome="floor"]')).toBeVisible();
     await expect(card).toContainText("Free");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Not a flow: what the two declared reprints cannot say. Those prove the taps reach a copy; this
+// proves each copy is **counted**, and by the edge rather than by the screen (ADR-0164). Two presses
+// on the pay screen and one from Today are three copies of the one receipt, Today names the bill by
+// its receipt number and its table, and a reload still says three, because the count comes back
+// from the log. The demo store has no printer, which is the point too: a copy is counted when it is
+// asked for, whatever the paper does.
+test("every copy of a receipt is counted, and the count is the edge's", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aSettledTable(page);
+    const press = async (step) => {
+      const answered = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/receipt/reprint") && response.request().method() === "POST",
+      );
+      await page.locator(`[data-step="${step}"]`).click();
+      expect((await answered).status()).toBe(200);
+    };
+    await press("printAgain");
+    await press("printAgain");
+    await expect(page.locator('[data-outcome="receipt-reprinted"]')).toHaveText(
+      "No printer is set up for this store",
+    );
+
+    await navigateTo(page, "/today");
+    const bill = page.locator('[data-step="chooseBill"]');
+    await expect(bill).toHaveCount(1);
+    await expect(bill).toContainText("Receipt #1");
+    await expect(bill).toContainText("Table 1");
+    const copies = page.locator('[data-outcome="receipt-copies"]');
+    await expect(copies).toHaveText("2 copies");
+    await bill.click();
+    await press("reprintReceipt");
+    await expect(copies).toHaveText("3 copies");
+
+    await page.reload();
+    await expect(copies).toHaveText("3 copies");
   } finally {
     await edge.stop();
   }

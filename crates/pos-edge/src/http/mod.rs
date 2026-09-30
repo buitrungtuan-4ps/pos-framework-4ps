@@ -477,6 +477,7 @@ where
         .route("/api/tables/{id}/bill", post(bills::open::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle::<S>))
+        .route("/api/bills/{id}/receipt/reprint", post(bills::reprint::<S>))
         // What one bill owes and the lines it covers — the read a split needs, because once a
         // table's bill is split each guest at the till is asking about their own part (ADR-0128).
         .route("/api/bills/{id}/check", get(check::read_for_bill::<S>))
@@ -626,6 +627,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::BillAlreadyOpen => "BILL_ALREADY_OPEN",
         AppError::OrderNotEmpty => "ORDER_NOT_EMPTY",
         AppError::NothingToBill => "NOTHING_TO_BILL",
+        AppError::NotSettled => "NOT_SETTLED",
+        AppError::ReceiptFromAnotherDay => "RECEIPT_FROM_ANOTHER_DAY",
         AppError::UnknownBill => "UNKNOWN_BILL",
         AppError::NothingToPrint => "NOTHING_TO_PRINT",
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
@@ -667,6 +670,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::BillAlreadyOpen
         | AppError::OrderNotEmpty
         | AppError::NothingToBill
+        | AppError::NotSettled
+        | AppError::ReceiptFromAnotherDay
         | AppError::UnknownBill
         | AppError::NothingToPrint
         | AppError::BillsOnDifferentTables
