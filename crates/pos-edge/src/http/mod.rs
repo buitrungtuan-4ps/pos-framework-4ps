@@ -365,6 +365,11 @@ pub fn stamp_version(app: Router, standing: Arc<CurrentStanding>) -> Router {
 /// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
 /// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
 /// successes).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the store's route table: one line per route, and splitting it would scatter the one \
+              list a reader checks for what the edge serves"
+)]
 pub fn domain_router<S, Q, A, J, W>(
     edge: Arc<Edge<S>>,
     queue: Q,
@@ -441,6 +446,7 @@ where
         // fan-out, which carries what happens next — so without this read a till that reloads and a
         // kitchen display switched on mid-service both draw an empty screen over live food.
         .route("/api/orders/live", get(live::read::<S>))
+        .route("/api/orders/kitchen", get(live::kitchen::<S>))
         // The order: add a line to a table, fire a line to the kitchen.
         .route("/api/tables/{id}/lines", post(lines::add::<S>))
         .route("/api/lines/{id}/fire", post(lines::fire::<S>))

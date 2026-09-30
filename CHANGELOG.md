@@ -100,6 +100,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A counter order paid before the kitchen made it stays on the kitchen board, with its note.**
+  A counter, a delivery or a QR takeaway order is paid first and cooked after, and the board
+  dropped every order the moment its bill settled. The ticket vanished while the food was still to
+  make, and the guest's note went with it ([ADR-0161](docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
+  - A paid order with no table stays on the board and the pass until a station bumps it, or until
+    its business day ends.
+  - Its guest note stays for as long as the card, still held in memory only, and is forgotten once
+    the line is bumped.
+  - `GET /api/orders/kitchen` (new) lists what the kitchen still has to make, so a board that
+    reloads after the payment keeps the card.
+  - A table's card still leaves when the table's bill settles, as before.
+
+  **Upgrade note:** a counter kitchen that never bumps sees the day's paid orders stay on its board
+  until the day ends. Today it shows none of them once they are paid.
+
 - **A good update is no longer rolled back because its file was briefly "busy".** The store server
   starts a downloaded release with `--self-test` before switching to it. If another part of the
   process started a program at the same instant, the operating system could refuse to run the file

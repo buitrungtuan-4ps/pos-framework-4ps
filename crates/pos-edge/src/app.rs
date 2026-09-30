@@ -1775,7 +1775,22 @@ struct Projection {
     /// inserted on the first line and removed on settle: voiding an order's only bill puts it
     /// back, so an order can leave the set and come back.
     live: BTreeSet<OrderId>,
+    /// Paid orders without a table whose kitchen is not done: at least one fired line no station
+    /// has bumped ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
+    /// Each maps to its newest such line's fire time, which dates it for the end of the day.
+    ///
+    /// Kept by [`Self::refresh_live`] from the same inputs as `live`, and from a fire, a void and
+    /// a bump, so no read scans for it. Bounded by [`MAX_COOKING`], and cut to the current
+    /// business day by [`Edge::kitchen_orders`].
+    cooking: BTreeMap<OrderId, Timestamp>,
 }
+
+/// The most paid orders the kitchen board holds waiting for a bump.
+///
+/// A store with no kitchen display never bumps, and nothing else would ever empty
+/// [`Projection::cooking`]; past this the orders fired longest ago are dropped. A kitchen that
+/// really has a thousand paid orders waiting has a bigger problem than its board.
+const MAX_COOKING: usize = 1_024;
 
 impl Projection {
     fn table_state(&self, table_id: TableId) -> TableState {
@@ -1973,6 +1988,57 @@ impl Projection {
         } else {
             self.live.remove(&order_id);
         }
+        // Paid, and served at no table: its food is still coming while a line waits for a bump.
+        let waiting = if settled && !refused && self.table_for_order(order_id).is_none() {
+            self.newest_unbumped_fire(order_id)
+        } else {
+            None
+        };
+        match waiting {
+            Some(fired) => {
+                self.cooking.insert(order_id, fired);
+                self.bound_cooking();
+            }
+            None => {
+                self.cooking.remove(&order_id);
+            }
+        }
+    }
+
+    /// The newest fire time among an order's fired lines that no station has bumped.
+    fn newest_unbumped_fire(&self, order_id: OrderId) -> Option<Timestamp> {
+        self.line_ids_for_order(order_id)
+            .iter()
+            .filter(|line_id| !self.bumped_lines.contains(line_id))
+            .filter_map(|line_id| self.lines.get(line_id))
+            .filter(|record| record.state == OrderLineState::Fired)
+            .filter_map(|record| record.fired_time)
+            .max()
+    }
+
+    /// Keeps [`Self::cooking`] within [`MAX_COOKING`] by dropping the orders fired longest ago.
+    fn bound_cooking(&mut self) {
+        while self.cooking.len() > MAX_COOKING {
+            let oldest = self
+                .cooking
+                .iter()
+                .min_by_key(|(_, fired)| **fired)
+                .map(|(order_id, _)| *order_id);
+            match oldest {
+                Some(order_id) => {
+                    self.cooking.remove(&order_id);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Whether a line is one the kitchen board still shows for an order that no longer owes:
+    /// fired, not bumped, on an order in [`Self::cooking`].
+    fn still_cooking(&self, order_line_id: OrderLineId, record: &LineRecord) -> bool {
+        record.state == OrderLineState::Fired
+            && !self.bumped_lines.contains(&order_line_id)
+            && self.cooking.contains_key(&record.order_id)
     }
 
     /// The ids of an order's lines, in id order, from the index.
@@ -2023,9 +2089,13 @@ impl Projection {
     }
 
     fn set_line_state(&mut self, line_id: OrderLineId, state: OrderLineState) {
-        if let Some(record) = self.lines.get_mut(&line_id) {
-            record.state = state;
-        }
+        let Some(record) = self.lines.get_mut(&line_id) else {
+            return;
+        };
+        record.state = state;
+        let order_id = record.order_id;
+        // A fire or a void can start or end a paid order's wait at the kitchen (ADR-0161).
+        self.refresh_live(order_id);
     }
 
     /// Records when a line went to the kitchen, beside the state change that sent it.
@@ -2046,10 +2116,13 @@ impl Projection {
         fired_time: Timestamp,
         station_id: StationId,
     ) {
-        if let Some(record) = self.lines.get_mut(&line_id) {
-            record.fired_time = Some(fired_time);
-            record.station_id = Some(station_id);
-        }
+        let Some(record) = self.lines.get_mut(&line_id) else {
+            return;
+        };
+        record.fired_time = Some(fired_time);
+        record.station_id = Some(station_id);
+        let order_id = record.order_id;
+        self.refresh_live(order_id);
     }
 
     /// Both halves of a fire, for the replay.
@@ -2076,6 +2149,14 @@ impl Projection {
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
     fn mark_bumped(&mut self, order_line_ids: &[OrderLineId]) {
         self.bumped_lines.extend(order_line_ids.iter().copied());
+        // A bump can end a paid order's wait at the kitchen (ADR-0161).
+        let orders: BTreeSet<OrderId> = order_line_ids
+            .iter()
+            .filter_map(|line_id| self.lines.get(line_id).map(|record| record.order_id))
+            .collect();
+        for order_id in orders {
+            self.refresh_live(order_id);
+        }
     }
 
     /// Every bumped line, in id order — the current prepared set a KDS reads on (re)connect so a
@@ -4430,6 +4511,8 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
         self.lock_projection().mark_bumped(&order_line_ids);
+        // A paid order's note is kept for the kitchen only until the line is made (ADR-0161).
+        self.forget_notes_off_screen();
         Ok(BumpView {
             order_id,
             station_id,
@@ -4764,31 +4847,70 @@ impl<S: EventStore> Edge<S> {
     /// If the projection lock is poisoned — unreachable, as its critical section only reads.
     #[must_use]
     pub fn live_orders(&self) -> Vec<LiveOrderView> {
-        let session = self.session();
         // Copied out under one guard, so the answer is one consistent moment across every order,
         // and assembled after it is released: the menu lookups and the allocation are the slow part,
         // and every sale waits on this lock (F2).
-        let snapshot: Vec<LiveSnapshot> = {
+        let snapshot = {
             let projection = self.lock_projection();
-            projection
-                .open_orders()
-                .into_iter()
-                .map(|order_id| LiveSnapshot {
-                    order_id,
-                    table_id: projection.table_for_order(order_id),
-                    bill_id: projection.bill_for_order(order_id),
-                    open_bill_ids: projection.open_bills_for_order(order_id),
-                    lines: projection
-                        .identified_lines_for_order(order_id)
-                        .into_iter()
-                        .map(|(id, record)| {
-                            let bumped = projection.bumped_lines.contains(&id);
-                            (id, record, bumped)
-                        })
-                        .collect(),
-                })
-                .collect()
+            Self::live_snapshot_of(&projection, projection.open_orders())
         };
+        self.views_of(snapshot)
+    }
+
+    /// What the kitchen still has to make
+    /// ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
+    /// every open order, as [`Self::live_orders`] has them, and each paid order without a table that
+    /// still has a fired line no station has bumped, fired on the current business day.
+    ///
+    /// A counter order is paid before it is cooked, and the live read drops an order the moment it
+    /// is paid, so a kitchen display that reloaded after the payment lost the ticket and its note.
+    /// The day's end is applied here, where the clock is: a paid order fired on an earlier business
+    /// day is dropped from the projection's waiting set, and its notes are forgotten with it.
+    #[must_use]
+    pub fn kitchen_orders(&self) -> Vec<LiveOrderView> {
+        let session = self.session();
+        let today = derive_business_date(self.clock.now(), &session.timezone, session.cutoff);
+        let snapshot = {
+            let mut projection = self.lock_projection();
+            if let Ok(today) = today {
+                projection.cooking.retain(|_, fired| {
+                    derive_business_date(*fired, &session.timezone, session.cutoff)
+                        .is_ok_and(|day| day == today)
+                });
+            }
+            let waiting: Vec<OrderId> = projection.cooking.keys().copied().collect();
+            let mut orders = projection.open_orders();
+            orders.extend(waiting);
+            Self::live_snapshot_of(&projection, orders)
+        };
+        self.forget_notes_off_screen();
+        self.views_of(snapshot)
+    }
+
+    /// The orders `order_ids` names, with their lines, copied out under the caller's guard.
+    fn live_snapshot_of(projection: &Projection, order_ids: Vec<OrderId>) -> Vec<LiveSnapshot> {
+        order_ids
+            .into_iter()
+            .map(|order_id| LiveSnapshot {
+                order_id,
+                table_id: projection.table_for_order(order_id),
+                bill_id: projection.bill_for_order(order_id),
+                open_bill_ids: projection.open_bills_for_order(order_id),
+                lines: projection
+                    .identified_lines_for_order(order_id)
+                    .into_iter()
+                    .map(|(id, record)| {
+                        let bumped = projection.bumped_lines.contains(&id);
+                        (id, record, bumped)
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// A snapshot as the screens read it: names from the menu, and each line's note.
+    fn views_of(&self, snapshot: Vec<LiveSnapshot>) -> Vec<LiveOrderView> {
+        let session = self.session();
         // After the projection's guard is released: the two locks are never held together.
         let notes = self.lock_notes();
         snapshot
@@ -6277,7 +6399,8 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Forgets every note no screen can show any more: a voided line's, and every line's on an
-    /// order that has left the open orders (ADR-0157 decision 2).
+    /// order that has left the open orders (ADR-0157 decision 2), except a line the kitchen board
+    /// still shows for a paid order without a table, until it is bumped or its day ends (ADR-0161).
     ///
     /// A line the projection has not folded yet is kept, because its note is held a moment before
     /// its write commits.
@@ -6292,7 +6415,8 @@ impl<S: EventStore> Edge<S> {
                 .filter(|(order_line_id, order_id)| {
                     projection.line(*order_line_id).is_some_and(|record| {
                         record.state == OrderLineState::Voided
-                            || !projection.live.contains(order_id)
+                            || (!projection.live.contains(order_id)
+                                && !projection.still_cooking(*order_line_id, &record))
                     })
                 })
                 .map(|(order_line_id, _)| order_line_id)
@@ -8402,5 +8526,46 @@ mod tests {
 
         roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
         assert!(roster.sign_in_ready());
+    }
+
+    /// A store with no kitchen display never bumps, and its waiting set must still stop growing:
+    /// past [`super::MAX_COOKING`] the orders fired longest ago give way (ADR-0161).
+    #[test]
+    fn the_waiting_set_is_bounded_and_drops_the_oldest() {
+        let mut projection = super::Projection::default();
+        let fired =
+            |ms: i64| Timestamp::from_milliseconds_since_epoch(ms).expect("a valid instant");
+        for n in 0..=super::MAX_COOKING {
+            let id = u128::try_from(n).expect("a small count");
+            let ms = i64::try_from(n).expect("a small count");
+            let order_id = OrderId::new(Ulid::from_u128(1 + id));
+            projection.cooking.insert(order_id, fired(1_000 + ms));
+            projection.bound_cooking();
+        }
+        assert_eq!(projection.cooking.len(), super::MAX_COOKING);
+        assert!(
+            !projection
+                .cooking
+                .contains_key(&OrderId::new(Ulid::from_u128(1))),
+            "the order fired first is the one that gave way"
+        );
+    }
+
+    /// A paid order's wait ends with the business day its food was fired in: the kitchen read
+    /// drops one fired on an earlier day (ADR-0161).
+    #[test]
+    fn a_paid_order_from_a_closed_day_leaves_the_board() {
+        let edge = edge();
+        let yesterday = OrderId::new(Ulid::from_u128(0x0DA7));
+        edge.lock_projection().cooking.insert(
+            yesterday,
+            Timestamp::from_milliseconds_since_epoch(1).expect("a valid instant"),
+        );
+
+        assert!(edge.kitchen_orders().is_empty());
+        assert!(
+            edge.lock_projection().cooking.is_empty(),
+            "the read ended the day for it, so it does not come back"
+        );
     }
 }
