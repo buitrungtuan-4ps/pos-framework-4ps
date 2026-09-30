@@ -218,6 +218,58 @@ fn a_paid_table_leaves_the_board_as_it_always_has() {
     });
 }
 
+/// A table's order stays a table's order after its table is seated again. The table points at its
+/// new guests' order then, and a cook bumping the old order's last ticket late must not bring the
+/// old order back to the board as though it had come from the counter.
+#[test]
+fn a_table_s_order_stays_off_the_board_once_its_table_is_seated_again() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let table = TableId::new(Ulid::from_u128(800));
+        let other_station = StationId::new(Ulid::from_u128(901));
+        edge.seat_table(server(), table, None).await.expect("seats");
+        let draft = || LineDraft {
+            menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+            display_name: DisplayName::new("Margherita"),
+            quantity: Quantity::ONE,
+            unit_price: vnd(150_000),
+            line_total: vnd(150_000),
+            tax_class_id: EdgeSession::standard_tax_class(),
+            tax_rate: Ratio::basis_points(1_000).expect("a valid rate"),
+            seat: None,
+            course_id: None,
+            modifier_menu_item_ids: Vec::new(),
+            note_present: false,
+        };
+        let pizza = edge.add_line(server(), table, draft()).await.expect("adds");
+        let salad = edge.add_line(server(), table, draft()).await.expect("adds");
+        edge.fire_line(server(), pizza.order_line_id, Some(station()))
+            .await
+            .expect("fires");
+        edge.fire_line(server(), salad.order_line_id, Some(other_station))
+            .await
+            .expect("fires");
+        pay(&edge, pizza.order_id).await;
+        edge.clean_table(server(), table).await.expect("cleans");
+        edge.seat_table(server(), table, None)
+            .await
+            .expect("the next guests sit down");
+
+        edge.bump_ticket(
+            server(),
+            pizza.order_id,
+            station(),
+            vec![pizza.order_line_id],
+        )
+        .await
+        .expect("a cook bumps the old ticket late");
+        assert!(
+            !on_the_board(&edge, salad.order_line_id),
+            "the old table's other dish is not back on the board"
+        );
+    });
+}
+
 /// A dish paid for and never sent to the kitchen is not waiting there.
 #[test]
 fn an_unfired_line_on_a_paid_order_is_not_on_the_board() {

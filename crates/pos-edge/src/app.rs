@@ -1989,7 +1989,13 @@ impl Projection {
             self.live.remove(&order_id);
         }
         // Paid, and served at no table: its food is still coming while a line waits for a bump.
-        let waiting = if settled && !refused && self.table_for_order(order_id).is_none() {
+        // "At a table" is where the order opened as well as where a table points now: a table
+        // seated again points at its new guests, and the old order is still a table's order.
+        let at_a_table = self.table_for_order(order_id).is_some()
+            || self
+                .order_origin(order_id)
+                .is_some_and(|origin| origin.table_id.is_some());
+        let waiting = if settled && !refused && !at_a_table {
             self.newest_unbumped_fire(order_id)
         } else {
             None
