@@ -820,6 +820,15 @@ pub enum AppError {
     /// would take two receipt numbers and charge the guest twice for one meal.
     #[error("a bill is already open on that order")]
     BillAlreadyOpen,
+    /// A table was released with something sold on it: a line not voided, or a bill open
+    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)). Releasing
+    /// says nobody ate, so it can only end an order with nothing on it.
+    #[error("that table has something sold on it; take payment or void the lines first")]
+    OrderNotEmpty,
+    /// A bill was asked for on an order with nothing to bill: no line, or every line voided
+    /// (ADR-0163). It could never settle, and its table would wait for a payment that cannot come.
+    #[error("that order has nothing to bill")]
+    NothingToBill,
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
@@ -1717,6 +1726,10 @@ struct Projection {
     /// order at once instead of leaving a stored flag to be cleared one order at a time. A stored
     /// boolean is how the reported answer and the enforced answer drifted apart before.
     staff_decisions: HashMap<OrderId, StaffDecision>,
+    /// Orders that ended owing nothing (`sales.order.closed`): a table released with nothing sold
+    /// on it (ADR-0163), and a guest order staff refused. A closed order is not live, whatever lines
+    /// it still names.
+    closed_orders: HashSet<OrderId>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
@@ -1972,6 +1985,19 @@ impl Projection {
         self.refresh_live(order_id);
     }
 
+    /// Ends an order owing nothing (`sales.order.closed`), live and replayed alike.
+    ///
+    /// A table still pointing at the order lets go of it, as a refused guest order's table does.
+    /// Left pointing, a released table would take the next line sent to it onto an order that has
+    /// ended: on no screen, on no bill, and never charged.
+    fn close_order(&mut self, order_id: OrderId) {
+        self.closed_orders.insert(order_id);
+        if let Some(table_id) = self.table_for_order(order_id) {
+            self.table_orders.remove(&table_id);
+        }
+        self.refresh_live(order_id);
+    }
+
     /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
     fn refresh_live(&mut self, order_id: OrderId) {
         let has_lines = self
@@ -1983,7 +2009,8 @@ impl Projection {
             .and_then(|bill_id| self.bills.get(&bill_id))
             .is_some_and(|bill| bill.state == BillState::Settled);
         let refused = self.staff_decision(order_id) == Some(StaffDecision::Rejected);
-        if has_lines && !settled && !refused {
+        let closed = self.closed_orders.contains(&order_id);
+        if has_lines && !settled && !refused && !closed {
             self.live.insert(order_id);
         } else {
             self.live.remove(&order_id);
@@ -3301,8 +3328,13 @@ impl<S: EventStore> Edge<S> {
             vec![rejected_message, closed_message],
         )
         .await?;
-        self.lock_projection()
-            .record_staff_decision(order_id, StaffDecision::Rejected);
+        {
+            let mut projection = self.lock_projection();
+            projection.record_staff_decision(order_id, StaffDecision::Rejected);
+            // The order ends here as the replay of its `sales.order.closed` ends it, so a live box
+            // and a restarted one hold the same thing.
+            projection.close_order(order_id);
+        }
         self.forget_notes_off_screen();
         Ok(())
     }
@@ -3967,6 +3999,69 @@ impl<S: EventStore> Edge<S> {
         self.commit_and_publish(&ctx, &payload).await?;
         self.lock_projection()
             .set_table(table_id, decision.next_state);
+        Ok(TableView {
+            table_id,
+            state: decision.next_state,
+        })
+    }
+
+    /// Releases a table seated by mistake, or whose guests left before anything was sold, straight
+    /// back to service
+    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)):
+    /// `sales.order.closed` for its order and `sales.table.closed`, in one transaction.
+    ///
+    /// Only while nothing is sold on it: every line voided or none at all, and no bill open. Before
+    /// this a table seated by mistake could leave `Occupied` only by a bill on nothing, which could
+    /// never settle, so it stayed taken until the store was re-provisioned. A table stuck that way
+    /// already is recovered once: a manager voids the empty bill, and the table is released.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::OrderNotEmpty`] if something is sold on the table; [`AppError::Domain`] if the
+    /// table is not seated, or the store does not do table service; or [`AppError`] if the store
+    /// cannot be written.
+    pub async fn release_table(
+        &self,
+        actor: Actor,
+        table_id: TableId,
+    ) -> Result<TableView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let decision = decide_table(self.table_state(table_id), TableCommand::Release, &ctx)?;
+        let order_id = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(table_id);
+            if let Some(order_id) = order_id {
+                let sold = !projection.sold_line_ids(order_id).is_empty();
+                let billed = projection
+                    .latest_bill_in(order_id, BillState::Open)
+                    .is_some();
+                if sold || billed {
+                    return Err(AppError::OrderNotEmpty);
+                }
+            }
+            order_id
+        };
+
+        let mut envelopes = Vec::with_capacity(2);
+        let mut messages = Vec::with_capacity(2);
+        if let Some(order_id) = order_id {
+            let (envelope, message) = self.prepare(&ctx, &SalesOrderClosed { order_id })?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        let (envelope, message) = self.prepare(&ctx, &SalesTableClosed { table_id })?;
+        envelopes.push(envelope);
+        messages.push(message);
+        self.append_and_publish(envelopes, messages).await?;
+        {
+            let mut projection = self.lock_projection();
+            if let Some(order_id) = order_id {
+                projection.close_order(order_id);
+            }
+            projection.set_table(table_id, decision.next_state);
+        }
+        // A voided line's note is gone already; a released order takes whatever else it held.
+        self.forget_notes_off_screen();
         Ok(TableView {
             table_id,
             state: decision.next_state,
@@ -5313,6 +5408,12 @@ impl<S: EventStore> Edge<S> {
         if table_id.is_none() && !has_lines {
             return Err(AppError::UnknownOrder);
         }
+        // Nothing sold, nothing to bill (ADR-0163). A bill on an order whose every line was voided
+        // could never settle, `assemble` refusing an empty set of tax bases, and its table would wait
+        // for a payment that cannot come; the way out for such a table is to release it.
+        if self.lock_projection().sold_line_ids(order_id).is_empty() {
+            return Err(AppError::NothingToBill);
+        }
 
         // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
         // the tables capability. There is no floor move to prove for a counter order.
@@ -5996,6 +6097,17 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Replays an order that ended owing nothing: a table released with nothing sold on it
+    /// ([`Edge::release_table`]), or a guest order staff refused.
+    fn fold_order_closed(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesOrderClosed = envelope.data.decode().map_err(AppError::Encode)?;
+        projection.close_order(event.order_id);
+        Ok(())
+    }
+
     /// Replays guests moving to another table: the table they left waits to be cleared, and the one
     /// they moved to is seated with their order ([`Edge::transfer_table`]).
     fn fold_transfer(
@@ -6030,6 +6142,7 @@ impl<S: EventStore> Edge<S> {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_table(event.table_id, TableState::Free);
             }
+            EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
@@ -8532,6 +8645,103 @@ mod tests {
 
         roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
         assert!(roster.sign_in_ready());
+    }
+
+    /// A table already stuck on a bill on nothing is recovered once (ADR-0163): a manager voids the
+    /// empty bill, and the table is released. An edge before ADR-0163 opened that bill when asked
+    /// for the bill of an empty table, and nothing could settle it; the stuck log is written here
+    /// as that edge wrote it, and replayed by a new one.
+    #[test]
+    fn a_table_stuck_on_an_empty_bill_is_recovered_by_a_void_and_a_release() {
+        use super::{AppError, Approval, BillingBillOpened, StaffAuth, StaffRoster};
+        use argon2::Argon2;
+        use argon2::password_hash::PasswordHasher as _;
+        use pos_core::error::DomainError;
+        use pos_core::permission::{Permission, PermissionSet};
+        use pos_proto::ids::BillId;
+        use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
+
+        fn session() -> EdgeSession {
+            let pin_phc = Argon2::default()
+                .hash_password_with_salt(b"4417", b"a-fixed-test-slt")
+                .expect("hash")
+                .to_string();
+            let mut staff = StaffRoster::new();
+            staff.insert(
+                "MGR-1",
+                StaffAuth {
+                    employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+                    permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+                    discount_ceiling: None,
+                    pin_phc: Some(pin_phc),
+                },
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.staff = staff;
+            session
+        }
+        let over = |store: FakeStore| {
+            Edge::new(
+                store,
+                identity(),
+                session(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds")
+        };
+        let table = TableId::new(Ulid::from_u128(40));
+        let bill_id = BillId::new(Ulid::from_u128(77));
+
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            {
+                let old = over(store.clone());
+                old.seat_table(actor(), table, None).await.expect("seats");
+                let order_id = old.order_for_table(table).expect("an order opened");
+                let ctx = old.decision_ctx(actor()).expect("a decision context");
+                old.commit_and_publish(
+                    &ctx,
+                    &BillingBillOpened {
+                        bill_id,
+                        order_id,
+                        order_line_ids: Vec::new(),
+                    },
+                )
+                .await
+                .expect("the old edge opened a bill on nothing");
+            }
+
+            let edge = over(store);
+            edge.rebuild().await.expect("replays the stuck log");
+            assert_eq!(edge.table_state(table), TableState::AwaitingPayment);
+            let stuck = edge.release_table(actor(), table).await;
+            assert!(
+                matches!(stuck, Err(AppError::Domain(DomainError::Transition(_)))),
+                "a table waiting for payment is not released, got {stuck:?}"
+            );
+
+            let reason = PublishedReasonCodes::framework_default()
+                .for_action(ReasonAction::VoidBill)
+                .next()
+                .expect("the framework set covers voiding a bill")
+                .id;
+            let approval = Approval {
+                code: "MGR-1".to_owned(),
+                pin: "4417".to_owned(),
+            };
+            let voided = edge
+                .void_bill(actor(), bill_id, reason, Some(&approval))
+                .await
+                .expect("a manager voids the empty bill");
+            assert_eq!(voided, BillState::Voided);
+            assert_eq!(edge.table_state(table), TableState::Occupied);
+
+            edge.release_table(actor(), table)
+                .await
+                .expect("and the table is released");
+            assert_eq!(edge.table_state(table), TableState::Free);
+            assert!(edge.live_orders().is_empty());
+        });
     }
 
     /// A store with no kitchen display never bumps, and its waiting set must still stop growing:

@@ -204,6 +204,10 @@ export const api = {
     request<TableResponse>("POST", `/api/tables/${tableId}/seat`),
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
+  // A table seated by mistake goes straight back to the floor, while nothing is sold on it
+  // (ADR-0163).
+  releaseTable: (tableId: string) =>
+    request<TableResponse>("POST", `/api/tables/${tableId}/release`),
   // Moves the guests at a table, and their order, to a free one; the table they left waits to be
   // cleared (`sales.table.transferred`).
   transferTable: (tableId: string, toTableId: string) =>

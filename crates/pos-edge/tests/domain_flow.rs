@@ -667,6 +667,44 @@ async fn a_line_after_the_bill_is_refused_and_the_bill_is_unchanged() {
     );
 }
 
+/// A table seated by mistake goes back to the floor over HTTP, and the two refusals around it name
+/// themselves in the header a till translates (ADR-0163): a bill on nothing is `NOTHING_TO_BILL`,
+/// and releasing a table with a dish on it is `ORDER_NOT_EMPTY`.
+#[tokio::test]
+async fn a_table_seated_by_mistake_is_released_over_http() {
+    let (app, token) = app().await;
+    let table = TableId::new(Ulid::from_u128(702));
+    let seat = format!("/api/tables/{table}/seat");
+    let release = format!("/api/tables/{table}/release");
+    let (status, _) = send(app.clone(), &token, "POST", &seat, None).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let bill = format!("/api/tables/{table}/bill");
+    let (status, reason) = send_for_reason(app.clone(), &token, "POST", &bill, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("NOTHING_TO_BILL"));
+
+    let (status, released) = send(app.clone(), &token, "POST", &release, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(released["state"], "TABLE_STATE_FREE");
+    let (status, reason) = send_for_reason(app.clone(), &token, "POST", &release, None).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "a free table has nobody to send away"
+    );
+    assert_eq!(reason.as_deref(), Some("TRANSITION_REFUSED"));
+
+    let (status, _) = send(app.clone(), &token, "POST", &seat, None).await;
+    assert_eq!(status, StatusCode::OK);
+    let lines = format!("/api/tables/{table}/lines");
+    let (status, _) = send(app.clone(), &token, "POST", &lines, Some(a_line_body())).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, reason) = send_for_reason(app, &token, "POST", &release, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("ORDER_NOT_EMPTY"));
+}
+
 #[tokio::test]
 async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
     let (app, token) = app().await;

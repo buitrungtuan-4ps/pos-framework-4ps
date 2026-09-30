@@ -61,5 +61,6 @@ POST /api/tables/{id}/bill
 POST /api/tables/{id}/check/print
 POST /api/tables/{id}/clean
 POST /api/tables/{id}/lines
+POST /api/tables/{id}/release
 POST /api/tables/{id}/seat
 POST /api/tables/{id}/transfer
