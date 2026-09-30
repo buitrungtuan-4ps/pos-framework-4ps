@@ -66,7 +66,7 @@ use pos_proto::text::PermissionKey;
 #[cfg(test)]
 use pos_proto::ids::IngredientId;
 use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable};
-use pos_proto::menu::MenuCatalog;
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio, Rounding};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
@@ -394,7 +394,14 @@ pub struct EdgeSession {
     /// ([ADR-0063](../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu
     /// through the config tree (WS-B), which is a safe default — it never guesses a price.
+    ///
+    /// The catalogue for [`sales_channel`](Self::sales_channel). An order on another channel prices
+    /// from [`menu_for`](Self::menu_for), which reads [`menu_book`](Self::menu_book).
     pub menu: MenuCatalog,
+    /// Every channel's price book as the cloud compiled it
+    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), with names resolved to the store's
+    /// language as `menu`'s are. Empty until a `menu` node is applied.
+    pub menu_book: MenuBook,
     /// The channel a walk-in bill's order came in on, which selects the tax rate. `DineIn` for a
     /// full-service store; a marketplace order overrides it per bill (P11).
     pub sales_channel: SalesChannel,
@@ -606,6 +613,7 @@ impl EdgeSession {
             // the same. A store that syncs a locale node replaces it.
             number_format: NumberFormat::default(),
             menu: MenuCatalog::new(),
+            menu_book: MenuBook::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
             floor: FloorPlan::new(),
@@ -654,6 +662,54 @@ impl EdgeSession {
     pub fn with_menu(mut self, menu: MenuCatalog) -> Self {
         self.menu = menu;
         self
+    }
+
+    /// Installs a price book, and the store's own channel's catalogue from it, as applying a
+    /// published `menu` node does ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)). For a test
+    /// or the example.
+    #[must_use]
+    pub fn with_menu_book(mut self, book: MenuBook) -> Self {
+        self.menu = book.catalog_for(self.sales_channel).clone();
+        self.menu_book = book;
+        self
+    }
+
+    /// The catalogue an order on `channel` is priced from
+    /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+    ///
+    /// The channel's own price book when the published book prices that channel, by a row of its
+    /// own or a fallback. Otherwise the store's own channel's catalogue, [`menu`](Self::menu): a
+    /// channel nobody has priced keeps selling at the prices it always sold at, rather than
+    /// refusing every dish on an upgrade.
+    ///
+    /// A channel the book does price is priced only from its own row, so a dish the cloud left off
+    /// that channel, such as one not sold for delivery, is refused there.
+    #[must_use]
+    pub fn menu_for(&self, channel: SalesChannel) -> &MenuCatalog {
+        let priced_here = self.menu_book.channels().iter().any(|row| {
+            !row.sales_channel.is_unrecognised() && row.sales_channel.known() == channel
+        });
+        if channel == self.sales_channel || (!priced_here && self.menu_book.fallback().is_empty()) {
+            &self.menu
+        } else {
+            self.menu_book.catalog_for(channel)
+        }
+    }
+
+    /// The published entry for `menu_item_id` on any channel: the store's own channel first, then
+    /// each channel the book prices.
+    ///
+    /// For a name, which a line needs whichever channel sold it. A dish sold only for takeaway is
+    /// on no dine-in catalogue, and the kitchen board must still name it.
+    #[must_use]
+    pub fn menu_entry(&self, menu_item_id: MenuItemId) -> Option<&MenuEntry> {
+        self.menu.get(menu_item_id).or_else(|| {
+            self.menu_book
+                .channels()
+                .iter()
+                .find_map(|row| row.catalog.get(menu_item_id))
+                .or_else(|| self.menu_book.fallback().get(menu_item_id))
+        })
     }
 
     /// Installs a channel-keyed tax table, for a test or the example.
@@ -3132,7 +3188,7 @@ impl<S: EventStore> Edge<S> {
                 // The same fallback the counter list uses: an item the store has since removed
                 // from its menu must still be *shown*, or a member of staff would be asked to
                 // agree to an order with a line missing from it.
-                display_name: session.menu.get(record.menu_item_id).map_or_else(
+                display_name: session.menu_entry(record.menu_item_id).map_or_else(
                     || record.menu_item_id.to_string(),
                     |entry| entry.display_name.as_str().to_owned(),
                 ),
@@ -3218,7 +3274,7 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<(), AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::MarkItemUnavailable)?;
-        if self.session().menu.get(menu_item_id).is_none() {
+        if self.session().menu_entry(menu_item_id).is_none() {
             return Err(AppError::ItemNotSellable);
         }
         if self.item_sold_out(menu_item_id) == sold_out {
@@ -4161,8 +4217,8 @@ impl<S: EventStore> Edge<S> {
     /// A store that has published no groups reaches the empty loop and the empty difference, so
     /// every line on it costs one lookup that finds nothing. That is the common case today and it
     /// stays free.
-    fn check_modifiers(session: &EdgeSession, draft: &LineDraft) -> Result<(), AppError> {
-        let groups = session.menu.groups_for(draft.menu_item_id);
+    fn check_modifiers(menu: &MenuCatalog, draft: &LineDraft) -> Result<(), AppError> {
+        let groups = menu.groups_for(draft.menu_item_id);
         // **An item that attaches no group is unconfigured, not empty-handed.** `add_line` has
         // accepted `modifier_menu_item_ids` since long before groups existed, and every store is
         // publishing none today — so enforcing "a modifier must be offered by a group" here would
@@ -4273,7 +4329,7 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::ItemNotSellable);
         }
         let session = self.session();
-        Self::check_modifiers(&session, &draft)?;
+        Self::check_modifiers(&session.menu, &draft)?;
         // The device priced this line from the session's price book and sends the modifiers' ids,
         // never their names, so the names come from that book (ADR-0144).
         let modifier_display_names =
@@ -4400,13 +4456,16 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::BillAlreadyOpen);
         }
         let channel = origin.channel.unwrap_or(session.sales_channel);
+        // The order's own channel's price book, not the store's: a takeaway order is priced at
+        // takeaway prices, as it is taxed at the takeaway rate.
+        let menu = session.menu_for(channel);
         let requested = RequestedLine {
             menu_item_id: choice.menu_item_id,
             quantity: choice.quantity,
             modifier_menu_item_ids: choice.modifier_menu_item_ids,
             quoted_unit_price: None,
         };
-        let priced = reprice_line(&session.menu, &session.tax_rates, channel, &requested)
+        let priced = reprice_line(menu, &session.tax_rates, channel, &requested)
             .map_err(AppError::from_reprice)?;
         let draft = LineDraft {
             menu_item_id: priced.menu_item_id,
@@ -4421,7 +4480,7 @@ impl<S: EventStore> Edge<S> {
             modifier_menu_item_ids: priced.modifier_menu_item_ids,
             note_present: choice.note_present,
         };
-        Self::check_modifiers(&session, &draft)?;
+        Self::check_modifiers(menu, &draft)?;
         self.append_line(&ctx, order_id, draft, priced.modifier_display_names, note)
             .await
     }
@@ -4877,7 +4936,7 @@ impl<S: EventStore> Edge<S> {
                     // An item the store has since removed from its menu still has to be chargeable,
                     // so a missing entry falls back to the id rather than dropping the line and
                     // under-reporting what the guest ordered.
-                    display_name: session.menu.get(line.menu_item_id).map_or_else(
+                    display_name: session.menu_entry(line.menu_item_id).map_or_else(
                         || DisplayName::new(line.menu_item_id.to_string()),
                         |entry| entry.display_name.clone(),
                     ),
@@ -5026,7 +5085,7 @@ impl<S: EventStore> Edge<S> {
                     .into_iter()
                     .map(|(order_line_id, record, bumped)| LiveOrderLine {
                         order_line_id,
-                        display_name: session.menu.get(record.menu_item_id).map_or_else(
+                        display_name: session.menu_entry(record.menu_item_id).map_or_else(
                             || DisplayName::new(record.menu_item_id.to_string()),
                             |entry| entry.display_name.clone(),
                         ),

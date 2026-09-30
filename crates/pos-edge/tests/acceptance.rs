@@ -47,7 +47,7 @@ use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine, Ord
 use pos_proto::ClockSource;
 use pos_proto::ids::{MenuItemId, StationId, StoreId, TableId};
 use pos_proto::locale::{TaxRate, TaxRateTable};
-use pos_proto::menu::{MenuCatalog, MenuEntry};
+use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
@@ -1871,6 +1871,41 @@ async fn a_store_with_tips_off_tells_the_till_not_to_ask_for_one() {
         Value::Bool(false),
         "with the capability off the till is told there is no tip to take"
     );
+}
+
+/// The till reads a channel's own price book by naming it (ADR-0066), so the counter's buttons
+/// show the takeaway price its lines are charged at. With no channel named the route serves the
+/// store's own, as it always has, and a channel the edge does not know is refused.
+#[tokio::test]
+async fn the_menu_read_serves_the_price_book_of_the_channel_it_names() {
+    let takeaway = MenuCatalog::new().with(MenuEntry::new(
+        MenuItemId::new(Ulid::from_u128(ITEM)),
+        DisplayName::new("Margherita"),
+        vnd(140_000),
+        EdgeSession::standard_tax_class(),
+    ));
+    let book = MenuBook::new()
+        .with(SalesChannel::DineIn, catalog())
+        .with(SalesChannel::Takeaway, takeaway);
+    let store = a_store_where(|session| session.with_menu_book(book)).await;
+    let price_of = |menu: &Value| menu["items"][0]["unit_price"]["amount_minor"].clone();
+
+    let own = read(&store, "/api/menu").await;
+    assert_eq!(price_of(&own), UNIT_PRICE, "the store's own channel");
+    let counter = read(&store, "/api/menu?channel=SALES_CHANNEL_TAKEAWAY").await;
+    assert_eq!(price_of(&counter), 140_000, "takeaway's own price");
+
+    for unknown in ["SALES_CHANNEL_SPACESHIP", "SALES_CHANNEL_UNSPECIFIED"] {
+        let (status, body) = send(
+            store.app.clone(),
+            Some(&store.token),
+            "GET",
+            &format!("/api/menu?channel={unknown}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{unknown}: {body}");
+    }
 }
 
 /// A paired device with nobody signed in may sign someone in, and may do nothing else.

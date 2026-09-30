@@ -315,3 +315,92 @@ mod staff_confirmation {
         );
     }
 }
+
+/// An inbound order is priced from its own channel's price book (ADR-0066), not the dining room's.
+mod channel_prices {
+    use std::sync::Arc;
+
+    use pos_edge::{
+        Edge, EdgeOrderIn, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity,
+    };
+    use pos_fakes::FakeStore;
+    use pos_fakes::executor::run_ready;
+    use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine, OrderIn};
+    use pos_proto::SalesChannel;
+    use pos_proto::ids::{DeviceId, MenuItemId};
+    use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
+    use pos_proto::money::{CurrencyCode, Money};
+    use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
+    use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
+
+    use super::{seeded_session, store};
+
+    fn margherita() -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(500))
+    }
+
+    fn catalog_at(minor: i64) -> MenuCatalog {
+        MenuCatalog::new().with(MenuEntry::new(
+            margherita(),
+            DisplayName::new("Margherita"),
+            Money::new(CurrencyCode::VND, minor),
+            EdgeSession::standard_tax_class(),
+        ))
+    }
+
+    fn intake_over(book: MenuBook) -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
+        let mut session = seeded_session().with_menu_book(book);
+        session.qr_staff_confirmation_required = false;
+        let edge = Edge::new(
+            FakeStore::default(),
+            StoreIdentity::for_store(store()),
+            session,
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator");
+        EdgeOrderIn::new(
+            Arc::new(edge),
+            InMemoryQueueNumbers::new(),
+            DeviceId::new(Ulid::from_u128(20)),
+        )
+    }
+
+    fn one_margherita(reference: &str, channel: SalesChannel) -> InboundOrder {
+        InboundOrder {
+            external_reference: ExternalReference::parse(reference).expect("a valid reference"),
+            sales_channel: Open::from_known(channel),
+            store_id: store(),
+            table_id: None,
+            subject_id: None,
+            lines: vec![InboundOrderLine {
+                menu_item_id: margherita(),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: Vec::new(),
+                quoted_unit_price: None,
+                note: None,
+            }],
+            placed_at: pos_contract_tests::fixtures::instant(),
+        }
+    }
+
+    /// A delivery order is charged the delivery price, and a channel the book does not price is
+    /// charged the dining room's, as every channel was before.
+    #[test]
+    fn a_delivery_order_is_priced_from_the_delivery_book() {
+        let intake = intake_over(
+            MenuBook::new()
+                .with(SalesChannel::DineIn, catalog_at(120_000))
+                .with(SalesChannel::Delivery, catalog_at(135_000)),
+        );
+
+        let delivery = run_ready(intake.submit(&one_margherita("GRAB-1", SalesChannel::Delivery)))
+            .expect("the store accepts it");
+        assert_eq!(delivery.total, Money::new(CurrencyCode::VND, 135_000));
+
+        let takeaway = run_ready(intake.submit(&one_margherita("WEB-1", SalesChannel::Takeaway)))
+            .expect("the store accepts it");
+        assert_eq!(takeaway.total, Money::new(CurrencyCode::VND, 120_000));
+    }
+}

@@ -226,8 +226,14 @@ export const api = {
   check: (tableId: string) => request<CheckResponse>("GET", `/api/tables/${tableId}/check`),
 
   // The store's published price book (roadmap-v3 E5, ADR-0063). Empty until the cloud publishes a
-  // menu — a store never guesses a price, and neither does the till.
-  menu: () => request<MenuResponse>("GET", "/api/menu"),
+  // menu — a store never guesses a price, and neither does the till. Naming a channel reads that
+  // channel's own book, the one the edge prices its orders from (ADR-0066); an edge that predates
+  // the parameter ignores it and serves its own, which is also what it prices from.
+  menu: (channel?: string) =>
+    request<MenuResponse>(
+      "GET",
+      channel === undefined ? "/api/menu" : `/api/menu?channel=${encodeURIComponent(channel)}`,
+    ),
 
   // Staff mark an item sold out at this store (86), and bring it back. Every device folds the
   // event and greys the item out; the edge refuses a line for it in the meantime.
