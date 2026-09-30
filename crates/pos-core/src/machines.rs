@@ -73,13 +73,18 @@ triggers! {
         /// The guests move to another table and take their order with them. The table they left
         /// needs clearing, as it does when guests pay and go; the table they move to is seated.
         Transfer => "transfer",
+        /// The table was seated by mistake, or its guests left before anything was sold: it goes
+        /// straight back to service. Only while nothing is sold on it, which the entity layer checks
+        /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
+        Release => "release",
     }
 }
 
 /// The floor-plan lifecycle of a table.
 ///
-/// `Free → Occupied → AwaitingPayment → NeedsCleaning → Free`, and `Occupied → NeedsCleaning` when
-/// the guests move to another table before asking for the bill. No terminal state: a table is reused.
+/// `Free → Occupied → AwaitingPayment → NeedsCleaning → Free`, `Occupied → NeedsCleaning` when the
+/// guests move to another table before asking for the bill, and `Occupied → Free` when the table is
+/// released with nothing sold on it. No terminal state: a table is reused.
 /// The invariant that a table holds exactly one open order at a time is enforced by the entity
 /// layer, not this machine — this machine only governs the table's own state.
 #[derive(Debug, Clone, Copy)]
@@ -111,7 +116,8 @@ impl StateMachine for Table {
             // table whose guests have asked for one pays where it sits.
             (TableState::AwaitingPayment, TableTrigger::Settle)
             | (TableState::Occupied, TableTrigger::Transfer) => TableState::NeedsCleaning,
-            (TableState::NeedsCleaning, TableTrigger::Clean) => TableState::Free,
+            (TableState::NeedsCleaning, TableTrigger::Clean)
+            | (TableState::Occupied, TableTrigger::Release) => TableState::Free,
             _ => return None,
         })
     }

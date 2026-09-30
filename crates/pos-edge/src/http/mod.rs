@@ -365,6 +365,11 @@ pub fn stamp_version(app: Router, standing: Arc<CurrentStanding>) -> Router {
 /// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
 /// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
 /// successes).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the store's route table: one line per route, and splitting it would scatter the one \
+              list a reader checks for what the edge serves"
+)]
 pub fn domain_router<S, Q, A, J, W>(
     edge: Arc<Edge<S>>,
     queue: Q,
@@ -420,6 +425,7 @@ where
         // The floor: seat, clean, move the guests to another table, read.
         .route("/api/tables/{id}/seat", post(tables::seat::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean::<S>))
+        .route("/api/tables/{id}/release", post(tables::release::<S>))
         .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
         .route("/api/tables/{id}", get(tables::get::<S>))
         // What the table owes right now, assembled by the edge — the till displays the figure it is
@@ -615,6 +621,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::UnroutableLine => "UNROUTABLE_LINE",
         AppError::UnknownOrder => "UNKNOWN_ORDER",
         AppError::BillAlreadyOpen => "BILL_ALREADY_OPEN",
+        AppError::OrderNotEmpty => "ORDER_NOT_EMPTY",
+        AppError::NothingToBill => "NOTHING_TO_BILL",
         AppError::UnknownBill => "UNKNOWN_BILL",
         AppError::NothingToPrint => "NOTHING_TO_PRINT",
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
@@ -653,6 +661,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnroutableLine
         | AppError::UnknownOrder
         | AppError::BillAlreadyOpen
+        | AppError::OrderNotEmpty
+        | AppError::NothingToBill
         | AppError::UnknownBill
         | AppError::NothingToPrint
         | AppError::BillsOnDifferentTables

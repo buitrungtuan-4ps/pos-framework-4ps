@@ -166,6 +166,21 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A table seated by mistake goes back to the floor** ([ADR-0163](docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
+  A seated table could leave the floor only by a bill, and a bill on nothing could never be paid, so
+  a table seated by mistake, or whose every dish was voided, stayed taken until the store was set up
+  again.
+  - With nothing sold on the table, the order screen offers **Release table** where **Take payment**
+    would be. One tap frees the table on every device.
+  - `POST /api/tables/{id}/release` (new) ends the table's order owing nothing and frees the table,
+    and is refused with `409 ORDER_NOT_EMPTY` while a dish or a bill is on it.
+  - A bill is no longer opened on an order with nothing on it: `409 NOTHING_TO_BILL`.
+  - A table already stuck waiting on an empty bill is recovered once: a manager voids the bill, and
+    the table is released.
+
+  **Upgrade note:** asking for the bill of a table with nothing on it was answered with a bill that
+  could never settle, and is now refused with `409 NOTHING_TO_BILL`.
+
 - **A guest note reaches the kitchen.** The order screen has *Note for the next item* under the
   search box. Whatever is typed there goes with the next dish added, then clears. The line shows the
   note, and so do the kitchen board and the printed ticket, last and in bold.

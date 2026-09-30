@@ -564,6 +564,25 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    case "sales.order.closed": {
+      // An order that ended owing nothing: a table released with nothing sold on it (ADR-0163), or
+      // a guest order staff refused. Either way it is off every board, and a table still showing it
+      // lets go, as the edge's does.
+      const order = str(payload, "order_id");
+      if (order !== null) {
+        setState(
+          produce((draft) => {
+            draft.liveOrders[order] = false;
+            const table = draft.orderTable[order];
+            if (table !== undefined && draft.tableOrder[table] === order) {
+              delete draft.tableOrder[table];
+            }
+            delete draft.orderTable[order];
+          }),
+        );
+      }
+      break;
+    }
     case "sales.table.closed": {
       const table = str(payload, "table_id");
       if (table !== null) {
@@ -1068,6 +1087,25 @@ export function seatedAt(tableId: string): string | undefined {
 export async function clean(tableId: string): Promise<void> {
   const response = await api.cleanTable(tableId);
   setState("tableState", tableId, response.state);
+}
+
+// Gives a table seated by mistake straight back to the floor, while nothing is sold on it
+// (ADR-0163). The edge ends its order owing nothing; the fan-out brings the same to every other
+// device, and this one shows it at once.
+export async function releaseTable(tableId: string): Promise<void> {
+  const response = await api.releaseTable(tableId);
+  setState(
+    produce((draft) => {
+      draft.tableState[tableId] = response.state;
+      delete draft.seatedAt[tableId];
+      const order = draft.tableOrder[tableId];
+      if (order !== undefined) {
+        draft.liveOrders[order] = false;
+        delete draft.tableOrder[tableId];
+        delete draft.orderTable[order];
+      }
+    }),
+  );
 }
 
 // Moves the guests at a table, and their order, to a free table. The fan-out brings the same move to
