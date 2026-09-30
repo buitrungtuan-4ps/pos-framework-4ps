@@ -1022,3 +1022,13 @@ async fn closing_a_shift_prints_its_report() {
     assert!(contains(b"SHIFT REPORT"));
     assert!(contains(b"Short"), "20k under the float reads as short");
 }
+
+/// A store the cloud has published no connection to lists none, which the Devices screen reads as
+/// "every family on its offline path" rather than an error.
+#[tokio::test]
+async fn a_store_with_no_published_connection_lists_none() {
+    let (app, token) = app().await;
+    let (status, listed) = send(app, &token, "GET", "/api/integrations", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed, json!([]));
+}

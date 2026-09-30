@@ -458,6 +458,76 @@
         }
       }
     },
+    "/admin/config/integrations": {
+      "put": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Publishes the connections that serve one store as its `integrations` node.",
+        "operationId": "admin_publish_integrations",
+        "requestBody": {
+          "description": "The tenant and the store to publish to. The node's content is resolved from the tenant's connections: the store's own, then its brand's, then the tenant's, with one per e-invoice and ERP family",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Published. The body names the config version and how many connections the store now has"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The connection store, the registry or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/config/reason-codes": {
       "put": {
         "tags": [

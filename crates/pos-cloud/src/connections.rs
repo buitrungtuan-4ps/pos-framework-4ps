@@ -296,6 +296,74 @@ impl ConnectionView {
     }
 }
 
+/// Which connections serve one store, as the `integrations` node it receives
+/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md) decision 5).
+///
+/// A connection serves the store when it is enabled, names a provider this cloud has, and is scoped
+/// to the store itself, to the store's brand, or to the tenant. They are ordered most specific
+/// first. In a family a scope may hold only one of (e-invoice, ERP), only the most specific
+/// survives, so a store with its own e-invoice provider is never also sent its tenant's; every
+/// other family is plural, and the store receives them all.
+///
+/// Settings go only with a family the store drives itself (card terminals), and never a secret: the
+/// node has no field a sealed value could travel in.
+#[must_use]
+pub fn resolve_for_store(
+    connections: &[Connection],
+    providers: &pos_providers::Registry,
+    store_id: &str,
+    brand_id: Option<&str>,
+) -> pos_proto::integrations::PublishedIntegrations {
+    use pos_proto::integrations::{PublishedIntegration, PublishedIntegrations};
+    use pos_proto::text::DisplayName;
+    use pos_providers::Runtime;
+
+    // How specific a connection is to this store, or `None` if it does not serve it.
+    let specificity = |connection: &Connection| -> Option<u8> {
+        match (connection.scope_level, connection.scope_id.as_deref()) {
+            (ScopeLevel::Store, Some(id)) if id == store_id => Some(0),
+            (ScopeLevel::Brand, Some(id)) if Some(id) == brand_id => Some(1),
+            (ScopeLevel::Tenant, _) => Some(2),
+            _ => None,
+        }
+    };
+    let mut serving: Vec<(u8, &Connection, &'static pos_providers::ProviderDescriptor)> =
+        connections
+            .iter()
+            .filter(|connection| connection.enabled)
+            .filter_map(|connection| {
+                let rank = specificity(connection)?;
+                let provider = providers.get(&connection.provider_id)?;
+                Some((rank, connection, provider))
+            })
+            .collect();
+    serving.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.connection_id.cmp(&b.1.connection_id))
+    });
+
+    let mut taken = BTreeSet::new();
+    let integrations = serving
+        .into_iter()
+        .filter(|(_, _, provider)| {
+            // The first in an exclusive family is the most specific; the rest are shadowed.
+            !provider.family.exclusive() || taken.insert(provider.family)
+        })
+        .map(|(_, connection, provider)| PublishedIntegration {
+            connection_id: connection.connection_id.clone(),
+            family: provider.family.integration_family().into(),
+            provider_id: connection.provider_id.clone(),
+            display_name: DisplayName::new(connection.display_name.clone()),
+            settings: if provider.family.runs_on() == Runtime::Edge {
+                connection.settings.clone()
+            } else {
+                BTreeMap::new()
+            },
+        })
+        .collect();
+    PublishedIntegrations::new(integrations)
+}
+
 /// Persists and reads a tenant's connections.
 ///
 /// The same per-record shape as [`crate::reason_codes::ReasonCodeStore`]: tenant-scoped, a create
@@ -455,6 +523,116 @@ mod tests {
         );
         assert!(key().is_well_formed());
         assert_eq!(format!("{:?}", key()), "ConnectionSecret(redacted)");
+    }
+
+    fn connection(
+        id: &str,
+        provider_id: &str,
+        scope: (ScopeLevel, Option<&str>),
+        enabled: bool,
+    ) -> Connection {
+        Connection {
+            connection_id: id.to_owned(),
+            provider_id: provider_id.to_owned(),
+            scope_level: scope.0,
+            scope_id: scope.1.map(str::to_owned),
+            display_name: format!("Connection {id}"),
+            enabled,
+            settings: BTreeMap::from([(
+                "address".to_owned(),
+                SettingValue::Text("192.0.2.40".to_owned()),
+            )]),
+            sealed_secrets: BTreeMap::from([("api_key".to_owned(), "00ff".to_owned())]),
+        }
+    }
+
+    static LEDGER: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
+        provider_id: "erp.ledger",
+        family: pos_providers::Family::Erp,
+        name_key: "provider.erp.ledger",
+        countries: &[],
+        fields: &[],
+        capabilities: &[],
+        sandbox: true,
+    };
+    static COURIER: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
+        provider_id: "courier.fast",
+        family: pos_providers::Family::Courier,
+        ..LEDGER
+    };
+    static TERMINAL: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
+        provider_id: "card.counter",
+        family: pos_providers::Family::CardTerminal,
+        ..LEDGER
+    };
+
+    #[test]
+    fn a_store_gets_its_own_ledger_over_its_brands_and_every_courier_that_serves_it() {
+        use pos_proto::integrations::IntegrationFamily;
+
+        let registry = pos_providers::Registry::new([&LEDGER, &COURIER, &TERMINAL]).expect("valid");
+        let all = [
+            connection("01A", "erp.ledger", (ScopeLevel::Tenant, None), true),
+            connection(
+                "01B",
+                "erp.ledger",
+                (ScopeLevel::Brand, Some("BRAND")),
+                true,
+            ),
+            connection("01C", "courier.fast", (ScopeLevel::Tenant, None), true),
+            connection(
+                "01D",
+                "courier.fast",
+                (ScopeLevel::Store, Some("STORE")),
+                true,
+            ),
+            connection(
+                "01E",
+                "courier.fast",
+                (ScopeLevel::Store, Some("ELSEWHERE")),
+                true,
+            ),
+            connection("01F", "courier.fast", (ScopeLevel::Tenant, None), false),
+            connection("01G", "courier.nobody", (ScopeLevel::Tenant, None), true),
+            connection(
+                "01H",
+                "card.counter",
+                (ScopeLevel::Store, Some("STORE")),
+                true,
+            ),
+        ];
+        let node = super::resolve_for_store(&all, &registry, "STORE", Some("BRAND"));
+        let ids: Vec<&str> = node
+            .integrations()
+            .iter()
+            .map(|integration| integration.connection_id.as_str())
+            .collect();
+        // Store scope first, then brand, then tenant. The tenant's ledger is shadowed by the
+        // brand's; another store's, a disabled one and an unknown provider serve nobody.
+        assert_eq!(ids, vec!["01D", "01H", "01B", "01C"]);
+
+        let ledger = node
+            .in_family(IntegrationFamily::Erp)
+            .next()
+            .expect("one ledger");
+        assert!(
+            ledger.settings.is_empty(),
+            "the cloud drives an ERP; its settings stay there"
+        );
+        let terminal = node
+            .in_family(IntegrationFamily::CardTerminal)
+            .next()
+            .expect("the counter terminal");
+        assert_eq!(
+            terminal.settings.get("address"),
+            Some(&SettingValue::Text("192.0.2.40".to_owned())),
+            "a driver the store runs needs its settings"
+        );
+        let json = serde_json::to_string(&node).expect("serializes");
+        assert!(
+            !json.contains("00ff") && !json.contains("sealed"),
+            "no secret, ever: {json}"
+        );
     }
 
     #[test]

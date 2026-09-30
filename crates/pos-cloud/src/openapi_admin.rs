@@ -120,6 +120,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_create_connection,
         crate::http::admin_update_connection,
         crate::http::admin_delete_connection,
+        crate::http::admin_publish_integrations,
         crate::http::admin_list_reason_codes,
         crate::http::admin_get_reason_code,
         crate::http::admin_create_reason_code,

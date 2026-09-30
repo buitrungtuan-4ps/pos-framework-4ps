@@ -16,8 +16,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
-
 use crate::ProviderDescriptor;
 
 /// The longest URL a setting may hold. Long enough for any real endpoint, short enough that a pasted
@@ -85,19 +83,9 @@ impl FieldKind {
     }
 }
 
-/// A setting's value as it arrives from the console and as it is stored.
-///
-/// Untagged, so the JSON is the plain value an operator typed: `true`, `30`, `"https://…"`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum SettingValue {
-    /// A [`FieldKind::Flag`].
-    Flag(bool),
-    /// A [`FieldKind::Number`].
-    Number(i64),
-    /// Every other kind.
-    Text(String),
-}
+/// A setting's value as it arrives from the console and as it is stored — the wire type a store
+/// receives, so the console, the cloud and the edge read one shape.
+pub use pos_proto::integrations::SettingValue;
 
 /// A connection's non-secret settings, by field key.
 pub type Settings = BTreeMap<String, SettingValue>;

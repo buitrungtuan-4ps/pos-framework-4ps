@@ -292,6 +292,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   keeps it, and an optional one can be removed. A settings refusal names the fields to fix. Labels
   the console does not ship yet fall back to the field's key. **Upgrade note:** none.
 
+- **A store is told which vendor connections serve it.** A new `integrations` config node
+  (`pos_proto::integrations`, [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)
+  decision 5) carries, per connection, its id, family, provider and name — and, for a card terminal
+  the store drives itself, the non-secret settings its driver needs. It never carries a secret, nor a
+  setting of a family the cloud drives. `PUT /admin/config/integrations` (behind
+  `console.config.publish`) resolves a store's connections — its own, its brand's, its tenant's,
+  keeping only the most specific e-invoice or ERP connection — and publishes the node. The edge
+  applies it (an absent or malformed node keeps the last one, so a bad publish never switches a
+  store off mid-service), lists it at `GET /api/integrations`, and the till's Devices screen shows
+  *Connected services*. **Upgrade note:** additive — a new config node key and two new routes; an
+  older edge ignores the node.
+
 - **A tenant connects its vendors from the console, and their credentials are sealed.** New
   `/admin/integrations/connections` routes (list and read for any console role; create, edit and
   delete behind the new `console.integrations.manage`, granted to Owner and Admin) store a
