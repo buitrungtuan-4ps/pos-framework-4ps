@@ -220,6 +220,7 @@ const PRECONDITIONS = {
     await seatTable(page);
     await addItem(page);
   },
+  "Release a table seated by mistake": seatTable,
   "Print a pre-bill for a table": async (page) => {
     await seatTable(page);
     await addItem(page);
@@ -1405,6 +1406,55 @@ test("guests move to another table with their order, and every screen follows th
   }
 });
 
+// A table seated by mistake goes back to the floor, and every till follows (ADR-0163).
+//
+// Before this a seated table left the floor only by a bill, and a bill on nothing could never be
+// paid, so the table stayed taken. With nothing sold on it, the order screen offers *Release table*
+// where *Take payment* would be; once a dish is on it, the button is *Take payment* again, and a
+// line voided before it was sent is nothing sold. The floor on a second device follows without
+// reloading, and a reload still has the table free.
+test("a table seated by mistake is released, and every till follows", async ({ context }) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    const floor = await context.newPage();
+    await floor.goto(`${edge.baseURL}/`);
+    await expect(floor.locator('[data-outcome="floor"]')).toBeVisible();
+    const card = floor.locator('[data-step="onCard"]', { hasText: "Table 1" });
+
+    await seatTable(till);
+    await expect(card).toContainText("Occupied");
+    const release = till.locator('[data-step="releaseTable"]');
+    const takePayment = till.locator('[data-step="takePayment"]');
+    await expect(release).toBeVisible();
+    await expect(takePayment).toHaveCount(0);
+
+    // A dish on the table is something sold: the table pays or voids it first.
+    await addItem(till);
+    await expect(release).toHaveCount(0);
+    await expect(takePayment).toBeVisible();
+    await till.locator('[data-step="askVoid"]').first().click();
+    await till.locator('[data-step="voidReason"]').first().click();
+    await expect(till.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    await expect(release).toBeVisible();
+
+    await release.click();
+    await till.waitForURL((url) => url.pathname === "/");
+    const mine = till.locator('[data-step="onCard"]', { hasText: "Table 1" });
+    await expect(mine).toContainText("Free");
+    await expect(card).toContainText("Free");
+    await expect(card.locator('[data-outcome="table-seated"]')).toHaveCount(0);
+
+    await floor.reload();
+    await expect(floor.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(card).toContainText("Free");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // On a phone or a tablet, a dish's choices open on screen, where the thumb that tapped it is.
 //
 // Below a terminal the menu is under the bill, and the picker was drawn in the bill's column, so it
@@ -2236,6 +2286,46 @@ test("a note typed at the till is on the kitchen board, under that dish only", a
     await navigateTo(page, "/kds");
     await expect(page.locator('[data-outcome="ticket-note"]')).toHaveCount(1);
     await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No ice, please");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A counter order paid before the kitchen made it stays on the board, note and all, until a station
+// bumps it (ADR-0161).
+//
+// A counter takes the money first and cooks after. The board used to drop an order the moment its
+// bill settled, so the ticket and the guest's allergy note vanished while the food was still to
+// make. This walks the counter's own order of work: ring the dish with a note, send it, charge it,
+// and only then look at the board, once live and once after a reload, the path a board switched on
+// mid-service takes. The bump is what takes it off.
+test("a counter order paid before the kitchen made it stays on the board until it is bumped", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await page.locator("#line-note").fill("No peanuts");
+    await addItem(page);
+    await sendOrder(page);
+    await page.locator('a[href="/counter"]').first().click();
+    await page.waitForURL((url) => url.pathname === "/counter");
+    await page.locator('[data-step="charge"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No peanuts");
+    await page.reload();
+    await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No peanuts");
+
+    await page.locator('[data-step="onBump"]').first().click();
+    await expect(page.locator('[data-step="onBump"]')).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('[data-outcome="ticket-note"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }

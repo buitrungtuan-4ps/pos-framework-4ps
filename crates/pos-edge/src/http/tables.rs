@@ -102,6 +102,23 @@ where
     respond(edge.clean_table(actor, table_id).await)
 }
 
+/// `POST /api/tables/{id}/release` — give a table seated by mistake straight back to the floor,
+/// while nothing is sold on it
+/// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
+pub(crate) async fn release<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(table_id) = parse_table(&id) else {
+        return bad_request("a table id is a ULID");
+    };
+    respond(edge.release_table(actor, table_id).await)
+}
+
 /// Where the guests are moving to.
 #[derive(Debug, Deserialize)]
 pub(crate) struct TransferRequest {

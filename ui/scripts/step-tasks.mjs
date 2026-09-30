@@ -91,6 +91,13 @@ export const TASKS = [
     outcome: { route: "/table/:id", mark: "table-moved" },
   },
   {
+    task: "Release a table seated by mistake",
+    budget: 3,
+    note: "One tap, where *Take payment* would be: with nothing sold on the table, the order screen offers *Release table* instead, and the table is free again on every device (ADR-0163). Rare, so its ceiling is three, and it needs one. No confirmation, because it is undone by seating the table again, and the edge refuses it once a dish is on the order: releasing says nobody ate.",
+    steps: [{ route: "/table/:id", action: "releaseTable" }],
+    outcome: { route: "/", mark: "floor" },
+  },
+  {
     task: "Print a pre-bill for a table",
     budget: 2,
     note: "One tap on the order screen, which is where the server is standing when the guests ask how much it is so far. No bill opens: a pre-bill is the check on paper, unnumbered and marked as not a receipt, so the guests can read it and still order dessert. A split table prints one per open part from the same tap. The pay screen carries the same button for one part of a split, and it is not declared separately because it is the same act on a smaller set.",

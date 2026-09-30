@@ -17,6 +17,12 @@
 //! It is distinct from `GET /api/orders/open`, which is the cashier's list: that one is counter
 //! orders only, carries the queue number staff shouted and the money owed, and deliberately leaves
 //! the floor out so nobody charges one meal from two screens. This one is a device's memory.
+//!
+//! `GET /api/orders/kitchen` is the kitchen's version of the same read
+//! ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
+//! every open order, plus each paid order without a table whose food the kitchen has not bumped yet,
+//! fired on the current business day. A counter order is paid before it is cooked, so the live read
+//! alone left a board that reloaded after the payment without the ticket.
 
 use std::sync::Arc;
 
@@ -114,8 +120,23 @@ pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
-    let body: Vec<LiveOrderResponse> = edge
-        .live_orders()
+    respond(edge.live_orders())
+}
+
+/// `GET /api/orders/kitchen` — what the kitchen still has to make, in the same shape.
+///
+/// A read, like the live one; it also ends the day for a paid order fired on an earlier business
+/// day, which then leaves the board and has its notes forgotten.
+pub(crate) async fn kitchen<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    respond(edge.kitchen_orders())
+}
+
+/// The orders as the screens read them.
+fn respond(orders: Vec<crate::app::LiveOrderView>) -> Response {
+    let body: Vec<LiveOrderResponse> = orders
         .into_iter()
         .map(|order| LiveOrderResponse {
             order_id: order.order_id.to_string(),

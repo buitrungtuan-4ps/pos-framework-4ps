@@ -820,6 +820,15 @@ pub enum AppError {
     /// would take two receipt numbers and charge the guest twice for one meal.
     #[error("a bill is already open on that order")]
     BillAlreadyOpen,
+    /// A table was released with something sold on it: a line not voided, or a bill open
+    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)). Releasing
+    /// says nobody ate, so it can only end an order with nothing on it.
+    #[error("that table has something sold on it; take payment or void the lines first")]
+    OrderNotEmpty,
+    /// A bill was asked for on an order with nothing to bill: no line, or every line voided
+    /// (ADR-0163). It could never settle, and its table would wait for a payment that cannot come.
+    #[error("that order has nothing to bill")]
+    NothingToBill,
     /// A command named a bill the edge does not know.
     #[error("no such bill")]
     UnknownBill,
@@ -1725,6 +1734,10 @@ struct Projection {
     /// order at once instead of leaving a stored flag to be cleared one order at a time. A stored
     /// boolean is how the reported answer and the enforced answer drifted apart before.
     staff_decisions: HashMap<OrderId, StaffDecision>,
+    /// Orders that ended owing nothing (`sales.order.closed`): a table released with nothing sold
+    /// on it (ADR-0163), and a guest order staff refused. A closed order is not live, whatever lines
+    /// it still names.
+    closed_orders: HashSet<OrderId>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
@@ -1783,7 +1796,22 @@ struct Projection {
     /// inserted on the first line and removed on settle: voiding an order's only bill puts it
     /// back, so an order can leave the set and come back.
     live: BTreeSet<OrderId>,
+    /// Paid orders without a table whose kitchen is not done: at least one fired line no station
+    /// has bumped ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).
+    /// Each maps to its newest such line's fire time, which dates it for the end of the day.
+    ///
+    /// Kept by [`Self::refresh_live`] from the same inputs as `live`, and from a fire, a void and
+    /// a bump, so no read scans for it. Bounded by [`MAX_COOKING`], and cut to the current
+    /// business day by [`Edge::kitchen_orders`].
+    cooking: BTreeMap<OrderId, Timestamp>,
 }
+
+/// The most paid orders the kitchen board holds waiting for a bump.
+///
+/// A store with no kitchen display never bumps, and nothing else would ever empty
+/// [`Projection::cooking`]; past this the orders fired longest ago are dropped. A kitchen that
+/// really has a thousand paid orders waiting has a bigger problem than its board.
+const MAX_COOKING: usize = 1_024;
 
 impl Projection {
     fn table_state(&self, table_id: TableId) -> TableState {
@@ -1965,6 +1993,19 @@ impl Projection {
         self.refresh_live(order_id);
     }
 
+    /// Ends an order owing nothing (`sales.order.closed`), live and replayed alike.
+    ///
+    /// A table still pointing at the order lets go of it, as a refused guest order's table does.
+    /// Left pointing, a released table would take the next line sent to it onto an order that has
+    /// ended: on no screen, on no bill, and never charged.
+    fn close_order(&mut self, order_id: OrderId) {
+        self.closed_orders.insert(order_id);
+        if let Some(table_id) = self.table_for_order(order_id) {
+            self.table_orders.remove(&table_id);
+        }
+        self.refresh_live(order_id);
+    }
+
     /// Recomputes whether `order_id` is still owing money, from the rule's own inputs.
     fn refresh_live(&mut self, order_id: OrderId) {
         let has_lines = self
@@ -1976,11 +2017,69 @@ impl Projection {
             .and_then(|bill_id| self.bills.get(&bill_id))
             .is_some_and(|bill| bill.state == BillState::Settled);
         let refused = self.staff_decision(order_id) == Some(StaffDecision::Rejected);
-        if has_lines && !settled && !refused {
+        let closed = self.closed_orders.contains(&order_id);
+        if has_lines && !settled && !refused && !closed {
             self.live.insert(order_id);
         } else {
             self.live.remove(&order_id);
         }
+        // Paid, and served at no table: its food is still coming while a line waits for a bump.
+        // "At a table" is where the order opened as well as where a table points now: a table
+        // seated again points at its new guests, and the old order is still a table's order.
+        let at_a_table = self.table_for_order(order_id).is_some()
+            || self
+                .order_origin(order_id)
+                .is_some_and(|origin| origin.table_id.is_some());
+        let waiting = if settled && !refused && !at_a_table {
+            self.newest_unbumped_fire(order_id)
+        } else {
+            None
+        };
+        match waiting {
+            Some(fired) => {
+                self.cooking.insert(order_id, fired);
+                self.bound_cooking();
+            }
+            None => {
+                self.cooking.remove(&order_id);
+            }
+        }
+    }
+
+    /// The newest fire time among an order's fired lines that no station has bumped.
+    fn newest_unbumped_fire(&self, order_id: OrderId) -> Option<Timestamp> {
+        self.line_ids_for_order(order_id)
+            .iter()
+            .filter(|line_id| !self.bumped_lines.contains(line_id))
+            .filter_map(|line_id| self.lines.get(line_id))
+            .filter(|record| record.state == OrderLineState::Fired)
+            .filter_map(|record| record.fired_time)
+            .max()
+    }
+
+    /// Keeps [`Self::cooking`] within [`MAX_COOKING`] by dropping the orders fired longest ago.
+    fn bound_cooking(&mut self) {
+        while self.cooking.len() > MAX_COOKING {
+            let oldest = self
+                .cooking
+                .iter()
+                .min_by_key(|(_, fired)| **fired)
+                .map(|(order_id, _)| *order_id);
+            match oldest {
+                Some(order_id) => {
+                    self.cooking.remove(&order_id);
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// Whether a line is one the kitchen board still shows for an order that no longer owes:
+    /// fired, not bumped, on an order in [`Self::cooking`].
+    fn still_cooking(&self, order_line_id: OrderLineId, record: &LineRecord) -> bool {
+        record.state == OrderLineState::Fired
+            && !self.bumped_lines.contains(&order_line_id)
+            && self.cooking.contains_key(&record.order_id)
     }
 
     /// The ids of an order's lines, in id order, from the index.
@@ -2031,9 +2130,13 @@ impl Projection {
     }
 
     fn set_line_state(&mut self, line_id: OrderLineId, state: OrderLineState) {
-        if let Some(record) = self.lines.get_mut(&line_id) {
-            record.state = state;
-        }
+        let Some(record) = self.lines.get_mut(&line_id) else {
+            return;
+        };
+        record.state = state;
+        let order_id = record.order_id;
+        // A fire or a void can start or end a paid order's wait at the kitchen (ADR-0161).
+        self.refresh_live(order_id);
     }
 
     /// Records when a line went to the kitchen, beside the state change that sent it.
@@ -2054,10 +2157,13 @@ impl Projection {
         fired_time: Timestamp,
         station_id: StationId,
     ) {
-        if let Some(record) = self.lines.get_mut(&line_id) {
-            record.fired_time = Some(fired_time);
-            record.station_id = Some(station_id);
-        }
+        let Some(record) = self.lines.get_mut(&line_id) else {
+            return;
+        };
+        record.fired_time = Some(fired_time);
+        record.station_id = Some(station_id);
+        let order_id = record.order_id;
+        self.refresh_live(order_id);
     }
 
     /// Both halves of a fire, for the replay.
@@ -2084,6 +2190,14 @@ impl Projection {
     /// Marks lines bumped (prepared) — from a live `bump_ticket` and from the fold on rebuild.
     fn mark_bumped(&mut self, order_line_ids: &[OrderLineId]) {
         self.bumped_lines.extend(order_line_ids.iter().copied());
+        // A bump can end a paid order's wait at the kitchen (ADR-0161).
+        let orders: BTreeSet<OrderId> = order_line_ids
+            .iter()
+            .filter_map(|line_id| self.lines.get(line_id).map(|record| record.order_id))
+            .collect();
+        for order_id in orders {
+            self.refresh_live(order_id);
+        }
     }
 
     /// Every bumped line, in id order — the current prepared set a KDS reads on (re)connect so a
@@ -3234,8 +3348,13 @@ impl<S: EventStore> Edge<S> {
             vec![rejected_message, closed_message],
         )
         .await?;
-        self.lock_projection()
-            .record_staff_decision(order_id, StaffDecision::Rejected);
+        {
+            let mut projection = self.lock_projection();
+            projection.record_staff_decision(order_id, StaffDecision::Rejected);
+            // The order ends here as the replay of its `sales.order.closed` ends it, so a live box
+            // and a restarted one hold the same thing.
+            projection.close_order(order_id);
+        }
         self.forget_notes_off_screen();
         Ok(())
     }
@@ -3917,6 +4036,69 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// Releases a table seated by mistake, or whose guests left before anything was sold, straight
+    /// back to service
+    /// ([ADR-0163](../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)):
+    /// `sales.order.closed` for its order and `sales.table.closed`, in one transaction.
+    ///
+    /// Only while nothing is sold on it: every line voided or none at all, and no bill open. Before
+    /// this a table seated by mistake could leave `Occupied` only by a bill on nothing, which could
+    /// never settle, so it stayed taken until the store was re-provisioned. A table stuck that way
+    /// already is recovered once: a manager voids the empty bill, and the table is released.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::OrderNotEmpty`] if something is sold on the table; [`AppError::Domain`] if the
+    /// table is not seated, or the store does not do table service; or [`AppError`] if the store
+    /// cannot be written.
+    pub async fn release_table(
+        &self,
+        actor: Actor,
+        table_id: TableId,
+    ) -> Result<TableView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let decision = decide_table(self.table_state(table_id), TableCommand::Release, &ctx)?;
+        let order_id = {
+            let projection = self.lock_projection();
+            let order_id = projection.order_for_table(table_id);
+            if let Some(order_id) = order_id {
+                let sold = !projection.sold_line_ids(order_id).is_empty();
+                let billed = projection
+                    .latest_bill_in(order_id, BillState::Open)
+                    .is_some();
+                if sold || billed {
+                    return Err(AppError::OrderNotEmpty);
+                }
+            }
+            order_id
+        };
+
+        let mut envelopes = Vec::with_capacity(2);
+        let mut messages = Vec::with_capacity(2);
+        if let Some(order_id) = order_id {
+            let (envelope, message) = self.prepare(&ctx, &SalesOrderClosed { order_id })?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        let (envelope, message) = self.prepare(&ctx, &SalesTableClosed { table_id })?;
+        envelopes.push(envelope);
+        messages.push(message);
+        self.append_and_publish(envelopes, messages).await?;
+        {
+            let mut projection = self.lock_projection();
+            if let Some(order_id) = order_id {
+                projection.close_order(order_id);
+            }
+            projection.set_table(table_id, decision.next_state);
+        }
+        // A voided line's note is gone already; a released order takes whatever else it held.
+        self.forget_notes_off_screen();
+        Ok(TableView {
+            table_id,
+            state: decision.next_state,
+        })
+    }
+
     /// Moves the guests at a table, and the order they are eating from, to a free table
     /// (`sales.table.transferred`).
     ///
@@ -4461,6 +4643,8 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
         self.lock_projection().mark_bumped(&order_line_ids);
+        // A paid order's note is kept for the kitchen only until the line is made (ADR-0161).
+        self.forget_notes_off_screen();
         Ok(BumpView {
             order_id,
             station_id,
@@ -4795,31 +4979,70 @@ impl<S: EventStore> Edge<S> {
     /// If the projection lock is poisoned — unreachable, as its critical section only reads.
     #[must_use]
     pub fn live_orders(&self) -> Vec<LiveOrderView> {
-        let session = self.session();
         // Copied out under one guard, so the answer is one consistent moment across every order,
         // and assembled after it is released: the menu lookups and the allocation are the slow part,
         // and every sale waits on this lock (F2).
-        let snapshot: Vec<LiveSnapshot> = {
+        let snapshot = {
             let projection = self.lock_projection();
-            projection
-                .open_orders()
-                .into_iter()
-                .map(|order_id| LiveSnapshot {
-                    order_id,
-                    table_id: projection.table_for_order(order_id),
-                    bill_id: projection.bill_for_order(order_id),
-                    open_bill_ids: projection.open_bills_for_order(order_id),
-                    lines: projection
-                        .identified_lines_for_order(order_id)
-                        .into_iter()
-                        .map(|(id, record)| {
-                            let bumped = projection.bumped_lines.contains(&id);
-                            (id, record, bumped)
-                        })
-                        .collect(),
-                })
-                .collect()
+            Self::live_snapshot_of(&projection, projection.open_orders())
         };
+        self.views_of(snapshot)
+    }
+
+    /// What the kitchen still has to make
+    /// ([ADR-0161](../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)):
+    /// every open order, as [`Self::live_orders`] has them, and each paid order without a table that
+    /// still has a fired line no station has bumped, fired on the current business day.
+    ///
+    /// A counter order is paid before it is cooked, and the live read drops an order the moment it
+    /// is paid, so a kitchen display that reloaded after the payment lost the ticket and its note.
+    /// The day's end is applied here, where the clock is: a paid order fired on an earlier business
+    /// day is dropped from the projection's waiting set, and its notes are forgotten with it.
+    #[must_use]
+    pub fn kitchen_orders(&self) -> Vec<LiveOrderView> {
+        let session = self.session();
+        let today = derive_business_date(self.clock.now(), &session.timezone, session.cutoff);
+        let snapshot = {
+            let mut projection = self.lock_projection();
+            if let Ok(today) = today {
+                projection.cooking.retain(|_, fired| {
+                    derive_business_date(*fired, &session.timezone, session.cutoff)
+                        .is_ok_and(|day| day == today)
+                });
+            }
+            let waiting: Vec<OrderId> = projection.cooking.keys().copied().collect();
+            let mut orders = projection.open_orders();
+            orders.extend(waiting);
+            Self::live_snapshot_of(&projection, orders)
+        };
+        self.forget_notes_off_screen();
+        self.views_of(snapshot)
+    }
+
+    /// The orders `order_ids` names, with their lines, copied out under the caller's guard.
+    fn live_snapshot_of(projection: &Projection, order_ids: Vec<OrderId>) -> Vec<LiveSnapshot> {
+        order_ids
+            .into_iter()
+            .map(|order_id| LiveSnapshot {
+                order_id,
+                table_id: projection.table_for_order(order_id),
+                bill_id: projection.bill_for_order(order_id),
+                open_bill_ids: projection.open_bills_for_order(order_id),
+                lines: projection
+                    .identified_lines_for_order(order_id)
+                    .into_iter()
+                    .map(|(id, record)| {
+                        let bumped = projection.bumped_lines.contains(&id);
+                        (id, record, bumped)
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// A snapshot as the screens read it: names from the menu, and each line's note.
+    fn views_of(&self, snapshot: Vec<LiveSnapshot>) -> Vec<LiveOrderView> {
+        let session = self.session();
         // After the projection's guard is released: the two locks are never held together.
         let notes = self.lock_notes();
         snapshot
@@ -5215,6 +5438,12 @@ impl<S: EventStore> Edge<S> {
         // opens a bill and is refused later by `assemble`, which is what the floor already did.
         if table_id.is_none() && !has_lines {
             return Err(AppError::UnknownOrder);
+        }
+        // Nothing sold, nothing to bill (ADR-0163). A bill on an order whose every line was voided
+        // could never settle, `assemble` refusing an empty set of tax bases, and its table would wait
+        // for a payment that cannot come; the way out for such a table is to release it.
+        if self.lock_projection().sold_line_ids(order_id).is_empty() {
+            return Err(AppError::NothingToBill);
         }
 
         // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
@@ -5899,6 +6128,17 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Replays an order that ended owing nothing: a table released with nothing sold on it
+    /// ([`Edge::release_table`]), or a guest order staff refused.
+    fn fold_order_closed(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesOrderClosed = envelope.data.decode().map_err(AppError::Encode)?;
+        projection.close_order(event.order_id);
+        Ok(())
+    }
+
     /// Replays guests moving to another table: the table they left waits to be cleared, and the one
     /// they moved to is seated with their order ([`Edge::transfer_table`]).
     fn fold_transfer(
@@ -5933,6 +6173,7 @@ impl<S: EventStore> Edge<S> {
                 let event: SalesTableClosed = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.set_table(event.table_id, TableState::Free);
             }
+            EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
             EventType::SalesOrderLineAdded => {
                 let event: SalesOrderLineAdded =
@@ -6308,7 +6549,8 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Forgets every note no screen can show any more: a voided line's, and every line's on an
-    /// order that has left the open orders (ADR-0157 decision 2).
+    /// order that has left the open orders (ADR-0157 decision 2), except a line the kitchen board
+    /// still shows for a paid order without a table, until it is bumped or its day ends (ADR-0161).
     ///
     /// A line the projection has not folded yet is kept, because its note is held a moment before
     /// its write commits.
@@ -6323,7 +6565,8 @@ impl<S: EventStore> Edge<S> {
                 .filter(|(order_line_id, order_id)| {
                     projection.line(*order_line_id).is_some_and(|record| {
                         record.state == OrderLineState::Voided
-                            || !projection.live.contains(order_id)
+                            || (!projection.live.contains(order_id)
+                                && !projection.still_cooking(*order_line_id, &record))
                     })
                 })
                 .map(|(order_line_id, _)| order_line_id)
@@ -8433,5 +8676,143 @@ mod tests {
 
         roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
         assert!(roster.sign_in_ready());
+    }
+
+    /// A table already stuck on a bill on nothing is recovered once (ADR-0163): a manager voids the
+    /// empty bill, and the table is released. An edge before ADR-0163 opened that bill when asked
+    /// for the bill of an empty table, and nothing could settle it; the stuck log is written here
+    /// as that edge wrote it, and replayed by a new one.
+    #[test]
+    fn a_table_stuck_on_an_empty_bill_is_recovered_by_a_void_and_a_release() {
+        use super::{AppError, Approval, BillingBillOpened, StaffAuth, StaffRoster};
+        use argon2::Argon2;
+        use argon2::password_hash::PasswordHasher as _;
+        use pos_core::error::DomainError;
+        use pos_core::permission::{Permission, PermissionSet};
+        use pos_proto::ids::BillId;
+        use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
+
+        fn session() -> EdgeSession {
+            let pin_phc = Argon2::default()
+                .hash_password_with_salt(b"4417", b"a-fixed-test-slt")
+                .expect("hash")
+                .to_string();
+            let mut staff = StaffRoster::new();
+            staff.insert(
+                "MGR-1",
+                StaffAuth {
+                    employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
+                    permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+                    discount_ceiling: None,
+                    pin_phc: Some(pin_phc),
+                },
+            );
+            let mut session = EdgeSession::bootstrap();
+            session.staff = staff;
+            session
+        }
+        let over = |store: FakeStore| {
+            Edge::new(
+                store,
+                identity(),
+                session(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds")
+        };
+        let table = TableId::new(Ulid::from_u128(40));
+        let bill_id = BillId::new(Ulid::from_u128(77));
+
+        pos_fakes::executor::run_ready(async {
+            let store = FakeStore::default();
+            {
+                let old = over(store.clone());
+                old.seat_table(actor(), table, None).await.expect("seats");
+                let order_id = old.order_for_table(table).expect("an order opened");
+                let ctx = old.decision_ctx(actor()).expect("a decision context");
+                old.commit_and_publish(
+                    &ctx,
+                    &BillingBillOpened {
+                        bill_id,
+                        order_id,
+                        order_line_ids: Vec::new(),
+                    },
+                )
+                .await
+                .expect("the old edge opened a bill on nothing");
+            }
+
+            let edge = over(store);
+            edge.rebuild().await.expect("replays the stuck log");
+            assert_eq!(edge.table_state(table), TableState::AwaitingPayment);
+            let stuck = edge.release_table(actor(), table).await;
+            assert!(
+                matches!(stuck, Err(AppError::Domain(DomainError::Transition(_)))),
+                "a table waiting for payment is not released, got {stuck:?}"
+            );
+
+            let reason = PublishedReasonCodes::framework_default()
+                .for_action(ReasonAction::VoidBill)
+                .next()
+                .expect("the framework set covers voiding a bill")
+                .id;
+            let approval = Approval {
+                code: "MGR-1".to_owned(),
+                pin: "4417".to_owned(),
+            };
+            let voided = edge
+                .void_bill(actor(), bill_id, reason, Some(&approval))
+                .await
+                .expect("a manager voids the empty bill");
+            assert_eq!(voided, BillState::Voided);
+            assert_eq!(edge.table_state(table), TableState::Occupied);
+
+            edge.release_table(actor(), table)
+                .await
+                .expect("and the table is released");
+            assert_eq!(edge.table_state(table), TableState::Free);
+            assert!(edge.live_orders().is_empty());
+        });
+    }
+
+    /// A store with no kitchen display never bumps, and its waiting set must still stop growing:
+    /// past [`super::MAX_COOKING`] the orders fired longest ago give way (ADR-0161).
+    #[test]
+    fn the_waiting_set_is_bounded_and_drops_the_oldest() {
+        let mut projection = super::Projection::default();
+        let fired =
+            |ms: i64| Timestamp::from_milliseconds_since_epoch(ms).expect("a valid instant");
+        for n in 0..=super::MAX_COOKING {
+            let id = u128::try_from(n).expect("a small count");
+            let ms = i64::try_from(n).expect("a small count");
+            let order_id = OrderId::new(Ulid::from_u128(1 + id));
+            projection.cooking.insert(order_id, fired(1_000 + ms));
+            projection.bound_cooking();
+        }
+        assert_eq!(projection.cooking.len(), super::MAX_COOKING);
+        assert!(
+            !projection
+                .cooking
+                .contains_key(&OrderId::new(Ulid::from_u128(1))),
+            "the order fired first is the one that gave way"
+        );
+    }
+
+    /// A paid order's wait ends with the business day its food was fired in: the kitchen read
+    /// drops one fired on an earlier day (ADR-0161).
+    #[test]
+    fn a_paid_order_from_a_closed_day_leaves_the_board() {
+        let edge = edge();
+        let yesterday = OrderId::new(Ulid::from_u128(0x0DA7));
+        edge.lock_projection().cooking.insert(
+            yesterday,
+            Timestamp::from_milliseconds_since_epoch(1).expect("a valid instant"),
+        );
+
+        assert!(edge.kitchen_orders().is_empty());
+        assert!(
+            edge.lock_projection().cooking.is_empty(),
+            "the read ended the day for it, so it does not come back"
+        );
     }
 }
