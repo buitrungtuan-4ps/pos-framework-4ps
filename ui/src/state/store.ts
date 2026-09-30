@@ -22,6 +22,7 @@ import type {
   MenuItemResponse,
   ModifierGroup,
   PaymentRequest,
+  DrawerOutcome,
   ReasonCodeEntry,
   ShiftResponse,
   SyncResponse,
@@ -111,6 +112,10 @@ export interface ShiftInfo {
   variance?: Money;
   // What came of printing the shift report, on the close that printed one (ADR-0100 tokens).
   reportPrint?: string;
+  // Cash paid in and out of the drawer outside a sale so far (ADR-0165). The edge's totals, never
+  // added up here: a device reads them back rather than counting events it may have seen twice.
+  paidIn?: Money;
+  paidOut?: Money;
 }
 
 interface StoreShape {
@@ -796,6 +801,12 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // A paid in or out on any device: read the shift's totals back, rather than add the amount here,
+    // because the device that recorded it has already taken the totals from its own response.
+    case "cash.drawer.paid_in":
+    case "cash.drawer.paid_out":
+      void loadShift();
+      break;
     case "cash.shift.closed": {
       const shiftId = str(payload, "closed_shift_id");
       const expected = asMoney(payload["expected_amount"]);
@@ -1672,7 +1683,13 @@ export async function loadShift(): Promise<void> {
   replaceShift(
     response === null
       ? null
-      : { shiftId: response.shift_id, state: response.state, counted: response.counted_amount },
+      : {
+          shiftId: response.shift_id,
+          state: response.state,
+          counted: response.counted_amount,
+          paidIn: response.paid_in_amount,
+          paidOut: response.paid_out_amount,
+        },
   );
 }
 
@@ -1690,6 +1707,8 @@ function replaceShift(info: ShiftInfo | null): void {
           counted: info.counted,
           variance: info.variance,
           reportPrint: info.reportPrint,
+          paidIn: info.paidIn,
+          paidOut: info.paidOut,
         },
   );
 }
@@ -1982,6 +2001,8 @@ export async function openShift(openingFloatMinor: number): Promise<void> {
     expected: response.expected_amount,
     counted: response.counted_amount,
     variance: response.variance,
+    paidIn: response.paid_in_amount,
+    paidOut: response.paid_out_amount,
   });
 }
 
@@ -2000,7 +2021,39 @@ export async function closeShift(shiftId: string): Promise<ShiftInfo> {
     counted: response.counted_amount,
     variance: response.variance,
     reportPrint: response.shift_report_print,
+    paidIn: response.paid_in_amount,
+    paidOut: response.paid_out_amount,
   };
   setState("shift", info);
   return info;
+}
+
+// Cash paid into or out of the drawer outside a sale (ADR-0165): the edge's new totals replace the
+// held ones, and what came of opening the drawer goes back to the screen.
+export async function recordCashMovement(
+  shiftId: string,
+  direction: "in" | "out",
+  amountMinor: number,
+  reasonCodeId: string,
+): Promise<DrawerOutcome | undefined> {
+  const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId };
+  const response =
+    direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
+  setState("shift", "paidIn", response.paid_in_amount);
+  setState("shift", "paidOut", response.paid_out_amount);
+  return response.drawer_open;
+}
+
+// The drawer opened without a sale, with a manager's code and PIN (ADR-0165).
+export async function openDrawerNoSale(
+  reasonCodeId: string,
+  approverCode: string,
+  approverPin: string,
+): Promise<DrawerOutcome> {
+  const response = await api.openDrawer({
+    reason_code_id: reasonCodeId,
+    approver_code: approverCode,
+    approver_pin: approverPin,
+  });
+  return response.drawer_open;
 }

@@ -58,7 +58,7 @@ Staff roles ship as editable templates: server, cashier, shift lead, store manag
 
 ## 6. Shifts and cash
 
-Open a shift with a starting float; every transaction attaches to it. **One open shift per cashier device at a time** — the shift a transaction belongs to is never ambiguous. Paid-in and paid-out entries carry reasons. **Closing is blind**: the cashier enters the counted amount *before* the system reveals the expected amount, and only then is the variance shown. Opening the drawer outside a sale requires a permission and is logged.
+Open a shift with a starting float; every transaction attaches to it. **One open shift per cashier device at a time** — the shift a transaction belongs to is never ambiguous. Paid-in and paid-out entries carry reasons, and are recorded against the open shift before its count: the expected drawer is the float, plus the cash taken, plus what was paid in, minus what was paid out ([ADR-0165](adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). A paid out larger than the drawer should hold is not refused, because the refusal would reveal what the drawer holds. **Closing is blind**: the cashier enters the counted amount *before* the system reveals the expected amount, and only then is the variance shown. Opening the drawer outside a sale requires a permission with a manager's PIN, and a reason, and is logged. The drawer itself opens only through the USB printer the console marks as having one.
 
 ## 7. Pricing and promotions
 

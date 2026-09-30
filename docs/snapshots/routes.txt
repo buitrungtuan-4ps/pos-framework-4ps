@@ -33,6 +33,7 @@ POST /api/bills/{id}/receipt/reprint
 POST /api/bills/{id}/settle
 POST /api/bills/{id}/split
 POST /api/bills/{id}/void
+POST /api/drawer/open
 POST /api/kds/bump
 POST /api/lines/{id}/fire
 POST /api/lines/{id}/quantity
@@ -59,6 +60,8 @@ POST /api/session/sign-out
 POST /api/shifts
 POST /api/shifts/{id}/close
 POST /api/shifts/{id}/count
+POST /api/shifts/{id}/paid-in
+POST /api/shifts/{id}/paid-out
 POST /api/tables/{id}/bill
 POST /api/tables/{id}/check/print
 POST /api/tables/{id}/clean

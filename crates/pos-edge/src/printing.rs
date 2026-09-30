@@ -393,11 +393,12 @@ pub fn pre_bill_document(
     )
 }
 
-/// A closed shift's drawer on paper: the float, the cash taken, what that should come to, what was
-/// counted, and the difference.
+/// A closed shift's drawer on paper: the float, the cash taken, what was paid in and out outside a
+/// sale, what that should come to, what was counted, and the difference.
 ///
-/// The drawer's own arithmetic, in the order a supervisor checks it: the first two add up to the
-/// third, and the fourth less the third is the fifth. Printed because the domain asks for it on close
+/// The drawer's own arithmetic, in the order a supervisor checks it: the float, the cash taken and
+/// the paid in, less the paid out, add up to the expectation, and the count less the expectation is
+/// the variance. A shift that paid nothing in or out prints neither line. Printed because the domain asks for it on close
 /// (`Effect::PrintShiftReport`), which it has done since the shift machine was written while nothing
 /// turned the effect into paper — a cashier handing over a drawer had only a screen to show for it.
 ///
@@ -425,6 +426,14 @@ pub fn shift_report_document(
         money,
     ));
     blocks.push(amount_line(labels.cash_taken, report.cash_collected, money));
+    // Only when there was one, so a shift that paid nothing in or out prints the report it always
+    // did; when there was, the lines are what make the expectation add up on paper (ADR-0165).
+    if report.paid_in.amount_minor != 0 {
+        blocks.push(amount_line(labels.paid_in, report.paid_in, money));
+    }
+    if report.paid_out.amount_minor != 0 {
+        blocks.push(amount_line(labels.paid_out, report.paid_out, money));
+    }
     blocks.push(amount_line(
         labels.expected_in_drawer,
         report.expected_amount,
@@ -2526,6 +2535,8 @@ mod tests {
             shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
             opening_float: vnd(500_000),
             cash_collected: vnd(1_250_000),
+            paid_in: vnd(0),
+            paid_out: vnd(0),
             expected_amount: vnd(1_750_000),
             counted_amount: vnd(counted),
             variance: vnd(counted - 1_750_000),
@@ -2569,6 +2580,61 @@ mod tests {
     }
 
     #[test]
+    fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
+        // ADR-0165 decision 2: 500k float + 1,250k taken + 200k paid in - 150k paid out is 1,800k,
+        // and the paper shows every term, in the order the sum runs.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let report = ShiftReport {
+            shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+            opening_float: vnd(500_000),
+            cash_collected: vnd(1_250_000),
+            paid_in: vnd(200_000),
+            paid_out: vnd(150_000),
+            expected_amount: vnd(1_800_000),
+            counted_amount: vnd(1_800_000),
+            variance: vnd(0),
+        };
+        let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
+        assert_eq!(
+            lines_of(&english)[2..],
+            [
+                "Opening float  VND 500,000",
+                "Cash taken  VND 1,250,000",
+                "Paid in  VND 200,000",
+                "Paid out  VND 150,000",
+                "Expected in drawer  VND 1,800,000",
+                "Counted  VND 1,800,000",
+                "Variance  VND 0",
+                "Balanced",
+            ]
+        );
+
+        let paid_out_only = ShiftReport {
+            paid_in: vnd(0),
+            expected_amount: vnd(1_600_000),
+            counted_amount: vnd(1_600_000),
+            ..report
+        };
+        let vietnamese = shift_report_document(
+            &StoreProfile::default(),
+            &style(0),
+            &VIETNAMESE,
+            &paid_out_only,
+        );
+        let drawn = lines_of(&vietnamese);
+        assert!(
+            drawn.contains(&"Chi ngoài bán hàng  VND 150,000"),
+            "{drawn:?}"
+        );
+        assert!(
+            !drawn
+                .iter()
+                .any(|line| line.starts_with("Thu ngoài bán hàng")),
+            "nothing paid in prints no paid-in line: {drawn:?}"
+        );
+    }
+
+    #[test]
     fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
         // The same documents, in the words a Vietnamese guest and cashier read: the heading, every
         // total's label and the sign-off change; the rows, the amounts and their order do not.
@@ -2599,6 +2665,8 @@ mod tests {
             shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
             opening_float: vnd(500_000),
             cash_collected: vnd(1_250_000),
+            paid_in: vnd(0),
+            paid_out: vnd(0),
             expected_amount: vnd(1_750_000),
             counted_amount: vnd(1_730_000),
             variance: vnd(-20_000),

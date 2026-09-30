@@ -209,6 +209,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Cash paid in and out of the drawer is recorded and counted, and the drawer opens without a sale
+  only for a manager** ([ADR-0165](docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The events, permissions and reasons for
+  both existed and nothing produced them, so cash taken out for a supplier showed up as a shortage
+  at close that the cashier did not cause.
+  - The shift screen takes an amount, then **Paid in** or **Paid out**, then a reason from the
+    store's list, under `cash.movement.record` (no PIN). It writes `cash.drawer.paid_in` or
+    `cash.drawer.paid_out` on the shift's envelope, and opens the drawer.
+  - **The expected drawer is now the float, plus the cash taken, plus paid in, minus paid out.** The
+    shift report prints paid in and paid out as their own lines when there were any. A paid out
+    larger than the drawer should hold is recorded, not refused.
+  - A movement is refused once the shift is counted (`409 SHIFT_NOT_OPEN`), and a reason the store
+    does not list for that act is refused with `409 CASH_REASON_NOT_VALID`.
+  - **Open drawer** needs `cash.drawer.open_no_sale`: a manager's code and PIN typed in place, and a
+    reason. It writes `cash.drawer.opened` with `standalone: true` and the approval's
+    `security.permission.overridden`, with or without an open shift.
+  - `POST /api/shifts/{id}/paid-in`, `POST /api/shifts/{id}/paid-out` and `POST /api/drawer/open`
+    are new. Every shift response carries `paid_in_amount` and `paid_out_amount`, and a movement's
+    response also says `drawer_open`.
+
+  **Upgrade note:** a shift that records a movement expects a different drawer than it would have
+  before; a shift without one closes exactly as before. No event, permission or protocol changes.
+  The cloud's daily cash rollup already folded paid in and out, and reads the expected figure from
+  `cash.shift.closed`, so it agrees without a change.
+
 - **A cash drawer opens on a cash payment** ([ADR-0165](docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
   No drawer ever opened, not even on a cash sale: the published device did not say which printer
   had one wired to it, so the edge assumed none (ADR-0103).

@@ -584,7 +584,8 @@ Two Linux details:
 
 **A cash drawer opens where the console says one is.** Tick **Cash drawer attached** on the
 printer in the console's Devices page, then **Publish to this store**
-([ADR-0165](../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The till then opens the drawer on a cash payment. It opens
+([ADR-0165](../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The till then opens the drawer on a cash payment, a paid in
+or paid out, and a manager's no-sale opening. It opens
 only over USB, because port 9100 has no authentication (`docs/architecture.md` §5), only through the
 printer that serves the bill, and only when the edge writes that printer's bytes itself: a printer
 behind a print agent keeps its drawer shut, and the till tells the cashier to use the key. Whether a

@@ -513,6 +513,104 @@ async fn a_cash_settle_opens_the_marked_drawer_and_a_card_settle_does_not() {
 }
 
 #[tokio::test]
+async fn cash_paid_out_over_http_opens_the_drawer_and_the_shift_keeps_it() {
+    // ADR-0165 decisions 1 and 4 over the shipped routes: a paid out is recorded against the shift,
+    // the drawer opens for the cash to come out, and a reload still shows it.
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let with_drawer = PublishedDevice {
+        connection: DeviceConnection::Usb.into(),
+        address: "/dev/usb/lp0".to_owned(),
+        drawer_attached: true,
+        ..counter_printer()
+    };
+    let (app, token) = app_with(Some((printers, PublishedDevices::new(vec![with_drawer])))).await;
+
+    // A reason the store lists for a paid out: the framework's default list has "Making change".
+    let (_, listed) = send(app.clone(), &token, "GET", "/api/reason-codes", None).await;
+    let reason = listed["reasons"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|reason| {
+            reason["applies_to"]
+                .as_array()
+                .is_some_and(|acts| acts.iter().any(|act| act == "REASON_ACTION_CASH_PAID_OUT"))
+        })
+        .expect("a reason for a paid out")["reason_code_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, shift) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{shift}");
+    let shift_id = shift["shift_id"].as_str().expect("a shift id").to_owned();
+    let paid_out = format!("/api/shifts/{shift_id}/paid-out");
+
+    let (status, zero) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &paid_out,
+        Some(json!({ "amount_minor": 0, "reason_code_id": reason })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "nothing is paid out: {zero}"
+    );
+
+    let (status, paid) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &paid_out,
+        Some(json!({ "amount_minor": 50_000, "reason_code_id": reason })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paid}");
+    assert_eq!(paid["drawer_open"], "OPENED");
+    assert_eq!(paid["paid_out_amount"]["amount_minor"], 50_000);
+    assert!(
+        paid.get("expected_amount").is_none(),
+        "a paid out reveals nothing the close keeps blind: {paid}"
+    );
+    assert_eq!(
+        *recorder.written.lock().expect("the recorder"),
+        vec![printer_escpos::escpos::DRAWER_KICK.to_vec()],
+        "the drawer opened for the cash to come out"
+    );
+
+    let (_, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(
+        current["paid_out_amount"]["amount_minor"], 50_000,
+        "a reload keeps it"
+    );
+
+    let (status, no_pin) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/drawer/open",
+        Some(json!({ "reason_code_id": reason })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a drawer opened without a sale needs a manager: {no_pin}"
+    );
+}
+
+#[tokio::test]
 async fn underpaying_a_bill_over_http_is_a_conflict() {
     let (app, token) = app().await;
     let table = TableId::new(Ulid::from_u128(701));
