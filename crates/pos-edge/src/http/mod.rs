@@ -501,6 +501,9 @@ where
         .route("/api/shifts", post(shifts::open::<S>))
         .route("/api/shifts/{id}/count", post(shifts::count::<S>))
         .route("/api/shifts/{id}/close", post(shifts::close::<S>))
+        .route("/api/shifts/{id}/paid-in", post(shifts::paid_in::<S>))
+        .route("/api/shifts/{id}/paid-out", post(shifts::paid_out::<S>))
+        .route("/api/drawer/open", post(shifts::open_drawer::<S>))
         // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
         // normally" and how many events are waiting.
         .route("/api/sync", get(sync::read::<S>))
@@ -639,6 +642,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::NotAwaitingStaffConfirmation => "NOT_AWAITING_STAFF_CONFIRMATION",
         AppError::ReasonCodeNotValid => "REASON_CODE_NOT_VALID",
         AppError::VoidReasonNotValid => "VOID_REASON_NOT_VALID",
+        AppError::CashReasonNotValid => "CASH_REASON_NOT_VALID",
+        AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -682,6 +687,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::NotAwaitingStaffConfirmation
         | AppError::ReasonCodeNotValid
         | AppError::VoidReasonNotValid
+        | AppError::CashReasonNotValid
+        | AppError::ShiftNotOpen
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable

@@ -390,6 +390,28 @@ export const TASKS = [
     outcome: { route: "/shift", mark: "shift-counted" },
   },
   {
+    task: "Pay cash out of the drawer, for a supplier",
+    budget: 3,
+    note: "The amount is typed first, then two taps: **Paid out**, and the reason (ADR-0165). No manager, because `cash.movement.record` asks no PIN: every paid out is on the record, and it moves what the close expects. A paid in is the same two taps with the other button, and is not declared separately, as the counter's reprint is not.",
+    steps: [
+      { route: "/shift", action: "askPaidOut" },
+      { route: "/shift", action: "movementReason" },
+    ],
+    outcome: { route: "/shift", mark: "cash-moved" },
+  },
+  {
+    task: "Open the cash drawer without a sale",
+    budget: 3,
+    note: "Two taps, **Open drawer** and the reason, with a manager's code and PIN typed between them, because `cash.drawer.open_no_sale` asks for one (ADR-0165). Rare, and a control: the PIN is the point, not a step to remove. It needs no open shift, because it moves no cash.",
+    steps: [
+      { route: "/shift", action: "askOpenDrawer" },
+      { route: "/shift", action: "drawerReason" },
+    ],
+    outcome: { route: "/shift", mark: "drawer-opened" },
+    unreplayable:
+      "the manager's badge and PIN are typed between the two taps, and the harness types only before the first; a dedicated replay below opens the drawer with them",
+  },
+  {
     task: "Close the shift and reveal the variance",
     budget: 3,
     steps: [{ route: "/shift", action: "closeShift" }],

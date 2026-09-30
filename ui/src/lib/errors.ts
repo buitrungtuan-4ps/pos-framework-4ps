@@ -37,6 +37,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   ALREADY_FIRED: "error.already_fired",
   REASON_CODE_NOT_VALID: "error.reason_not_valid",
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
+  CASH_REASON_NOT_VALID: "error.reason_not_valid",
+  SHIFT_NOT_OPEN: "error.shift_not_open",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",

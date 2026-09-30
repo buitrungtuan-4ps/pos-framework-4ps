@@ -360,6 +360,10 @@ const PRECONDITIONS = {
     await openShift(page);
     await page.locator("#count").fill("100000");
   },
+  "Pay cash out of the drawer, for a supplier": async (page) => {
+    await openShift(page);
+    await page.locator("#movement-amount").fill("50000");
+  },
   "Close the shift and reveal the variance": async (page) => {
     await openShift(page);
     await page.locator("#count").fill("100000");
@@ -2260,6 +2264,67 @@ test("a manager voids a bill on a till with no keyboard, typing on the on-screen
   }
 });
 
+// A drawer opened without a sale needs a manager's code and PIN and a reason (ADR-0165), which the
+// declared flow cannot type between its taps. So this types them, and reads what the till says:
+// the demo store has no drawer marked, so the opening is recorded and the till says to use the key.
+test("a manager opens the drawer without a sale, and the till says what came of it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await page.locator('[data-step="askOpenDrawer"]').click();
+    await expect(page.locator('[data-step="drawerReason"]').first()).toBeDisabled();
+    await page.locator("#no-sale-approver-code").fill(edge.staffCode);
+    await page.locator("#no-sale-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="drawerReason"]').first().click();
+    await expect(page.locator('[data-outcome="drawer-opened"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="drawer-opened"]')).toContainText("key");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Cash paid in and out is the edge's to add up (ADR-0165): the shift shows the totals, a reload
+// keeps them, and the close expects the float plus what came in less what went out.
+test("cash paid in and out moves what the close expects, and a reload keeps it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+
+    await page.locator("#movement-amount").fill("20000");
+    await page.locator('[data-step="askPaidIn"]').click();
+    await page.locator('[data-step="movementReason"]').first().click();
+    await expect(page.locator('[data-outcome="cash-moved"]')).toBeVisible();
+
+    await page.locator("#movement-amount").fill("5000");
+    await page.locator('[data-step="askPaidOut"]').click();
+    await page.locator('[data-step="movementReason"]').first().click();
+    await expect(page.locator('[data-outcome="cash-totals"]')).toContainText("20");
+    await expect(page.locator('[data-outcome="cash-totals"]')).toContainText("5");
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="cash-totals"]')).toBeVisible();
+
+    // 100,000 float + 20,000 in - 5,000 out, and no sales.
+    await page.locator("#count").fill("115000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed).toBeVisible();
+    await expect(closed.locator(".text-ok")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Once the bill is open the menu sells nothing, and says how to order more.
 //
 // A bill names the dishes it covers when it opens, so a dish rung onto the table afterwards was on no
@@ -2622,6 +2687,7 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [
+      "Open the cash drawer without a sale",
       "Settle a dine-in table in cash, typing the amount handed over",
       "Take money off a bill",
       "Void a bill before it settles",

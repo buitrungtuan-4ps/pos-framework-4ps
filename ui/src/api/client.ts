@@ -16,6 +16,7 @@ import type {
   BumpRequest,
   BumpResponse,
   CheckResponse,
+  CashMovementRequest,
   CountShiftRequest,
   BillCheckResponse,
   CounterOrder,
@@ -33,6 +34,8 @@ import type {
   MenuResponse,
   MintedCode,
   OpenedOrder,
+  OpenDrawerRequest,
+  OpenDrawerResponse,
   OpenShiftRequest,
   OrderLineRequest,
   PairAccepted,
@@ -381,6 +384,13 @@ export const api = {
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/count`, count),
   closeShift: (shiftId: string) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/close`),
+  // Cash paid in or out of the drawer outside a sale, and the drawer opened without one (ADR-0165).
+  paidIn: (shiftId: string, movement: CashMovementRequest) =>
+    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/paid-in`, movement),
+  paidOut: (shiftId: string, movement: CashMovementRequest) =>
+    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/paid-out`, movement),
+  openDrawer: (open: OpenDrawerRequest) =>
+    request<OpenDrawerResponse>("POST", "/api/drawer/open", open),
 
   // Redeem a pairing code for a device token, and keep the token **and the edge it came from** so
   // every later call carries the one against the other (ADR-0084, ADR-0111). Pairing itself is

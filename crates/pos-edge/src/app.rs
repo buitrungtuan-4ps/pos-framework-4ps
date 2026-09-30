@@ -46,13 +46,13 @@ use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted, CashShiftClosed,
-    CashShiftCounted, CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted,
-    DeviceAdmissionRevoked, EventType, InventoryItemRestored, InventoryItemSoldOut,
-    KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded,
-    SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
-    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened, SalesTableTransferred,
-    SecurityPermissionOverridden, StoreChainAnchored,
+    BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened,
+    CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
+    InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
+    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
@@ -991,6 +991,20 @@ pub enum AppError {
     /// would send an operator to the wrong row.
     #[error("that reason code is not valid for voiding")]
     VoidReasonNotValid,
+    /// A paid in, a paid out or a no-sale opening cited a reason the store's managed list does not
+    /// hold for that act ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+    ///
+    /// One refusal for the three: they are all the drawer's acts, and the till offers each only the
+    /// reasons listed for it, so a message naming the drawer sends an operator to the right rows.
+    #[error("that reason code is not valid for this cash movement")]
+    CashReasonNotValid,
+    /// A paid in or a paid out named a shift that is not the one trading, or one already counted
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+    ///
+    /// A counted shift is refused because its blind count was made against the drawer as it stood,
+    /// and a movement after the count would change what the count is checked against.
+    #[error("that shift is not open for cash to be paid in or out")]
+    ShiftNotOpen,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
     /// attaches ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
@@ -1212,9 +1226,11 @@ pub struct PreBill {
 
 /// A closed shift's drawer, as the shift report prints it.
 ///
-/// Every figure is one the close already computed and recorded in `cash.shift.closed`, plus the two
-/// it was computed from, so the paper adds up: the float plus the cash taken is what was expected,
-/// and the count minus the expectation is the variance.
+/// Every figure is one the close already computed and recorded in `cash.shift.closed`, plus the ones
+/// it was computed from, so the paper adds up: the float, plus the cash taken, plus what was paid in,
+/// minus what was paid out, is what was expected, and the count minus the expectation is the
+/// variance ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+/// decision 2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShiftReport {
     /// The shift.
@@ -1223,7 +1239,11 @@ pub struct ShiftReport {
     pub opening_float: Money,
     /// Every cash payment taken during the shift.
     pub cash_collected: Money,
-    /// The float plus the cash taken.
+    /// Cash put into the drawer outside a sale (`cash.drawer.paid_in`).
+    pub paid_in: Money,
+    /// Cash taken out of it outside a sale (`cash.drawer.paid_out`).
+    pub paid_out: Money,
+    /// The float, plus the cash taken, plus paid in, minus paid out.
     pub expected_amount: Money,
     /// What the cashier counted.
     pub counted_amount: Money,
@@ -1578,11 +1598,39 @@ pub struct ShiftView {
     pub counted_amount: Option<Money>,
     /// Counted minus expected, revealed only at close. Negative means short.
     pub variance: Option<Money>,
+    /// Cash paid into the drawer outside a sale so far
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+    ///
+    /// Not the expectation, and nothing the close keeps blind: the cashier entered every one of
+    /// these, and the cash taken on bills, which is the part they do not know, is not here.
+    pub paid_in: Money,
+    /// Cash paid out of the drawer outside a sale so far.
+    pub paid_out: Money,
     /// Whether closing asked for the shift report to print, for the caller to run after commit.
     pub print_shift_report: bool,
     /// The figures that report prints — present only on the close, which is the one command that
     /// has them all and the last moment the shift's record exists.
     pub report: Option<ShiftReport>,
+}
+
+/// Which way cash moved through the drawer outside a sale
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CashMovement {
+    /// Cash put in: change brought from the bank, a float topped up.
+    PaidIn,
+    /// Cash taken out: a supplier paid at the door, petty cash.
+    PaidOut,
+}
+
+impl CashMovement {
+    /// The act the store's reason list names for this movement (ADR-0115).
+    const fn reason_action(self) -> ReasonAction {
+        match self {
+            Self::PaidIn => ReasonAction::CashPaidIn,
+            Self::PaidOut => ReasonAction::CashPaidOut,
+        }
+    }
 }
 
 /// Puts a line's guest note on the frame that tells the store's devices about it (ADR-0157).
@@ -1773,22 +1821,43 @@ impl BillRecord {
 }
 
 /// What the projection remembers about a cash shift: its state, the float it opened with, the cash
-/// its settled bills have taken (the rollup the close compares against), and the blind count once
-/// entered. The expected drawer amount is `opening_float + cash_collected`; keeping the count here
-/// but never revealing the expectation before close is what makes the close blind (§11.1).
+/// its settled bills have taken (the rollup the close compares against), the cash paid in and out
+/// outside a sale, and the blind count once entered. Keeping the count here but never revealing the
+/// expectation before close is what makes the close blind (§11.1).
 #[derive(Debug, Clone, Copy)]
 struct ShiftRecord {
     state: ShiftState,
     opening_float: Money,
     cash_collected: Money,
+    paid_in: Money,
+    paid_out: Money,
     counted: Option<Money>,
 }
 
 impl ShiftRecord {
-    /// The cash the drawer is expected to hold: the float plus every cash payment taken on the
-    /// shift. Cash rounding and non-cash tenders never touch the drawer, so they are not in it.
+    /// A shift as it opens: its float, and nothing taken, paid in or out, or counted yet, in
+    /// `currency`.
+    fn opened(opening_float: Money, currency: CurrencyCode) -> Self {
+        let zero = Money::zero(currency);
+        Self {
+            state: ShiftState::Open,
+            opening_float,
+            cash_collected: zero,
+            paid_in: zero,
+            paid_out: zero,
+            counted: None,
+        }
+    }
+
+    /// The cash the drawer is expected to hold: the float, plus every cash payment taken on the
+    /// shift, plus what was paid in, minus what was paid out (ADR-0165 decision 2). Cash rounding and
+    /// non-cash tenders never touch the drawer, so they are not in it.
     fn expected(&self) -> Result<Money, DomainError> {
-        Ok(self.opening_float.checked_add(self.cash_collected)?)
+        Ok(self
+            .opening_float
+            .checked_add(self.cash_collected)?
+            .checked_add(self.paid_in)?
+            .checked_sub(self.paid_out)?)
     }
 }
 
@@ -2804,6 +2873,22 @@ impl Projection {
         if self.open_shift == Some(shift_id) {
             self.open_shift = None;
         }
+    }
+
+    /// Adds a paid in or a paid out to `shift_id`'s record (ADR-0165 decision 2).
+    fn record_movement(
+        &mut self,
+        shift_id: ShiftId,
+        movement: CashMovement,
+        amount: Money,
+    ) -> Result<(), DomainError> {
+        if let Some(record) = self.shifts.get_mut(&shift_id) {
+            match movement {
+                CashMovement::PaidIn => record.paid_in = record.paid_in.checked_add(amount)?,
+                CashMovement::PaidOut => record.paid_out = record.paid_out.checked_add(amount)?,
+            }
+        }
+        Ok(())
     }
 
     /// Adds cash taken on a bill to the open shift's rollup, if a shift is open.
@@ -6182,21 +6267,17 @@ impl<S: EventStore> Edge<S> {
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
-        self.lock_projection().open_shift_record(
-            shift_id,
-            ShiftRecord {
-                state: ShiftState::Open,
-                opening_float,
-                cash_collected: Money::zero(self.session().currency),
-                counted: None,
-            },
-        );
+        let currency = self.session().currency;
+        self.lock_projection()
+            .open_shift_record(shift_id, ShiftRecord::opened(opening_float, currency));
         Ok(ShiftView {
             shift_id,
             state: ShiftState::Open,
             expected_amount: None,
             counted_amount: None,
             variance: None,
+            paid_in: Money::zero(currency),
+            paid_out: Money::zero(currency),
             print_shift_report: false,
             report: None,
         })
@@ -6218,6 +6299,8 @@ impl<S: EventStore> Edge<S> {
             expected_amount: None,
             counted_amount: record.counted,
             variance: None,
+            paid_in: record.paid_in,
+            paid_out: record.paid_out,
             print_shift_report: false,
             report: None,
         })
@@ -6262,6 +6345,8 @@ impl<S: EventStore> Edge<S> {
             expected_amount: None,
             counted_amount: Some(counted_amount),
             variance: None,
+            paid_in: record.paid_in,
+            paid_out: record.paid_out,
             print_shift_report: false,
             report: None,
         })
@@ -6316,16 +6401,148 @@ impl<S: EventStore> Edge<S> {
             expected_amount: Some(expected_amount),
             counted_amount: Some(counted_amount),
             variance: Some(variance),
+            paid_in: record.paid_in,
+            paid_out: record.paid_out,
             print_shift_report: decision.effects.contains(&Effect::PrintShiftReport),
             report: Some(ShiftReport {
                 shift_id,
                 opening_float: record.opening_float,
                 cash_collected: record.cash_collected,
+                paid_in: record.paid_in,
+                paid_out: record.paid_out,
                 expected_amount,
                 counted_amount,
                 variance,
             }),
         })
+    }
+
+    /// Records cash paid into or out of the drawer outside a sale, against the shift trading now
+    /// (`cash.drawer.paid_in` or `cash.drawer.paid_out`,
+    /// [ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 1).
+    ///
+    /// The amount moves what the close expects, which is why a counted shift refuses it: the blind
+    /// count was made against the drawer as it stood. A paid out larger than the drawer should hold
+    /// is **not** refused, because the refusal would tell the cashier roughly what it holds, and the
+    /// close is blind; the variance shows it. `amount` is above zero, which the route checks, as it
+    /// checks a discount's. The kick is the caller's, after this commits.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] without `cash.movement.record`, [`AppError::CashReasonNotValid`] for a
+    /// reason the store does not hold for this act, [`AppError::UnknownShift`] for a shift the edge
+    /// does not know, [`AppError::ShiftNotOpen`] for one that is not trading or has been counted, or
+    /// [`AppError`] if the store cannot be written.
+    pub async fn record_cash_movement(
+        &self,
+        actor: Actor,
+        shift_id: ShiftId,
+        movement: CashMovement,
+        amount: Money,
+        reason_code_id: ReasonCodeId,
+    ) -> Result<ShiftView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::RecordCashMovement)?;
+        if !self
+            .session()
+            .reason_codes
+            .accepts(reason_code_id, movement.reason_action())
+        {
+            return Err(AppError::CashReasonNotValid);
+        }
+        let (record, trading) = {
+            let projection = self.lock_projection();
+            (
+                projection.shift(shift_id),
+                projection.open_shift == Some(shift_id),
+            )
+        };
+        let record = record.ok_or(AppError::UnknownShift)?;
+        if !trading || record.state != ShiftState::Open {
+            return Err(AppError::ShiftNotOpen);
+        }
+        let (envelope, message) = match movement {
+            CashMovement::PaidIn => self.prepare(
+                &ctx,
+                &CashDrawerPaidIn {
+                    amount,
+                    reason_code_id,
+                },
+            )?,
+            CashMovement::PaidOut => self.prepare(
+                &ctx,
+                &CashDrawerPaidOut {
+                    amount,
+                    reason_code_id,
+                },
+            )?,
+        };
+        self.append_and_publish(vec![envelope], vec![message])
+            .await?;
+        let record = {
+            let mut projection = self.lock_projection();
+            projection.record_movement(shift_id, movement, amount)?;
+            projection.shift(shift_id).unwrap_or(record)
+        };
+        Ok(ShiftView {
+            shift_id,
+            state: record.state,
+            expected_amount: None,
+            counted_amount: record.counted,
+            variance: None,
+            paid_in: record.paid_in,
+            paid_out: record.paid_out,
+            print_shift_report: false,
+            report: None,
+        })
+    }
+
+    /// Opens the cash drawer outside a sale (`cash.drawer.opened` with `standalone: true`,
+    /// [ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 3).
+    ///
+    /// `cash.drawer.open_no_sale` asks for a PIN, so a manager types their badge code and PIN in
+    /// place, and the opening carries a reason from the store's list for it. Allowed with or without
+    /// an open shift, because it moves no cash; the envelope names the shift when one is trading.
+    /// The kick is the caller's, after this commits, as a receipt's paper is.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CashReasonNotValid`] for a reason the store does not hold for opening the drawer,
+    /// [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
+    /// [`AppError::ApproverLockedOut`] for the PIN, [`AppError::Domain`] without the permission, or
+    /// [`AppError`] if the store cannot be written.
+    pub async fn open_drawer_no_sale(
+        &self,
+        actor: Actor,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<(), AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        if !self
+            .session()
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::DrawerOpen)
+        {
+            return Err(AppError::CashReasonNotValid);
+        }
+        let approver = self.resolve_step_up(&mut ctx, Permission::OpenDrawerNoSale, approval)?;
+        ctx.require(Permission::OpenDrawerNoSale)?;
+        let opened = CashDrawerOpened {
+            standalone: true,
+            reason_code_id: Some(reason_code_id),
+        };
+        let (envelope, message) = self.prepare(&ctx, &opened)?;
+        let mut envelopes = vec![envelope];
+        let mut messages = vec![message];
+        if let Some(approver) = approver {
+            let override_record =
+                Self::override_record(Permission::OpenDrawerNoSale, approver, None);
+            let (envelope, message) = self.prepare(&ctx, &override_record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+        Ok(())
     }
 
     /// Publishes the head of this store's hash chain
@@ -6655,13 +6872,11 @@ impl<S: EventStore> Edge<S> {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.open_shift_record(
                     event.opened_shift_id,
-                    ShiftRecord {
-                        state: ShiftState::Open,
-                        opening_float: event.opening_float,
-                        cash_collected: Money::zero(event.opening_float.currency_code),
-                        counted: None,
-                    },
+                    ShiftRecord::opened(event.opening_float, event.opening_float.currency_code),
                 );
+            }
+            EventType::CashDrawerPaidIn | EventType::CashDrawerPaidOut => {
+                Self::fold_movement(projection, envelope, known)?;
             }
             EventType::CashShiftCounted => {
                 let event: CashShiftCounted = envelope.data.decode().map_err(AppError::Encode)?;
@@ -6684,6 +6899,28 @@ impl<S: EventStore> Edge<S> {
                 Self::fold_sold_out(projection, envelope, known)?;
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// A paid in or a paid out, on the shift its envelope names (ADR-0165 decision 2), so a box that
+    /// restarts mid-shift expects the drawer a running one does. The envelope is the authority on
+    /// the shift: a movement is only ever recorded while one is open, and the fallback to the shift
+    /// open now is for a record written without one, which nothing writes.
+    fn fold_movement(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        let (movement, amount) = if known == EventType::CashDrawerPaidIn {
+            let event: CashDrawerPaidIn = envelope.data.decode().map_err(AppError::Encode)?;
+            (CashMovement::PaidIn, event.amount)
+        } else {
+            let event: CashDrawerPaidOut = envelope.data.decode().map_err(AppError::Encode)?;
+            (CashMovement::PaidOut, event.amount)
+        };
+        if let Some(shift_id) = envelope.shift_id.or(projection.open_shift) {
+            projection.record_movement(shift_id, movement, amount)?;
         }
         Ok(())
     }

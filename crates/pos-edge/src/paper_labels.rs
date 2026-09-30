@@ -49,6 +49,10 @@ pub struct PaperLabels {
     pub opening_float: &'static str,
     /// The cash taken during the shift.
     pub cash_taken: &'static str,
+    /// Cash put into the drawer outside a sale (ADR-0165).
+    pub paid_in: &'static str,
+    /// Cash taken out of the drawer outside a sale.
+    pub paid_out: &'static str,
     /// What the drawer should hold.
     pub expected_in_drawer: &'static str,
     /// What was counted.
@@ -82,6 +86,8 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     shift_report: "SHIFT REPORT",
     opening_float: "Opening float",
     cash_taken: "Cash taken",
+    paid_in: "Paid in",
+    paid_out: "Paid out",
     expected_in_drawer: "Expected in drawer",
     counted: "Counted",
     variance: "Variance",
@@ -107,6 +113,8 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     shift_report: "BÁO CÁO CA",
     opening_float: "Tiền đầu ca",
     cash_taken: "Tiền mặt thu",
+    paid_in: "Thu ngoài bán hàng",
+    paid_out: "Chi ngoài bán hàng",
     expected_in_drawer: "Tiền trong két dự kiến",
     counted: "Đã đếm",
     variance: "Chênh lệch",
@@ -170,6 +178,8 @@ mod tests {
             ENGLISH.shift_report,
             ENGLISH.opening_float,
             ENGLISH.cash_taken,
+            ENGLISH.paid_in,
+            ENGLISH.paid_out,
             ENGLISH.expected_in_drawer,
             ENGLISH.counted,
             ENGLISH.variance,

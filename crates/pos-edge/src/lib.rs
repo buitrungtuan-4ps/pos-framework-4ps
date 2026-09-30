@@ -86,8 +86,8 @@ pub mod version;
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};
 pub use app::{
-    AppError, Approval, BillCheckView, BillView, CounterOrderOpened, EVENT_LOG_DAYS, Edge,
-    EdgeSession, FiredLine, InboundOrderOpened, LineDraft, LineView, MAX_SETTLED_LISTED,
+    AppError, Approval, BillCheckView, BillView, CashMovement, CounterOrderOpened, EVENT_LOG_DAYS,
+    Edge, EdgeSession, FiredLine, InboundOrderOpened, LineDraft, LineView, MAX_SETTLED_LISTED,
     OrderLineChoice, ReceiptCopy, ReceiptLine, SettledBillView, ShiftView, StaffAuth, StaffRoster,
     StoreIdentity, TableView, TransferView,
 };

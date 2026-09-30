@@ -588,6 +588,32 @@ export interface ShiftResponse {
   print_shift_report: boolean;
   /** What came of printing the shift report, on the close that printed one (ADR-0100 tokens). */
   shift_report_print?: string;
+  /**
+   * Cash paid into the drawer outside a sale so far, and out of it (ADR-0165). Not the expectation:
+   * the cashier entered both. Absent from an edge that predates them.
+   */
+  paid_in_amount?: Money;
+  paid_out_amount?: Money;
+  /** What came of opening the drawer, on a paid in or a paid out (ADR-0165). */
+  drawer_open?: DrawerOutcome;
+}
+
+/** A paid in or a paid out: how much, in minor units, and why (ADR-0165). */
+export interface CashMovementRequest {
+  amount_minor: number;
+  reason_code_id: string;
+}
+
+/** Opening the drawer without a sale: why, and the manager whose PIN allows it (ADR-0165). */
+export interface OpenDrawerRequest {
+  reason_code_id: string;
+  approver_code: string;
+  approver_pin: string;
+}
+
+/** The opening is recorded; this is whether the drawer sprang. */
+export interface OpenDrawerResponse {
+  drawer_open: DrawerOutcome;
 }
 
 export interface PairRequest {
