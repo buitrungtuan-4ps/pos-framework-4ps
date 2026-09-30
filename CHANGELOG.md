@@ -39,6 +39,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The cloud's API documents are generated with utoipa 6** (#537). The `/v1` API is unchanged. In
+  `docs/openapi.json` the two choices for an order line's `quoted_unit_price` swap places, so
+  `MoneyDto` now comes before `null`. The admin document is unchanged.
+
 - **AccountMenu theme selector keyboard navigation.**
   Added arrow key navigation (`ArrowRight`, `ArrowDown`, `ArrowLeft`, `ArrowUp`), roving `tabindex`, and focus-visible indicators to the theme selector `role="radiogroup"` in `dashboard/src/components/AccountMenu.tsx`.
 
