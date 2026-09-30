@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { api } from "../api/client";
-import type { MintedCode, PairedDevice, PrinterEntry } from "../api/types";
+import type { IntegrationEntry, MintedCode, PairedDevice, PrinterEntry } from "../api/types";
 import { QrCode } from "../components/QrCode";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
@@ -51,6 +51,27 @@ function onLoopback(): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "[::1]";
 }
 
+// A connection's family in words. A family this edge does not know is still a connection the cloud
+// sent, so it is listed as one rather than dropped.
+function familyKey(family: string): MessageKey {
+  switch (family) {
+    case "INTEGRATION_FAMILY_E_INVOICE":
+      return "devices.family_einvoice";
+    case "INTEGRATION_FAMILY_QR_PAYMENT":
+      return "devices.family_qr";
+    case "INTEGRATION_FAMILY_CARD_TERMINAL":
+      return "devices.family_card";
+    case "INTEGRATION_FAMILY_DELIVERY":
+      return "devices.family_delivery";
+    case "INTEGRATION_FAMILY_COURIER":
+      return "devices.family_courier";
+    case "INTEGRATION_FAMILY_ERP":
+      return "devices.family_erp";
+    default:
+      return "devices.family_other";
+  }
+}
+
 // Which way the store server's clock is off, in words. The figure is shown unsigned beside it: "340 ms
 // behind" reads, "-340 ms" makes a manager work out which of the two clocks the sign is about.
 function clockOffsetKey(offsetMs: number): MessageKey {
@@ -69,6 +90,7 @@ export function Devices() {
   const [confirmAll, setConfirmAll] = createSignal("");
   const [minted, setMinted] = createSignal<MintedCode | null>(null);
   const [printers, setPrinters] = createSignal<readonly PrinterEntry[]>([]);
+  const [integrations, setIntegrations] = createSignal<readonly IntegrationEntry[]>([]);
   // The last test page's outcome, per printer.
   const [tested, setTested] = createSignal<Record<string, string>>({});
 
@@ -108,6 +130,12 @@ export function Devices() {
       .printers()
       .then(setPrinters)
       .catch(() => setPrinters([]));
+    // The same forgiveness: an edge that predates the route lists none, which reads as what it is —
+    // every family on its offline path.
+    void api
+      .integrations()
+      .then(setIntegrations)
+      .catch(() => setIntegrations([]));
   });
 
   // Print a page on one printer (manager only — the edge refuses anyone else, and says so).
@@ -319,6 +347,24 @@ export function Devices() {
                     {t("devices.test_print")}
                   </button>
                 </span>
+              </li>
+            )}
+          </For>
+        </ul>
+      </div>
+
+      <div class="mt-6 rounded-token border border-line p-3" data-outcome="integrations">
+        <p class="font-semibold text-ink">{t("devices.integrations_title")}</p>
+        <p class="mt-1 text-sm text-ink-muted">{t("devices.integrations_hint")}</p>
+        <ul class="mt-2 flex flex-col gap-1">
+          <For
+            each={integrations()}
+            fallback={<li class="text-sm text-ink-muted">{t("devices.integrations_none")}</li>}
+          >
+            {(integration) => (
+              <li class="flex flex-wrap items-baseline justify-between gap-2">
+                <span class="text-ink">{integration.display_name}</span>
+                <span class="text-sm text-ink-muted">{t(familyKey(integration.family))}</span>
               </li>
             )}
           </For>

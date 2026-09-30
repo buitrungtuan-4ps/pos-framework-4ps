@@ -6,6 +6,7 @@ GET /api/activation
 GET /api/bills/{id}/check
 GET /api/claim
 GET /api/floor
+GET /api/integrations
 GET /api/layout
 GET /api/locale
 GET /api/menu

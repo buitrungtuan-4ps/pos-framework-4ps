@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks RFC 9637 expanded IPv6 documentation prefix (`3fff::/20`).**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `3fff::/20` IPv6 documentation addresses as `ForbiddenReason::Documentation`, preventing SSRF bypasses via RFC 9637 documentation prefix addresses. **Upgrade note:** none.
+
 - **SSRF protection in webhook URL classification now checks RFC 6666 Discard-Only (`100::/64`) and RFC 4843 / RFC 7343 ORCHIDv1/v2 (`2001:10::/28` and `2001:20::/28`) IPv6 ranges.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `100::/64` Discard-Only and `2001:10::/28` / `2001:20::/28` ORCHID/ORCHIDv2 addresses as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
 
@@ -35,6 +38,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
 
 ### Changed
+
+- **AccountMenu theme selector keyboard navigation.**
+  Added arrow key navigation (`ArrowRight`, `ArrowDown`, `ArrowLeft`, `ArrowUp`), roving `tabindex`, and focus-visible indicators to the theme selector `role="radiogroup"` in `dashboard/src/components/AccountMenu.tsx`.
 
 - **The notification bell's history can be read from the keyboard.** In the console's top bar, the
   arrow keys move focus through the open history, wrapping at either end, so a screen reader reads
@@ -285,6 +291,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   credential is typed once and never shown again: the field says a value is stored, leaving it blank
   keeps it, and an optional one can be removed. A settings refusal names the fields to fix. Labels
   the console does not ship yet fall back to the field's key. **Upgrade note:** none.
+
+- **A store is told which vendor connections serve it.** A new `integrations` config node
+  (`pos_proto::integrations`, [ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)
+  decision 5) carries, per connection, its id, family, provider and name — and, for a card terminal
+  the store drives itself, the non-secret settings its driver needs. It never carries a secret, nor a
+  setting of a family the cloud drives. `PUT /admin/config/integrations` (behind
+  `console.config.publish`) resolves a store's connections — its own, its brand's, its tenant's,
+  keeping only the most specific e-invoice or ERP connection — and publishes the node. The edge
+  applies it (an absent or malformed node keeps the last one, so a bad publish never switches a
+  store off mid-service), lists it at `GET /api/integrations`, and the till's Devices screen shows
+  *Connected services*. **Upgrade note:** additive — a new config node key and two new routes; an
+  older edge ignores the node.
 
 - **A tenant connects its vendors from the console, and their credentials are sealed.** New
   `/admin/integrations/connections` routes (list and read for any console role; create, edit and

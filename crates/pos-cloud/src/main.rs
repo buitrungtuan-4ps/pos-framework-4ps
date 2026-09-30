@@ -785,6 +785,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
+        // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
+        // publish like every other node, so it is console.config.publish, not the authoring
+        // permission.
+        .merge(http::config_integrations_router(
+            store.connections(),
+            Arc::clone(&providers),
+            store.registry(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
         // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned
         // through the config tree, which runs the §10 inter-flag rules.
