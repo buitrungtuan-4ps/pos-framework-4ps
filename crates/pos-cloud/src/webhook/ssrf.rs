@@ -437,7 +437,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first & 0xffc0 == 0xfe80 {
         // fe80::/10 link-local.
         Some(ForbiddenReason::LinkLocal)
-    } else if (first == 0x2001 && second == 0x0db8) || (first == 0x3fff && (second & 0xf000 == 0x0000)) {
+    } else if (first == 0x2001 && second == 0x0db8)
+        || (first == 0x3fff && (second & 0xf000 == 0x0000))
+    {
         // 2001:db8::/32 (RFC 3849) and 3fff::/20 (RFC 9637) documentation.
         Some(ForbiddenReason::Documentation)
     } else if first == 0x2001 && second == 0x0002 {
