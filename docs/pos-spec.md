@@ -125,6 +125,7 @@ Items carry `sku`, `barcode`, and variant fields from day one so enabling retail
 4. **Reprints** are marked COPY, counted, and permissioned. **Price override** is a separate permission with its own ceiling.
 5. Immutable audit log plus NTP-synchronised clocks, so records line up with store camera footage where it exists.
 6. **No training mode.** "Sell without recording" is a classic fraud vector. Training happens in a demo store with a sample menu.
+7. **A manager's PIN is limited like a sign-in PIN.** A wrong PIN at an approval prompt counts against that manager exactly as a wrong one at sign-in does, in one count per person: five in a row lock both for five minutes, and a right PIN clears it (ADR-0030).
 
 ## 12. Internationalisation
 

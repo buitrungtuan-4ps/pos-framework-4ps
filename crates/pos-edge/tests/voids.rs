@@ -512,3 +512,125 @@ fn a_table_whose_bill_is_open_takes_no_new_line_until_the_bill_is_voided() {
         );
     });
 }
+
+fn wrong_pin() -> Approval {
+    Approval {
+        code: MANAGER_CODE.to_owned(),
+        pin: "0000".to_owned(),
+    }
+}
+
+/// An instant long before any lockout the edge sets, which it sets from its own clock: a failure
+/// counts whenever it happened, and a lockout set just now has not ended by then.
+fn long_ago() -> pos_proto::time::Timestamp {
+    pos_proto::time::Timestamp::from_milliseconds_since_epoch(1).expect("a valid instant")
+}
+
+/// Five wrong approval PINs in a row lock the manager out, as five wrong sign-in PINs do
+/// (ADR-0030), and the right PIN is refused until the lockout ends. An approval prompt was the one
+/// place a PIN could be guessed without limit.
+#[test]
+fn five_wrong_approval_pins_lock_the_manager_out() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let line = a_seated_line(&edge).await;
+        edge.fire_line(server(), line, Some(station()))
+            .await
+            .expect("fires");
+
+        for attempt in 1..=4 {
+            let wrong = edge
+                .void_line(server(), line, keyed_wrong(), Some(&wrong_pin()))
+                .await;
+            assert!(
+                matches!(wrong, Err(AppError::ApprovalRefused)),
+                "attempt {attempt}: {wrong:?}"
+            );
+        }
+        let fifth = edge
+            .void_line(server(), line, keyed_wrong(), Some(&wrong_pin()))
+            .await;
+        assert!(
+            matches!(fifth, Err(AppError::ApproverLockedOut)),
+            "the fifth wrong PIN locks: {fifth:?}"
+        );
+
+        let right = edge
+            .void_line(server(), line, keyed_wrong(), Some(&approval()))
+            .await;
+        assert!(
+            matches!(right, Err(AppError::ApproverLockedOut)),
+            "the right PIN waits out the lockout too: {right:?}"
+        );
+        assert_eq!(edge.line_state(line), Some(OrderLineState::Fired));
+    });
+}
+
+/// The approval prompt and the sign-in screen count against the same person: failures at one
+/// lock the other, so neither is a way round the limit the other sets.
+#[test]
+fn approvals_and_sign_ins_share_one_count() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let line = a_seated_line(&edge).await;
+        edge.fire_line(server(), line, Some(station()))
+            .await
+            .expect("fires");
+
+        // Four wrong PINs at the sign-in screen...
+        let lockout = edge.pin_lockout();
+        for _ in 0..4 {
+            let _ = lockout.record(manager_id(), false, long_ago());
+        }
+        // ...and the fifth at an approval prompt locks the manager out of both.
+        let fifth = edge
+            .void_line(server(), line, keyed_wrong(), Some(&wrong_pin()))
+            .await;
+        assert!(
+            matches!(fifth, Err(AppError::ApproverLockedOut)),
+            "got {fifth:?}"
+        );
+        assert!(matches!(
+            lockout.authenticate(manager_id(), &hash_of(MANAGER_PIN), MANAGER_PIN, long_ago()),
+            pos_edge::SignIn::LockedOut { .. }
+        ));
+    });
+}
+
+/// The right PIN clears the count, as a sign-in does, so a manager who mistypes once a shift is
+/// never locked out by the fifth slip of the week.
+#[test]
+fn a_right_approval_pin_clears_the_count() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let first = a_seated_line(&edge).await;
+        edge.fire_line(server(), first, Some(station()))
+            .await
+            .expect("fires");
+        for _ in 0..4 {
+            let wrong = edge
+                .void_line(server(), first, keyed_wrong(), Some(&wrong_pin()))
+                .await;
+            assert!(matches!(wrong, Err(AppError::ApprovalRefused)));
+        }
+        edge.void_line(server(), first, keyed_wrong(), Some(&approval()))
+            .await
+            .expect("the right PIN still works on the fourth miss");
+
+        let next = edge
+            .add_line(server(), table(), a_line())
+            .await
+            .expect("adds")
+            .order_line_id;
+        edge.fire_line(server(), next, Some(station()))
+            .await
+            .expect("fires");
+        let wrong = edge
+            .void_line(server(), next, keyed_wrong(), Some(&wrong_pin()))
+            .await;
+        assert!(
+            matches!(wrong, Err(AppError::ApprovalRefused)),
+            "a fresh count: one miss is not a lockout, got {wrong:?}"
+        );
+    });
+}

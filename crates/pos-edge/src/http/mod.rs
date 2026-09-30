@@ -60,7 +60,7 @@ use pos_ports::subject_store::SubjectStore;
 use pos_proto::ulid::Ulid;
 
 use crate::app::{AppError, Edge};
-use crate::auth::{Lockout, Sessions};
+use crate::auth::Sessions;
 use crate::lease_state::CurrentStanding;
 use crate::pairing::Pairing;
 use crate::state::AppState;
@@ -362,9 +362,11 @@ pub fn stamp_version(app: Router, standing: Arc<CurrentStanding>) -> Router {
 /// *durable* one over the store's device registry and loads it before the first request arrives
 /// (ADR-0091) — so a restart no longer makes every member of staff re-enter a PIN. A caller with no
 /// registry (a test, the on-fakes example) passes `Arc::new(Sessions::new())` and gets the
-/// in-memory lifetime this had before S0d. The PIN lockout ([`Lockout`]) is still created here: it
-/// is a rate limiter, and a restart clearing it is the safe direction (it forgets failures, never
-/// successes).
+/// in-memory lifetime this had before S0d. The PIN lockout
+/// ([`Lockout`](crate::auth::Lockout)) is the edge's own ([`Edge::pin_lockout`]), because a
+/// manager's approval PIN counts against the same person the sign-in screen counts. It stays in
+/// memory, since it is a rate limiter and a restart clearing it is the safe direction (it forgets
+/// failures, never successes).
 #[expect(
     clippy::too_many_lines,
     reason = "the store's route table: one line per route, and splitting it would scatter the one \
@@ -387,7 +389,7 @@ where
     J: crate::print_queue::PrintQueue + 'static,
     W: crate::print_wake::PrintWake + 'static,
 {
-    let lockout = Arc::new(Lockout::new());
+    let lockout = edge.pin_lockout();
     // Cloned before `edge` and `sessions` move into the routers below.
     let counter_edge = Arc::clone(&edge);
     let agent_edge = Arc::clone(&edge);
@@ -640,6 +642,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::AlreadyFired => "ALREADY_FIRED",
         AppError::ApprovalRequired => "APPROVAL_REQUIRED",
         AppError::ApprovalRefused => "APPROVAL_REFUSED",
+        AppError::ApproverLockedOut => "APPROVER_LOCKED_OUT",
         AppError::Superseded => "SUPERSEDED",
         AppError::Port(_) => "STORE_UNAVAILABLE",
         AppError::Clock | AppError::Encode(_) => "INTERNAL",
@@ -688,9 +691,10 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         // *machine's*, not the actor's, because a replacement holds this store's lease. Not `409`,
         // which would say the caller asked at the wrong moment; not `503`, which would promise that
         // trying again helps. It does not: the way back is to re-provision this box.
-        AppError::ApprovalRequired | AppError::ApprovalRefused | AppError::Superseded => {
-            refusal(StatusCode::FORBIDDEN, reason, error.to_string())
-        }
+        AppError::ApprovalRequired
+        | AppError::ApprovalRefused
+        | AppError::ApproverLockedOut
+        | AppError::Superseded => refusal(StatusCode::FORBIDDEN, reason, error.to_string()),
         AppError::Port(_) => refusal(
             StatusCode::SERVICE_UNAVAILABLE,
             reason,

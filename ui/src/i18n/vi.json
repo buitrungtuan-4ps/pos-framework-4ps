@@ -86,6 +86,7 @@
   "error.already_activated": "Máy chủ cửa hàng này đã được kích hoạt.",
   "error.already_fired": "Đã gửi bếp — không thể từ chối nữa.",
   "error.approval_refused": "Mã PIN quản lý này không đủ quyền cho thao tác.",
+  "error.approver_locked_out": "Quản lý này đã nhập sai PIN quá nhiều lần. Vui lòng thử lại sau vài phút.",
   "error.approval_required": "Thao tác này cần mã PIN của quản lý.",
   "error.awaiting_staff_confirmation": "Cần nhân viên xác nhận hoặc từ chối order này của khách trước đã.",
   "error.bill_already_open": "Order này đã có hoá đơn đang mở.",

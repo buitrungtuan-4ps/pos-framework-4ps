@@ -18,6 +18,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **A manager's PIN can no longer be guessed at an approval prompt.** A sign-in locked a person
+  out after five wrong PINs in a row, but the prompt that approves a void, a discount over the
+  ceiling or a bill void checked the PIN with no limit, so the same PIN could be tried forever.
+  - Both now count against the same person: five wrong PINs in a row, at either, lock that manager
+    out of both for five minutes, and a right PIN clears the count.
+  - A locked-out approver is refused `403 APPROVER_LOCKED_OUT` even with the right PIN, and the
+    till says to try again in a few minutes.
+  - The count and the lockout are still the fixed sign-in values; ADR-0160 (proposed in #541)
+    makes them settings.
+
+  **Upgrade note:** none. No route, event, permission or default changes; the refusal token is new.
+
 - **SSRF protection in webhook URL classification now checks RFC 9637 expanded IPv6 documentation prefix (`3fff::/20`).**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `3fff::/20` IPv6 documentation addresses as `ForbiddenReason::Documentation`, preventing SSRF bypasses via RFC 9637 documentation prefix addresses. **Upgrade note:** none.
 
