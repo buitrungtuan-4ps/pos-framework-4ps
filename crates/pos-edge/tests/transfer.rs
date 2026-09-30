@@ -318,7 +318,7 @@ async fn a_guest_order(edge: &Edge<FakeStore>, at: TableId) -> OrderId {
         server().device_id,
         Open::from_known(SalesChannel::Qr),
         Some(at),
-        &[(line, false)],
+        &[(line, None)],
         None,
     )
     .await

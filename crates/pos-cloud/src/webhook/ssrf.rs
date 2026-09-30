@@ -129,7 +129,7 @@ pub enum ForbiddenReason {
     SharedCgn,
     /// Benchmarking (`198.18/15`).
     Benchmarking,
-    /// Documentation ranges (`192.0.2/24`, `198.51.100/24`, `203.0.113/24`, `2001:db8::/32`).
+    /// Documentation ranges (`192.0.2/24`, `198.51.100/24`, `203.0.113/24`, `2001:db8::/32`, `3fff::/20`).
     Documentation,
     /// Reserved or future-use (`240/4`, `255.255.255.255`, and the part of `64:ff9b::/32` that
     /// carries no assigned NAT64 prefix).
@@ -437,8 +437,10 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first & 0xffc0 == 0xfe80 {
         // fe80::/10 link-local.
         Some(ForbiddenReason::LinkLocal)
-    } else if first == 0x2001 && second == 0x0db8 {
-        // 2001:db8::/32 documentation.
+    } else if (first == 0x2001 && second == 0x0db8)
+        || (first == 0x3fff && (second & 0xf000 == 0x0000))
+    {
+        // 2001:db8::/32 (RFC 3849) and 3fff::/20 (RFC 9637) documentation.
         Some(ForbiddenReason::Documentation)
     } else if first == 0x2001 && second == 0x0002 {
         // 2001:2::/48 benchmarking (RFC 5180).
@@ -756,6 +758,32 @@ mod tests {
         // prefix exists to carry, and fails closed so quietly that no existing test notices.
         assert_eq!(classify_ip(ip("64:ff9b::8.8.8.8")), Ok(()));
         assert_eq!(classify_ip(ip("64:ff9b::93.184.216.34")), Ok(()));
+    }
+
+    #[test]
+    fn v6_documentation_prefixes_are_refused() {
+        // IPv6 Documentation ranges (2001:db8::/32 and 3fff::/20 RFC 9637).
+        assert_eq!(
+            classify_ip(ip("2001:db8::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("3fff::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("3fff::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("3fff:0fff:ffff::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("3fff:0fff:ffff::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
     }
 
     #[test]

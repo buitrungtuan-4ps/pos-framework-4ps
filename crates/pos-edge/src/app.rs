@@ -81,6 +81,7 @@ use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
 use crate::lease_state::CurrentStanding;
+use crate::line_notes::{LineNotes, NoteText};
 use crate::queue::QueueNumberAuthority;
 use crate::receipt::ReceiptAuthority;
 use crate::sntp::ClockStatus;
@@ -1163,6 +1164,9 @@ pub struct FiredLine {
     pub quantity: Quantity,
     /// The modifiers chosen, in the order they were added.
     pub modifier_menu_item_ids: Vec<MenuItemId>,
+    /// Whether a guest note was written for the line, so a ticket whose note the edge no longer
+    /// holds says one was lost rather than printing nothing (ADR-0157).
+    pub note_present: bool,
 }
 
 /// What a KDS bump looks like to a caller: the order and station, and the lines now marked prepared.
@@ -1356,6 +1360,11 @@ pub struct LiveOrderLine {
     /// The station it was fired to, `None` while it is still on the pad — what lets a kitchen
     /// board show one station its own tickets and bump them to the right place.
     pub station_id: Option<StationId>,
+    /// Whether a guest note was written for the line — from the log, so it survives a restart.
+    pub note_present: bool,
+    /// The note's text while the edge still holds it (ADR-0157). `None` with `note_present` set is
+    /// a note lost to a restart, which a screen says rather than hides.
+    pub note: Option<NoteText>,
 }
 
 /// An order still owing money, with its lines — what a device reads to rebuild its screens.
@@ -1420,6 +1429,23 @@ pub struct ShiftView {
     /// The figures that report prints — present only on the close, which is the one command that
     /// has them all and the last moment the shift's record exists.
     pub report: Option<ShiftReport>,
+}
+
+/// Puts a line's guest note on the frame that tells the store's devices about it (ADR-0157).
+///
+/// The frame's payload is a copy of the event made for the fan-out; the event appended to the log is
+/// encoded separately and never carries the text.
+fn attach_note(message: &mut ServerMessage, note: &NoteText) {
+    if let ServerMessage::Event {
+        payload: serde_json::Value::Object(fields),
+        ..
+    } = message
+    {
+        fields.insert(
+            "note".to_owned(),
+            serde_json::Value::String(note.as_str().to_owned()),
+        );
+    }
 }
 
 /// One live order as [`Edge::live_orders`] copies it out of the projection, before the lock is
@@ -1493,6 +1519,10 @@ struct LineRecord {
     /// event as [`Self::fired_time`], so a kitchen board that reloads still shows each station only
     /// its own tickets.
     station_id: Option<StationId>,
+    /// Whether a guest note was written for the line. From the event, so it survives a restart that
+    /// the note's text does not, and a screen can say a note was lost rather than show none
+    /// (ADR-0157).
+    note_present: bool,
 }
 
 impl From<SalesOrderLineAdded> for LineRecord {
@@ -1518,6 +1548,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             // `sales.order_line.fired` fills it from that event's own envelope.
             fired_time: None,
             station_id: None,
+            note_present: event.note_present,
         }
     }
 }
@@ -2424,6 +2455,13 @@ pub struct Edge<S> {
     /// [`crate::sntp`]). Written by the probe loop `main` starts, read by `GET /api/sync`; a
     /// composition that starts no loop — a test, the on-fakes example — reports it unmeasured.
     clock_status: ClockStatus,
+    /// The guest notes of the lines still open, held in memory and nowhere else
+    /// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+    ///
+    /// Beside the projection rather than inside it, because the projection is rebuilt from the log
+    /// and a note is precisely what the log does not hold. Locked on its own and never while the
+    /// projection's lock is held.
+    notes: Mutex<LineNotes>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -2580,6 +2618,7 @@ impl<S: EventStore> Edge<S> {
             standing: Arc::new(CurrentStanding::new()),
             sync: SyncStatus::new(),
             clock_status: ClockStatus::new(),
+            notes: Mutex::new(LineNotes::default()),
         })
     }
 
@@ -2797,7 +2836,7 @@ impl<S: EventStore> Edge<S> {
         device_id: DeviceId,
         channel: Open<SalesChannel>,
         table_id: Option<TableId>,
-        lines: &[(PricedLine, bool)],
+        lines: &[(PricedLine, Option<NoteText>)],
         intake: Option<IntakeIntent<'_>>,
     ) -> Result<InboundOrderOpened, AppError>
     where
@@ -2832,7 +2871,8 @@ impl<S: EventStore> Edge<S> {
         messages.push(message);
 
         let mut line_records: Vec<(OrderLineId, LineRecord)> = Vec::with_capacity(lines.len());
-        for (priced, note_present) in lines {
+        let mut line_notes: Vec<(OrderLineId, NoteText)> = Vec::new();
+        for (priced, note) in lines {
             let order_line_id = OrderLineId::new(self.next_ulid());
             let added = SalesOrderLineAdded {
                 order_id,
@@ -2850,9 +2890,14 @@ impl<S: EventStore> Edge<S> {
                 // From the same book that priced the line (ADR-0144), not from this function's
                 // session snapshot, which the config pull may have swapped since.
                 modifier_display_names: priced.modifier_display_names.clone(),
-                note_present: *note_present,
+                note_present: note.is_some(),
             };
-            let (envelope, message) = self.system_prepare(device_id, now, business_date, &added)?;
+            let (envelope, mut message) =
+                self.system_prepare(device_id, now, business_date, &added)?;
+            if let Some(note) = note {
+                attach_note(&mut message, note);
+                line_notes.push((order_line_id, note.clone()));
+            }
             envelopes.push(envelope);
             messages.push(message);
             // Built from the event rather than beside it. Restating the same fields in two
@@ -2895,6 +2940,14 @@ impl<S: EventStore> Edge<S> {
                 .await?;
         }
         tx.commit().await?;
+        // Held after the commit: a delivery that loses the race to a duplicate must leave nothing
+        // behind, and nothing reads these lines until the frames below announce them.
+        {
+            let mut notes = self.lock_notes();
+            for (order_line_id, note) in line_notes {
+                notes.hold(order_id, order_line_id, note);
+            }
+        }
         for message in &messages {
             self.fanout.publish(message);
         }
@@ -3163,6 +3216,7 @@ impl<S: EventStore> Edge<S> {
         .await?;
         self.lock_projection()
             .record_staff_decision(order_id, StaffDecision::Rejected);
+        self.forget_notes_off_screen();
         Ok(())
     }
 
@@ -3297,6 +3351,7 @@ impl<S: EventStore> Edge<S> {
 
         self.lock_projection()
             .set_line_state(order_line_id, decision.next_state);
+        self.forget_notes_off_screen();
         Ok(LineView {
             order_id: record.order_id,
             order_line_id,
@@ -4004,6 +4059,25 @@ impl<S: EventStore> Edge<S> {
         table_id: TableId,
         draft: LineDraft,
     ) -> Result<LineView, AppError> {
+        self.add_noted_line(actor, table_id, draft, None).await
+    }
+
+    /// [`Self::add_line`], with the guest's note for the kitchen
+    /// ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
+    ///
+    /// The event records only that a note exists. The text is held in memory for as long as the
+    /// line is on a screen, printed on its ticket, and written nowhere.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::add_line`].
+    pub async fn add_noted_line(
+        &self,
+        actor: Actor,
+        table_id: TableId,
+        draft: LineDraft,
+        note: Option<NoteText>,
+    ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
@@ -4036,7 +4110,7 @@ impl<S: EventStore> Edge<S> {
         if billed {
             return Err(AppError::BillAlreadyOpen);
         }
-        self.append_line(&ctx, order_id, draft, modifier_display_names)
+        self.append_line(&ctx, order_id, draft, modifier_display_names, note)
             .await
     }
 
@@ -4100,6 +4174,23 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
         choice: OrderLineChoice,
     ) -> Result<LineView, AppError> {
+        self.add_noted_line_to_order(actor, order_id, choice, None)
+            .await
+    }
+
+    /// [`Self::add_line_to_order`], with the guest's note for the kitchen (ADR-0157), as
+    /// [`Self::add_noted_line`] is for a table.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::add_line_to_order`].
+    pub async fn add_noted_line_to_order(
+        &self,
+        actor: Actor,
+        order_id: OrderId,
+        choice: OrderLineChoice,
+        note: Option<NoteText>,
+    ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         if choice.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
@@ -4149,7 +4240,7 @@ impl<S: EventStore> Edge<S> {
             note_present: choice.note_present,
         };
         Self::check_modifiers(&session, &draft)?;
-        self.append_line(&ctx, order_id, draft, priced.modifier_display_names)
+        self.append_line(&ctx, order_id, draft, priced.modifier_display_names, note)
             .await
     }
 
@@ -4158,14 +4249,20 @@ impl<S: EventStore> Edge<S> {
     ///
     /// `modifier_display_names` is the caller's, because each path priced the line against its own
     /// book: the device's copy of the session's menu, or the edge's repricing (ADR-0144).
+    ///
+    /// A note is held before the write and forgotten if the write fails, so a device that reads the
+    /// live orders the moment the frame reaches it finds the note already there (ADR-0157).
     async fn append_line(
         &self,
         ctx: &DecisionCtx,
         order_id: OrderId,
         draft: LineDraft,
         modifier_display_names: Vec<DisplayName>,
+        note: Option<NoteText>,
     ) -> Result<LineView, AppError> {
         let order_line_id = OrderLineId::new(self.next_ulid());
+        // A device that still sends only the flag keeps working; a note implies it.
+        let note_present = draft.note_present || note.is_some();
 
         let payload = SalesOrderLineAdded {
             order_id,
@@ -4181,9 +4278,17 @@ impl<S: EventStore> Edge<S> {
             course_id: draft.course_id,
             modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             modifier_display_names,
-            note_present: draft.note_present,
+            note_present,
         };
-        self.commit_and_publish(ctx, &payload).await?;
+        let (envelope, mut message) = self.prepare(ctx, &payload)?;
+        if let Some(note) = note {
+            attach_note(&mut message, &note);
+            self.lock_notes().hold(order_id, order_line_id, note);
+        }
+        if let Err(error) = self.append_and_publish(vec![envelope], vec![message]).await {
+            self.lock_notes().forget(order_line_id);
+            return Err(error);
+        }
 
         // From the event, for the reason the order-in path above says.
         self.lock_projection()
@@ -4295,6 +4400,7 @@ impl<S: EventStore> Edge<S> {
                 menu_item_id: record.menu_item_id,
                 quantity: record.quantity,
                 modifier_menu_item_ids: record.modifier_menu_item_ids,
+                note_present: record.note_present,
             }),
         })
     }
@@ -4683,6 +4789,8 @@ impl<S: EventStore> Edge<S> {
                 })
                 .collect()
         };
+        // After the projection's guard is released: the two locks are never held together.
+        let notes = self.lock_notes();
         snapshot
             .into_iter()
             .map(|order| LiveOrderView {
@@ -4708,6 +4816,8 @@ impl<S: EventStore> Edge<S> {
                         seat: record.seat,
                         course_id: record.course_id,
                         station_id: record.station_id,
+                        note_present: record.note_present,
+                        note: notes.get(order_line_id).cloned(),
                     })
                     .collect(),
             })
@@ -4939,6 +5049,7 @@ impl<S: EventStore> Edge<S> {
                         menu_item_id: record.menu_item_id,
                         quantity: record.quantity,
                         modifier_menu_item_ids: record.modifier_menu_item_ids,
+                        note_present: record.note_present,
                     }),
                 });
             }
@@ -5277,6 +5388,8 @@ impl<S: EventStore> Edge<S> {
             bill.table_id
                 .map(|table_id| projection.table_state(table_id))
         };
+        // The last part of a split settles the order off the boards, and its notes go with it.
+        self.forget_notes_off_screen();
         Ok(BillView {
             bill_id,
             state: bill_decision.next_state,
@@ -6141,6 +6254,56 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Locks the held guest notes, recovering from a poisoned lock as [`Self::lock_projection`] does.
+    ///
+    /// Never taken while the projection's lock is held, nor the projection's while this is, so the
+    /// two cannot deadlock.
+    fn lock_notes(&self) -> std::sync::MutexGuard<'_, LineNotes> {
+        self.notes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The guest note the edge holds for a line, for its kitchen ticket (ADR-0157).
+    #[must_use]
+    pub fn line_note(&self, order_line_id: OrderLineId) -> Option<NoteText> {
+        self.lock_notes().get(order_line_id).cloned()
+    }
+
+    /// How many guest notes the edge holds — the figure a test reads to see one forgotten.
+    #[must_use]
+    pub fn held_note_count(&self) -> usize {
+        self.lock_notes().len()
+    }
+
+    /// Forgets every note no screen can show any more: a voided line's, and every line's on an
+    /// order that has left the open orders (ADR-0157 decision 2).
+    ///
+    /// A line the projection has not folded yet is kept, because its note is held a moment before
+    /// its write commits.
+    fn forget_notes_off_screen(&self) {
+        let held = self.lock_notes().held();
+        if held.is_empty() {
+            return;
+        }
+        let gone: Vec<OrderLineId> = {
+            let projection = self.lock_projection();
+            held.into_iter()
+                .filter(|(order_line_id, order_id)| {
+                    projection.line(*order_line_id).is_some_and(|record| {
+                        record.state == OrderLineState::Voided
+                            || !projection.live.contains(order_id)
+                    })
+                })
+                .map(|(order_line_id, _)| order_line_id)
+                .collect()
+        };
+        let mut notes = self.lock_notes();
+        for order_line_id in gone {
+            notes.forget(order_line_id);
+        }
+    }
+
     /// Locks the projection, recovering from a poisoned lock rather than propagating the panic.
     fn lock_projection(&self) -> std::sync::MutexGuard<'_, Projection> {
         self.projection
@@ -6919,7 +7082,7 @@ mod tests {
             actor().device_id,
             Open::from_known(SalesChannel::Takeaway),
             None,
-            &[(a_priced_line(), false)],
+            &[(a_priced_line(), None)],
             None,
         )
         .await

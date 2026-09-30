@@ -35,6 +35,7 @@ use pos_proto::{Open, SalesChannel};
 use crate::app::{Edge, OrderLineChoice};
 use crate::http::lines::LineResponse;
 use crate::http::{bad_request, error_response, parse_ulid};
+use crate::line_notes::NoteText;
 use crate::queue::QueueNumberAuthority;
 
 /// The edge and the queue-number authority, together — this router's state.
@@ -173,8 +174,12 @@ struct OrderLineRequest {
     seat: Option<u16>,
     #[serde(default)]
     course_id: Option<CourseId>,
+    /// Deprecated by `note`: a device that sends only the flag still records that a note exists.
     #[serde(default)]
     note_present: bool,
+    /// The guest's note for the kitchen, held in memory and never logged (ADR-0157).
+    #[serde(default)]
+    note: Option<String>,
 }
 
 /// `POST /api/orders/{id}/lines` — add a line to an order by its id, priced by the edge.
@@ -191,6 +196,10 @@ where
     let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
         return bad_request("an order id is a ULID");
     };
+    let note = match NoteText::parse(request.note.as_deref()) {
+        Ok(note) => note,
+        Err(refused) => return bad_request(refused.message()),
+    };
     let choice = OrderLineChoice {
         menu_item_id: request.menu_item_id,
         quantity: request.quantity,
@@ -199,7 +208,11 @@ where
         course_id: request.course_id,
         note_present: request.note_present,
     };
-    match deps.edge.add_line_to_order(actor, order_id, choice).await {
+    match deps
+        .edge
+        .add_noted_line_to_order(actor, order_id, choice, note)
+        .await
+    {
         Ok(view) => Json(LineResponse::from(view)).into_response(),
         Err(error) => error_response(&error),
     }

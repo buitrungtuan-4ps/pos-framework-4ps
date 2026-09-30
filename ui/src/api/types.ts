@@ -31,6 +31,9 @@ export interface LineRequest {
   // a refusal rather than a silent sale.
   modifier_menu_item_ids: string[];
   note_present: boolean;
+  // The guest's note for the kitchen (ADR-0157): held in the edge's memory, printed on the ticket,
+  // and never written to the log. At most 200 characters, one line.
+  note?: string;
 }
 
 export interface LineResponse {
@@ -47,6 +50,7 @@ export interface OrderLineRequest {
   modifier_menu_item_ids: string[];
   course_id?: string;
   note_present: boolean;
+  note?: string;
 }
 
 // A counter order the till has just opened, with the number the guest will be called by.
@@ -100,6 +104,11 @@ export interface LiveLine {
   // The kitchen station it was fired to. Absent while it is on the pad, and from an edge older than
   // the field.
   station_id?: string;
+  // Whether a guest note was written (ADR-0157). With no `note` beside it, the edge lost the text to
+  // a restart and the screen says so. Absent from an edge older than the field.
+  note_present?: boolean;
+  // The note while the edge holds it.
+  note?: string;
 }
 
 // One open order, table or counter.

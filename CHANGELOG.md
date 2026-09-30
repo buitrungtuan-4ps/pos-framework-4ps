@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks RFC 9637 expanded IPv6 documentation prefix (`3fff::/20`).**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `3fff::/20` IPv6 documentation addresses as `ForbiddenReason::Documentation`, preventing SSRF bypasses via RFC 9637 documentation prefix addresses. **Upgrade note:** none.
+
 - **SSRF protection in webhook URL classification now checks RFC 6666 Discard-Only (`100::/64`) and RFC 4843 / RFC 7343 ORCHIDv1/v2 (`2001:10::/28` and `2001:20::/28`) IPv6 ranges.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `100::/64` Discard-Only and `2001:10::/28` / `2001:20::/28` ORCHID/ORCHIDv2 addresses as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
 
@@ -35,6 +38,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
 
 ### Changed
+
+- **AccountMenu theme selector keyboard navigation.**
+  Added arrow key navigation (`ArrowRight`, `ArrowDown`, `ArrowLeft`, `ArrowUp`), roving `tabindex`, and focus-visible indicators to the theme selector `role="radiogroup"` in `dashboard/src/components/AccountMenu.tsx`.
 
 - **The notification bell's history can be read from the keyboard.** In the console's top bar, the
   arrow keys move focus through the open history, wrapping at either end, so a screen reader reads
@@ -155,6 +161,70 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   snapped to the store's cash increment as the pay screen's are.
 
 ### Added
+
+- **A guest note reaches the kitchen.** The order screen has *Note for the next item* under the
+  search box. Whatever is typed there goes with the next dish added, then clears. The line shows the
+  note, and so do the kitchen board and the printed ticket, last and in bold.
+
+  Until now nothing held a note's text. The till had no way to write one, and a delivery or QR order's
+  note ("no peanuts, allergy") was dropped at the edge: the log recorded that a note existed and the
+  kitchen never saw it. Inbound notes are kept now as well. A line break in one becomes a space, and
+  one past 200 characters is cut rather than refused.
+
+  **Where the note is kept, and where it is not**
+  ([ADR-0157](docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)):
+  - The note is personal data and often health data, so the edge holds it **in memory only**.
+  - It holds at most 2,048 notes, and keeps each one only while its line is on a screen: it is
+    dropped when the line is voided or its order is settled or refused.
+  - Nothing writes a note to the database, the event log, the outbox, a backup, a log line or
+    telemetry. `sales.order_line.added` still carries only `note_present`.
+  - After a restart the text is gone and the flag is not. The till and the board then say *A note was
+    written — ask the server*, and the ticket prints the same line in the store's language.
+
+  **Upgrade note:**
+  - `POST /api/tables/{id}/lines` and `POST /api/orders/{id}/lines` take an optional `note`: at most
+    200 characters, one line. Anything else is a `400`.
+  - `note_present` alone is still accepted.
+  - `GET /api/orders/live` lines gain `note_present` and, while held, `note`.
+  - The `/ws` frame for `sales.order_line.added` carries `note` in its payload.
+  - All of this is additive, with no event, permission, migration or `PROTOCOL_VERSION` change.
+
+  Docs: `docs/pos-spec.md` §3, `docs/ui-ux.md` §3.
+
+- **A new vendor starts as a catalogue entry.** `templates/adapter-template` now exports a
+  `ProviderDescriptor` (`PROVIDER`), with a test that fails the build on a malformed one. Its
+  checklist and `docs/guides/write-an-adapter.md` spell out the rest of adding a vendor that tenants
+  can choose from the console
+  ([ADR-0153](docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)):
+  - describe it in `PROVIDER`;
+  - register it with one line in `crates/pos-cloud/src/providers.rs`;
+  - name it in the console's `en` and `vi` catalogues.
+
+  The Integrations screen draws its form from the schema, so nothing in the core, the protocol, the
+  edge or the console changes. **Upgrade note:** none.
+
+- **A stopping edge says how its last drain ended**
+  ([ADR-0113](docs/adr/0113-the-host-agent.md)). A hosted store's container and volume are removed
+  together, so the host agent that stops one has to know whether events were still waiting to reach
+  the cloud. The edge now tells it in two places:
+  - **Its exit code.** `0` means stopped and drained, `10` restart wanted, and `11` stopped with events
+    still in the outbox.
+  - **`drain-status.json`**, written beside the store's database, with the store id, the outbox
+    depth, the drain budget and time spent, and when it finished. It holds a count, not events, and
+    no personal data.
+
+  On a box in a shop nothing is lost either way: the events stay in `store.sqlite` and go out at the
+  next start. The Windows service still exits `0` on any stop, so its failure action never restarts
+  a store that was asked to stop.
+
+  **Upgrade note:**
+  - On Linux a restart for an update now exits `10` instead of `0`.
+  - `deploy/edge/pos-edge.service` and the appliance's copy gain `SuccessExitStatus=10 11`.
+  - A box still on the old unit restarts exactly as before (`Restart=always`), and the journal logs
+    that exit as a failure until the unit is updated.
+  - The drain budget is unchanged at 15 seconds.
+
+  Docs: `deploy/edge/README.md`, `docs/roadmap-v3.md` Program C.
 
 - **A Vietnamese store's receipts, pre-bills and shift reports are printed in Vietnamese.** The fixed
   words on paper — *Tạm tính*, *Thuế*, *Giảm giá*, *PHIẾU TẠM TÍNH*, *Không phải hóa đơn thanh

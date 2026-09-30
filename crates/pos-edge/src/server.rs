@@ -167,6 +167,31 @@ pub enum ServeOutcome {
     /// a version that never booted healthy was reverted — so the process ended in order to be
     /// started again. Nothing is wrong; the store is waiting to come back.
     RestartWanted,
+    /// Asked to stop, and the outbox's last drain ended with events still in it, or with a depth
+    /// nobody could read ([ADR-0113](../../../docs/adr/0113-the-host-agent.md)).
+    ///
+    /// The events are safe in the store's database. On a box in a shop they go out at the next
+    /// start. On a hosted placement they are lost if the volume goes with the container, which is
+    /// what this outcome and `drain-status.json` exist to tell a host agent before it removes one.
+    DrainIncomplete,
+}
+
+impl ServeOutcome {
+    /// The exit code a process that ended this way returns
+    /// ([ADR-0113](../../../docs/adr/0113-the-host-agent.md)): `0` stopped and drained, `10` restart
+    /// wanted, `11` drain budget spent.
+    ///
+    /// What a supervisor gets from the runtime it started the process in, with no channel into the
+    /// process at all. `systemd`'s `Restart=always` restarts whatever the code, and the unit lists
+    /// `10` and `11` as clean exits so a restart for an update is not logged as a failure.
+    #[must_use]
+    pub const fn exit_code(self) -> u8 {
+        match self {
+            Self::Stopped => 0,
+            Self::RestartWanted => 10,
+            Self::DrainIncomplete => 11,
+        }
+    }
 }
 
 /// Builds the state and router, binds the configured address, and serves until an operating-system
@@ -329,6 +354,10 @@ where
     let advertised_host = config.advertised_host();
     let public_origin = config.public_origin.clone();
     let store_id = config.store_id;
+    let drain_status_path = crate::drain_status::path_beside(&config.store_path);
+    // The outbox depth is read from the store once the last drain is over, which is after `edge`
+    // has moved into the composition.
+    let drained_edge = Arc::clone(&edge);
 
     // The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
     // Settling the boot marker comes *first*, before anything is composed or bound: if a committed
@@ -431,7 +460,8 @@ where
     // It is waited for even when serving failed, and especially then: a store whose HTTP surface
     // fell over still has committed events, and that is exactly when they should be pushed out
     // before the process goes.
-    if let Some(publisher) = composed.publisher {
+    let drain = if let Some(publisher) = composed.publisher {
+        let began = tokio::time::Instant::now();
         match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => tracing::error!(
@@ -444,7 +474,12 @@ where
                  still in the outbox"
             ),
         }
-    }
+        Some(report_drain(&drained_edge, store_id, began.elapsed(), drain_status_path).await)
+    } else {
+        // Nothing publishes on a LAN-only or unactivated box, so there was no drain to report and
+        // its outbox waiting is its ordinary state, not an unfinished stop.
+        None
+    };
 
     // Only now is there anything true to say. The drain above is what makes the outbox depth mean
     // something, and this beat is the only one that carries it: the heartbeat loop stopped ticking
@@ -461,13 +496,63 @@ where
 
     served.map_err(EdgeError::Serve)?;
 
+    // A restart comes back on the same volume, so its outbox goes out at the next start whatever the
+    // drain managed; only a stop that leaves events behind is worth telling a supervisor about.
     let outcome = if restart.wanted() {
         ServeOutcome::RestartWanted
+    } else if drain.as_ref().is_some_and(|status| !status.drained()) {
+        ServeOutcome::DrainIncomplete
     } else {
         ServeOutcome::Stopped
     };
     tracing::info!(?outcome, "pos_edge stopped");
     Ok(outcome)
+}
+
+/// Reads the outbox once the last drain is over and writes `drain-status.json` beside the store's
+/// database ([ADR-0113](../../../docs/adr/0113-the-host-agent.md)).
+///
+/// Never fails the stop: a status that cannot be written is logged, and the exit code still says how
+/// the drain ended.
+async fn report_drain<S>(
+    edge: &Edge<S>,
+    store_id: StoreId,
+    spent: Duration,
+    path: std::path::PathBuf,
+) -> crate::drain_status::DrainStatus
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let outbox_depth = match edge.store().outbox_depth(store_id).await {
+        Ok(depth) => Some(depth),
+        Err(error) => {
+            tracing::warn!(%error, "could not read the outbox depth after the last drain");
+            None
+        }
+    };
+    let status = crate::drain_status::DrainStatus {
+        store_id,
+        outbox_depth,
+        budget_ms: millis(crate::event_publish::STOP_GRACE),
+        spent_ms: millis(spent),
+        finish_time: SystemClock.now(),
+    };
+    let written = status.clone();
+    match tokio::task::spawn_blocking(move || crate::drain_status::write(&path, &written)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "could not write drain-status.json; the exit code still says how the drain ended");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "the task writing drain-status.json did not finish");
+        }
+    }
+    status
+}
+
+/// A duration in whole milliseconds, saturating rather than wrapping for one that does not fit.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Everything [`serve`] assembles before it binds a socket: the router the shipped binary serves,
@@ -1814,7 +1899,7 @@ mod tests {
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
 
-    use super::{choose_sync_key, system_device_id, usable_env_key};
+    use super::{ServeOutcome, choose_sync_key, system_device_id, usable_env_key};
 
     fn holding(secrets: &[(SecretName, &str)]) -> FakeKeyVault {
         let vault = FakeKeyVault::new();
@@ -1892,5 +1977,14 @@ mod tests {
         let one = system_device_id(StoreId::new(Ulid::from_u128(7)));
         let other = system_device_id(StoreId::new(Ulid::from_u128(8)));
         assert_ne!(one, other);
+    }
+
+    /// The codes a host agent reads (ADR-0113). They are a wire: changing one is changing what every
+    /// supervisor already deployed takes the exit to mean.
+    #[test]
+    fn each_way_of_stopping_has_its_own_exit_code() {
+        assert_eq!(ServeOutcome::Stopped.exit_code(), 0);
+        assert_eq!(ServeOutcome::RestartWanted.exit_code(), 10);
+        assert_eq!(ServeOutcome::DrainIncomplete.exit_code(), 11);
     }
 }

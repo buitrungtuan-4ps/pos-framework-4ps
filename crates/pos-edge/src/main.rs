@@ -30,6 +30,7 @@
 //! runtime is built explicitly, by whichever of the two entry paths turns out to be the real one.
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 
 use pos_edge::{
@@ -43,33 +44,34 @@ use store_sqlite::SqliteStore;
 #[cfg(windows)]
 mod service;
 
-fn main() -> Result<(), EdgeError> {
+fn main() -> Result<ExitCode, EdgeError> {
     telemetry::init();
 
     let path = std::env::var_os("POS_EDGE_CONFIG")
         .map_or_else(|| PathBuf::from("config.toml"), PathBuf::from);
 
     if std::env::args().any(|argument| argument == pos_edge::SELF_TEST_FLAG) {
-        return self_test(&path);
+        return self_test(&path).map(|()| ExitCode::SUCCESS);
     }
 
     // Before anything opens a database or binds a socket: `archive` is a one-shot tool run by a
     // technician on a bench, not the store server starting up.
     if std::env::args().nth(1).as_deref() == Some(ARCHIVE_COMMAND) {
-        return archive(&std::env::args().skip(2).collect::<Vec<_>>());
+        return archive(&std::env::args().skip(2).collect::<Vec<_>>()).map(|()| ExitCode::SUCCESS);
     }
 
     // `claim`, run once on a box installed from the one image for every store: it shows a code,
     // waits for the console to bind it, and writes this box's config.toml (ADR-0148).
     if std::env::args().nth(1).as_deref() == Some(pos_edge::claim::CLAIM_COMMAND) {
-        return pos_edge::claim::run(&std::env::args().skip(2).collect::<Vec<_>>(), &path);
+        return pos_edge::claim::run(&std::env::args().skip(2).collect::<Vec<_>>(), &path)
+            .map(|()| ExitCode::SUCCESS);
     }
 
     // `promote`, which the installer script runs from the copy of the release it carries, with the
     // service stopped, to put that release in place of an older one (ADR-0140 Amendment 1).
     // Before `install`'s name check, so a tagged file handed this subcommand promotes itself.
     if std::env::args().nth(1).as_deref() == Some(pos_edge::setup::PROMOTE_COMMAND) {
-        return pos_edge::setup::promote(&path);
+        return pos_edge::setup::promote(&path).map(|()| ExitCode::SUCCESS);
     }
 
     // And `install`, which sets this machine up as the store's service (ADR-0140) — asked for by
@@ -77,10 +79,11 @@ fn main() -> Result<(), EdgeError> {
     // which a technician double-clicks with no arguments at all. The installed copies are named
     // `current` and `pos-edge.exe`, so the service itself never takes this path.
     if std::env::args().nth(1).as_deref() == Some(pos_edge::setup::INSTALL_COMMAND) {
-        return pos_edge::setup::run(&std::env::args().skip(2).collect::<Vec<_>>());
+        return pos_edge::setup::run(&std::env::args().skip(2).collect::<Vec<_>>())
+            .map(|()| ExitCode::SUCCESS);
     }
     if pos_edge::setup::launched_as_installer() {
-        return pos_edge::setup::run(&[]);
+        return pos_edge::setup::run(&[]).map(|()| ExitCode::SUCCESS);
     }
 
     // On Windows, hand the main thread to the Service Control Manager when SCM is the one that
@@ -88,20 +91,28 @@ fn main() -> Result<(), EdgeError> {
     // the operator's rescue copy — and it falls through to exactly the same path Linux takes.
     #[cfg(windows)]
     if service::dispatch(path.clone())? {
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     // A console run: nobody is going to restart this process, so the outcome is logged and not
     // acted on. Under a service manager it is the manager's business — `systemd`'s `Restart=always`
     // does it unconditionally, and the Windows wrapper reads the outcome to decide.
+    //
+    // The outcome is also the exit code (ADR-0113): what a host agent that started this process in a
+    // container reads, with no channel into the container at all.
     let outcome = runtime()?.block_on(run(path, shutdown_signal()))?;
-    if outcome == ServeOutcome::RestartWanted {
-        tracing::info!(
+    match outcome {
+        ServeOutcome::RestartWanted => tracing::info!(
             "the binary on disk changed; start pos_edge again to run it (a service manager does \
              this by itself)"
-        );
+        ),
+        ServeOutcome::DrainIncomplete => tracing::warn!(
+            "stopped with events still in the outbox; they are safe in the store's database and go \
+             out at the next start, and drain-status.json says how many"
+        ),
+        ServeOutcome::Stopped => {}
     }
-    Ok(())
+    Ok(ExitCode::from(outcome.exit_code()))
 }
 
 /// The multi-threaded runtime the edge serves on.

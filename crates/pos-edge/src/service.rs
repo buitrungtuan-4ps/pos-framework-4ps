@@ -188,6 +188,15 @@ fn run_service() -> Result<(), EdgeError> {
             ServiceExitCode::Win32(RESTART_EXIT_CODE)
         }
         Ok(ServeOutcome::Stopped) => ServiceExitCode::Win32(0),
+        // Asked to stop, so it stays stopped: a non-zero code here would run the failure action and
+        // start it again. The events left in the outbox are safe in the store's database and go out
+        // at the next start; `drain-status.json` beside it says how many (ADR-0113).
+        Ok(ServeOutcome::DrainIncomplete) => {
+            tracing::warn!(
+                "stopped with events still in the outbox; they go out at the next start"
+            );
+            ServiceExitCode::Win32(0)
+        }
         // A start that failed — an unreadable config, a bound port, a store that will not open — is
         // also a non-zero exit, and for the same reason: the failure action is what retries it.
         Err(_) => ServiceExitCode::Win32(RESTART_EXIT_CODE),

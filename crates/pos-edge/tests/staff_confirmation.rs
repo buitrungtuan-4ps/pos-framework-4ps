@@ -108,7 +108,7 @@ async fn a_guest_order(edge: &Edge<FakeStore>) -> (OrderId, pos_proto::ids::Orde
             actor().device_id,
             Open::from_known(SalesChannel::Qr),
             Some(table()),
-            &[(a_priced_line(), false)],
+            &[(a_priced_line(), None)],
             None,
         )
         .await

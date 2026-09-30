@@ -139,6 +139,28 @@ describe("the theme switcher", () => {
     await waitFor(() => expect(document.documentElement.hasAttribute("data-theme")).toBe(false));
     expect(localStorage.getItem("pos.dashboard.theme")).toBe("system");
   });
+
+  it("navigates theme choices using arrow keys in the radiogroup", async () => {
+    mount();
+    await openMenu();
+    const systemBtn = screen.getByRole("radio", { name: "System" });
+    expect(systemBtn.getAttribute("tabindex")).toBe("0");
+
+    fireEvent.keyDown(systemBtn, { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Light" }).getAttribute("aria-checked")).toBe("true"),
+    );
+    expect(document.documentElement.dataset["theme"]).toBe("light");
+    expect(screen.getByRole("radio", { name: "Light" }).getAttribute("tabindex")).toBe("0");
+    expect(screen.getByRole("radio", { name: "System" }).getAttribute("tabindex")).toBe("-1");
+
+    const lightBtn = screen.getByRole("radio", { name: "Light" });
+    fireEvent.keyDown(lightBtn, { key: "ArrowLeft" });
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("true"),
+    );
+    expect(document.documentElement.hasAttribute("data-theme")).toBe(false);
+  });
 });
 
 describe("the folded-in controls", () => {
