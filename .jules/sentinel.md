@@ -47,3 +47,8 @@
 **Vulnerability:** Webhook destinations could bypass SSRF IPv6 checks when hostnames/IPs were provided using IPv4-mapped interface identifiers (`0:ffff:a.b.c.d` or `ffff:ffff:a.b.c.d`, RFC 4291) attached to arbitrary non-zero 64-bit IPv6 prefixes (such as `2001:db8::ffff:127.0.0.1` or `2001:1234:5678:9abc:ffff:ffff:169.254.169.254`), because Rust std's `to_ipv4_mapped()` requires the prefix to be all-zero (`::ffff:a.b.c.d`).
 **Learning:** IPv4-mapped interface identifiers embed an IPv4 address in the low 32 bits when `(segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff`, regardless of the upper 64-bit routing prefix.
 **Prevention:** Inspect interface identifiers with `(segments[4] == 0 || segments[4] == 0xffff) && segments[5] == 0xffff` across all IPv6 prefixes, evaluating `a.b.c.d` through `classify_v4` when `a != 0` or when `segments[0..4]` is all-zero.
+
+## 2026-09-27 - [SSRF Expansion IPv6 Documentation Prefix Bypass]
+**Vulnerability:** Webhook SSRF validation only checked `2001:db8::/32` (RFC 3849) for documentation addresses, allowing expanded RFC 9637 IPv6 documentation prefix addresses (`3fff::/20`) to fall through `classify_v6` as public unicast addresses.
+**Learning:** IETF expanded IPv6 documentation allocations under RFC 9637 (`3fff::/20`). Checking only legacy RFC 3849 ranges leaves modern documentation prefix blocks unclassified.
+**Prevention:** Always include `first == 0x3fff && (second & 0xf000 == 0x0000)` (`3fff::/20`) alongside `2001:db8::/32` when matching non-routable documentation ranges in `classify_v6`.
