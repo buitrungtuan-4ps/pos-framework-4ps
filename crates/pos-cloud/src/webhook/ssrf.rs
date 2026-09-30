@@ -614,28 +614,6 @@ mod tests {
                 ForbiddenReason::LinkLocal
             ))
         );
-        // IPv6 Documentation ranges (2001:db8::/32 and 3fff::/20 RFC 9637).
-        assert_eq!(
-            classify_ip(ip("2001:db8::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("2001:db8::1"),
-                ForbiddenReason::Documentation
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("3fff::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("3fff::1"),
-                ForbiddenReason::Documentation
-            ))
-        );
-        assert_eq!(
-            classify_ip(ip("3fff:0fff:ffff::1")),
-            Err(SsrfRejection::ForbiddenAddress(
-                ip("3fff:0fff:ffff::1"),
-                ForbiddenReason::Documentation
-            ))
-        );
         // IPv4-mapped interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`).
         assert_eq!(
             classify_ip(ip("2001:db8::ffff:127.0.0.1")),
@@ -780,6 +758,32 @@ mod tests {
         // prefix exists to carry, and fails closed so quietly that no existing test notices.
         assert_eq!(classify_ip(ip("64:ff9b::8.8.8.8")), Ok(()));
         assert_eq!(classify_ip(ip("64:ff9b::93.184.216.34")), Ok(()));
+    }
+
+    #[test]
+    fn v6_documentation_prefixes_are_refused() {
+        // IPv6 Documentation ranges (2001:db8::/32 and 3fff::/20 RFC 9637).
+        assert_eq!(
+            classify_ip(ip("2001:db8::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("2001:db8::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("3fff::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("3fff::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
+        assert_eq!(
+            classify_ip(ip("3fff:0fff:ffff::1")),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip("3fff:0fff:ffff::1"),
+                ForbiddenReason::Documentation
+            ))
+        );
     }
 
     #[test]
