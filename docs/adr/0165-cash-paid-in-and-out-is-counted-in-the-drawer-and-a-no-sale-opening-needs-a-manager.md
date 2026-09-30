@@ -55,7 +55,7 @@ Option **C**. The owner approved these five points on 2026-09-30.
    the reason, and the `security.permission.overridden` every verified step-up writes. It is allowed
    with or without an open shift, because it moves no cash. Route: `POST /api/drawer/open`.
 4. **The drawer kick.** The console marks a printer **Cash drawer attached**. The mark is published
-   as a new field on the device, `cash_drawer` (default false), which closes what ADR-0103 left
+   as a new field on the device, `drawer_attached` (default false), which closes what ADR-0103 left
    open. A drawer opens only through such a printer, only when it serves the bill rather than a
    station, only over USB (`docs/architecture.md` §5), and only when the edge writes its bytes
    itself (a print agent carries print jobs, not a kick, ADR-0112). It opens on a cash payment, a
@@ -74,7 +74,7 @@ Option **C**. The owner approved these five points on 2026-09-30.
 - **A shift that records a movement expects a different drawer.** A shift without one closes
   exactly as before. The cloud's daily cash rollup already folds paid in and paid out, and takes the
   expected figure from `cash.shift.closed`, so it agrees without a change.
-- **The cloud gains a column**, `device_proposals.cash_drawer`, in an additive migration, and the
+- **The cloud gains a column**, `device_proposals.drawer_attached`, in an additive migration, and the
   console gains the checkbox on a USB printer.
 - **A drawer behind a print agent stays shut** until the agent protocol carries a kick. The till
   says to use the key.
