@@ -239,6 +239,7 @@
   "pay.change": "Tiền thối",
   "pay.comp_applied": "Tặng",
   "pay.copy_printed": "Đã in bản sao lần {number}",
+  "pay.drawer_unavailable": "Ngăn kéo tiền không mở. Hãy mở bằng chìa khóa.",
   "pay.discount": "Giảm giá",
   "pay.discount_amount": "Giảm bao nhiêu",
   "pay.discount_applied": "Giảm giá",

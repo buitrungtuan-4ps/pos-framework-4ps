@@ -601,7 +601,8 @@ end:
   none existed that could list a store's *approved* devices.
 
   **Not in it:** the drawer following the printer. This record settles which machine the kick lands
-  on; ADR-0103's missing console field still means no drawer opens anywhere.
+  on. The console field ADR-0103 was missing has since arrived with
+  [ADR-0165](adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md), and a drawer behind an agent still stays shut.
 
 - The **region** ([ADR-0114](adr/0114-region-is-required-recorded-visible.md)), three slices across
   #224–#227 and now complete — required, recorded and visible, in that order.

@@ -353,6 +353,7 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
         station_id: None,
         // No agent: the edge opens the address itself, which is what this test drives.
         agent_device_id: None,
+        drawer_attached: false,
     };
     let (app, token) = app_with(Some((
         printers,
@@ -410,6 +411,104 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
     assert!(
         bytes.windows(2).any(|window| window == b"#1"),
         "the gapless receipt number is on the paper"
+    );
+}
+
+/// Seats a table, puts one line on it, opens its bill and settles it with one tender of `method`,
+/// returning the settle's response body.
+async fn settle_a_table_with(app: &Router, token: &str, table: TableId, method: &str) -> Value {
+    send(
+        app.clone(),
+        token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    send(
+        app.clone(),
+        token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    let (_, bill) = send(
+        app.clone(),
+        token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    let (status, settled) = send(
+        app.clone(),
+        token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": method,
+                "tendered": vnd(165_000),
+                "applied_to_bill": vnd(165_000),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    settled
+}
+
+#[tokio::test]
+async fn a_cash_settle_opens_the_marked_drawer_and_a_card_settle_does_not() {
+    // ADR-0165 decision 4, over the shipped route: the drawer opens for cash, and only for cash, and
+    // it opens before the receipt prints, because the cashier needs the change first.
+    let recorder = Arc::new(Recorder::default());
+    let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
+    let with_drawer = PublishedDevice {
+        connection: DeviceConnection::Usb.into(),
+        address: "/dev/usb/lp0".to_owned(),
+        drawer_attached: true,
+        ..counter_printer()
+    };
+    let (app, token) = app_with(Some((printers, PublishedDevices::new(vec![with_drawer])))).await;
+
+    let cash = settle_a_table_with(
+        &app,
+        &token,
+        TableId::new(Ulid::from_u128(705)),
+        "PAYMENT_METHOD_CASH",
+    )
+    .await;
+    assert_eq!(cash["drawer_open"], "OPENED");
+    assert_eq!(cash["receipt_print"], "PRINTED");
+    {
+        let written = recorder.written.lock().expect("the recorder");
+        assert_eq!(written.len(), 2, "a kick and a receipt");
+        assert_eq!(
+            written.first(),
+            Some(&printer_escpos::escpos::DRAWER_KICK.to_vec()),
+            "the drawer opens before the receipt prints"
+        );
+    }
+
+    let card = settle_a_table_with(
+        &app,
+        &token,
+        TableId::new(Ulid::from_u128(706)),
+        "PAYMENT_METHOD_CARD",
+    )
+    .await;
+    assert!(
+        card.get("drawer_open").is_none(),
+        "a card payment asks nothing of the drawer: {card}"
+    );
+    assert_eq!(card["receipt_print"], "PRINTED");
+    assert_eq!(
+        recorder.written.lock().expect("the recorder").len(),
+        3,
+        "the card settle printed its receipt and kicked nothing"
     );
 }
 
@@ -910,6 +1009,7 @@ fn counter_printer() -> PublishedDevice {
         name: DisplayName::new("Counter"),
         station_id: None,
         agent_device_id: None,
+        drawer_attached: false,
     }
 }
 

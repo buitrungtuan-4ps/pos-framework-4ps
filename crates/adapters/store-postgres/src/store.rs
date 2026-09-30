@@ -265,6 +265,10 @@ const MIGRATION_0069: &str = include_str!("../migrations/0069_device_claims.sql"
 /// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
 const MIGRATION_0070: &str = include_str!("../migrations/0070_integration_connections.sql");
 
+/// Whether a cash drawer is wired to a printer, which the console marks and the edge reads before it
+/// opens one ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+const MIGRATION_0071: &str = include_str!("../migrations/0071_device_drawer.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -603,6 +607,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0070)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0071)
             .await
             .map_err(unavailable)
     }

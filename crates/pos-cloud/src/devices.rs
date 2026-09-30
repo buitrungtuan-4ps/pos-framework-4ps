@@ -142,6 +142,10 @@ pub struct DeviceProposalSummary {
     /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)). `None` — the ordinary case — means the
     /// edge opens the address itself, exactly as it always has.
     pub agent_device_id: Option<String>,
+    /// Whether an operator has marked a cash drawer as wired to this printer
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+    /// `false` until somebody does, which is what every store assumed before the mark existed.
+    pub drawer_attached: bool,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -150,9 +154,11 @@ pub struct DeviceProposalSummary {
     pub version: String,
 }
 
-/// What a conditional agent write did.
+/// What a conditional write to an approved device did: an agent pick
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)) or a drawer mark
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetAgentOutcome {
+pub enum DeviceWriteOutcome {
     /// The row was changed, and now sits at this version.
     Updated,
     /// No **approved** row with that id exists in this tenant.
@@ -267,5 +273,24 @@ pub trait DeviceProposalStore {
         id: DeviceProposalId,
         agent: Option<DeviceProposalId>,
         expected: &str,
-    ) -> impl Future<Output = Result<SetAgentOutcome, DeviceProposalError>> + Send;
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Marks an approved device as having a cash drawer wired to it, or clears the mark
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+    /// decision 4).
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is, for the same reasons. This
+    /// seam does not check that the device is a USB printer: the console offers the box only there,
+    /// and the edge opens a drawer only there, so a mark anywhere else is inert rather than wrong.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_drawer(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        drawer_attached: bool,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
 }

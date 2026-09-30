@@ -463,6 +463,11 @@ export function Takeaway() {
                     {t("pay.change")}:{" "}
                     <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
                   </p>
+                  <Show when={settled().drawer_open === "DRAWER_UNAVAILABLE"}>
+                    <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
+                      {t("pay.drawer_unavailable")}
+                    </p>
+                  </Show>
                   <button
                     type="button"
                     class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"

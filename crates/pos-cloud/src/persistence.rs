@@ -106,7 +106,7 @@ use crate::dashboard::projection::{RollupError, RollupStore, StoredRollups};
 use crate::dashboard::projector::StoreCatalog;
 use crate::devices::{
     DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
-    DeviceProposalSummary, PersistedDeviceProposal, SetAgentOutcome,
+    DeviceProposalSummary, DeviceWriteOutcome, PersistedDeviceProposal,
 };
 use pos_core::lease::LeaseGeneration;
 
@@ -1548,6 +1548,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 connection: row.connection,
                 station_id: row.station_id,
                 agent_device_id: row.agent_device_id,
+                drawer_attached: row.drawer_attached,
                 status: row.status,
                 version: row.version,
             })
@@ -1600,7 +1601,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         id: DeviceProposalId,
         agent: Option<DeviceProposalId>,
         expected: &str,
-    ) -> Result<SetAgentOutcome, DeviceProposalError> {
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
         let tenant = tenant.to_string();
         let id = id.to_string();
         let agent = agent.map(|agent| agent.to_string());
@@ -1609,7 +1610,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
         if changed.is_some() {
-            return Ok(SetAgentOutcome::Updated);
+            return Ok(DeviceWriteOutcome::Updated);
         }
         // Nothing changed, and the two reasons need different answers: the caller is stale, or the
         // device is not there at all. A second read is the only way to tell, and it is only ever
@@ -1619,9 +1620,37 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             .await
             .map_err(|error| DeviceProposalError::new(error.to_string()))?;
         Ok(if present.is_some() {
-            SetAgentOutcome::VersionMismatch
+            DeviceWriteOutcome::VersionMismatch
         } else {
-            SetAgentOutcome::NotFound
+            DeviceWriteOutcome::NotFound
+        })
+    }
+
+    async fn set_drawer(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        drawer_attached: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let changed =
+            PostgresDeviceProposals::set_drawer(self, &tenant, &id, drawer_attached, expected)
+                .await
+                .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        if changed.is_some() {
+            return Ok(DeviceWriteOutcome::Updated);
+        }
+        // The agent pick's second read, for the same two answers: stale, or not there.
+        let present = self
+            .version_of(&tenant, &id)
+            .await
+            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        Ok(if present.is_some() {
+            DeviceWriteOutcome::VersionMismatch
+        } else {
+            DeviceWriteOutcome::NotFound
         })
     }
 }

@@ -17,12 +17,16 @@
 //! selects nothing and prints nothing, and *says so*: that is the honest state for a LAN-only box or
 //! a shop with no printer, and it is the state the till has been misreporting.
 //!
-//! # A drawer is not a decision this module gets to make
+//! # A drawer opens where the console says one is, and over USB only
 //!
+//! *When* to open one is the caller's decision: a cash payment, a paid in or out, a no-sale opening
+//! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+//! This module only performs it, through the printer the console marked `drawer_attached`
+//! ([`drawer_printer`]).
 //! [`PrinterConnection::may_open_a_drawer`](pos_ports::printer::PrinterConnection::may_open_a_drawer)
 //! is false for anything but USB, because port 9100 has no authentication and the drawer-kick rides
-//! the same channel as everything else (`docs/architecture.md` §5). A published node naming a network
-//! printer with a drawer is accepted here and the drawer command is still not sent.
+//! the same channel as everything else (`docs/architecture.md` §5). A published node marking a network
+//! printer's drawer is accepted here and the drawer command is still not sent.
 //!
 //! # A printer may name another device as the one that writes the bytes
 //!
@@ -122,6 +126,25 @@ fn printer_for_station(devices: &PublishedDevices, station: StationId) -> Option
 /// device whose type we cannot name is how a label printer ends up spitting a receipt.
 fn is_printer(device: &PublishedDevice) -> bool {
     device.kind.known() == DeviceKind::Printer
+}
+
+/// The printer a cash drawer opens through, if this edge may open one
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+///
+/// The first printer that serves the bill rather than a station, that the console marked
+/// `drawer_attached`, whose bytes this edge writes itself, and whose connection may open a drawer,
+/// which is USB and nothing else. Each condition is a way the kick would go wrong: a station
+/// printer's drawer is not the till's, a print agent carries print jobs and not a kick (ADR-0112), and
+/// port 9100 has no authentication (`docs/architecture.md` §5).
+#[must_use]
+pub fn drawer_printer(devices: &PublishedDevices) -> Option<&PublishedDevice> {
+    devices.devices().iter().find(|device| {
+        device.station_id.is_none()
+            && is_printer(device)
+            && device.drawer_attached
+            && device.agent_device_id.is_none()
+            && connection_of(device).may_open_a_drawer()
+    })
 }
 
 /// How a published device is attached, in the port's vocabulary.
@@ -925,6 +948,35 @@ impl PrintOutcome {
     }
 }
 
+/// What came of opening the cash drawer, as the till reports it
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+///
+/// None of the three is an error. The act the drawer opened for has already been recorded, and a
+/// drawer that did not spring is opened with its key; what the till needs is which of these happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrawerOutcome {
+    /// The kick went down the drawer printer's cable. Whether the drawer sprang is the hardware's
+    /// part (gate P8), which the edge cannot see.
+    Opened,
+    /// No printer this edge may open a drawer through: none is marked, or the marked one is not on
+    /// USB, serves a station, or prints through an agent. The ordinary state of a store with no drawer.
+    NoDrawer,
+    /// The drawer printer was chosen and did not take the kick: unplugged, or switched off.
+    Unavailable,
+}
+
+impl DrawerOutcome {
+    /// The stable token the API reports, which the till maps to its own wording.
+    #[must_use]
+    pub const fn as_wire(self) -> &'static str {
+        match self {
+            Self::Opened => "OPENED",
+            Self::NoDrawer => "NO_DRAWER",
+            Self::Unavailable => "DRAWER_UNAVAILABLE",
+        }
+    }
+}
+
 /// Where a job goes when its printer names an agent.
 ///
 /// **Dyn-compatible on purpose, unlike the three seams underneath it.** `PrintAgents`, `PrintQueue`
@@ -1137,17 +1189,18 @@ const ASSUMED_DOTS_PER_LINE: u16 = 576;
 /// What this build assumes about a published printer.
 ///
 /// A device proposal carries an address, a kind and — since ADR-0100's approval change — a
-/// connection. It does not carry a code page, a paper width or whether a drawer is wired to it, and
-/// no discovery protocol reports them. So every unknown is set to the answer that cannot produce a
-/// wrong receipt:
+/// connection. It does not carry a code page or a paper width, and no discovery protocol reports
+/// them. So every unknown is set to the answer that cannot produce a wrong receipt:
 ///
 /// - `code_page: Ascii` — the repertoire every ESC/POS printer has. Claiming more would print
 ///   question marks; claiming [`CodePage::Unsupported`] would refuse plain ASCII too.
 /// - `prints_bitmaps` — whether a font is loaded, and nothing about the hardware. `GS v 0` is
 ///   universal on ESC/POS, so the printer is not the constraint; the framework's ability to
 ///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).
-/// - `kicks_drawer: false` — no drawer is opened from here at all. ADR-0100 is explicit that the
-///   drawer is not this module's decision.
+/// - `kicks_drawer` — what the console says, `drawer_attached`
+///   ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
+///   because nothing a printer reports says so. The port adds the USB rule on top, so a mark on a
+///   network printer opens nothing.
 ///
 /// Public because a printer's agent needs the capabilities the **edge** assumed, not its own: the
 /// document it receives was prepared under these, so `prints_bitmaps` disagreeing would make an
@@ -1161,7 +1214,7 @@ pub fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> Pr
         dots_per_line: NonZeroU16::new(ASSUMED_DOTS_PER_LINE).unwrap_or(NonZeroU16::MIN),
         prints_bitmaps: can_rasterise,
         cuts_paper: true,
-        kicks_drawer: false,
+        kicks_drawer: device.drawer_attached,
     }
 }
 
@@ -1172,7 +1225,7 @@ pub fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> Pr
 /// same `job_id` prints once.
 pub struct Printers {
     transports: Arc<dyn TransportFactory>,
-    open: Mutex<HashMap<DeviceId, HeldPrinter>>,
+    open: Mutex<HashMap<DeviceId, Held>>,
     /// The renderer that turns a line no code page covers into a raster, or `None` on a box with no
     /// font installed — which prints ASCII and refuses the rest, the behaviour before ADR-0102.
     renderer: Option<TextRenderer>,
@@ -1185,6 +1238,19 @@ pub struct Printers {
 
 /// One printer held open for the life of the process.
 type HeldPrinter = Arc<EscPosPrinter<Box<dyn Transport>>>;
+
+/// A held printer and what it was opened as.
+///
+/// Kept beside it because the console can change a device while the store trades: a drawer marked
+/// after the printer was first opened, an address corrected. A printer held under the old facts is
+/// opened again under the new ones on its next use, rather than addressed as it used to be until the
+/// box restarts. The price is a fresh idempotency set for that printer: a job retried across a change
+/// of its device prints again.
+struct Held {
+    printer: HeldPrinter,
+    address: String,
+    capabilities: PrinterCapabilities,
+}
 
 impl fmt::Debug for Printers {
     /// How many printers are held and where the channels come from — never a document and never a
@@ -1256,6 +1322,53 @@ impl Printers {
     /// when it cannot, so a label is never the line that stops a receipt printing.
     fn labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
         PaperLabels::for_store(session.display_language.as_deref(), self.can_rasterise())
+    }
+
+    /// Opens the store's cash drawer through the printer [`drawer_printer`] picks
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
+    ///
+    /// The caller asks only after the act the drawer is for has committed: a cash payment, a paid in
+    /// or out, a no-sale opening. Never an error, for the reason a receipt is never one: the money is
+    /// already recorded, and a drawer that did not spring is opened with its key. The outcome says
+    /// which, and the till tells the cashier.
+    pub async fn open_drawer(&self, session: &EdgeSession) -> DrawerOutcome {
+        let Some(device) = drawer_printer(&session.devices) else {
+            if session
+                .devices
+                .devices()
+                .iter()
+                .any(|device| device.drawer_attached)
+            {
+                tracing::warn!(
+                    "a printer is marked as having a cash drawer, but not one this edge may open: it \
+                     must serve the bill, be on USB, and print without an agent"
+                );
+            }
+            return DrawerOutcome::NoDrawer;
+        };
+        let capabilities = assumed_capabilities(device, self.can_rasterise());
+        let printer = match self.printer_for(device, capabilities) {
+            Ok(printer) => printer,
+            Err(error) => {
+                tracing::warn!(device = %device.device_id, %error, "no channel to the drawer's printer");
+                return DrawerOutcome::Unavailable;
+            }
+        };
+        // On a blocking thread for the reason a receipt is: an unplugged printer blocks on its write.
+        match tokio::task::spawn_blocking(move || printer.open_drawer_blocking()).await {
+            Ok(Ok(())) => {
+                tracing::info!(device = %device.device_id, "cash drawer kicked");
+                DrawerOutcome::Opened
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(device = %device.device_id, %error, "the drawer's printer refused the kick");
+                DrawerOutcome::Unavailable
+            }
+            Err(_) => {
+                tracing::warn!(device = %device.device_id, "the drawer thread did not finish");
+                DrawerOutcome::Unavailable
+            }
+        }
     }
 
     /// Prints the guest's receipt for a settled bill on the store's receipt printer.
@@ -1612,7 +1725,8 @@ impl Printers {
         }
     }
 
-    /// The held printer for `device`, opening a channel the first time.
+    /// The held printer for `device`, opening a channel the first time and again whenever the
+    /// device's address or its assumed capabilities have changed since ([`Held`]).
     fn printer_for(
         &self,
         device: &PublishedDevice,
@@ -1624,12 +1738,22 @@ impl Printers {
                 "the printer registry lock was poisoned",
             )
         })?;
-        if let Some(held) = open.get(&device.device_id) {
-            return Ok(Arc::clone(held));
+        if let Some(held) = open.get(&device.device_id)
+            && held.address == device.address
+            && held.capabilities == capabilities
+        {
+            return Ok(Arc::clone(&held.printer));
         }
         let transport = self.transports.open(device)?;
-        let printer = Arc::new(EscPosPrinter::new(capabilities, transport));
-        open.insert(device.device_id, Arc::clone(&printer));
+        let printer = Arc::new(EscPosPrinter::new(capabilities.clone(), transport));
+        open.insert(
+            device.device_id,
+            Held {
+                printer: Arc::clone(&printer),
+                address: device.address.clone(),
+                capabilities,
+            },
+        );
         Ok(printer)
     }
 }
@@ -1638,10 +1762,11 @@ impl Printers {
 mod tests {
     use super::TcpTransports;
     use super::{
-        ASSUMED_DOTS_PER_LINE, AgentLane, MoneyStyle, PrintOutcome, Printers, TicketLine,
-        TicketNote, TransportFactory, assumed_capabilities, connection_of, pre_bill_document,
-        receipt_copy_document, receipt_document, receipt_printer, shift_report_document,
-        short_reference, station_printer, ticket_document, ticket_line,
+        ASSUMED_DOTS_PER_LINE, AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers,
+        TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
+        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
+        receipt_printer, shift_report_document, short_reference, station_printer, ticket_document,
+        ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, VIETNAMESE};
@@ -1716,6 +1841,17 @@ mod tests {
             // Absent is the in-store case: the edge opens the address itself, which is what every
             // store that configures no agent still does (ADR-0112).
             agent_device_id: None,
+            drawer_attached: false,
+        }
+    }
+
+    /// The counter's printer on a USB cable, marked as having a cash drawer (ADR-0165).
+    fn drawer_device(seed: u128) -> PublishedDevice {
+        PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            address: "/dev/usb/lp0".to_owned(),
+            drawer_attached: true,
+            ..device(seed, DeviceKind::Printer, None)
         }
     }
 
@@ -2988,6 +3124,135 @@ mod tests {
         assert!(
             TcpTransports.open(&network).is_ok(),
             "and the LAN still works"
+        );
+    }
+
+    // ---------------------------------------------------------------------
+    // ADR-0165: a cash drawer opens through the printer the console marked.
+
+    #[test]
+    fn a_drawer_outcome_names_itself_with_a_stable_token() {
+        assert_eq!(DrawerOutcome::Opened.as_wire(), "OPENED");
+        assert_eq!(DrawerOutcome::NoDrawer.as_wire(), "NO_DRAWER");
+        assert_eq!(DrawerOutcome::Unavailable.as_wire(), "DRAWER_UNAVAILABLE");
+    }
+
+    #[test]
+    fn only_a_marked_usb_counter_printer_the_edge_writes_to_is_a_drawer_printer() {
+        let marked = drawer_device(1);
+        let devices = PublishedDevices::new(vec![marked.clone()]);
+        assert_eq!(drawer_printer(&devices), Some(&marked));
+        assert!(
+            assumed_capabilities(&marked, false).may_open_a_drawer(),
+            "the mark is what the adapter's own check reads"
+        );
+
+        let station = StationId::new(Ulid::from_u128(9));
+        for (why, device) in [
+            (
+                "not marked",
+                PublishedDevice {
+                    drawer_attached: false,
+                    ..drawer_device(2)
+                },
+            ),
+            (
+                "on the network, where port 9100 has no authentication",
+                PublishedDevice {
+                    connection: DeviceConnection::Network.into(),
+                    ..drawer_device(3)
+                },
+            ),
+            (
+                "a kitchen station's printer",
+                PublishedDevice {
+                    station_id: Some(station),
+                    ..drawer_device(4)
+                },
+            ),
+            (
+                "written through a print agent, which carries jobs and not a kick",
+                PublishedDevice {
+                    agent_device_id: Some(DeviceId::new(Ulid::from_u128(5))),
+                    ..drawer_device(6)
+                },
+            ),
+        ] {
+            assert_eq!(
+                drawer_printer(&PublishedDevices::new(vec![device])),
+                None,
+                "{why}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_drawer_is_kicked_through_its_printer_and_nothing_else_is_written() {
+        let (printers, written) = recorder(true);
+        let outcome = printers
+            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .await;
+        assert_eq!(outcome, DrawerOutcome::Opened);
+        assert_eq!(
+            *written.written.lock().expect("the recorder"),
+            vec![printer_escpos::escpos::DRAWER_KICK.to_vec()],
+            "one pulse on the kick pin, and no document"
+        );
+
+        let (printers, written) = recorder(true);
+        let unmarked = PublishedDevice {
+            drawer_attached: false,
+            ..drawer_device(2)
+        };
+        let outcome = printers
+            .open_drawer(&session_with(PublishedDevices::new(vec![unmarked])))
+            .await;
+        assert_eq!(outcome, DrawerOutcome::NoDrawer);
+        assert!(
+            written.written.lock().expect("the recorder").is_empty(),
+            "a store with no drawer sends nothing to its printer"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_drawer_printer_that_does_not_answer_is_unavailable() {
+        let (printers, _written) = recorder(false);
+        let outcome = printers
+            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .await;
+        assert_eq!(outcome, DrawerOutcome::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn a_drawer_marked_after_its_printer_was_opened_opens_without_a_restart() {
+        // The printer is opened for a receipt before anybody ticks the box, so it is held with no
+        // drawer. The next config pull marks it, and the mark must not wait for a restart.
+        let (printers, written) = recorder(true);
+        let unmarked = PublishedDevice {
+            drawer_attached: false,
+            ..drawer_device(2)
+        };
+        let receipt = printers
+            .print_receipt(
+                &session_with(PublishedDevices::new(vec![unmarked])),
+                store_id(),
+                event_id(1),
+                1,
+                &[],
+                &totals_of(Money::new(CurrencyCode::VND, 10_000)),
+                None,
+            )
+            .await;
+        assert_eq!(receipt, PrintOutcome::Printed);
+
+        let outcome = printers
+            .open_drawer(&session_with(PublishedDevices::new(vec![drawer_device(2)])))
+            .await;
+        assert_eq!(outcome, DrawerOutcome::Opened);
+        assert_eq!(
+            written.written.lock().expect("the recorder").last(),
+            Some(&printer_escpos::escpos::DRAWER_KICK.to_vec()),
+            "the kick follows the receipt on the same printer"
         );
     }
 

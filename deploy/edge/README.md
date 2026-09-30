@@ -582,10 +582,13 @@ Two Linux details:
   Match the printer's own setting — 9600 and 19200 are the common ones, and it is usually printed on
   a self-test page the printer produces when you hold the feed button while powering it on.
 
-**A cash drawer does not open yet.** The USB channel it needs now exists — and a drawer may only ever
-open over USB, because port 9100 has no authentication (`docs/architecture.md` §5) — but nothing in
-the published device says a drawer is *wired* to a given printer, so none is kicked. ADR-0103 names
-the console field that closes it.
+**A cash drawer opens where the console says one is.** Tick **Cash drawer attached** on the
+printer in the console's Devices page, then **Publish to this store**
+([ADR-0165](../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The till then opens the drawer on a cash payment. It opens
+only over USB, because port 9100 has no authentication (`docs/architecture.md` §5), only through the
+printer that serves the bill, and only when the edge writes that printer's bytes itself: a printer
+behind a print agent keeps its drawer shut, and the till tells the cashier to use the key. Whether a
+given drawer springs on its kick is a desk test (`docs/gate-register.md` P8).
 
 ## The print agent — for a store whose edge is not in the shop
 

@@ -209,6 +209,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A cash drawer opens on a cash payment** ([ADR-0165](docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+  No drawer ever opened, not even on a cash sale: the published device did not say which printer
+  had one wired to it, so the edge assumed none (ADR-0103).
+  - The console's Devices page marks a USB printer **Cash drawer attached**, under
+    `POST /admin/devices/proposals/{id}/drawer` (new), with an `If-Match` and an audit entry.
+  - The same page now has **Publish to this store**. Nothing on it reached a store before without
+    calling `POST /admin/devices/publish` by hand: not an approval, not a print agent, not a drawer.
+  - A settle that takes cash opens the drawer after it commits and before the receipt prints. Its
+    response says how it went in `drawer_open`: `OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`. The
+    till says "The cash drawer did not open. Open it with its key." when one should have opened and
+    did not. A card or QR payment opens nothing.
+  - A drawer opens only through the printer that serves the bill, only over USB, and only when the
+    edge writes that printer's bytes itself. A drawer behind a print agent stays shut.
+  - A printer the edge already holds open is opened again when its address or the drawer mark
+    changes, so a mark takes effect on the next config pull rather than after a restart.
+
+  **Upgrade note:** `PublishedDevice` gains `drawer_attached` (`pos-proto`, additive, absent means
+  `false`), so an edge that predates it opens no drawer, as before. Migration
+  `0071_device_drawer.sql` adds `device_proposals.drawer_attached` (`boolean`, default `false`). It
+  is additive and rollback-safe. No drawer opens until an operator marks one and publishes.
+
 - **A guest's receipt can be printed again, as a marked copy**
   ([ADR-0164](docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
   Nothing printed a settled bill's receipt twice, so a guest who came back for a copy for their

@@ -1,0 +1,14 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0071 — a printer may have a cash drawer wired to it
+-- ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+-- decision 4).
+--
+-- One boolean, and its default is the whole compatibility story. Nothing a printer reports says a
+-- drawer is on its kick port (ADR-0103), so an operator says so in the console. `false` is what
+-- every store has assumed until now: a fleet takes this release, every row reads `false`, and no
+-- drawer opens until somebody ticks the box.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS drawer_attached boolean NOT NULL DEFAULT false;
