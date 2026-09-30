@@ -278,10 +278,10 @@
           "quoted_unit_price": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/MoneyDto"
               },
               {
-                "$ref": "#/components/schemas/MoneyDto"
+                "type": "null"
               }
             ]
           }
