@@ -165,6 +165,12 @@ interface StoreShape {
   // Empty until it lands and on every store that has published none, which is every store today —
   // and the till then asks nothing, exactly as it did before the field existed.
   modifierGroups: ModifierGroup[];
+  // The walk-in channel's own price book and groups, from `GET /api/menu?channel=` (ADR-0066). A
+  // walk-in is priced by the edge at its order's channel, and a store may price takeaway apart from
+  // the dining room, so the counter shows this book rather than `menu`. Where the store prices only
+  // the dining room the edge serves that book here too, and the two are the same.
+  walkInMenu: MenuItemResponse[];
+  walkInModifierGroups: ModifierGroup[];
   // What kind of shop this is, from the same read. `docs/ui-ux.md` §3: the store profile decides the
   // starting screen and the flow — *"same components, different assembly, not three applications"*.
   //
@@ -278,6 +284,8 @@ const [state, setState] = createStore<StoreShape>({
   coursesEnabled: false,
   courses: [],
   modifierGroups: [],
+  walkInMenu: [],
+  walkInModifierGroups: [],
   tablesEnabled: true,
   kdsEnabled: true,
   seatForTable: {},
@@ -862,9 +870,12 @@ export function noteLost(line: OrderLine): boolean {
 // ticket does: a cook can still match it to a screen, and a silently empty modifier is how the wrong
 // dish gets made.
 export function modifierNames(line: OrderLine): string[] {
-  return line.modifierMenuItemIds.map(
-    (id) => state.menu.find((item) => item.menu_item_id === id)?.display_name ?? id,
-  );
+  const named = (id: string) =>
+    (
+      state.menu.find((item) => item.menu_item_id === id) ??
+      state.walkInMenu.find((item) => item.menu_item_id === id)
+    )?.display_name;
+  return line.modifierMenuItemIds.map((id) => named(id) ?? id);
 }
 
 // How long a board waits before asking the counter list again for a number it has not got. A
@@ -1048,6 +1059,11 @@ function setSoldOut(menuItemId: string, soldOut: boolean): void {
   if (index >= 0) {
     setState("menu", index, { sold_out: soldOut, available: !soldOut });
   }
+  // A mark is the store's, whatever channel the dish sells on: the counter's book follows it.
+  const walkIn = state.walkInMenu.findIndex((item) => item.menu_item_id === menuItemId);
+  if (walkIn >= 0) {
+    setState("walkInMenu", walkIn, { sold_out: soldOut, available: !soldOut });
+  }
 }
 
 // Staff mark an item sold out at this store (86), or bring it back. The fan-out brings the same fact
@@ -1098,17 +1114,24 @@ export async function moveTable(from: string, to: string): Promise<void> {
 /// the same way the compiled book's own `groups_for` skips it: a partial publish is a real state,
 /// and a till that stopped selling a pizza over a late-arriving "extra cheese" would be worse than
 /// one that asks a question fewer.
-export function groupsFor(item: MenuItemResponse): ModifierGroup[] {
+export function groupsFor(
+  item: MenuItemResponse,
+  groups: readonly ModifierGroup[] = state.modifierGroups,
+): ModifierGroup[] {
   return item.modifier_group_ids
-    .map((id) => state.modifierGroups.find((group) => group.modifier_group_id === id))
+    .map((id) => groups.find((group) => group.modifier_group_id === id))
     .filter((group): group is ModifierGroup => group !== undefined);
 }
 
 /// Whether `chosen` satisfies every group this item attaches — the same arithmetic the edge runs,
 /// so the till refuses before the round trip rather than after it. The edge is still the authority:
 /// this exists to keep a refusal off the screen, not to replace the check.
-export function modifiersSatisfied(item: MenuItemResponse, chosen: string[]): boolean {
-  return groupsFor(item).every((group) => {
+export function modifiersSatisfied(
+  item: MenuItemResponse,
+  chosen: string[],
+  groups: readonly ModifierGroup[] = state.modifierGroups,
+): boolean {
+  return groupsFor(item, groups).every((group) => {
     const count = chosen.filter((id) => group.member_menu_item_ids.includes(id)).length;
     return count >= group.min_select && count <= group.max_select;
   });
@@ -1213,7 +1236,8 @@ export async function startWalkIn(): Promise<string> {
 
 // A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
-// edge's figure; the counter's price book is the one the edge prices from, so the two agree.
+// edge's figure; the counter shows the walk-in channel's own book (`walkInMenu`), the one the edge
+// prices a walk-in from, so the two agree.
 async function addItemToWalkIn(
   orderId: string,
   key: string,
@@ -1339,9 +1363,16 @@ export function tenderAccepted(method: string): boolean {
 // Reads the store's published price book from the edge (ADR-0063) into the projection. Forgiving: a
 // failed read leaves whatever is already loaded, so a blip does not empty the till mid-service. An
 // empty menu is a real answer — the store has published none — and the screen says so.
+// The channel a walk-in is opened on: the edge's default for `POST /api/orders` (ADR-0146), which
+// this till's counter never overrides.
+const WALK_IN_CHANNEL = "SALES_CHANNEL_TAKEAWAY";
+
 export async function loadMenu(): Promise<void> {
-  try {
-    const response = await api.menu();
+  // Two reads, each applied on its own: a walk-in book that fails to arrive must not keep the store's
+  // own book from loading, and the reverse.
+  const [own, walkIn] = await Promise.allSettled([api.menu(), api.menu(WALK_IN_CHANNEL)]);
+  if (own.status === "fulfilled") {
+    const response = own.value;
     // Merged by id rather than replaced, so an item that did not change keeps its place and its
     // button: an item brought back reads the price book again, and a till mid-tap in marking mode
     // must not have every button on the screen swapped under the next tap.
@@ -1355,9 +1386,12 @@ export async function loadMenu(): Promise<void> {
     setState("acceptedTender", response.accepted_tender);
     setState("coursesEnabled", response.courses_enabled);
     setState("courses", response.courses);
-  } catch {
-    // The counter keeps whatever it last loaded; the next boot or reload tries again.
   }
+  if (walkIn.status === "fulfilled") {
+    setState("walkInMenu", reconcile(walkIn.value.items, { key: "menu_item_id" }));
+    setState("walkInModifierGroups", walkIn.value.modifier_groups);
+  }
+  // A read that failed keeps whatever it last loaded; the next boot or reload tries again.
 }
 
 // The quick-cash keys the pay pad offers, in minor units, ascending (ADR-0105).
