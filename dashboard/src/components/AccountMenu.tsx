@@ -77,6 +77,28 @@ export function AccountMenu(props: { onSignOut: () => void }) {
     return who === null ? "" : initials(who.name);
   };
 
+  const onThemeKeyDown = (event: KeyboardEvent, currentChoice: Theme) => {
+    const currentIndex = THEMES.indexOf(currentChoice);
+    if (currentIndex === -1) return;
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      event.preventDefault();
+      nextIndex = (currentIndex + 1) % THEMES.length;
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      event.preventDefault();
+      nextIndex = (currentIndex - 1 + THEMES.length) % THEMES.length;
+    }
+    if (nextIndex !== currentIndex) {
+      const nextTheme = THEMES[nextIndex];
+      if (nextTheme) {
+        setTheme(nextTheme);
+        const target = event.currentTarget as HTMLElement;
+        const buttons = target.parentElement?.querySelectorAll<HTMLButtonElement>("button[role='radio']");
+        buttons?.[nextIndex]?.focus();
+      }
+    }
+  };
+
   return (
     <div class="relative" ref={container}>
       <button
@@ -143,8 +165,10 @@ export function AccountMenu(props: { onSignOut: () => void }) {
                     type="button"
                     role="radio"
                     aria-checked={theme() === choice}
+                    tabindex={theme() === choice ? 0 : -1}
                     onClick={() => setTheme(choice)}
-                    class={`min-h-touch flex-1 rounded-token border px-2 text-sm transition-colors ${
+                    onKeyDown={(event) => onThemeKeyDown(event, choice)}
+                    class={`min-h-touch flex-1 rounded-token border px-2 text-sm transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
                       theme() === choice
                         ? "border-accent bg-surface-raised font-semibold text-ink"
                         : "border-line text-ink-muted hover:text-ink"

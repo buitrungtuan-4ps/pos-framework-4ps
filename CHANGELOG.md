@@ -39,6 +39,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **AccountMenu theme selector keyboard navigation.**
+  Added arrow key navigation (`ArrowRight`, `ArrowDown`, `ArrowLeft`, `ArrowUp`), roving `tabindex`, and focus-visible indicators to the theme selector `role="radiogroup"` in `dashboard/src/components/AccountMenu.tsx`.
+
 - **The notification bell's history can be read from the keyboard.** In the console's top bar, the
   arrow keys move focus through the open history, wrapping at either end, so a screen reader reads
   each notification in turn; each one shows a focus ring, Escape from inside the history hands focus

@@ -1,3 +1,8 @@
+## 2026-09-25 - Custom ARIA Radiogroups Require Keyboard Arrow Navigation and Roving Tabindex
+
+**Learning:** Declaring `role="radiogroup"` on a container and `role="radio"` on custom `<button>` elements communicates radio group semantics to screen readers, but browsers do not provide automatic arrow key navigation or standard radio group tabbing behavior. Without an explicit `onKeyDown` handler for arrow keys (ArrowLeft/Right/Up/Down) and roving `tabindex` (`0` for selected, `-1` for unselected), keyboard users are forced to tab through every radio button individually and cannot navigate the group with arrow keys as expected by WAI-ARIA standards.
+**Action:** Always implement roving `tabindex={isSelected ? 0 : -1}` and arrow key navigation (`onKeyDown`) for custom `role="radiogroup"` components, along with `focus-visible` styling.
+
 ## 2026-09-24 - Active Option Announcement in Comboboxes via aria-activedescendant
 
 **Learning:** When keyboard focus remains on a `<input role="combobox">` while arrow keys navigate through listbox options (`role="option"`), screen reader users do not receive active item announcements unless `aria-activedescendant` on the input dynamically references the `id` of the active option element. Simply marking options with `aria-selected` is insufficient when DOM focus stays on the input field.
