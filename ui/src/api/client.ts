@@ -314,6 +314,10 @@ export const api = {
   // a kitchen display switched on mid-service draws an empty board.
   liveOrders: () => request<LiveOrder[]>("GET", "/api/orders/live"),
 
+  // What the kitchen still has to make (ADR-0161): the live orders, plus each paid order with no
+  // table whose food no station has bumped yet. A counter order is paid before it is cooked.
+  kitchenOrders: () => request<LiveOrder[]>("GET", "/api/orders/kitchen"),
+
   // What an order owes, for an order that sits on no table.
   checkOrder: (orderId: string) =>
     request<CheckResponse>("GET", `/api/orders/${orderId}/check`),

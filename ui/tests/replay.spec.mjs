@@ -2291,6 +2291,46 @@ test("a note typed at the till is on the kitchen board, under that dish only", a
   }
 });
 
+// A counter order paid before the kitchen made it stays on the board, note and all, until a station
+// bumps it (ADR-0161).
+//
+// A counter takes the money first and cooks after. The board used to drop an order the moment its
+// bill settled, so the ticket and the guest's allergy note vanished while the food was still to
+// make. This walks the counter's own order of work: ring the dish with a note, send it, charge it,
+// and only then look at the board, once live and once after a reload, the path a board switched on
+// mid-service takes. The bump is what takes it off.
+test("a counter order paid before the kitchen made it stays on the board until it is bumped", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await page.locator("#line-note").fill("No peanuts");
+    await addItem(page);
+    await sendOrder(page);
+    await page.locator('a[href="/counter"]').first().click();
+    await page.waitForURL((url) => url.pathname === "/counter");
+    await page.locator('[data-step="charge"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No peanuts");
+    await page.reload();
+    await expect(page.locator('[data-outcome="ticket-note"]')).toContainText("No peanuts");
+
+    await page.locator('[data-step="onBump"]').first().click();
+    await expect(page.locator('[data-step="onBump"]')).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('[data-outcome="ticket-note"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter tip on a bill that is not a round number still settles.
 //
 // The table pay screen's float-division tip was fixed (the test above it here says how it failed);
