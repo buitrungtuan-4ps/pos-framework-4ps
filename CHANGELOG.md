@@ -18,6 +18,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **SSRF protection in webhook URL classification now checks RFC 9637 expanded IPv6 documentation prefix (`3fff::/20`).**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `3fff::/20` IPv6 documentation addresses as `ForbiddenReason::Documentation`, preventing SSRF bypasses via RFC 9637 documentation prefix addresses. **Upgrade note:** none.
+
 - **SSRF protection in webhook URL classification now checks RFC 6666 Discard-Only (`100::/64`) and RFC 4843 / RFC 7343 ORCHIDv1/v2 (`2001:10::/28` and `2001:20::/28`) IPv6 ranges.**
   `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `100::/64` Discard-Only and `2001:10::/28` / `2001:20::/28` ORCHID/ORCHIDv2 addresses as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
 
