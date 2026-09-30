@@ -77,6 +77,7 @@ use pos_proto::{
     ReductionKind, SalesChannel, ShiftState, TableState,
 };
 
+use crate::auth::{Lockout, SignIn};
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
@@ -263,8 +264,8 @@ impl StaffRoster {
         crate::auth::verify_pin(phc, pin).then_some(auth.permissions)
     }
 
-    /// Verifies an approver's `code` + `pin` for a **step-up** on one act, returning who they are
-    /// and what their role grants.
+    /// The approver `code` names for a **step-up** on one act: who they are, the Argon2id hash to
+    /// verify their PIN against, and what their role grants.
     ///
     /// [`authorise`](Self::authorise) answers the sign-in question — "what may this person do" — and
     /// throws the identity away, because a sign-in goes on to carry it in the session. A step-up is
@@ -273,14 +274,20 @@ impl StaffRoster {
     /// `security.permission.overridden` records the approver as `approver_employee_id` while the
     /// envelope keeps the actor who performed the act.
     ///
-    /// `None` for an unknown code, a member with no id, a member with no PIN set, or a wrong PIN —
-    /// so a failed step-up authorises nothing and names nobody.
+    /// The PIN is not verified here. The caller verifies it under the lockout
+    /// ([`crate::auth::Lockout::authenticate`], ADR-0030), so a wrong approval PIN counts against
+    /// the approver exactly as a wrong sign-in PIN does.
+    ///
+    /// `None` for an unknown code, a member with no id, or a member with no PIN set, so a step-up
+    /// under any of them authorises nothing and names nobody.
     #[must_use]
-    pub fn approve(&self, code: &str, pin: &str) -> Option<(EmployeeId, PermissionSet)> {
+    pub fn approver(&self, code: &str) -> Option<(EmployeeId, &str, PermissionSet)> {
         let auth = self.by_code.get(code)?;
-        let phc = auth.pin_phc.as_deref()?;
-        let employee_id = auth.employee_id?;
-        crate::auth::verify_pin(phc, pin).then_some((employee_id, auth.permissions))
+        Some((
+            auth.employee_id?,
+            auth.pin_phc.as_deref()?,
+            auth.permissions,
+        ))
     }
 
     /// The sign-in credentials under `code`: the employee the code acts as and the Argon2id hash to
@@ -641,13 +648,6 @@ impl EdgeSession {
         self.staff.authorise(code, pin)
     }
 
-    /// Verifies a manager's step-up authorisation for one act against the published roster, giving
-    /// back who approved and what they hold ([`StaffRoster::approve`]).
-    #[must_use]
-    pub fn approve_step_up(&self, code: &str, pin: &str) -> Option<(EmployeeId, PermissionSet)> {
-        self.staff.approve(code, pin)
-    }
-
     /// Installs a menu catalog, for a test or the on-fakes example. The real store's menu arrives
     /// from the cloud config tree (WS-B); this builder seeds one without a cloud.
     #[must_use]
@@ -887,6 +887,14 @@ pub enum AppError {
     /// at the till enumerate who can approve a void.
     #[error("that manager PIN does not authorise this action")]
     ApprovalRefused,
+    /// A manager's PIN was offered for someone the PIN lockout is holding: too many wrong PINs in a
+    /// row, at the sign-in screen or at an approval prompt (ADR-0030).
+    ///
+    /// Refused before the PIN is checked, so a right PIN does not get through until the lockout
+    /// ends, and guessing faster does not help. It names no more than the sign-in screen already
+    /// does, which answers "locked out" for the same code.
+    #[error("that manager is locked out after too many wrong PINs; try again in a few minutes")]
+    ApproverLockedOut,
     /// A command that would **open** a new order or a new shift was refused because a replacement
     /// machine has taken this store
     /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), closing
@@ -2462,6 +2470,11 @@ pub struct Edge<S> {
     /// and a note is precisely what the log does not hold. Locked on its own and never while the
     /// projection's lock is held.
     notes: Mutex<LineNotes>,
+    /// Consecutive wrong PINs per person
+    /// ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md)), shared by the sign-in route
+    /// and every manager approval, so a PIN the sign-in screen would have locked cannot be guessed
+    /// at an approval prompt instead. Owned here and lent to the sign-in route as one `Arc`.
+    pin_lockout: Arc<Lockout>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
@@ -2619,7 +2632,14 @@ impl<S: EventStore> Edge<S> {
             sync: SyncStatus::new(),
             clock_status: ClockStatus::new(),
             notes: Mutex::new(LineNotes::default()),
+            pin_lockout: Arc::new(Lockout::new()),
         })
+    }
+
+    /// The PIN lockout sign-ins and approvals share ([`Lockout`], ADR-0030).
+    #[must_use]
+    pub fn pin_lockout(&self) -> Arc<Lockout> {
+        Arc::clone(&self.pin_lockout)
     }
 
     /// The cloud-link and outbox-depth cell the status bar reads
@@ -3240,10 +3260,21 @@ impl<S: EventStore> Edge<S> {
             return Ok(None);
         }
         let approval = approval.ok_or(AppError::ApprovalRequired)?;
-        let (approver, held) = self
-            .session()
-            .approve_step_up(&approval.code, &approval.pin)
+        let session = self.session();
+        // An unknown code is refused without touching the lockout, as sign-in refuses one: there is
+        // nobody to count the failure against, and a probe cannot tell a real code from a missing one.
+        let (approver, phc, held) = session
+            .staff
+            .approver(&approval.code)
             .ok_or(AppError::ApprovalRefused)?;
+        match self
+            .pin_lockout
+            .authenticate(approver, phc, &approval.pin, self.clock.now())
+        {
+            SignIn::Ok => {}
+            SignIn::Wrong { .. } => return Err(AppError::ApprovalRefused),
+            SignIn::LockedOut { .. } => return Err(AppError::ApproverLockedOut),
+        }
         if !held.contains(permission) {
             return Err(AppError::ApprovalRefused);
         }

@@ -86,6 +86,7 @@
   "error.already_activated": "This store server is already activated.",
   "error.already_fired": "Already sent to the kitchen — it can no longer be refused.",
   "error.approval_refused": "That manager PIN cannot authorise this.",
+  "error.approver_locked_out": "Too many wrong PINs for that manager. Try again in a few minutes.",
   "error.approval_required": "This needs a manager's PIN.",
   "error.awaiting_staff_confirmation": "A member of staff must confirm or refuse this guest order first.",
   "error.bill_already_open": "A bill is already open for this order.",
