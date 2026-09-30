@@ -1312,6 +1312,15 @@ export function Pay() {
                 {t(receiptPrintKey(bill().receipt_print))}
               </p>
             </Show>
+            {/*
+              A drawer that should have sprung and did not (ADR-0165). A store with no drawer marked
+              says nothing here: `NO_DRAWER` is its ordinary state, not news for the cashier.
+            */}
+            <Show when={bill().drawer_open === "DRAWER_UNAVAILABLE"}>
+              <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
+                {t("pay.drawer_unavailable")}
+              </p>
+            </Show>
             <button
               type="button"
               class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"

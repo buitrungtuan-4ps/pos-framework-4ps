@@ -97,6 +97,7 @@ impl Harness {
                 name: DisplayName::new("Counter"),
                 station_id: None,
                 agent_device_id: Some(id(TERMINAL)),
+                drawer_attached: false,
             }]),
             ..EdgeSession::bootstrap()
         };

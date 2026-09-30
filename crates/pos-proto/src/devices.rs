@@ -140,6 +140,17 @@ pub struct PublishedDevice {
     /// a device path that is not there and reports a named refusal rather than failing silently.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_device_id: Option<DeviceId>,
+    /// Whether a cash drawer is wired to this printer's kick port
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+    /// decision 4).
+    ///
+    /// An operator says so in the console, because nothing a printer reports does
+    /// ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)). `false`, which is also
+    /// what an absent field reads as, means no drawer: what every edge assumed before this field
+    /// existed. It says a drawer is there, not that it may be opened from anywhere. A drawer still
+    /// opens only over USB, and only when the edge writes the printer's bytes itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub drawer_attached: bool,
 }
 
 /// The `devices` config node: the store's approved, addressable devices.
@@ -187,6 +198,7 @@ mod tests {
             name: DisplayName::new("Counter"),
             station_id: station,
             agent_device_id: None,
+            drawer_attached: false,
         }
     }
 
@@ -300,6 +312,29 @@ mod tests {
             Some(terminal),
             "the printer names the terminal that holds its transport"
         );
+    }
+
+    #[test]
+    fn a_printer_with_no_drawer_says_so_by_omission_and_an_attached_one_round_trips() {
+        // The ADR-0112 rule again: a fleet that marks nothing publishes exactly the node it did
+        // before, so an edge that predates the field reads the same bytes and opens no drawer.
+        let json = serde_json::to_string(&PublishedDevices::new(vec![device(None)])).expect("json");
+        assert!(
+            !json.contains("drawer_attached"),
+            "a printer with no drawer writes no field: {json}"
+        );
+        let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
+        assert!(!back.devices().first().expect("one device").drawer_attached);
+
+        let marked = PublishedDevice {
+            connection: DeviceConnection::Usb.into(),
+            drawer_attached: true,
+            ..device(None)
+        };
+        let json = serde_json::to_string(&PublishedDevices::new(vec![marked])).expect("json");
+        assert!(json.contains(r#""drawer_attached":true"#), "{json}");
+        let back: PublishedDevices = serde_json::from_str(&json).expect("round trip");
+        assert!(back.devices().first().expect("one device").drawer_attached);
     }
 
     #[test]

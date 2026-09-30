@@ -300,6 +300,8 @@ const UNDOCUMENTED: &[&str] = &[
     // together, and documenting two routes in the middle of it would leave a fork's client reading
     // half a story. They join the debt when the device surface does.
     "/admin/devices/proposals/{id}/agent",
+    // The drawer mark (ADR-0165) joins the same deferred device surface, for the same reason.
+    "/admin/devices/proposals/{id}/drawer",
     "/admin/devices/terminals",
     "/admin/activation-codes",
     "/admin/activation-codes/revoke",

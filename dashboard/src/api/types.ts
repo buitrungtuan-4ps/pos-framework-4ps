@@ -68,6 +68,15 @@ export interface CreateApiKeyResponse {
   readonly token: string;
 }
 
+/** What `POST /admin/devices/publish` reports: the node's version and how many devices it holds. */
+export interface PublishDevicesResponse {
+  readonly config_version_id: string;
+  /** The devices the published node lists. */
+  readonly device_count: number;
+  /** Approved devices held back, because their connection was never recorded (ADR-0100). */
+  readonly skipped_count: number;
+}
+
 /** A pending printer/KDS proposal from `GET /admin/devices/proposals` (ADR-0041). */
 export interface DeviceProposalSummary {
   readonly id: string;
@@ -90,6 +99,11 @@ export interface DeviceProposalSummary {
    * (ADR-0112). `null` — the ordinary case — means the edge opens the address itself.
    */
   readonly agent_device_id: string | null;
+  /**
+   * Whether an operator has marked a cash drawer as wired to this printer (ADR-0165). The till opens
+   * it only over USB, from the store's own box, and only once the devices are published.
+   */
+  readonly drawer_attached: boolean;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**

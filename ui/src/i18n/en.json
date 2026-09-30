@@ -239,6 +239,7 @@
   "pay.change": "Change",
   "pay.comp_applied": "Comped",
   "pay.copy_printed": "Copy {number} printed",
+  "pay.drawer_unavailable": "The cash drawer did not open. Open it with its key.",
   "pay.discount": "Take money off",
   "pay.discount_amount": "How much comes off",
   "pay.discount_applied": "Discount",

@@ -459,7 +459,19 @@ export interface BillResponse {
    * receipt, or from an edge built before C2.
    */
   receipt_print?: string;
+  /**
+   * What came of opening the cash drawer when the settle took cash (ADR-0165): `OPENED`,
+   * `NO_DRAWER` or `DRAWER_UNAVAILABLE`. Absent when no cash was taken, or from an older edge.
+   */
+  drawer_open?: DrawerOutcome;
 }
+
+/**
+ * What came of opening the cash drawer (ADR-0165). `NO_DRAWER` is a store with no drawer marked in
+ * the console, which is the ordinary case and says nothing; `DRAWER_UNAVAILABLE` is a drawer that
+ * should have opened and did not, which the cashier has to hear about.
+ */
+export type DrawerOutcome = "OPENED" | "NO_DRAWER" | "DRAWER_UNAVAILABLE";
 
 /**
  * The store's money settings, from `GET /api/locale`

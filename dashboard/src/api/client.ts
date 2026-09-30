@@ -77,6 +77,7 @@ import type {
   OtaRollout,
   HostedRelease,
   FetchedRelease,
+  PublishDevicesResponse,
   PublishPlacementRequest,
   PublishRolloutRequest,
   ReasonCode,
@@ -754,6 +755,22 @@ export const api = {
       version,
       { tenant_id: tenantId, agent_device_id: agentDeviceId },
     ),
+  // Marking (or clearing) a cash drawer on an approved printer, conditional on the version the row
+  // was read at, as the agent pick is (ADR-0094, ADR-0165). The store hears it on the next publish.
+  setDrawerAttached: (tenantId: string, id: string, drawerAttached: boolean, version: string) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/drawer`,
+      version,
+      { tenant_id: tenantId, drawer_attached: drawerAttached },
+    ),
+  // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
+  // pick and a drawer mark all wait on this before the store hears about them.
+  publishDevices: (tenantId: string, storeId: string) =>
+    requestJson<PublishDevicesResponse>("POST", "/admin/devices/publish", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
 
   // --- webhooks (ADR-0032) ---
   listWebhooks: (tenantId: string) =>

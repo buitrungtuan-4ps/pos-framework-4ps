@@ -1420,6 +1420,10 @@ pub struct BillView {
     pub table_state: Option<TableState>,
     /// Whether the settle asked for a receipt to be printed, for the caller to run after commit.
     pub print_receipt: bool,
+    /// Whether the settle took cash, so the caller opens the cash drawer after commit
+    /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4). Cash is what the drawer holds: a card, a QR payment or a
+    /// voucher does not open it.
+    pub open_drawer: bool,
     /// The rows that receipt lists, present once settled and empty otherwise (ADR-0129).
     ///
     /// Carried out of the settle rather than read back afterwards: the receipt is composed **after**
@@ -5769,6 +5773,7 @@ impl<S: EventStore> Edge<S> {
             lines: Vec::new(),
             table_state: table_decision.map(|decision| decision.next_state),
             print_receipt: false,
+            open_drawer: false,
         })
     }
 
@@ -5935,6 +5940,7 @@ impl<S: EventStore> Edge<S> {
             totals: Some(totals.clone()),
             table_state,
             print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+            open_drawer: cash_taken.amount_minor > 0,
             lines: Self::receipt_lines(&order.lines),
         })
     }

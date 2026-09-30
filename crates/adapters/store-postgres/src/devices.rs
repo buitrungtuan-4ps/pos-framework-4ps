@@ -36,6 +36,9 @@ pub struct DeviceProposalRow {
     /// The `terminal` row whose transport reaches this printer (ADR-0112). `None` — the ordinary
     /// case — means the edge opens the address itself.
     pub agent_device_id: Option<String>,
+    /// Whether an operator has marked a cash drawer as wired to this printer (ADR-0165). `false`
+    /// for every row nobody has marked, and for every device that is not a printer.
+    pub drawer_attached: bool,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The row's `xmin`, as a string: the version a conditional write must match (ADR-0094).
@@ -96,7 +99,7 @@ impl PostgresDeviceProposals {
         let rows = connection
             .query(
                 "SELECT id, store_id, kind, name, address, connection, station_id, \
-                        agent_device_id, status, xmin::text \
+                        agent_device_id, drawer_attached, status, xmin::text \
                  FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
@@ -115,8 +118,9 @@ impl PostgresDeviceProposals {
                 connection: row.get(5),
                 station_id: row.get(6),
                 agent_device_id: row.get(7),
-                status: row.get(8),
-                version: row.get(9),
+                drawer_attached: row.get(8),
+                status: row.get(9),
+                version: row.get(10),
             })
             .collect())
     }
@@ -177,6 +181,35 @@ impl PostgresDeviceProposals {
                  WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $4 \
                  RETURNING xmin::text",
                 &[&tenant_id, &id, &agent_device_id, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Marks an **approved** row as having a cash drawer wired to it, or clears the mark, only if
+    /// the row is still at `expected` (ADR-0094's conditional write, ADR-0165's drawer checkbox).
+    ///
+    /// Returns what [`Self::set_agent`] returns, for the same reason: `Some(version)` for the row's
+    /// new version, or `None` when nothing changed, which [`Self::version_of`] then tells apart.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_drawer(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        drawer_attached: bool,
+        expected: &str,
+    ) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "UPDATE device_proposals SET drawer_attached = $3 \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $4 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &id, &drawer_attached, &expected],
             )
             .await
             .map_err(unavailable)?;

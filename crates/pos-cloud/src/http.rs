@@ -171,7 +171,7 @@ use crate::dashboard::{
 };
 use crate::devices::{
     DeviceKind, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceProposalSummary,
-    PersistedDeviceProposal, SetAgentOutcome,
+    DeviceWriteOutcome, PersistedDeviceProposal,
 };
 use crate::export;
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
@@ -3118,6 +3118,10 @@ where
             "/admin/devices/proposals/{id}/agent",
             post(set_print_agent::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/drawer",
+            post(set_drawer_attached::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -3664,7 +3668,7 @@ where
         .set_agent(tenant_id, id, agent, expected.as_str())
         .await
     {
-        Ok(SetAgentOutcome::Updated) => {
+        Ok(DeviceWriteOutcome::Updated) => {
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -3681,8 +3685,83 @@ where
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(SetAgentOutcome::VersionMismatch) => version_mismatch(),
-        Ok(SetAgentOutcome::NotFound) => not_found("device"),
+        Ok(DeviceWriteOutcome::VersionMismatch) => version_mismatch(),
+        Ok(DeviceWriteOutcome::NotFound) => not_found("device"),
+        Err(error) => device_error_response(&error),
+    }
+}
+
+/// An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.
+#[derive(Debug, Clone, Deserialize)]
+struct SetDrawerRequest {
+    /// The tenant the device belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// Whether a cash drawer is on this printer's kick port.
+    drawer_attached: bool,
+}
+
+/// A super-admin ticks (or clears) **Cash drawer attached** on an approved printer
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
+/// decision 4).
+///
+/// The agent pick's guards, for the agent pick's reasons: `ManageDevices`, an `If-Match`, and an
+/// audit entry. The mark decides whether a drawer full of cash can be sprung from the till, so who
+/// set it, and when, is worth a row. It reaches a store on the next devices publish, as every other
+/// fact about a device does.
+async fn set_drawer_attached<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetDrawerRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .devices
+        .set_drawer(tenant_id, id, request.drawer_attached, expected.as_str())
+        .await
+    {
+        Ok(DeviceWriteOutcome::Updated) => {
+            audit_action(
+                &state.audit,
+                &state.clock,
+                &context,
+                Some(tenant_id),
+                "device_proposal.set_drawer",
+                "device_proposal",
+                &id.to_string(),
+                None,
+                Some(serde_json::json!({ "drawer_attached": request.drawer_attached })),
+            )
+            .await;
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Ok(DeviceWriteOutcome::VersionMismatch) => version_mismatch(),
+        Ok(DeviceWriteOutcome::NotFound) => not_found("device"),
         Err(error) => device_error_response(&error),
     }
 }
@@ -11079,6 +11158,10 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                     name: DisplayName::new(row.name.as_str()),
                     station_id,
                     agent_device_id,
+                    // Verbatim. The edge decides whether a marked printer may open its drawer (USB
+                    // only, its own transport only), so a mark on a network printer is published
+                    // and inert rather than silently dropped here.
+                    drawer_attached: row.drawer_attached,
                 })
             })
             .collect(),

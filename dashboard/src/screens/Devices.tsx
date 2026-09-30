@@ -7,6 +7,10 @@
 // pointed at one, which makes that terminal's agent the thing that writes its bytes. Both halves are
 // approved devices in one store, so neither can be shown by the pending queue above; they read
 // through `listStoreDevices` and follow the top bar's store, not the tenant.
+//
+// The printers card also carries the cash drawer mark (ADR-0165) and the publish. Nothing decided on
+// this page reaches a store until its devices are published: not an approval, not an agent, not a
+// drawer. So the page offers the publish rather than leaving it to a route nobody can see.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
@@ -15,7 +19,16 @@ import type { DeviceProposalSummary, Station, Store } from "../api/types";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, SelectField, Skeleton, TextField } from "../components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  CheckboxField,
+  PageHeader,
+  SelectField,
+  Skeleton,
+  TextField,
+} from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -59,6 +72,11 @@ export function Devices() {
   // was read at: the write is conditional on that version (ADR-0094), so re-reading the row is what
   // makes a stale pick fail loudly rather than quietly overwrite a colleague's.
   const [agentChoice, setAgentChoice] = createSignal("");
+  // The printer whose cash drawer is being marked, read at a version for the same conditional write
+  // (ADR-0165). Offered on a USB printer only, because a drawer opens over nothing else.
+  const drawerDraft = useEntityCrud<DeviceProposalSummary>();
+  const [drawerChoice, setDrawerChoice] = createSignal(false);
+  const [publishing, setPublishing] = createSignal(false);
 
   // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
   // name a store that predates the backfill, or one already archived).
@@ -152,6 +170,40 @@ export function Devices() {
           void loadFleet();
         }
       });
+  };
+
+  const saveDrawer = () => {
+    const printer = drawerDraft.subject();
+    if (!printer) {
+      return;
+    }
+    void drawerDraft
+      .run(() =>
+        conditionalFleet(() =>
+          api.setDrawerAttached(tenantId(), printer.id, drawerChoice(), printer.version),
+        ),
+      )
+      .then((saved) => {
+        if (saved) {
+          toast.ok(t("devices.drawerSaved"));
+          void loadFleet();
+        }
+      });
+  };
+
+  const publish = async () => {
+    setPublishing(true);
+    try {
+      const report = await api.publishDevices(tenantId(), storeId());
+      toast.ok(t("devices.published", { count: report.device_count }));
+      if (report.skipped_count > 0) {
+        toast.error(t("devices.publishedSkipped", { count: report.skipped_count }));
+      }
+    } catch (caught) {
+      toast.error(apiMessage(caught));
+    } finally {
+      setPublishing(false);
+    }
   };
 
   // Opens the approval dialog, pulling the *proposing store's* stations so the picker offers real
@@ -279,6 +331,19 @@ export function Devices() {
         </span>
       ),
     },
+    {
+      key: "drawer",
+      header: t("devices.drawer"),
+      cell: (row) => (
+        <span class={row.drawer_attached ? "text-ink" : "text-ink-muted"}>
+          {row.connection !== "usb"
+            ? t("devices.drawerUsbOnly")
+            : row.drawer_attached
+              ? t("devices.drawerAttached")
+              : t("devices.drawerNone")}
+        </span>
+      ),
+    },
   ];
 
   return (
@@ -339,8 +404,16 @@ export function Devices() {
         </div>
 
         <div class="mt-6">
-          <Card title={t("devices.agents")}>
+          <Card
+            title={t("devices.agents")}
+            actions={
+              <Button disabled={!storeId() || publishing()} onClick={() => void publish()}>
+                {t("devices.publish")}
+              </Button>
+            }
+          >
             <p class="mb-3 text-sm text-ink-muted">{t("devices.agentsHint")}</p>
+            <p class="mb-3 text-sm text-ink-muted">{t("devices.publishHint")}</p>
             <Show when={storeId()} fallback={<p class="text-sm text-ink-muted">{t("context.storeRequired")}</p>}>
               <DataTable
                 columns={printerColumns()}
@@ -349,15 +422,27 @@ export function Devices() {
                 empty={<EmptyState title={t("devices.agentsEmpty")} />}
                 actionsHeader={t("common.actions")}
                 actions={(row) => (
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setAgentChoice(row.agent_device_id ?? "");
-                      agentDraft.edit(row);
-                    }}
-                  >
-                    {t("devices.chooseAgent")}
-                  </Button>
+                  <div class="flex gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setAgentChoice(row.agent_device_id ?? "");
+                        agentDraft.edit(row);
+                      }}
+                    >
+                      {t("devices.chooseAgent")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={row.connection !== "usb"}
+                      onClick={() => {
+                        setDrawerChoice(row.drawer_attached);
+                        drawerDraft.edit(row);
+                      }}
+                    >
+                      {t("devices.chooseDrawer")}
+                    </Button>
+                  </div>
                 )}
               />
             </Show>
@@ -434,6 +519,22 @@ export function Devices() {
             options={terminals().map((entry) => ({ value: entry.id, label: entry.name }))}
             onChange={setAgentChoice}
             placeholder={t("devices.agentNone")}
+          />
+        </FormPanel>
+
+        <FormPanel
+          crud={drawerDraft}
+          createTitle={t("devices.drawerTitle")}
+          editTitle={t("devices.drawerTitle")}
+          submitLabel={t("action.save")}
+          onSubmit={saveDrawer}
+          as="modal"
+        >
+          <p class="text-sm text-ink-muted">{t("devices.drawerHint")}</p>
+          <CheckboxField
+            label={t("devices.drawerLabel")}
+            checked={drawerChoice()}
+            onChange={setDrawerChoice}
           />
         </FormPanel>
 

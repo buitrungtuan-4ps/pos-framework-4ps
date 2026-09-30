@@ -31,7 +31,7 @@ use pos_proto::ids::EventId;
 
 use crate::app::{Approval, BillView, BuyerDetails, Edge};
 use crate::http::{bad_request, error_response, parse_ulid};
-use crate::printing::{PrintOutcome, Printers};
+use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
 
 /// One payment a device applies to a bill: how it was paid, what the guest handed over, what was put
 /// against the total, and what they left. Change is what is left of `tendered` once
@@ -147,6 +147,11 @@ pub(crate) struct BillResponse {
     /// rendered "Printing receipt…" over a store with no printer wired at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     receipt_print: Option<String>,
+    /// What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or
+    /// `DRAWER_UNAVAILABLE` ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing
+    /// was asked of the drawer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    drawer_open: Option<String>,
 }
 
 impl From<BillView> for BillResponse {
@@ -159,6 +164,7 @@ impl From<BillView> for BillResponse {
             table_state: view.table_state.map(|state| state.as_wire().to_owned()),
             print_receipt: view.print_receipt,
             receipt_print: None,
+            drawer_open: None,
         }
     }
 }
@@ -254,6 +260,14 @@ where
     // After the commit, never before: a printer that is down must not unwind a settled bill, and a
     // rolled-back settle must never have printed (ADR-0100, `Edge::settle_bill`).
     let mut response = BillResponse::from(view.clone());
+    // The drawer before the paper: the cashier needs the change before the guest needs the receipt.
+    if view.open_drawer {
+        let opened = match printers.as_deref() {
+            Some(printers) => printers.open_drawer(&edge.session()).await,
+            None => DrawerOutcome::NoDrawer,
+        };
+        response.drawer_open = Some(opened.as_wire().to_owned());
+    }
     if view.print_receipt {
         let printed = print_receipt_for(printers.as_deref(), &edge, &view, buyer.as_ref()).await;
         response.receipt_print = Some(printed.as_wire().to_owned());

@@ -53,7 +53,7 @@ use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore}
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
 use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
-    DeviceProposalSummary, PersistedDeviceProposal, SetAgentOutcome,
+    DeviceProposalSummary, DeviceWriteOutcome, PersistedDeviceProposal,
 };
 use pos_cloud::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use pos_cloud::floorplan::{
@@ -4244,6 +4244,8 @@ struct DeviceRow {
     /// Picked in the console, never discovered (ADR-0112). `None` — the ordinary case — means the
     /// edge opens the address itself.
     agent_device_id: Option<DeviceProposalId>,
+    /// Ticked in the console, never discovered (ADR-0165). `false` until somebody does.
+    drawer_attached: bool,
     status: DeviceProposalStatus,
     /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
     /// reason about. Bumped by every write that changes the row.
@@ -4279,6 +4281,7 @@ impl DeviceProposalStore for FakeDevices {
             connection: None,
             station_id: None,
             agent_device_id: None,
+            drawer_attached: false,
             status: DeviceProposalStatus::Pending,
             version: self.mint(),
         });
@@ -4310,6 +4313,7 @@ impl DeviceProposalStore for FakeDevices {
                 connection: row.connection.map(|kind| kind.short_name().to_owned()),
                 station_id: row.station_id.map(|id| id.to_string()),
                 agent_device_id: row.agent_device_id.map(|id| id.to_string()),
+                drawer_attached: row.drawer_attached,
                 status: row.status.as_wire().to_owned(),
                 version: row.version.to_string(),
             })
@@ -4357,6 +4361,7 @@ impl DeviceProposalStore for FakeDevices {
             connection: None,
             station_id: None,
             agent_device_id: None,
+            drawer_attached: false,
             // Created resolved. The console write by a named admin *is* the decision, because
             // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
             status: DeviceProposalStatus::Approved,
@@ -4371,19 +4376,40 @@ impl DeviceProposalStore for FakeDevices {
         id: DeviceProposalId,
         agent: Option<DeviceProposalId>,
         expected: &str,
-    ) -> Result<SetAgentOutcome, DeviceProposalError> {
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
         let mut rows = self.rows.lock().expect("lock");
         let Some(row) = rows.iter_mut().find(|row| {
             row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
         }) else {
-            return Ok(SetAgentOutcome::NotFound);
+            return Ok(DeviceWriteOutcome::NotFound);
         };
         if row.version.as_str() != expected {
-            return Ok(SetAgentOutcome::VersionMismatch);
+            return Ok(DeviceWriteOutcome::VersionMismatch);
         }
         row.agent_device_id = agent;
         row.version = self.mint();
-        Ok(SetAgentOutcome::Updated)
+        Ok(DeviceWriteOutcome::Updated)
+    }
+
+    async fn set_drawer(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        drawer_attached: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
+        }) else {
+            return Ok(DeviceWriteOutcome::NotFound);
+        };
+        if row.version.as_str() != expected {
+            return Ok(DeviceWriteOutcome::VersionMismatch);
+        }
+        row.drawer_attached = drawer_attached;
+        row.version = self.mint();
+        Ok(DeviceWriteOutcome::Updated)
     }
 }
 
@@ -4966,6 +4992,129 @@ async fn picking_an_agent_needs_the_version_the_device_was_read_at() {
         replayed.status(),
         StatusCode::PRECONDITION_FAILED,
         "the second manager is told to re-read rather than silently overwriting the first"
+    );
+}
+
+/// Publishes a store's devices and reads one of them back out of the store's effective config,
+/// which is what the store receives.
+async fn published_device(
+    router: &axum::Router,
+    cookie: &str,
+    tenant_ulid: &str,
+    store_ulid: &str,
+    device_id: &str,
+) -> serde_json::Value {
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/devices/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            cookie,
+        ))
+        .await
+        .expect("route the config read");
+    let document = json_body(effective).await;
+    document["devices"]["devices"]
+        .as_array()
+        .expect("the devices node is an array")
+        .iter()
+        .find(|device| device["device_id"] == device_id)
+        .expect("the device is published")
+        .clone()
+}
+
+/// A printer is marked **Cash drawer attached**, and the published node carries the mark
+/// (**ADR-0165** decision 4), under the agent pick's conditional write.
+///
+/// End to end for the reason the agent test is: the mark alone proves nothing about what a store
+/// receives. And the default is asserted first, because it is the claim a fleet upgrade rests on: a
+/// printer nobody marked publishes no drawer.
+#[tokio::test]
+async fn a_printer_marked_with_a_drawer_publishes_the_mark_and_the_mark_needs_its_version() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "/dev/usb/lp0").await;
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=usb"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let unmarked = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert!(
+        unmarked["drawer_attached"].is_null(),
+        "a printer nobody marked publishes no drawer, not even a false one: {unmarked}"
+    );
+
+    let body = serde_json::json!({ "tenant_id": tenant_ulid.clone(), "drawer_attached": true });
+    let unconditional = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/devices/proposals/{counter}/drawer"),
+            &body,
+            &cookie,
+        ))
+        .await
+        .expect("route the unconditional mark");
+    assert_eq!(
+        unconditional.status(),
+        StatusCode::BAD_REQUEST,
+        "no If-Match is refused, not a silent last-write-wins"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let marked = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/drawer"),
+            &body,
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the mark");
+    assert_eq!(marked.status(), StatusCode::NO_CONTENT);
+    let replayed = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{counter}/drawer"),
+            &serde_json::json!({ "tenant_id": tenant_ulid.clone(), "drawer_attached": false }),
+            &cookie,
+            &version,
+        ))
+        .await
+        .expect("route the stale clear");
+    assert_eq!(
+        replayed.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert_eq!(
+        published["drawer_attached"], true,
+        "the store hears that a drawer is wired to its counter printer"
     );
 }
 

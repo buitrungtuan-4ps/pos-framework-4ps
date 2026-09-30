@@ -6626,6 +6626,89 @@ mod device_proposals {
         });
     }
 
+    /// A printer's cash drawer is marked, cleared and read back through the column the publish reads
+    /// (ADR-0165 decision 4), under the same conditional write as the agent pick.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a row nobody marked reads `false`, so no
+    /// store's drawer starts opening because the column appeared.
+    #[test]
+    fn a_drawer_mark_round_trips_and_a_row_nobody_marked_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "PRN1")
+                .expect("the printer")
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create(
+                    "PRN1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Counter",
+                    "/dev/usb/lp0",
+                )
+                .await
+                .expect("propose the printer");
+            devices
+                .mark(
+                    TENANT_A,
+                    "PRN1",
+                    "approved",
+                    Some(DeviceConnection::Usb),
+                    None,
+                )
+                .await
+                .expect("approve the printer");
+            let printer = read(&devices).await;
+            assert!(
+                !printer.drawer_attached,
+                "a printer nobody marked has no drawer"
+            );
+
+            let moved = devices
+                .set_drawer(TENANT_A, "PRN1", true, &printer.version)
+                .await
+                .expect("the conditional mark")
+                .expect("a matching version writes");
+            assert!(read(&devices).await.drawer_attached, "the mark round-trips");
+            assert!(
+                devices
+                    .set_drawer(TENANT_A, "PRN1", false, &printer.version)
+                    .await
+                    .expect("the stale clear")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the mark"
+            );
+            assert!(
+                devices
+                    .set_drawer("tenant-b", "PRN1", false, &moved)
+                    .await
+                    .expect("cross-tenant clear")
+                    .is_none(),
+                "the tenant scope stops one tenant clearing another's drawer"
+            );
+            devices
+                .set_drawer(TENANT_A, "PRN1", false, &moved)
+                .await
+                .expect("the clear")
+                .expect("the current version writes");
+            assert!(
+                !read(&devices).await.drawer_attached,
+                "and the clear does too"
+            );
+        });
+    }
+
     /// Migration 0055 repairs the rows a two-spelling seam already wrote.
     ///
     /// Typing the argument stops the mistake being made again; it does nothing for the approvals
