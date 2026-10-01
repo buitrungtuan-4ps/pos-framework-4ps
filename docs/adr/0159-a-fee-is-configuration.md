@@ -1,6 +1,6 @@
 # ADR-0159 — A fee is configuration: any number of named charges, each a rate or an amount, taxed or not, by channel and by item
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-26
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-26
 · Relates to [ADR-0028](0028-settlement-and-payment-invariant.md), [ADR-0033](0033-config-tree.md),
 [ADR-0066](0066-cloud-catalog.md), [ADR-0104](0104-multi-component-and-inclusive-tax.md),
 [ADR-0115](0115-reason-codes-are-a-managed-list.md), [ADR-0128](0128-a-bill-splits-and-merges.md),
@@ -30,7 +30,9 @@ or not, by sales channel and by item. Today there is one fee, and it is always z
 | B | Fees as menu items staff add | No percentages, no automatic channel rule, relies on memory |
 | C | **A published list of fee rules the core applies to every bill** | A new wire node, additive event fields, and a core calculation to prove |
 
-## Decision (proposed)
+## Decision
+
+Option **C**. The owner approved it on 2026-10-01.
 
 1. **A fee rule is data** in a new `fees` config node (`pos_proto::fees`), authored in the console at
    tenant, brand or store level and merged by fee id down the config tree
@@ -89,6 +91,9 @@ may pull any of them into this record during review:
 - The owner confirms the defaults: taxable (`FOLLOW_LINES`), after discounts, net of tax, not
   waivable.
 - The owner confirms freezing a bill's fees when it opens (item 3) rather than when it settles.
+
+Met on 2026-10-01: the owner confirmed both. Accounting reviews how a fee is taxed together with
+ADR-0162's tax point; until it answers, a new fee follows its lines.
 
 ## Consequences accepted
 

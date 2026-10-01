@@ -1,6 +1,6 @@
 # ADR-0160 — Everything a store runs differently is published configuration: typed, defaulted, authored once for many stores, and honoured or hidden
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-26
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-26
 · Relates to [ADR-0004](0004-cloud-owned-configuration.md), [ADR-0033](0033-config-tree.md),
 [ADR-0071](0071-config-without-json.md), [ADR-0078](0078-sync-and-ota-closure.md),
 [ADR-0105](0105-a-country-pack-is-values.md), [ADR-0115](0115-reason-codes-are-a-managed-list.md),
@@ -41,7 +41,9 @@ run differently is hardcoded. [ADR-0004](0004-cloud-owned-configuration.md) and
 | B | A free-form settings bag of keys and values | Untyped, unvalidated, and the JSON editing [ADR-0071](0071-config-without-json.md) removed |
 | C | **Typed fields with defaults, authored at any scope, honoured by the edge or hidden by the console** | Many small slices across the edge, the till and the console |
 
-## Decision (proposed)
+## Decision
+
+Option **C**. The owner approved it on 2026-10-01.
 
 1. **A setting is a typed field with a default.** Every value a store may run differently is a field
    on a published node, typed in `pos-proto` as the `integrations` node is
@@ -105,6 +107,12 @@ run differently is hardcoded. [ADR-0004](0004-cloud-owned-configuration.md) and
 - The owner confirms the other recommended values for new stores: the drawer model, the receipt
   languages and the idle lock.
 - The owner confirms one QR switch (item 5) and joining the table's order by default (item 2).
+
+Met on 2026-10-01: the owner confirmed the recommended values for a new store: one drawer per
+terminal once the multi-drawer shift work lands, and one per store until then; receipts in the
+country's language (Vietnamese in Vietnam), with a bilingual Vietnamese and English receipt as a
+per-store choice; and a till that locks after two minutes without a touch. The owner also
+confirmed one QR switch, and that a QR order joins the table's order by default.
 
 ## Consequences accepted
 
