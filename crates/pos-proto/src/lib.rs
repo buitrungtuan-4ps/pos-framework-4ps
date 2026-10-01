@@ -49,6 +49,8 @@ pub mod pii;
 pub mod protocol;
 pub mod quantity;
 pub mod reason_codes;
+pub mod settings;
+pub mod shift;
 pub mod snapshot;
 pub mod store_profile;
 pub mod text;

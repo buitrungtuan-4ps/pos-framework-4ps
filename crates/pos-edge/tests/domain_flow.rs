@@ -25,11 +25,13 @@ use pos_fakes::FakeStore;
 use pos_ports::PortError;
 use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
+use pos_proto::Open;
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::ids::DeviceId;
 use pos_proto::ids::{EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
+use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use printer_escpos::{Transport, TransportStatus, Unreachable};
@@ -72,6 +74,15 @@ async fn app_with_permissions(
     printing: Option<(Arc<Printers>, PublishedDevices)>,
     permissions: PermissionSet,
 ) -> (Router, String) {
+    app_with_shift(printing, permissions, PublishedShift::default()).await
+}
+
+/// [`app_with_permissions`], at a store whose published `shift` node is `shift` (ADR-0160).
+async fn app_with_shift(
+    printing: Option<(Arc<Printers>, PublishedDevices)>,
+    permissions: PermissionSet,
+    shift: PublishedShift,
+) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
@@ -93,6 +104,7 @@ async fn app_with_permissions(
             identity,
             EdgeSession {
                 devices,
+                shift,
                 ..EdgeSession::bootstrap().with_staff(roster)
             },
             Arc::new(InMemoryReceipts::new()),
@@ -1026,6 +1038,30 @@ async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
         send_for_reason(app, &token, "POST", "/api/shifts/not-a-ulid/close", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(reason.as_deref(), Some("INVALID_ARGUMENT"));
+}
+
+#[tokio::test]
+async fn a_store_that_refuses_selling_without_a_shift_says_so_until_one_opens() {
+    let refusing = PublishedShift {
+        no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+    };
+    let (app, token) = app_with_shift(None, PermissionSet::default(), refusing).await;
+    let seat = format!("/api/tables/{}/seat", TableId::new(Ulid::from_u128(780)));
+
+    let (status, reason) = send_for_reason(app.clone(), &token, "POST", &seat, None).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("OPEN_SHIFT_REQUIRED"));
+    let counter = Some(json!({}));
+    let (status, reason) =
+        send_for_reason(app.clone(), &token, "POST", "/api/orders", counter).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(reason.as_deref(), Some("OPEN_SHIFT_REQUIRED"));
+
+    let open = Some(json!({ "opening_float": vnd(500_000) }));
+    let (status, _) = send(app.clone(), &token, "POST", "/api/shifts", open).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send(app, &token, "POST", &seat, None).await;
+    assert_eq!(status, StatusCode::OK, "a table seats once a shift is open");
 }
 
 #[tokio::test]
