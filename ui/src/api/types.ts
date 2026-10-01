@@ -604,12 +604,11 @@ export interface CashMovementRequest {
   reason_code_id: string;
 }
 
-/** Opening the drawer without a sale: why, and the manager whose PIN allows it (ADR-0165). */
-export interface OpenDrawerRequest {
-  reason_code_id: string;
-  approver_code: string;
-  approver_pin: string;
-}
+/**
+ * Opening the drawer without a sale: why, and the manager whose PIN allows it (ADR-0165). No manager
+ * where the store enforces each person's own set and the person holds the act directly (ADR-0158).
+ */
+export type OpenDrawerRequest = { reason_code_id: string } & Partial<ApproverRequest>;
 
 /** The opening is recorded; this is whether the drawer sprang. */
 export interface OpenDrawerResponse {

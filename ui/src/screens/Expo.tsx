@@ -3,6 +3,7 @@ import { For, Show, createEffect, createMemo } from "solid-js";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
+import { can } from "../state/permissions";
 import {
   bump,
   firedLines,
@@ -111,6 +112,7 @@ export function Expo() {
                   )}
                 </For>
               </ul>
+              <Show when={can("sales.ticket.bump")}>
               <button
                 type="button"
                 class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
@@ -119,6 +121,7 @@ export function Expo() {
               >
                 {t("expo.all_away")}
               </button>
+              </Show>
             </div>
           )}
         </For>

@@ -20,6 +20,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { asksApprover, can } from "../state/permissions";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
@@ -116,17 +117,24 @@ export function Shift() {
     setApproverPin("");
   };
 
+  // A manager's code and PIN, where the person needs an approver for the drawer: everybody, where
+  // the store does not enforce each person's own set (ADR-0158).
+  const drawerAsks = () => asksApprover("cash.drawer.open_no_sale");
   const openDrawer = async (reasonCodeId: string) => {
     setError(null);
+    const approval = drawerAsks()
+      ? { approver_code: approverCode(), approver_pin: approverPin() }
+      : undefined;
     try {
-      setDrawer(await openDrawerNoSale(reasonCodeId, approverCode(), approverPin()));
+      setDrawer(await openDrawerNoSale(reasonCodeId, approval));
       closeDrawerPanel();
     } catch (caught) {
       setError(errorMessage(caught));
     }
   };
 
-  const approverReady = () => approverCode().trim() !== "" && approverPin().trim() !== "";
+  const approverReady = () =>
+    !drawerAsks() || (approverCode().trim() !== "" && approverPin().trim() !== "");
 
   // The taps the step budget counts, named for what the operator is doing (`ui/scripts/step-budget.mjs`
   // resolves a declared step to the handler its element calls).
@@ -156,7 +164,9 @@ export function Shift() {
         )}
       </Show>
 
-      <Show when={phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED"}>
+      <Show
+        when={(phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") && can("cash.shift.open")}
+      >
         <label class="block text-sm text-ink-muted" for="float">
           {t("shift.float_label", { currency: storeCurrency() })}
         </label>
@@ -193,6 +203,7 @@ export function Shift() {
           Cash in and out of the drawer outside a sale (ADR-0165). The amount comes first, so the
           two taps after it are the whole act: which way, and why.
         */}
+        <Show when={can("cash.movement.record")}>
         <div class="mt-4 rounded-token border border-line bg-surface p-3">
           <h2 class="font-semibold">{t("shift.cash_title")}</h2>
           <label class="mt-2 block text-sm text-ink-muted" for="movement-amount">
@@ -293,7 +304,9 @@ export function Shift() {
             </p>
           </Show>
         </div>
+        </Show>
 
+        <Show when={can("cash.shift.close")}>
         <label class="mt-4 block text-sm text-ink-muted" for="count">
           {t("shift.count_label", { currency: storeCurrency() })}
         </label>
@@ -320,12 +333,14 @@ export function Shift() {
         >
           {t("shift.enter_count")}
         </button>
+        </Show>
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_COUNTED"}>
         <p class="text-ink-muted" data-outcome="shift-counted">
           {t("shift.counted_hint")}
         </p>
+        <Show when={can("cash.shift.close")}>
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
@@ -339,6 +354,7 @@ export function Shift() {
         >
           {t("shift.close")}
         </button>
+        </Show>
       </Show>
 
       <Show when={phase() === "SHIFT_STATE_CLOSED" && shift()?.variance}>
@@ -392,6 +408,7 @@ export function Shift() {
         <Show
           when={openingDrawer()}
           fallback={
+            <Show when={can("cash.drawer.open_no_sale")}>
             <button
               type="button"
               class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
@@ -401,10 +418,12 @@ export function Shift() {
             >
               {t("shift.open_drawer")}
             </button>
+            </Show>
           }
         >
           <div class="rounded-token border border-line bg-surface p-3">
             <h2 class="font-semibold">{t("shift.open_drawer_title")}</h2>
+            <Show when={drawerAsks()}>
             <p class="mt-1 text-sm text-ink-muted">{t("shift.open_drawer_manager")}</p>
             <ApproverFields
               id="no-sale-approver"
@@ -415,6 +434,7 @@ export function Shift() {
               codeLabel={t("shift.approver_code")}
               pinLabel={t("shift.approver_pin")}
             />
+            </Show>
             <p class="mt-3 text-sm text-ink-muted">{t("shift.open_drawer_reason")}</p>
             <div class="mt-2 grid grid-cols-2 gap-2">
               <For each={reasonsFor(DRAWER_OPEN)}>

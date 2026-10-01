@@ -44,6 +44,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { asksApprover, can, permissionsEnforced } from "../state/permissions";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
 // store can hold reasons for one and not the other — and the picker here offers only the entries
@@ -634,7 +635,16 @@ export function Pay() {
   // After one guest's part is paid: the next bill still open on the table.
   const nextBill = (id: string) => switchTo(id);
 
-  const readyToVoid = () => approverCode().trim() !== "" && approverPin() !== "";
+  // The manager's badge and PIN, once both are typed. Each act below asks for them only where the
+  // person needs an approver (ADR-0158): where the store does not enforce each person's own set,
+  // always, as the till always has.
+  const approverTyped = () => approverCode().trim() !== "" && approverPin() !== "";
+  const approval = () =>
+    approverTyped()
+      ? { approver_code: approverCode().trim(), approver_pin: approverPin() }
+      : undefined;
+  const voidAsks = () => asksApprover("billing.bill.void");
+  const readyToVoid = () => !voidAsks() || approverTyped();
 
   const closeVoid = () => {
     setVoidingBill(false);
@@ -658,10 +668,7 @@ export function Pay() {
       return;
     }
     setError(null);
-    void voidBill(id, reasonCodeId, {
-      approver_code: approverCode().trim(),
-      approver_pin: approverPin(),
-    })
+    void voidBill(id, reasonCodeId, voidAsks() ? approval() : undefined)
       .then(() => {
         closeVoid();
         setVoided(true);
@@ -684,8 +691,18 @@ export function Pay() {
 
   // The reason buttons stay disabled until there is an amount and a manager, for the reason the
   // void's are: a button that can only produce a refusal teaches an operator the till is unreliable.
+  //
+  // Where the store enforces each person's own set, a person holding the override with approval is
+  // offered the manager's fields rather than made to fill them: the till does not know their
+  // ceiling, so a discount within it goes through alone, and one above it is refused until a
+  // manager approves (ADR-0158). One half-typed is waited for, never dropped.
+  const discountAsks = () => asksApprover("billing.discount.override_ceiling");
+  const discountOptional = () => discountAsks() && permissionsEnforced();
   const readyToDiscount = () =>
-    discountAmount() !== null && approverCode().trim() !== "" && approverPin() !== "";
+    discountAmount() !== null &&
+    (approverTyped() ||
+      !discountAsks() ||
+      (discountOptional() && approverCode().trim() === "" && approverPin() === ""));
 
   const closeDiscount = () => {
     setDiscounting(false);
@@ -709,16 +726,23 @@ export function Pay() {
       return;
     }
     setError(null);
-    void applyDiscount(id, money(currency(), amount), reasonCodeId, {
-      approver_code: approverCode().trim(),
-      approver_pin: approverPin(),
-    })
+    const approver = discountAsks() ? approval() : undefined;
+    void applyDiscount(id, money(currency(), amount), reasonCodeId, approver)
       .then((totals) => {
         setCheck(totals);
         closeDiscount();
       })
       .catch((caught: unknown) =>
-        setError(errorMessage(caught)),
+        // Above the ceiling with no manager typed, the edge names the override that was missing:
+        // for a person who holds it with approval, that is a manager to fetch, not a refusal.
+        setError(
+          caught instanceof ApiError &&
+            caught.reason === "PERMISSION_DENIED" &&
+            discountOptional() &&
+            approver === undefined
+            ? t("error.approval_required")
+            : errorMessage(caught),
+        ),
       );
   };
 
@@ -800,7 +824,9 @@ export function Pay() {
                   : t("pay.part_for_seat", { seat: partSeat() ?? 0, items: partItems() })}
               </p>
             </Show>
-            <Show when={otherParts().length > 0 && taken().length === 0}>
+            <Show
+              when={otherParts().length > 0 && taken().length === 0 && can("billing.bill.split")}
+            >
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
@@ -812,7 +838,7 @@ export function Pay() {
 
             {/* Before any money is taken: once a payment is against the bill, the guest has agreed
                 the figure and the receipt is the paper that follows. */}
-            <Show when={taken().length === 0}>
+            <Show when={taken().length === 0 && can("billing.bill.open")}>
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
@@ -844,6 +870,7 @@ export function Pay() {
               screen that asked "split?" first would make every split a tap longer and every other
               settle no shorter.
             */}
+            <Show when={can("billing.payment.take")}>
             <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
             <div class="grid grid-cols-5 gap-2">
               <For each={SPLIT_WAYS}>
@@ -863,6 +890,7 @@ export function Pay() {
                 )}
               </For>
             </div>
+            </Show>
             <Show when={ways()}>
               {(n) => (
                 <div class="mt-3 rounded-token border border-line bg-surface p-3">
@@ -922,7 +950,7 @@ export function Pay() {
               rather than a list on every bill, because the list would push the tenders below the fold
               on a phone for every settle that never splits.
             */}
-            <Show when={(covered()?.length ?? 0) > 1 && !picking()}>
+            <Show when={(covered()?.length ?? 0) > 1 && !picking() && can("billing.bill.split")}>
               <div class="mt-2 flex gap-2">
                 <button
                   type="button"
@@ -991,6 +1019,8 @@ export function Pay() {
               </div>
             </Show>
 
+            {/* The tip, the buyer and the tenders are taking payment (ADR-0158). */}
+            <Show when={can("billing.payment.take")}>
             <Show when={tipsEnabled() && ways() === null}>
               <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
               <div class="grid grid-cols-4 gap-2">
@@ -1143,12 +1173,14 @@ export function Pay() {
                 <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
               </Show>
             </div>
+            </Show>
 
             {/*
               Voiding the bill (ADR-0115, §6). Secondary to the tender buttons on purpose: it is the
               rare act, and it is the one that needs a second person. Always a manager — a bill is
               money whether or not the kitchen started — so unlike a line there is no shape of this
-              the till lets through on its own.
+              the till lets through on its own, unless the store enforces each person's own set and
+              the person holds the void directly (ADR-0158).
 
               The reason buttons stay disabled until the manager's badge and PIN are filled, which
               keeps the void at the three taps §6 allows a rare action (pay, void, reason) rather
@@ -1165,11 +1197,15 @@ export function Pay() {
               own description refers to, so the edge reads the ceiling as zero and answers `403`
               naming `billing.discount.override_ceiling`. The fields are here because that is the
               answer today; when a store publishes a ceiling, a small discount will start going
-              through and this panel will not have to change.
+              through and this panel will not have to change. Where the store enforces each person's
+              own set, the fields are offered only to a person who holds the override with approval,
+              and the button only to one who holds `billing.discount.apply`, which every discount
+              needs whatever its size.
             */}
             <Show
               when={discounting()}
               fallback={
+                <Show when={can("billing.discount.apply")}>
                 <button
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
@@ -1179,6 +1215,7 @@ export function Pay() {
                 >
                   {t("pay.discount")}
                 </button>
+                </Show>
               }
             >
               <div class="mt-6 rounded-token border border-line bg-surface p-3">
@@ -1199,7 +1236,10 @@ export function Pay() {
                   onChange={setDiscountText}
                   data-step="discountKeypad"
                 />
-                <p class="mt-2 text-sm text-ink-muted">{t("pay.discount_manager")}</p>
+                <Show when={discountAsks()}>
+                <p class="mt-2 text-sm text-ink-muted">
+                  {t(discountOptional() ? "pay.discount_over_limit" : "pay.discount_manager")}
+                </p>
                 <ApproverFields
                   id="discount-approver"
                   code={approverCode()}
@@ -1209,6 +1249,7 @@ export function Pay() {
                   codeLabel={t("pay.approver_code")}
                   pinLabel={t("pay.approver_pin")}
                 />
+                </Show>
                 <p class="mt-3 text-sm text-ink-muted">{t("pay.discount_reason")}</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
                   <For each={reasonsFor(DISCOUNT)}>
@@ -1238,6 +1279,7 @@ export function Pay() {
             <Show
               when={voidingBill()}
               fallback={
+                <Show when={can("billing.bill.void")}>
                 <button
                   type="button"
                   class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
@@ -1247,10 +1289,12 @@ export function Pay() {
                 >
                   {t("pay.void")}
                 </button>
+                </Show>
               }
             >
               <div class="mt-6 rounded-token border border-line bg-surface p-3">
                 <h2 class="font-semibold">{t("pay.void_title")}</h2>
+                <Show when={voidAsks()}>
                 <p class="mt-1 text-sm text-ink-muted">{t("pay.void_manager")}</p>
                 <ApproverFields
                   id="void-bill-approver"
@@ -1261,6 +1305,7 @@ export function Pay() {
                   codeLabel={t("pay.approver_code")}
                   pinLabel={t("pay.approver_pin")}
                 />
+                </Show>
                 <p class="mt-3 text-sm text-ink-muted">{t("pay.void_reason")}</p>
                 <div class="mt-2 grid grid-cols-2 gap-2">
                   <For each={reasonsFor(VOID_BILL)}>
@@ -1323,6 +1368,7 @@ export function Pay() {
                 {t("pay.drawer_unavailable")}
               </p>
             </Show>
+            <Show when={can("billing.receipt.reprint")}>
             <button
               type="button"
               class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
@@ -1331,6 +1377,7 @@ export function Pay() {
             >
               {t("pay.print_again")}
             </button>
+            </Show>
             <Show when={copy()}>
               {(printed) => (
                 <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="receipt-reprinted">

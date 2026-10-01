@@ -2684,6 +2684,166 @@ test("a box being claimed shows its claim page and no till around it", async ({ 
   }
 });
 
+// What the signed-in person may do, as a store that enforces each person's own permissions reports
+// it (ADR-0158 decision 6). The example store enforces nothing, so this rewrites the session read's
+// three fields and nothing else; `granted()` is asked on every read, so a test can change it.
+async function aSessionThatSays(page, enforced, granted, withApproval = []) {
+  await page.route("**/api/session", async (route) => {
+    const response = await route.fetch();
+    if (!response.ok()) {
+      await route.fulfill({ response });
+      return;
+    }
+    const body = await response.json();
+    await route.fulfill({
+      response,
+      json: {
+        ...body,
+        permissions_enforced: enforced,
+        permissions: granted(),
+        permissions_with_approval: withApproval,
+      },
+    });
+  });
+}
+
+/** The status bar's destinations that are drawn, by address. */
+async function destinations(page) {
+  return page.locator("nav a").evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+}
+
+// A store that enforces hides what the person may not do. This person seats, rings, sends and opens
+// the bill, and opens the drawer alone. With a manager's approval they void a bill, and they go above
+// a discount ceiling, but they hold no discount itself. They also move guests "with approval", which
+// no act takes, so it lets them do nothing.
+test("a store that enforces each person's own permissions hides what they may not do", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    const granted = [
+      "billing.bill.open",
+      "cash.drawer.open_no_sale",
+      "sales.line.add",
+      "sales.line.fire",
+      "sales.table.manage",
+    ];
+    const withApproval = [
+      "billing.bill.void",
+      "billing.discount.override_ceiling",
+      "sales.order.transfer",
+    ];
+    await aSessionThatSays(page, true, () => granted, withApproval);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(() => destinations(page)).toEqual(["/", "/counter", "/today", "/shift", "/pair"]);
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+
+    // Void follows the line: a cancel before the kitchen has it, `sales.line.void_fired` after.
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await expect(page.locator('[data-step="askVoid"]')).toHaveCount(0);
+    await addItem(page);
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="askVoid"]')).toHaveCount(1);
+    for (const hidden of ["openMove", "startMarking"]) {
+      await expect(page.locator(`[data-step="${hidden}"]`)).toHaveCount(0);
+    }
+
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-step="askVoidBill"]')).toBeVisible();
+    for (const hidden of ["setTender", "payCash", "payCard", "splitEvenly", "askDiscount"]) {
+      await expect(page.locator(`[data-step="${hidden}"]`)).toHaveCount(0);
+    }
+    // With approval: the manager's fields are asked for before the void is sent.
+    await page.locator('[data-step="askVoidBill"]').click();
+    await expect(page.locator("#void-bill-approver-code")).toBeVisible();
+    await expect(page.locator('[data-step="voidBillReason"]').first()).toBeDisabled();
+
+    // Directly: the drawer opens with nobody's PIN, and the shift itself is not theirs to open.
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-step="openShift"]')).toHaveCount(0);
+    await page.locator('[data-step="askOpenDrawer"]').click();
+    await expect(page.locator("#no-sale-approver-code")).toHaveCount(0);
+    await expect(page.locator('[data-step="drawerReason"]').first()).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A store that does not enforce hides nothing, whatever the two lists say: every store today.
+test("a store that does not enforce each person's own permissions hides nothing", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await aSessionThatSays(page, false, () => []);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect.poll(() => destinations(page)).toEqual([
+      "/",
+      "/counter",
+      "/guests",
+      "/kds",
+      "/expo",
+      "/today",
+      "/shift",
+      "/pair",
+      "/devices",
+    ]);
+
+    await seatTable(page);
+    await addItem(page);
+    for (const shown of ["fireOrder", "openMove", "startMarking", "askVoid"]) {
+      await expect(page.locator(`[data-step="${shown}"]`).first()).toBeVisible();
+    }
+    await page.locator('[data-step="takePayment"]').click();
+    for (const shown of ["setTender", "payCash", "askDiscount", "askVoidBill"]) {
+      await expect(page.locator(`[data-step="${shown}"]`).first()).toBeVisible();
+    }
+    // A manager approves the void, as on every store today.
+    await page.locator('[data-step="askVoidBill"]').click();
+    await expect(page.locator("#void-bill-approver-code")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A role changed in the console reaches an open till with the configuration, without a new sign-in:
+// the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
+// session again. The frame is given the next position on the stream, so it is heard as itself.
+test("a till hears a new configuration and reads again what the person may do", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    const granted = ["sales.line.add", "sales.table.manage"];
+    await aSessionThatSays(page, true, () => granted);
+    let link = null;
+    let last = null;
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        link = socket;
+        socket.connectToServer().onMessage((message) => {
+          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          last = typeof sequence === "number" ? { streamId, sequence } : last;
+          socket.send(message);
+        });
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await expect(page.locator('[data-step="fireOrder"]')).toHaveCount(0);
+
+    granted.push("sales.line.fire");
+    const position = last === null ? {} : { stream_id: last.streamId, sequence: last.sequence + 1 };
+    link.send(JSON.stringify({ type: "config_applied", config_version_id: "replay", ...position }));
+    await expect(page.locator('[data-step="fireOrder"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

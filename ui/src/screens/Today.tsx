@@ -7,6 +7,7 @@ import { type MessageKey, t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { can } from "../state/permissions";
 import { formatAmount, openBillCount, state, tableCounts, tableLabel } from "../state/store";
 
 const ORDER = [
@@ -119,6 +120,8 @@ export function Today() {
         </div>
       </div>
 
+      {/* The list is there to reprint from (`billing.receipt.reprint`, ADR-0158). */}
+      <Show when={can("billing.receipt.reprint")}>
       <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("today.recent_bills")}</h2>
       <Show when={error()}>
         {(message) => (
@@ -188,6 +191,7 @@ export function Today() {
             </ul>
           </Show>
         )}
+      </Show>
       </Show>
     </section>
   );

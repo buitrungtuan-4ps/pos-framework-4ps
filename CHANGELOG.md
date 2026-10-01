@@ -348,6 +348,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till hides what the signed-in person cannot do, where the store enforces each person's own
+  permissions** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+  decision 6). Nothing turns enforcement on yet.
+  - The till reads what the person holds directly and with approval from `GET /api/session` at
+    sign-in, again whenever it reads the store's configuration (including on `config_applied`), and
+    forgets it at sign-out.
+  - A control the person may not use is not drawn; a table, a dish, a counter order or a kitchen
+    ticket stays on screen and does not answer a tap it may not act on. Void follows the line:
+    `sales.line.add` before the kitchen has it, `sales.line.void_fired` after. Take money off needs
+    `billing.discount.apply`. Counter, Guests, Kitchen, Pass, Shift and Devices leave the status
+    bar when the person cannot do what the screen is for; Floor, Today, Pair and Sign out stay.
+  - Voiding a fired line or a bill, a discount and opening the drawer without a sale ask for a
+    manager's code and PIN only from a person who holds the act with approval. A discount offers the
+    fields rather than requiring them, since the till does not know the person's ceiling.
+  - **Upgrade note:** nothing changes until a store enforces. Where `permissions_enforced` is false
+    or absent, which is every store today and every older edge, every control shows and every
+    approver is asked for as before. The edge stays the authority. No route, event, migration,
+    permission or protocol change.
+
 - **A bill records its fees, and each fee carries its tax**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decisions 3 and 4), in the wire types and
   the core. The edge records none of it yet.

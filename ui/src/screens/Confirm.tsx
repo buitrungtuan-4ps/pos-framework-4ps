@@ -6,6 +6,7 @@ import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { formatAmount, tableLabel } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { can } from "../state/permissions";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
 // (ADR-0116).
@@ -125,6 +126,7 @@ export function Confirm() {
                 <p class="mt-2 text-right text-lg font-semibold tabular-nums">
                   {formatAmount(order.total)}
                 </p>
+                <Show when={can("sales.order.confirm_qr")}>
                 <div class="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -143,6 +145,7 @@ export function Confirm() {
                     {t("confirm.refuse")}
                   </button>
                 </div>
+                </Show>
               </li>
             )}
           </For>

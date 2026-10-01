@@ -19,6 +19,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { can } from "../state/permissions";
 
 // The table pay screen's tip shares and its guard on the cash snap, repeated rather than shared: this
 // is their second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx` carries the
@@ -235,6 +236,7 @@ export function Takeaway() {
         fallback={
           <>
             <PageHeader title={t("counter.title")} />
+            <Show when={can("sales.line.add")}>
             <button
               type="button"
               class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
@@ -243,6 +245,7 @@ export function Takeaway() {
             >
               {t("counter.new_order")}
             </button>
+            </Show>
 
             <Show when={error()}>
               {(message) => (
@@ -267,7 +270,8 @@ export function Takeaway() {
                     <li>
                       <button
                         type="button"
-                        class="min-h-touch w-full rounded-token border border-line bg-surface p-3 text-left"
+                        class="min-h-touch w-full rounded-token border border-line bg-surface p-3 text-left disabled:opacity-50"
+                        disabled={order.bill_id === undefined && !can("billing.bill.open")}
                         data-step="charge"
                         onClick={() => void charge(order)}
                       >
@@ -331,6 +335,8 @@ export function Takeaway() {
                     )}
                   </Show>
 
+                  {/* The tip and the tenders are taking payment (ADR-0158). */}
+                  <Show when={can("billing.payment.take")}>
                   <Show when={tipsEnabled()}>
                     <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
                     <div class="grid grid-cols-4 gap-2">
@@ -446,6 +452,7 @@ export function Takeaway() {
                       <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
                     </Show>
                   </div>
+                  </Show>
                 </>
               }
             >
@@ -468,6 +475,7 @@ export function Takeaway() {
                       {t("pay.drawer_unavailable")}
                     </p>
                   </Show>
+                  <Show when={can("billing.receipt.reprint")}>
                   <button
                     type="button"
                     class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
@@ -476,6 +484,7 @@ export function Takeaway() {
                   >
                     {t("pay.print_again")}
                   </button>
+                  </Show>
                   <Show when={copy()}>
                     {(printed) => (
                       <p

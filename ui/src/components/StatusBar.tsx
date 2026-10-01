@@ -3,6 +3,7 @@ import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
+import { can, canAny, forgetPermissions } from "../state/permissions";
 import { kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
 
 // The screens a device sees before anyone is signed in on it.
@@ -47,23 +48,41 @@ function cloudNotice(): { key: MessageKey; tone: "muted" | "warn" | "danger" } |
 // A counter cafe has no floor and no kitchen board; offering either is the failure `tips_enabled` was
 // published to stop — an action the store cannot honour, presented as though it could.
 //
+// It also asks what the signed-in person may do (ADR-0158 decision 6): a screen whose every act they
+// lack is not a destination for them. The floor, Today and pairing stay for everybody — home, a read,
+// and a device's own errand.
+//
 // The floor link is dropped rather than relabelled on a counter store, because `/` is still home
 // there: it draws the counter list instead (see `App.tsx`), and a link to the page you are on is not
 // navigation. `nav.counter` below is the one that names it.
 const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
   { href: "/", key: "nav.floor", needs: tablesEnabled },
-  { href: "/counter", key: "nav.counter" },
+  {
+    href: "/counter",
+    key: "nav.counter",
+    needs: () => canAny(["sales.line.add", "billing.bill.open", "billing.payment.take"]),
+  },
   // A guest order that nobody confirms never reaches the kitchen (ADR-0116), so the queue needs to
   // be one tap from every screen rather than somewhere a server has to remember to look.
-  { href: "/guests", key: "nav.confirm" },
-  { href: "/kds", key: "nav.kitchen", needs: kdsEnabled },
-  { href: "/expo", key: "nav.pass", needs: kdsEnabled },
+  { href: "/guests", key: "nav.confirm", needs: () => can("sales.order.confirm_qr") },
+  { href: "/kds", key: "nav.kitchen", needs: () => kdsEnabled() && can("sales.ticket.bump") },
+  { href: "/expo", key: "nav.pass", needs: () => kdsEnabled() && can("sales.ticket.bump") },
   { href: "/today", key: "nav.today" },
-  { href: "/shift", key: "nav.shift" },
+  {
+    href: "/shift",
+    key: "nav.shift",
+    needs: () =>
+      canAny([
+        "cash.shift.open",
+        "cash.shift.close",
+        "cash.movement.record",
+        "cash.drawer.open_no_sale",
+      ]),
+  },
   { href: "/pair", key: "nav.pair" },
   // Retiring a lost till (ADR-0091, production-readiness O1). Beside pairing, because it is the same
   // job from the other end: this is where a device stops being admitted.
-  { href: "/devices", key: "nav.devices" },
+  { href: "/devices", key: "nav.devices", needs: () => can("admin.device.manage") },
 ];
 
 // The persistent status bar. It names the store link (to the edge on the LAN), the cloud when there is
@@ -124,9 +143,10 @@ export function StatusBar() {
   };
 
   // End the shift on this device: sign out and return to the sign-in screen (S0b, ADR-0084). The
-  // device stays paired, so the next person only signs in.
+  // device stays paired, so the next person only signs in, and holds nothing until they have.
   const signOut = async () => {
     await api.signOut();
+    forgetPermissions();
     window.location.replace("/signin");
   };
 

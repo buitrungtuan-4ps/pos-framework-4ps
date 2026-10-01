@@ -7,6 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
+import { loadPermissions } from "./permissions";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -1660,11 +1661,20 @@ export async function loadStore(): Promise<void> {
 }
 
 // What the till draws from the store's configuration: the floor, both price books, the console's
-// button plan, the money settings and the reason codes. The edge says `config_applied` on the live
-// link when a new version is live (ADR-0160 item 7), and an open till reloads these then, without a
-// new sign-in; the boot gate reads them through loadStore. Forgiving like each loader it calls.
+// button plan, the money settings, the reason codes and what the signed-in person may do, which the
+// published `permissions` node decides (ADR-0158 decision 6). The edge says `config_applied` on the
+// live link when a new version is live (ADR-0160 item 7), and an open till reloads these then,
+// without a new sign-in; the boot gate and sign-in read them through loadStore. Forgiving like each
+// loader it calls.
 export async function loadConfiguration(): Promise<void> {
-  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale(), loadReasonCodes()]);
+  await Promise.all([
+    loadFloor(),
+    loadMenu(),
+    loadLayout(),
+    loadLocale(),
+    loadReasonCodes(),
+    loadPermissions(),
+  ]);
 }
 
 // The shift open on this store right now (F4).
@@ -1817,8 +1827,9 @@ export async function voidLine(
   setState("lines", lineId, "state", response.state);
 }
 
-// Voids a bill before it settles. Always needs a manager, so `approval` is required rather than
-// optional: a bill is money whether or not the kitchen started.
+// Voids a bill before it settles. A bill is money whether or not the kitchen started, so it needs a
+// manager — unless the store enforces each person's own set and the person holds the void directly,
+// which is why `approval` is optional (ADR-0158).
 //
 // The table goes back to occupied. The bill is gone but the order is not — the lines are still
 // there, and a cashier who voided the wrong bill can open another one on the same table.
@@ -1835,7 +1846,7 @@ export async function applyDiscount(
   billId: string,
   amount: Money,
   reasonCodeId: string,
-  approval: ApproverRequest,
+  approval?: ApproverRequest,
 ): Promise<DiscountResponse> {
   return api.discountBill(billId, {
     amount,
@@ -1847,7 +1858,7 @@ export async function applyDiscount(
 export async function voidBill(
   billId: string,
   reasonCodeId: string,
-  approval: ApproverRequest,
+  approval?: ApproverRequest,
 ): Promise<void> {
   await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
   setState(
@@ -2044,16 +2055,12 @@ export async function recordCashMovement(
   return response.drawer_open;
 }
 
-// The drawer opened without a sale, with a manager's code and PIN (ADR-0165).
+// The drawer opened without a sale, with a manager's code and PIN (ADR-0165) — or with none, where
+// the store enforces each person's own set and the person holds the act directly (ADR-0158).
 export async function openDrawerNoSale(
   reasonCodeId: string,
-  approverCode: string,
-  approverPin: string,
+  approval?: ApproverRequest,
 ): Promise<DrawerOutcome> {
-  const response = await api.openDrawer({
-    reason_code_id: reasonCodeId,
-    approver_code: approverCode,
-    approver_pin: approverPin,
-  });
+  const response = await api.openDrawer({ reason_code_id: reasonCodeId, ...approval });
   return response.drawer_open;
 }

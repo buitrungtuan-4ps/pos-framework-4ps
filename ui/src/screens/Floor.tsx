@@ -4,6 +4,7 @@ import { useNavigate } from "@solidjs/router";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
+import { can } from "../state/permissions";
 import {
   areaIsPlaced,
   clean,
@@ -109,12 +110,18 @@ export function Floor() {
 
   // One table's card. Identical in both layouts — only where it is placed differs, so a server's
   // target never changes size or shape between a placed area and an unplaced one.
+  //
+  // A free table's tap seats it and a used one's clears it, which need `sales.table.manage`; a
+  // person without it still sees the room, and opens the tables that are being served (ADR-0158).
   const card = (table: TableCard) => {
     const currentState = () => tableState(table.id);
+    const seatsOrClears = () =>
+      currentState() === "TABLE_STATE_FREE" || currentState() === "TABLE_STATE_NEEDS_CLEANING";
     return (
       <button
         type="button"
-        class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left tablet:[grid-column:var(--table-column,auto)] tablet:[grid-row:var(--table-row,auto)]"
+        class="flex min-h-touch flex-col items-start gap-2 rounded-token border border-line bg-surface p-4 text-left disabled:opacity-50 tablet:[grid-column:var(--table-column,auto)] tablet:[grid-row:var(--table-row,auto)]"
+        disabled={seatsOrClears() && !can("sales.table.manage")}
         // `pos_proto::display::GridPosition` counts from zero; CSS grid lines count from one. The
         // `+ 1` is that conversion and nothing else — without it every table shifts up and left, and
         // the table the editor put in the top-left corner lands on line 0, which CSS ignores.

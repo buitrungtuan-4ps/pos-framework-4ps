@@ -246,6 +246,7 @@
   "pay.discount_amount": "Giảm bao nhiêu",
   "pay.discount_applied": "Giảm giá",
   "pay.discount_manager": "Quản lý phải duyệt khoản giảm này.",
+  "pay.discount_over_limit": "Khoản giảm vượt hạn mức của bạn cần mã và PIN của quản lý.",
   "pay.discount_reason": "Vì sao giảm?",
   "pay.discount_title": "Giảm tiền hóa đơn này",
   "pay.exact": "Vừa đủ",

@@ -42,6 +42,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { asksApprover, can } from "../state/permissions";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
 // nothing else (ADR-0115). A reason valid only for refusing a guest's order — `OUT_OF_STOCK` is one
@@ -126,7 +127,7 @@ export function Order() {
   // recorded no capacity, and a picker with no seats in it is worse than none — so the control only
   // appears where the store both does seats and said how many this table has.
   const seatCount = () => floorTables().find((table) => table.id === params.id)?.seats ?? 0;
-  const showSeats = () => seatsEnabled() && seatCount() > 0;
+  const showSeats = () => seatsEnabled() && seatCount() > 0 && can("sales.line.add");
 
   // Moving the guests to another table: whether the list of free tables is open, and a refusal,
   // shown in that list rather than under a bill it may be drawn over. The table they came from rides
@@ -135,8 +136,13 @@ export function Order() {
   const [moveError, setMoveError] = createSignal<string | null>(null);
   const [search] = useSearchParams<{ moved_from?: string }>();
   // Guests move before the bill only: once they have asked for it they pay where they sit, and the
-  // edge refuses the move (`docs/pos-spec.md` §2).
-  const movable = () => !walkIn() && tableState(params.id) === "TABLE_STATE_OCCUPIED";
+  // edge refuses the move (`docs/pos-spec.md` §2). A move also seats the table it moves to, so it
+  // needs both permissions, not either (ADR-0158).
+  const movable = () =>
+    !walkIn() &&
+    tableState(params.id) === "TABLE_STATE_OCCUPIED" &&
+    can("sales.order.transfer") &&
+    can("sales.table.manage");
   // Whether a bill is open on this table. A bill names the dishes it covers when it opens, so one
   // rung after it would be on no bill and leave with the table unpaid; the edge refuses it
   // (`BILL_ALREADY_OPEN`), and the menu says so before the tap rather than after it.
@@ -222,8 +228,16 @@ export function Order() {
   };
 
   // A line the kitchen has already been told to make. §5 puts that behind `VoidFiredLine` and a
-  // verified PIN — the food exists, and stock has moved. An unfired line is an ordinary cancel.
-  const needsApproval = (line: OrderLine) => line.state === "ORDER_LINE_STATE_FIRED";
+  // verified PIN — the food exists, and stock has moved. An unfired line is an ordinary cancel. Where
+  // the store enforces each person's own set, only a person holding the void with approval is asked;
+  // one holding it directly voids alone (ADR-0158).
+  const needsApproval = (line: OrderLine) =>
+    line.state === "ORDER_LINE_STATE_FIRED" && asksApprover("sales.line.void_fired");
+  // Whether this person may void this line at all. The act follows the line, as on the edge: one
+  // the kitchen has not been sent is a cancel (`sales.line.add`), one it has is `VoidFiredLine`,
+  // held directly or with an approver.
+  const canVoid = (line: OrderLine) =>
+    can(line.state === "ORDER_LINE_STATE_FIRED" ? "sales.line.void_fired" : "sales.line.add");
 
   // Whether the reason buttons can be tapped yet. A fired line with no manager typed in would be
   // refused by the edge, and a button that can only produce a refusal is worse than a disabled one:
@@ -463,7 +477,7 @@ export function Order() {
     <button
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
-      disabled={!item.available || billed()}
+      disabled={!item.available || billed() || !can("sales.line.add")}
       data-step="onItem"
       onClick={() => onItem(item)}
     >
@@ -562,7 +576,7 @@ export function Order() {
               {t("order.move_table")}
             </button>
           </Show>
-          <Show when={billCount() > 0}>
+          <Show when={billCount() > 0 && can("billing.bill.open")}>
             <button
               type="button"
               class="min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
@@ -726,7 +740,7 @@ export function Order() {
                       Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
                       no order — that is a void, which carries a reason and, after a fire, a manager.
                       Letting the stepper walk into it would give that act a second, quieter spelling. */}
-                  <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
+                  <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add")}>
                     <span class="inline-flex items-center gap-1">
                       <button
                         type="button"
@@ -755,8 +769,14 @@ export function Order() {
                       </button>
                     </span>
                   </Show>
-                  {/* A line already with the kitchen shows its count without the controls. */}
-                  <Show when={line.state !== "ORDER_LINE_STATE_ADDED" && line.quantityMilli !== 1000}>
+                  {/* A line already with the kitchen shows its count without the controls, and so does
+                      every line for a person who may not change one. */}
+                  <Show
+                    when={
+                      (line.state !== "ORDER_LINE_STATE_ADDED" || !can("sales.line.add")) &&
+                      line.quantityMilli !== 1000
+                    }
+                  >
                     <span class="tabular-nums text-ink-muted">
                       {formatQuantity(line.quantityMilli)}
                     </span>
@@ -800,6 +820,7 @@ export function Order() {
                       </span>
                     }
                   >
+                    <Show when={canVoid(line)}>
                     <button
                       type="button"
                       class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
@@ -809,6 +830,7 @@ export function Order() {
                     >
                       {t("order.void")}
                     </button>
+                    </Show>
                   </Show>
                 </li>
               )}
@@ -1106,7 +1128,7 @@ export function Order() {
               there: offering it would be an act the store will not honour, which is the rule
               `tips_enabled` and `seats_enabled` already follow.
             */}
-            <Show when={unsentCourses().length > 0}>
+            <Show when={unsentCourses().length > 0 && can("sales.line.fire")}>
               <div
                 class="mb-3 tablet:col-span-2"
                 classList={{ "tablet:hidden terminal:block": !billOpen() }}
@@ -1135,6 +1157,7 @@ export function Order() {
               </div>
             </Show>
 
+            <Show when={can("sales.line.fire")}>
             <button
               type="button"
               class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
@@ -1146,10 +1169,14 @@ export function Order() {
                 ? t("order.send")
                 : t("order.send_count", { count: unfired().length })}
             </button>
+            </Show>
 
+            {/* Take payment opens the bill unless one is open already, and releasing clears the
+                table: `billing.bill.open` and `sales.table.manage` (ADR-0158). */}
             <Show
               when={releasable()}
               fallback={
+                <Show when={billed() || can("billing.bill.open")}>
                 <button
                   type="button"
                   class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
@@ -1158,8 +1185,10 @@ export function Order() {
                 >
                   {t("order.take_payment")}
                 </button>
+                </Show>
               }
             >
+              <Show when={can("sales.table.manage")}>
               <button
                 type="button"
                 class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
@@ -1173,6 +1202,7 @@ export function Order() {
               >
                 {t("order.release_table")}
               </button>
+              </Show>
             </Show>
           </div>
         </div>
@@ -1185,6 +1215,7 @@ export function Order() {
           <Show
             when={marking()}
             fallback={
+              <Show when={can("sales.item.mark_unavailable")}>
               <button
                 type="button"
                 class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted"
@@ -1193,6 +1224,7 @@ export function Order() {
               >
                 {t("order.mark_sold_out")}
               </button>
+              </Show>
             }
           >
             <button
@@ -1253,7 +1285,7 @@ export function Order() {
             class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
             aria-describedby="line-note-hint"
             value={note()}
-            disabled={billed() || marking()}
+            disabled={billed() || marking() || !can("sales.line.add")}
             onInput={(event) => setNote(event.currentTarget.value)}
           />
           <span id="line-note-hint" class="text-xs text-ink-muted">

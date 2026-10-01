@@ -7,6 +7,7 @@ import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { can } from "../state/permissions";
 import { loadSync, state } from "../state/store";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
@@ -83,6 +84,9 @@ function clockOffsetKey(offsetMs: number): MessageKey {
 }
 
 export function Devices() {
+  // Retiring, adding and testing are managing devices (`admin.device.manage`; retiring under
+  // ADR-0158 decision 8). Without it the screen still says what is paired, published and measured.
+  const manages = () => can("admin.device.manage");
   const [devices, setDevices] = createSignal<readonly PairedDevice[]>([]);
   const [durable, setDurable] = createSignal(true);
   const [error, setError] = createSignal<string | null>(null);
@@ -228,6 +232,7 @@ export function Devices() {
                 </span>
               </div>
               <p class="mt-1 break-all font-mono text-xs text-ink-muted">{device.device_id}</p>
+              <Show when={manages()}>
               <Show
                 when={confirming() === device.device_id}
                 fallback={
@@ -262,11 +267,13 @@ export function Devices() {
                   </button>
                 </div>
               </Show>
+              </Show>
             </li>
           )}
         </For>
       </ul>
 
+      <Show when={manages()}>
       <div class="mt-6 rounded-token border border-line p-3">
         <p class="font-semibold text-ink">{t("devices.add_title")}</p>
         <p class="mt-1 text-sm text-ink-muted">{t("devices.add_hint")}</p>
@@ -320,6 +327,7 @@ export function Devices() {
           )}
         </Show>
       </div>
+      </Show>
 
       <div class="mt-6 rounded-token border border-line p-3">
         <p class="font-semibold text-ink">{t("devices.printers_title")}</p>
@@ -340,6 +348,7 @@ export function Devices() {
                       </span>
                     )}
                   </Show>
+                  <Show when={manages()}>
                   <button
                     type="button"
                     class="min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
@@ -348,6 +357,7 @@ export function Devices() {
                   >
                     {t("devices.test_print")}
                   </button>
+                  </Show>
                 </span>
               </li>
             )}
@@ -398,6 +408,7 @@ export function Devices() {
         </Show>
       </div>
 
+      <Show when={manages()}>
       <div class="mt-6 rounded-token border border-danger p-3">
         <p class="font-semibold text-ink">{t("devices.all_title")}</p>
         <p class="mt-1 text-sm text-ink-muted">{t("devices.all_hint")}</p>
@@ -419,6 +430,7 @@ export function Devices() {
           {t("devices.all_confirm")}
         </button>
       </div>
+      </Show>
     </section>
   );
 }

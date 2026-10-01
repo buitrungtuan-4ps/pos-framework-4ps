@@ -9,6 +9,7 @@ import { errorMessage } from "../lib/errors";
 import { formatQuantity } from "../lib/money";
 import { useDarkTakeover } from "../lib/screen";
 import { fold, matches } from "../lib/search";
+import { can } from "../state/permissions";
 import {
   bump,
   kitchenTickets,
@@ -261,6 +262,7 @@ export function Kds() {
       <div class="flex items-start justify-between gap-3">
         <PageHeader title={t("kds.title")} size="xl" />
         <div class="flex shrink-0 flex-wrap justify-end gap-2">
+          <Show when={can("sales.item.mark_unavailable")}>
           <button
             type="button"
             class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
@@ -270,6 +272,7 @@ export function Kds() {
           >
             {t("kds.sold_out")}
           </button>
+          </Show>
           <button
             type="button"
             class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
@@ -415,6 +418,9 @@ export function Kds() {
                     type="button"
                     class="flex min-h-money flex-col items-start gap-1 rounded-token border bg-surface-raised p-4 text-left"
                     classList={{ "border-line": !late(), "border-danger": late() }}
+                    // The ticket stays on the board for a person who may not bump it, and answers
+                    // no tap (ADR-0158).
+                    disabled={!can("sales.ticket.bump")}
                     data-step="onBump"
                     data-outcome={late() ? "ticket-late" : "ticket-waiting"}
                     onClick={() => onBump(current())}
@@ -500,7 +506,9 @@ export function Kds() {
                         }}
                       </For>
                     </ul>
-                    <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
+                    <Show when={can("sales.ticket.bump")}>
+                      <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
+                    </Show>
                   </button>
                 )}
               </Show>
