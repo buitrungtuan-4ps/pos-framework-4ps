@@ -1,6 +1,7 @@
 # ADR-0128 — A bill splits and merges
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-21
+· Decision 6 amended by [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md): a split and a merge need `billing.bill.split`, and still no PIN
 **Extends** [ADR-0028](0028-settlement-and-payment-invariant.md) (the settlement invariant each resulting bill must still prove)
 **Relates to** [ADR-0024](0024-protocol-version-negotiation.md) (why two enum values are additive rather than a bump) · [ADR-0115](0115-reason-codes-are-a-managed-list.md) (why neither act is a void) · [ADR-0029](0029-append-command-merge-semantics.md) (the line order the parts inherit)
 

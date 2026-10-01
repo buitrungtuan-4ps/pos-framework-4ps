@@ -4114,12 +4114,14 @@ impl<S: EventStore> Edge<S> {
     /// source's total was quoted and never charged, and what the store banks is the sum of what each
     /// guest was actually asked for (decision 4).
     ///
-    /// No permission and no PIN: nothing is created, forgiven or moved out of the store.
+    /// `billing.bill.split` and no PIN: nothing is created, forgiven or moved out of the store, so
+    /// no manager is asked, and the permission lets a role say who splits (ADR-0158).
     ///
     /// # Errors
     ///
-    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if the bill is not open or
-    /// the proposed parts are not a partition of what it covers.
+    /// [`AppError::UnknownBill`] if no such bill; [`AppError::Domain`] if the bill is not open, the
+    /// actor lacks `billing.bill.split`, or the proposed parts are not a partition of what it
+    /// covers.
     pub async fn split_bill(
         &self,
         actor: Actor,
@@ -4211,7 +4213,7 @@ impl<S: EventStore> Edge<S> {
     ///
     /// [`AppError::UnknownBill`] if the target or any absorbed bill is unknown;
     /// [`AppError::BillsOnDifferentTables`] if they do not share a table; [`AppError::Domain`] if
-    /// the target or an absorbed bill is not open.
+    /// the target or an absorbed bill is not open, or the actor lacks `billing.bill.split`.
     pub async fn merge_bills(
         &self,
         actor: Actor,
@@ -4623,8 +4625,8 @@ impl<S: EventStore> Edge<S> {
 
     /// Adds a line to the order the table holds (`sales.order_line.added`).
     ///
-    /// Adding a line is not a state-machine transition and needs no permission; it records what the
-    /// device captured. A new line starts [`OrderLineState::Added`].
+    /// Adding a line is not a state-machine transition; it needs `sales.line.add` (ADR-0158) and
+    /// records what the device captured. A new line starts [`OrderLineState::Added`].
     ///
     /// **The modifiers are checked**, and the device is not trusted to have asked (ADR-0127
     /// decision 5). A line names `modifier_menu_item_ids`; the item it names attaches zero or more
@@ -4647,8 +4649,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::BillAlreadyOpen`] once
     /// a bill is open on its order (that bill would not cover the line), [`AppError::Domain`] if the
-    /// line names a seat and the store does not do seats, [`AppError::ModifierSelectionInvalid`] if
-    /// the modifiers break the item's rules, or [`AppError`] if the store cannot be written.
+    /// actor lacks `sales.line.add` or the line names a seat and the store does not do seats,
+    /// [`AppError::ModifierSelectionInvalid`] if the modifiers break the item's rules, or
+    /// [`AppError`] if the store cannot be written.
     pub async fn add_line(
         &self,
         actor: Actor,
@@ -4675,6 +4678,7 @@ impl<S: EventStore> Edge<S> {
         note: Option<NoteText>,
     ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::AddLine)?;
         if draft.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
@@ -4721,8 +4725,9 @@ impl<S: EventStore> Edge<S> {
     /// # Errors
     ///
     /// [`AppError::Superseded`] on a replaced box, [`AppError::OpenShiftRequired`] while no shift is
-    /// open at a store that refuses selling without one, [`AppError::ChannelNotAccepted`] for a
-    /// channel the store does not take, or [`AppError`] if the store cannot be written.
+    /// open at a store that refuses selling without one, [`AppError::Domain`] if the actor lacks
+    /// `sales.line.add`, [`AppError::ChannelNotAccepted`] for a channel the store does not take, or
+    /// [`AppError`] if the store cannot be written.
     pub async fn open_counter_order(
         &self,
         actor: Actor,
@@ -4732,6 +4737,8 @@ impl<S: EventStore> Edge<S> {
         self.refuse_if_superseded()?;
         self.refuse_without_open_shift()?;
         let ctx = self.decision_ctx(actor)?;
+        // Starting an order at the counter is taking one, as adding its first line is (ADR-0158).
+        ctx.require(Permission::AddLine)?;
         if !self.session().channel_enabled(channel) {
             return Err(AppError::ChannelNotAccepted);
         }
@@ -4764,8 +4771,9 @@ impl<S: EventStore> Edge<S> {
     /// [`AppError::UnknownOrder`] for an order this edge never saw open, [`AppError::OrderRejected`]
     /// for one staff refused, [`AppError::BillAlreadyOpen`] once a bill is open on it (that bill
     /// would not cover the line), [`AppError::ItemNotSellable`] if the price book cannot price it,
-    /// [`AppError::ModifierSelectionInvalid`], [`AppError::Domain`] for a seat on a store without
-    /// seats, or [`AppError`] if the store cannot be written.
+    /// [`AppError::ModifierSelectionInvalid`], [`AppError::Domain`] if the actor lacks
+    /// `sales.line.add` or for a seat on a store without seats, or [`AppError`] if the store cannot
+    /// be written.
     pub async fn add_line_to_order(
         &self,
         actor: Actor,
@@ -4790,6 +4798,7 @@ impl<S: EventStore> Edge<S> {
         note: Option<NoteText>,
     ) -> Result<LineView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::AddLine)?;
         if choice.seat.is_some() {
             ctx.require_capability(Capability::Seats)?;
         }
@@ -5014,8 +5023,8 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError`] if the business date cannot be derived, the event cannot be encoded, or the store
-    /// cannot be written.
+    /// [`AppError::Domain`] if the actor lacks `sales.ticket.bump`, or [`AppError`] if the business
+    /// date cannot be derived, the event cannot be encoded, or the store cannot be written.
     pub async fn bump_ticket(
         &self,
         actor: Actor,
@@ -5024,6 +5033,7 @@ impl<S: EventStore> Edge<S> {
         order_line_ids: Vec<OrderLineId>,
     ) -> Result<BumpView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::BumpTicket)?;
         let payload = KitchenTicketBumped {
             order_id,
             station_id,
@@ -5799,14 +5809,15 @@ impl<S: EventStore> Edge<S> {
     /// # Errors
     ///
     /// [`AppError::UnknownOrder`] if the edge knows no such order; [`AppError::BillAlreadyOpen`] if
-    /// one is already open on it; [`AppError::Domain`] if the order sits on a table that is not
-    /// occupied; or [`AppError`] if the store cannot be written.
+    /// one is already open on it; [`AppError::Domain`] if the actor lacks `billing.bill.open` or the
+    /// order sits on a table that is not occupied; or [`AppError`] if the store cannot be written.
     pub async fn open_bill_for_order(
         &self,
         actor: Actor,
         order_id: OrderId,
     ) -> Result<BillView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::OpenBill)?;
 
         let (existing_bill, table_id, has_lines) = {
             let projection = self.lock_projection();
@@ -6275,8 +6286,8 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::ShiftAlreadyOpen`] if a shift is already open, or [`AppError`] if the store cannot
-    /// be written.
+    /// [`AppError::ShiftAlreadyOpen`] if a shift is already open, [`AppError::Domain`] if the actor
+    /// lacks `cash.shift.open`, or [`AppError`] if the store cannot be written.
     pub async fn open_shift(
         &self,
         actor: Actor,
@@ -6290,6 +6301,7 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::ShiftAlreadyOpen);
         }
         let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::OpenShift)?;
         let shift_id = ShiftId::new(self.next_ulid());
 
         let payload = CashShiftOpened {
@@ -7324,6 +7336,22 @@ impl<S: EventStore> Edge<S> {
         {
             return Err(AppError::OpenShiftRequired);
         }
+        Ok(())
+    }
+
+    /// Refuses `actor` an act no decision covers unless they hold `permission`, as a decision would
+    /// refuse it (ADR-0158).
+    ///
+    /// For the routes that write no event and so decide nothing — printing a pre-bill — but still
+    /// do what a role grants. The same set and the same refusal as every command, so a till cannot
+    /// tell the two apart.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] carrying `PermissionDenied` when the actor does not hold `permission`,
+    /// or [`AppError::Clock`] if the business date cannot be derived.
+    pub fn authorise(&self, actor: Actor, permission: Permission) -> Result<(), AppError> {
+        self.decision_ctx(actor)?.require(permission)?;
         Ok(())
     }
 
@@ -9153,6 +9181,113 @@ mod tests {
             edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
                 .await
                 .expect("settles inside a shift");
+        });
+    }
+
+    /// Narrows what the store grants to everything but `withheld`: what a person whose roles lack
+    /// it will hold once each person's own set decides (ADR-0158).
+    fn withhold(edge: &Edge<FakeStore>, withheld: pos_core::permission::Permission) {
+        edge.apply_session(EdgeSession {
+            granted: pos_core::permission::Permission::ALL
+                .iter()
+                .copied()
+                .filter(|permission| *permission != withheld)
+                .collect(),
+            ..(*edge.session()).clone()
+        });
+    }
+
+    /// Asserts the edge refused for want of exactly `permission`.
+    fn denied_for<T: core::fmt::Debug>(
+        result: Result<T, super::AppError>,
+        permission: pos_core::permission::Permission,
+    ) {
+        match result {
+            Err(super::AppError::Domain(pos_core::error::DomainError::PermissionDenied {
+                permission: id,
+            })) => assert_eq!(id, permission.meta().id),
+            other => panic!(
+                "expected a refusal for {}, got {other:?}",
+                permission.meta().id
+            ),
+        }
+    }
+
+    /// The commands that decide nothing in `pos-core` still need their permission at the edge
+    /// (ADR-0158 decision 2): taking an order, opening and printing the bill, bumping a ticket and
+    /// opening a shift. Each is refused naming it, and nothing is written.
+    #[test]
+    fn each_command_the_core_does_not_decide_still_needs_its_permission() {
+        use pos_core::permission::Permission;
+        pos_fakes::executor::run_ready(async {
+            let table = TableId::new(Ulid::from_u128(150));
+
+            let taking = edge();
+            taking
+                .seat_table(actor(), table, None)
+                .await
+                .expect("seats");
+            withhold(&taking, Permission::AddLine);
+            denied_for(
+                taking.add_line(actor(), table, a_line()).await,
+                Permission::AddLine,
+            );
+            denied_for(
+                taking
+                    .open_counter_order(actor(), SalesChannel::Takeaway)
+                    .await,
+                Permission::AddLine,
+            );
+            let order_id = taking
+                .order_for_table(table)
+                .expect("the seated table holds an order");
+            assert!(
+                taking.order_line_ids(order_id).is_empty(),
+                "no line was written"
+            );
+
+            let billing = edge();
+            billing
+                .seat_table(actor(), table, None)
+                .await
+                .expect("seats");
+            billing
+                .add_line(actor(), table, a_line())
+                .await
+                .expect("adds");
+            withhold(&billing, Permission::OpenBill);
+            denied_for(
+                billing.open_bill(actor(), table).await,
+                Permission::OpenBill,
+            );
+            denied_for(
+                billing.authorise(actor(), Permission::OpenBill),
+                Permission::OpenBill,
+            );
+            assert_eq!(billing.table_state(table), TableState::Occupied);
+
+            let kitchen = edge();
+            withhold(&kitchen, Permission::BumpTicket);
+            denied_for(
+                kitchen
+                    .bump_ticket(
+                        actor(),
+                        OrderId::new(Ulid::from_u128(151)),
+                        StationId::new(Ulid::from_u128(152)),
+                        vec![pos_proto::ids::OrderLineId::new(Ulid::from_u128(153))],
+                    )
+                    .await,
+                Permission::BumpTicket,
+            );
+            assert!(kitchen.bumped_line_ids().is_empty());
+
+            let drawer = edge();
+            withhold(&drawer, Permission::OpenShift);
+            denied_for(
+                drawer.open_shift(actor(), vnd(500_000)).await,
+                Permission::OpenShift,
+            );
+            assert!(drawer.current_shift().is_none());
         });
     }
 
