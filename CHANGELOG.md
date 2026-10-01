@@ -73,6 +73,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **Every role that exists keeps every till action it has**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). The seven
+  permissions #560 named — seating, adding a line, firing, bumping, opening a bill, splitting and
+  taking a payment — are granted to every role the cloud holds, archived ones included, so no role
+  loses an act merely because the act gained a name. Each role's list stays sorted and free of
+  duplicates.
+  - The grant runs **once**. Migrations run again at every boot, and a grant that ran again would
+    hand back a permission an owner had removed on purpose, so it is gated on a row in a new
+    `data_migrations` table that the first run writes in the same statement.
+  - **Upgrade note:** migration `0073_roles_keep_every_till_action.sql` adds `data_migrations` (the
+    cloud's own bookkeeping: no tenant data, no RLS, no grant to `app_tenant`) and updates
+    `role_templates` once. A console tab holding a role open when the cloud upgrades gets a version
+    conflict on its next save and reloads, as after any other edit. Stores see the new permissions
+    on the next publish of their `permissions` node; nothing at a store changes until per-person
+    enforcement is on.
+
 - **The `permissions` node has one type**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 10). The
   cloud's compiler and the edge each kept a private struct for the document, so a field one side
