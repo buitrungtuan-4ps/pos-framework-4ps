@@ -227,7 +227,21 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<PublishedPermissions>(&text).ok())
     {
         let mut roster = StaffRoster::new();
+        // The rollout switch rides the node (ADR-0158): the cloud writes it on the Tenant layer and
+        // the merge puts it beside the staff. A node without it keeps the store-wide set.
+        session.permissions_enforced = published.enforced;
         for member in published.staff {
+            let permissions = permission_set_from_ids(&member.permissions);
+            // Held directly wins: a permission listed both ways is one the person acts on alone,
+            // so the with-approval set never overlaps it.
+            let listed_with_approval = permission_set_from_ids(&member.permissions_with_approval);
+            let with_approval: PermissionSet = Permission::ALL
+                .iter()
+                .copied()
+                .filter(|permission| {
+                    listed_with_approval.contains(*permission) && !permissions.contains(*permission)
+                })
+                .collect();
             roster.insert(
                 member.code,
                 StaffAuth {
@@ -238,7 +252,8 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                         .id
                         .as_deref()
                         .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
-                    permissions: permission_set_from_ids(&member.permissions),
+                    permissions,
+                    permissions_with_approval: with_approval,
                     // Given the store's own currency here rather than carried as one: a role is a
                     // tenant's and has no currency, a store has exactly one (its `locale` node), and
                     // the only thing this figure is ever compared against is a bill in that
@@ -1351,10 +1366,59 @@ mod tests {
         );
     }
 
+    /// The rollout switch and the with-approval lists ride the node (ADR-0158 decisions 1 and 4).
+    /// A permission listed both ways is held directly, so the with-approval set never overlaps it.
+    #[test]
+    fn a_permissions_node_carries_the_switch_and_what_each_person_holds_with_approval() {
+        use pos_core::permission::Permission;
+
+        let base = EdgeSession::bootstrap();
+        assert!(
+            !base.permissions_enforced,
+            "the bootstrap keeps the store-wide set"
+        );
+        let document = serde_json::json!({
+            "permissions": {
+                "enforced": true,
+                "staff": [{
+                    "id": "01EMP0000000000000000000A1",
+                    "code": "C01",
+                    "permissions": ["sales.line.add", "billing.bill.void"],
+                    "permissions_with_approval": [
+                        "sales.line.void_fired",
+                        "billing.bill.void",
+                        "not.a.permission"
+                    ],
+                    "pin_phc": null
+                }]
+            }
+        });
+        let rebuilt = session_from_config(&base, &document);
+        assert!(rebuilt.permissions_enforced);
+        let member = rebuilt.staff.get("C01").expect("C01 is in the roster");
+        assert!(member.permissions.contains(Permission::AddLine));
+        assert!(
+            member
+                .permissions_with_approval
+                .contains(Permission::VoidFiredLine)
+        );
+        assert!(
+            !member
+                .permissions_with_approval
+                .contains(Permission::VoidBill),
+            "held directly wins"
+        );
+        assert_eq!(member.permissions_with_approval.len(), 1);
+
+        // A node without the switch turns it back off: the switch is the node's to say.
+        let without = serde_json::json!({ "permissions": { "staff": [] } });
+        assert!(!session_from_config(&rebuilt, &without).permissions_enforced);
+    }
+
     #[test]
     fn an_absent_or_malformed_permissions_node_leaves_the_roster_unchanged() {
         use crate::app::{StaffAuth, StaffRoster};
-        use pos_core::permission::Permission;
+        use pos_core::permission::{Permission, PermissionSet};
 
         let mut roster = StaffRoster::new();
         roster.insert(
@@ -1362,6 +1426,7 @@ mod tests {
             StaffAuth {
                 employee_id: None,
                 permissions: [Permission::AddOpenItem].into_iter().collect(),
+                permissions_with_approval: PermissionSet::EMPTY,
                 discount_ceiling: None,
                 pin_phc: Some(hash_of("1234")),
             },

@@ -319,6 +319,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     gains `fee_lines`, and `DomainError` gains `LinesDoNotMatchBases`, refused when the lines do
     not sum to the class bases. No event, migration, permission or protocol version changes.
 
+- **The till enforces each person's own permissions where the store turns it on**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 1, 4, 5
+  and 6). Nothing turns it on yet.
+  - Where the `permissions` node's `enforced` is true, the edge decides every command with the
+    acting person's own set. A permission they hold directly needs nobody's PIN; one they hold with
+    approval needs the code and PIN of somebody else who holds it directly, never their own; one
+    they hold neither way is refused without asking for an approver. A person the roster does not
+    list holds nothing.
+  - Only the acts that ask for an approver today take one: voiding a fired line or a bill, a
+    discount above the ceiling, and opening the drawer without a sale. Any other permission is
+    usable only when held directly.
+  - `GET /api/session` gains `permissions_enforced`, and the signed-in person's `permissions` and
+    `permissions_with_approval`, so a till can hide what they may not do.
+  - The route table no longer lists `billing.comp.apply` under `POST /api/bills/{id}/discount`,
+    which only discounts. It is listed as not yet on a route.
+  - **Upgrade note:** additive, and no store changes behaviour. `enforced` is false or absent in
+    every node published today, and there the edge decides with the store-wide set exactly as
+    before, self-approval included. The session read's three fields are new; older tills ignore
+    them. No event, migration, permission or protocol change.
+
 - **A role can grant a permission directly or with approval, and a store can switch on each
   person's own set** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
   decisions 1 and 4), in the wire types and the core. Nothing sets them yet.

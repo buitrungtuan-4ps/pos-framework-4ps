@@ -139,6 +139,7 @@ fn session() -> EdgeSession {
         StaffAuth {
             employee_id: Some(manager_id()),
             permissions: PermissionSet::EMPTY.with(Permission::OverrideDiscountCeiling),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(MANAGER_PIN)),
         },
@@ -164,6 +165,7 @@ fn session_with_a_server_ceiling(ceiling: Money) -> EdgeSession {
         StaffAuth {
             employee_id: Some(server().employee_id),
             permissions: PermissionSet::EMPTY.with(Permission::ApplyDiscount),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: Some(ceiling),
             pin_phc: Some(hash_of("0000")),
         },

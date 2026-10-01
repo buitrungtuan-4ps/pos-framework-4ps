@@ -152,8 +152,14 @@ pub struct StaffAuth {
     /// carried no (or a malformed) id, in which case the member cannot sign in — the edge never invents
     /// an identity to act as.
     pub employee_id: Option<EmployeeId>,
-    /// What the person's role grants (§9).
+    /// What the person's roles grant them **directly** (§9): they act on these alone.
     pub permissions: PermissionSet,
+    /// What their roles grant only **with approval**: each act needs another person, who holds the
+    /// permission directly, to approve it with their code and PIN
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4). Read only where the store enforces each person's own set
+    /// ([`EdgeSession::permissions_enforced`]); never overlaps [`Self::permissions`].
+    pub permissions_with_approval: PermissionSet,
     /// How much they may discount before it needs a manager, from their role's configured ceiling
     /// (ADR-0070's `permissions` node).
     ///
@@ -206,6 +212,15 @@ impl StaffRoster {
     #[must_use]
     pub fn permissions_for(&self, employee_id: EmployeeId) -> Option<PermissionSet> {
         self.member(employee_id).map(|auth| auth.permissions)
+    }
+
+    /// What a signed-in person may do only with another person's approval
+    /// ([`StaffAuth::permissions_with_approval`]). Empty for an id no published member holds, which
+    /// grants nothing either way.
+    #[must_use]
+    pub fn permissions_with_approval_for(&self, employee_id: EmployeeId) -> PermissionSet {
+        self.member(employee_id)
+            .map_or(PermissionSet::EMPTY, |auth| auth.permissions_with_approval)
     }
 
     /// What a signed-in person may discount before it needs a manager, or `None` when their role
@@ -419,6 +434,16 @@ pub struct EdgeSession {
     /// authorises no one from a roster until the console publishes its people, the same
     /// safe-by-default shape as the menu.
     pub staff: StaffRoster,
+    /// Whether the store decides every command with the signed-in person's own permissions rather
+    /// than the store-wide [`Self::granted`]
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 1 and Rollout), from the `permissions` node's `enforced`.
+    ///
+    /// `false` in the bootstrap and for every node published without it: the store-wide set, as
+    /// before. `true`: a person holds what their roles grant, directly or with approval, and
+    /// nothing else — a person the roster does not know holds nothing — and an approver must be
+    /// somebody other than the person acting (decision 5).
+    pub permissions_enforced: bool,
     /// The store's floor plan — its areas and tables, as published on the `floor` config node
     /// ([ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)). Empty in the bootstrap: the store
     /// carries no roster of tables until the console publishes one (the in-store UI shows its own
@@ -631,6 +656,7 @@ impl EdgeSession {
             menu_book: MenuBook::new(),
             sales_channel: SalesChannel::DineIn,
             staff: StaffRoster::new(),
+            permissions_enforced: false,
             floor: FloorPlan::new(),
             stations: StationPlan::new(),
             layout: DisplayPlan::new(),
@@ -3759,11 +3785,28 @@ impl<S: EventStore> Edge<S> {
         permission: Permission,
         approval: Option<&Approval>,
     ) -> Result<Option<EmployeeId>, AppError> {
-        if !permission.meta().pin_required {
+        let session = self.session();
+        // Where the store enforces each person's own set (ADR-0158 decision 4), the actor's role
+        // says whether this act needs an approver: none for a permission held directly, one for a
+        // permission held with approval, and a refusal for one not held at all. Elsewhere the
+        // catalogue's PIN flag decides, as it always has.
+        if session.permissions_enforced {
+            if ctx.granted_directly.contains(permission) {
+                return Ok(None);
+            }
+            if !session
+                .staff
+                .permissions_with_approval_for(ctx.actor.employee_id)
+                .contains(permission)
+            {
+                return Err(AppError::Domain(DomainError::PermissionDenied {
+                    permission: permission.meta().id,
+                }));
+            }
+        } else if !permission.meta().pin_required {
             return Ok(None);
         }
         let approval = approval.ok_or(AppError::ApprovalRequired)?;
-        let session = self.session();
         // An unknown code is refused without touching the lockout, as sign-in refuses one: there is
         // nobody to count the failure against, and a probe cannot tell a real code from a missing one.
         let (approver, phc, held) = session
@@ -3779,6 +3822,12 @@ impl<S: EventStore> Edge<S> {
             SignIn::LockedOut { .. } => return Err(AppError::ApproverLockedOut),
         }
         if !held.contains(permission) {
+            return Err(AppError::ApprovalRefused);
+        }
+        // Approving is vouching for somebody else (decision 5). Only once the store enforces each
+        // person's own set: until then a manager alone on shift has nobody else to approve their own
+        // void, and approving it themselves is how they do it.
+        if session.permissions_enforced && approver == ctx.actor.employee_id {
             return Err(AppError::ApprovalRefused);
         }
         ctx.granted = ctx.granted.with(permission);
@@ -7368,14 +7417,26 @@ impl<S: EventStore> Edge<S> {
         let session = self.session();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
             .map_err(|_| AppError::Clock)?;
+        // Each person's own set once the store enforces it (ADR-0158): what their roles grant
+        // directly, and nothing for an identity the roster does not know. What they hold only with
+        // approval joins a context one act at a time, in `resolve_step_up`. Until then the
+        // store-wide set, in which nobody holds anything directly, so a PIN-flagged permission asks
+        // for a PIN as it always has.
+        let (granted, granted_directly) = if session.permissions_enforced {
+            let own = session
+                .staff
+                .permissions_for(actor.employee_id)
+                .unwrap_or(PermissionSet::EMPTY);
+            (own, own)
+        } else {
+            (session.granted, PermissionSet::EMPTY)
+        };
         Ok(DecisionCtx {
             now,
             business_date,
             actor,
-            granted: session.granted,
-            // Nobody holds anything directly until the store decides with each person's own set
-            // (ADR-0158), so a PIN-flagged permission asks for a PIN as it always has.
-            granted_directly: PermissionSet::EMPTY,
+            granted,
+            granted_directly,
             capabilities: session.capabilities,
             connectivity: session.connectivity,
             currency: session.currency,
@@ -9611,6 +9672,7 @@ mod tests {
         let member = |employee_id: Option<u128>, pin_phc: Option<&str>| StaffAuth {
             employee_id: employee_id.map(|id| EmployeeId::new(Ulid::from_u128(id))),
             permissions: PermissionSet::default(),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: pin_phc.map(str::to_owned),
         };
@@ -9655,6 +9717,7 @@ mod tests {
                 StaffAuth {
                     employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
                     permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+                    permissions_with_approval: PermissionSet::EMPTY,
                     discount_ceiling: None,
                     pin_phc: Some(pin_phc),
                 },

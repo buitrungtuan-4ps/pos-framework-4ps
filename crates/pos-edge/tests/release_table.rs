@@ -99,6 +99,7 @@ fn session() -> EdgeSession {
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
             permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(MANAGER_PIN)),
         },

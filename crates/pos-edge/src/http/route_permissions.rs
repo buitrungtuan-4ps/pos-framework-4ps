@@ -8,8 +8,8 @@
 //! Every route that changes something names the permission a signed-in person must hold, or says
 //! why no person acts through it. The table is the record; the checks themselves stay where they
 //! are, in `pos_core::decision` and in the edge command each route calls, because a route can need
-//! a different permission for different things it acts on (a line that fired, a comp rather than a
-//! discount, an amount above the ceiling).
+//! a different permission for different things it acts on (a line that fired, an amount above the
+//! ceiling).
 //!
 //! A test holds the table to the published routes in `docs/snapshots/routes.txt`. A new
 //! state-changing route that is not in the table fails CI, and so does an entry for a route that
@@ -49,7 +49,6 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         "POST /api/bills/{id}/discount",
         RouteGate::Person(&[
             Permission::ApplyDiscount,
-            Permission::ApplyComp,
             Permission::OverrideDiscountCeiling,
         ]),
     ),
@@ -234,6 +233,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::OverridePrice,
         "the till cannot override a price yet",
+    ),
+    (
+        Permission::ApplyComp,
+        "the till cannot comp a bill yet; the discount route only discounts",
     ),
     (
         Permission::IssueRefund,
