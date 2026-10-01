@@ -348,6 +348,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A settled bill records each fee and its tax per class**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4, roadmap-v3 B4.1).
+  `billing.bill.settled` carries `tax_lines`, one per tax class with its base, rate and tax, and
+  `fee_lines` when a fee was charged, each with its code, the name the bill froze, its amount and
+  its tax. `service_charge` stays the sum of every fee, so a reader of that one figure stays right.
+  - **Upgrade note:** every settled event this release writes carries `tax_lines`, because every
+    bill has a tax class, so its bytes differ from an older edge's for the same sale. The fields
+    are additive: an older reader ignores them, and `PROTOCOL_VERSION` and `schema_version` are
+    unchanged. An event without them reads as no fee lines, and as tax lines *not recorded*. No
+    migration or permission changes.
+
 - **The edge charges a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
   decisions 2, 3 and 6). No store charges one yet: nothing in the cloud publishes a `fees` node.
   - The edge installs the `fees` node. An absent node, or an empty list, is no fee; a node that
@@ -372,8 +383,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - A bill whose lines do not come to its class bases is a broken invariant, since the edge reads
     both from one snapshot. It now answers `500` with `LINES_DO_NOT_MATCH_BASES`, not a refusal.
   - **Upgrade note:** no store charges a fee until the cloud can publish a `fees` node, which is
-    not built yet. Until then every bill and every event is what it was, and the check reads
-    carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain a
+    not built yet. Until then every bill owes what it did, a settled bill records its tax per
+    class (above), and the check reads carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain a
     required `display_name`; no event has carried either yet. No migration, permission or
     protocol version change.
 

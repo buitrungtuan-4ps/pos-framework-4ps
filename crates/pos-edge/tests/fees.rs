@@ -23,8 +23,8 @@ use pos_edge::{
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::events::BillingBillOpened;
-use pos_proto::fees::{FrozenFee, PublishedFees};
+use pos_proto::events::{BillFeeLine, BillTaxLine, BillingBillOpened, BillingBillSettled};
+use pos_proto::fees::{FeeCode, FrozenFee, PublishedFees};
 use pos_proto::ids::{
     BillId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderLineId, StoreId, TableId, TaxClassId,
 };
@@ -174,22 +174,25 @@ async fn a_table_of(edge: &Edge<FakeStore>, table: TableId, count: usize) -> Vec
     lines
 }
 
-/// The rules every `billing.bill.opened` in the log froze, in the order the bills opened.
-async fn frozen_on_open(store: &FakeStore) -> Vec<Vec<FrozenFee>> {
+/// Every payload of `event_type` in the log, in order.
+async fn logged<P: serde::de::DeserializeOwned>(store: &FakeStore, event_type: &str) -> Vec<P> {
     let query = EventQuery::first(store_id(), NonZeroU32::new(200).expect("a positive limit"));
     store
         .read(&query)
         .await
         .expect("read the log")
         .into_iter()
-        .filter(|envelope| envelope.event_type.as_str() == "billing.bill.opened")
-        .map(|envelope| {
-            envelope
-                .data
-                .decode::<BillingBillOpened>()
-                .expect("an opened bill decodes")
-                .fee_rules
-        })
+        .filter(|envelope| envelope.event_type.as_str() == event_type)
+        .map(|envelope| envelope.data.decode::<P>().expect("the payload decodes"))
+        .collect()
+}
+
+/// The rules every `billing.bill.opened` in the log froze, in the order the bills opened.
+async fn frozen_on_open(store: &FakeStore) -> Vec<Vec<FrozenFee>> {
+    logged::<BillingBillOpened>(store, "billing.bill.opened")
+        .await
+        .into_iter()
+        .map(|opened| opened.fee_rules)
         .collect()
 }
 
@@ -395,5 +398,98 @@ fn a_bill_opened_again_after_a_void_freezes_what_is_in_force_then() {
             .map(|rules| rules.first().and_then(|rule| rule.rate))
             .collect();
         assert_eq!(rates, [Ratio::percent(5).ok(), Ratio::percent(10).ok()]);
+    });
+}
+
+/// Cash for exactly `minor`.
+fn cash(minor: i64) -> Vec<pos_core::billing::Payment> {
+    vec![pos_core::billing::Payment {
+        method: pos_proto::PaymentMethod::Cash,
+        tendered: vnd(minor),
+        applied_to_bill: vnd(minor),
+        tip: Money::zero(CurrencyCode::VND),
+    }]
+}
+
+/// The settle records each fee under the name the bill froze, and the tax per class, from the
+/// totals the guest paid (ADR-0159 decision 4). A rename published during the meal changes neither.
+#[test]
+fn a_settled_bill_records_each_fee_and_its_tax_per_class() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), fees(&[service(5)]));
+        a_table_of(&edge, table(1), 2).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let mut renamed = service(5);
+        renamed["display_name"] = json!("Phí phục vụ");
+        edge.apply_session(session(fees(&[renamed])));
+        edge.settle_bill(server(), bill, cash(115_500), None)
+            .await
+            .expect("settles for what the check said");
+
+        let settled: Vec<BillingBillSettled> = logged(&store, "billing.bill.settled").await;
+        let [settled] = settled.as_slice() else {
+            panic!("one settled bill: {settled:?}");
+        };
+        assert_eq!(
+            settled.fee_lines,
+            [BillFeeLine {
+                fee_id: fee_id(1),
+                code: FeeCode::new("SERVICE"),
+                display_name: DisplayName::new("Service charge"),
+                amount: vnd(5_000),
+                tax: vnd(500),
+            }]
+        );
+        assert_eq!(settled.service_charge, vnd(5_000), "the sum of every fee");
+        assert_eq!(
+            settled.tax_lines,
+            [BillTaxLine {
+                tax_class_id: class(),
+                taxable_base: vnd(105_000),
+                rate_basis_points: 1_000,
+                tax: vnd(10_500),
+            }]
+        );
+        assert_eq!(settled.tax_total, vnd(10_500));
+    });
+}
+
+/// A bill with no fee records no fee line, and still records its tax per class: every bill has a
+/// class, so every settle from this release carries `tax_lines`.
+#[test]
+fn a_bill_without_fees_records_its_tax_per_class_and_no_fee_line() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), PublishedFees::default());
+        a_table_of(&edge, table(1), 1).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        edge.settle_bill(server(), bill, cash(55_000), None)
+            .await
+            .expect("settles");
+        let settled: Vec<BillingBillSettled> = logged(&store, "billing.bill.settled").await;
+        let [settled] = settled.as_slice() else {
+            panic!("one settled bill: {settled:?}");
+        };
+        assert!(settled.fee_lines.is_empty());
+        assert_eq!(settled.service_charge, vnd(0));
+        assert_eq!(
+            settled.tax_lines,
+            [BillTaxLine {
+                tax_class_id: class(),
+                taxable_base: vnd(50_000),
+                rate_basis_points: 1_000,
+                tax: vnd(5_000),
+            }]
+        );
+        assert!(frozen_on_open(&store).await.iter().all(Vec::is_empty));
     });
 }
