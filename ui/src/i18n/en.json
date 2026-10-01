@@ -246,6 +246,7 @@
   "pay.discount_amount": "How much comes off",
   "pay.discount_applied": "Discount",
   "pay.discount_manager": "A manager must approve this discount.",
+  "pay.discount_over_limit": "A discount above your limit needs a manager's code and PIN.",
   "pay.discount_reason": "Why is it coming off?",
   "pay.discount_title": "Take money off this bill",
   "pay.exact": "Exact",

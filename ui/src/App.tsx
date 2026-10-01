@@ -21,6 +21,7 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
+import { adoptSession } from "./state/permissions";
 import { fold, loadConfiguration, loadLiveOrders, loadStore, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
@@ -152,6 +153,9 @@ export function App() {
           sendTo("/signin");
           return;
         }
+        // What this person may do, from the read already in hand, so the till hides what they
+        // cannot do before it draws the store (ADR-0158 decision 6).
+        adoptSession(session);
         // Signed in: draw the store's real floor, its own price book, the console's button plan and
         // its money settings (ADR-0072, ADR-0066, ADR-0105, E5). A failure or an empty node leaves
         // the never-blank fallback in place. The sign-in screen loads the same set on success,
