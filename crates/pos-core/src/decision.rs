@@ -156,16 +156,17 @@ pub enum LineCommand {
         course: Option<CourseId>,
     },
     /// Void the line. Voiding a line that has already fired needs [`Permission::VoidFiredLine`] and,
-    /// because that permission is PIN-flagged, a verified PIN.
+    /// because that permission is PIN-flagged, a verified PIN. Voiding one that never fired is
+    /// taking the order, and needs [`Permission::AddLine`].
     Void {
         /// Whether the edge has collected and verified the actor's PIN for this action.
         pin_verified: bool,
     },
     /// Change how many of this line, while it is still editable.
     ///
-    /// Carries no permission, for the same reason adding a line carries none and voiding an unfired
-    /// line carries none: nothing has been made and no stock has moved, so it is an ordinary edit of
-    /// an order still being taken. A **fired** line is refused by the machine, not by a permission —
+    /// Needs [`Permission::AddLine`], as adding the line did and as voiding an unfired line does:
+    /// nothing has been made and no stock has moved, so it is an ordinary edit of an order still
+    /// being taken (ADR-0158). A **fired** line is refused by the machine, not by a permission —
     /// see [`LineTrigger::Amend`](crate::machines::LineTrigger::Amend).
     ///
     /// The quantity is assumed positive. A zero or negative one is a malformed request rather than
@@ -198,8 +199,18 @@ pub fn decide_line(
     book: &RecipeBook,
 ) -> Result<LineDecision, DomainError> {
     match command {
-        LineCommand::Hold => transition_only(current, LineTrigger::Hold),
-        LineCommand::Resume => transition_only(current, LineTrigger::Resume),
+        // Holding a line back and letting it go are deciding when it reaches the kitchen, so they
+        // are firing's to grant (ADR-0158).
+        LineCommand::Hold => {
+            let decision = transition_only(current, LineTrigger::Hold)?;
+            ctx.require(Permission::FireLines)?;
+            Ok(decision)
+        }
+        LineCommand::Resume => {
+            let decision = transition_only(current, LineTrigger::Resume)?;
+            ctx.require(Permission::FireLines)?;
+            Ok(decision)
+        }
         LineCommand::Fire {
             base_item,
             modifiers,
@@ -210,6 +221,7 @@ pub fn decide_line(
                 ctx.require_capability(Capability::Courses)?;
             }
             let next_state = OrderLine::step(current, LineTrigger::Fire)?;
+            ctx.require(Permission::FireLines)?;
             let stock_movements = consumption_for_fire(
                 base_item,
                 &modifiers,
@@ -226,13 +238,22 @@ pub fn decide_line(
         // No stock movement: stock leaves at fire (§8), and a line that can still be amended has not
         // fired. The quantity the kitchen is eventually told about is whatever the line holds when
         // somebody presses send.
-        LineCommand::SetQuantity { .. } => transition_only(current, LineTrigger::Amend),
+        // Changing a line still being taken is taking the order (ADR-0158).
+        LineCommand::SetQuantity { .. } => {
+            let decision = transition_only(current, LineTrigger::Amend)?;
+            ctx.require(Permission::AddLine)?;
+            Ok(decision)
+        }
         LineCommand::Void { pin_verified } => {
             let next_state = OrderLine::step(current, LineTrigger::Void)?;
             // Voiding a line that already fired is the fraud-sensitive case (§9, §11): it needs the
             // permission, and because that permission is PIN-flagged it needs a verified PIN. Voiding
-            // a line that never fired is an ordinary cancel.
+            // a line that never fired is an ordinary cancel, which taking the order grants
+            // (ADR-0158).
             let mut effects = Vec::new();
+            if current != OrderLineState::Fired {
+                ctx.require(Permission::AddLine)?;
+            }
             if current == OrderLineState::Fired {
                 let grant = ctx.require(Permission::VoidFiredLine)?;
                 if grant.pin_required && !pin_verified {
@@ -255,7 +276,8 @@ pub fn decide_line(
     }
 }
 
-/// A transition that carries no permission, capability, inventory or effect — Hold and Resume.
+/// A transition that carries no capability, inventory or effect — Hold, Resume and an amend. The
+/// caller checks the permission each needs.
 fn transition_only(
     current: OrderLineState,
     trigger: LineTrigger,
@@ -306,10 +328,11 @@ pub enum BillCommand {
     /// Partition the bill's lines into two or more new bills
     /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
-    /// **No permission and no PIN.** A void forgives money and a discount reduces it, so both are
-    /// gated; a split partitions amounts that are already captured and creates, forgives and moves
-    /// nothing — the totals reconcile by construction. A prompt here would be paid for on every
-    /// table, every service, for an act that cannot lose money (ADR-0128 decision 6).
+    /// **No PIN.** A void forgives money and a discount reduces it, so both ask a manager; a split
+    /// partitions amounts that are already captured and creates, forgives and moves nothing — the
+    /// totals reconcile by construction. A prompt here would be paid for on every table, every
+    /// service, for an act that cannot lose money (ADR-0128 decision 6). It does need
+    /// [`Permission::SplitBill`], low risk, so a role can say who splits (ADR-0158).
     Split {
         /// Every line the bill covers, as the caller holds it.
         covers: Vec<OrderLineId>,
@@ -319,8 +342,8 @@ pub enum BillCommand {
     /// Fold this bill into another, which takes its lines.
     ///
     /// Decided on the **absorbed** bill, once per bill being folded in: the target stays `Open` and
-    /// has not changed state by gaining lines, so there is nothing to step it through. No permission
-    /// and no PIN, for the reason [`Self::Split`] carries none.
+    /// has not changed state by gaining lines, so there is nothing to step it through. No PIN, for
+    /// the reason [`Self::Split`] asks none, and [`Permission::SplitBill`], as a split needs.
     Merge,
     /// Reduce what the bill owes, before it settles.
     Reduce {
@@ -461,6 +484,7 @@ pub fn decide_bill(
             payments,
         } => {
             let next_state = Bill::step(current, BillTrigger::Settle)?;
+            ctx.require(Permission::TakePayment)?;
             // A tip needs the store to be taking tips (§10, `tips_enabled`). Checked only when a
             // tender actually carries one, so a store with tips off settles untipped bills exactly
             // as before — the gate refuses taking the money, it does not refuse the sale.
@@ -524,6 +548,7 @@ pub fn decide_bill(
             // The machine first, so a settled or voided bill is refused before anything is computed
             // about lines that are no longer anybody's to move.
             let next_state = Bill::step(current, BillTrigger::Split)?;
+            ctx.require(Permission::SplitBill)?;
             check_partition(&covers, &parts)?;
             Ok(BillDecision {
                 next_state,
@@ -531,11 +556,15 @@ pub fn decide_bill(
                 effects: Vec::new(),
             })
         }
-        BillCommand::Merge => Ok(BillDecision {
-            next_state: Bill::step(current, BillTrigger::Merge)?,
-            settlement: None,
-            effects: Vec::new(),
-        }),
+        BillCommand::Merge => {
+            let next_state = Bill::step(current, BillTrigger::Merge)?;
+            ctx.require(Permission::SplitBill)?;
+            Ok(BillDecision {
+                next_state,
+                settlement: None,
+                effects: Vec::new(),
+            })
+        }
         BillCommand::Void { pin_verified } => {
             let next_state = Bill::step(current, BillTrigger::Void)?;
             let grant = ctx.require(Permission::VoidBill)?;
@@ -665,8 +694,10 @@ impl TableCommand {
     }
 }
 
-/// Decides a table command. Gated wholesale by the `tables_enabled` capability; the transitions
-/// themselves are the routine floor cycle and need no permission.
+/// Decides a table command. Gated wholesale by the `tables_enabled` capability. Seating, clearing
+/// and releasing a table need [`Permission::ManageTables`] (ADR-0158); a transfer needs
+/// [`Permission::TransferOrder`]. Asking for the bill and settling move the table as a side effect
+/// of the bill, whose own permission the caller checks.
 ///
 /// # Errors
 ///
@@ -678,12 +709,18 @@ pub fn decide_table(
     ctx: &DecisionCtx,
 ) -> Result<TableDecision, DomainError> {
     ctx.require_capability(Capability::Tables)?;
-    // Moving guests and their order to another table is `sales.order.transfer`. Seating, billing,
-    // clearing and releasing a table are serving it, and ask for nothing beyond the capability.
-    if matches!(command, TableCommand::Transfer) {
-        ctx.require(Permission::TransferOrder)?;
-    }
     let next_state = Table::step(current, command.trigger())?;
+    match command {
+        // Moving guests and their order to another table. The table they move to is seated, so a
+        // transfer also needs `sales.table.manage`, which every role that moves guests holds.
+        TableCommand::Transfer => {
+            ctx.require(Permission::TransferOrder)?;
+        }
+        TableCommand::Seat | TableCommand::Clean | TableCommand::Release => {
+            ctx.require(Permission::ManageTables)?;
+        }
+        TableCommand::RequestBill | TableCommand::Settle => {}
+    }
     Ok(TableDecision {
         next_state,
         effects: Vec::new(),
@@ -750,9 +787,23 @@ mod tests {
         book
     }
 
+    /// A context granting exactly `permission`, with every capability on, so a refusal in a test is
+    /// provably the missing permission and not a missing capability.
+    fn ctx_granting(permissions: &[Permission]) -> DecisionCtx {
+        let every_capability = Capability::ALL
+            .iter()
+            .fold(CapabilityContext::NONE, |context, capability| {
+                context.with(*capability)
+            });
+        ctx_with(permissions.iter().copied().collect(), every_capability)
+    }
+
     #[test]
     fn holding_then_resuming_moves_the_line() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::FireLines),
+            CapabilityContext::NONE,
+        );
         let book = RecipeBook::new();
         let held =
             decide_line(OrderLineState::Added, LineCommand::Hold, &ctx, &book).expect("hold");
@@ -760,6 +811,151 @@ mod tests {
         let resumed =
             decide_line(OrderLineState::Held, LineCommand::Resume, &ctx, &book).expect("resume");
         assert_eq!(resumed.next_state, OrderLineState::Added);
+    }
+
+    /// A floor command tried against a context, reduced to whether it went through.
+    type Attempt<'a> = Box<dyn Fn(&DecisionCtx) -> Result<(), DomainError> + 'a>;
+
+    /// One line command from `state`, as an [`Attempt`].
+    fn line_attempt(book: &RecipeBook, state: OrderLineState, command: LineCommand) -> Attempt<'_> {
+        Box::new(move |ctx| decide_line(state, command.clone(), ctx, book).map(|_| ()))
+    }
+
+    /// Every line command from a state it is legal in, with the permission it needs.
+    fn line_commands(book: &RecipeBook) -> Vec<(&'static str, Permission, Attempt<'_>)> {
+        let fire = LineCommand::Fire {
+            base_item: menu_item(1),
+            modifiers: Vec::new(),
+            quantity: Quantity::ONE,
+            course: None,
+        };
+        let amend = LineCommand::SetQuantity {
+            quantity: Quantity::from_milli(2_000),
+        };
+        let cancel = LineCommand::Void {
+            pin_verified: false,
+        };
+        vec![
+            (
+                "hold",
+                Permission::FireLines,
+                line_attempt(book, OrderLineState::Added, LineCommand::Hold),
+            ),
+            (
+                "resume",
+                Permission::FireLines,
+                line_attempt(book, OrderLineState::Held, LineCommand::Resume),
+            ),
+            (
+                "fire",
+                Permission::FireLines,
+                line_attempt(book, OrderLineState::Added, fire),
+            ),
+            (
+                "change the quantity",
+                Permission::AddLine,
+                line_attempt(book, OrderLineState::Added, amend),
+            ),
+            (
+                "void a line that never fired",
+                Permission::AddLine,
+                line_attempt(book, OrderLineState::Added, cancel),
+            ),
+        ]
+    }
+
+    /// Every bill and table command from a state it is legal in, with the permission it needs.
+    fn bill_and_table_commands<'a>() -> Vec<(&'static str, Permission, Attempt<'a>)> {
+        let bill = |state: BillState, command: BillCommand| -> Attempt<'a> {
+            Box::new(move |ctx| decide_bill(state, command.clone(), ctx).map(|_| ()))
+        };
+        let table = |state: TableState, command: TableCommand| -> Attempt<'a> {
+            Box::new(move |ctx| decide_table(state, command, ctx).map(|_| ()))
+        };
+        let settle = BillCommand::Settle {
+            total_due: vnd(100_000),
+            payments: vec![cash(100_000)],
+        };
+        let split = BillCommand::Split {
+            covers: vec![line(1), line(2)],
+            parts: vec![vec![line(1)], vec![line(2)]],
+        };
+        vec![
+            (
+                "settle",
+                Permission::TakePayment,
+                bill(BillState::Open, settle),
+            ),
+            ("split", Permission::SplitBill, bill(BillState::Open, split)),
+            (
+                "merge",
+                Permission::SplitBill,
+                bill(BillState::Open, BillCommand::Merge),
+            ),
+            (
+                "seat",
+                Permission::ManageTables,
+                table(TableState::Free, TableCommand::Seat),
+            ),
+            (
+                "clean",
+                Permission::ManageTables,
+                table(TableState::NeedsCleaning, TableCommand::Clean),
+            ),
+            (
+                "release",
+                Permission::ManageTables,
+                table(TableState::Occupied, TableCommand::Release),
+            ),
+            (
+                "transfer",
+                Permission::TransferOrder,
+                table(TableState::Occupied, TableCommand::Transfer),
+            ),
+        ]
+    }
+
+    /// Each floor command needs its own permission, and nothing but it (ADR-0158 decision 2).
+    ///
+    /// Every command is tried from a state it is legal in, twice: with every other permission and
+    /// every capability, where it must be refused naming the permission; and with that permission
+    /// alone, where it must go through. Together they say the permission is both necessary and
+    /// sufficient, so a role that lists it can do the act and a role that does not cannot.
+    #[test]
+    fn each_floor_command_needs_exactly_its_own_permission() {
+        let book = RecipeBook::new();
+        let attempts = line_commands(&book)
+            .into_iter()
+            .chain(bill_and_table_commands());
+        for (act, needed, attempt) in attempts {
+            let others: Vec<Permission> = Permission::ALL
+                .iter()
+                .copied()
+                .filter(|permission| *permission != needed)
+                .collect();
+            match attempt(&ctx_granting(&others)) {
+                Err(DomainError::PermissionDenied { permission }) => assert_eq!(
+                    permission,
+                    needed.meta().id,
+                    "{act} names the permission it needs"
+                ),
+                other => panic!("{act} without {} went {other:?}", needed.meta().id),
+            }
+            assert!(
+                attempt(&ctx_granting(&[needed])).is_ok(),
+                "{act} with {} alone goes through",
+                needed.meta().id
+            );
+        }
+    }
+
+    /// Asking for the bill and settling move a table as a side effect of its bill, so the table
+    /// itself asks nothing: the bill's own decision carries the permission.
+    #[test]
+    fn a_table_moved_by_its_bill_asks_for_nothing_itself() {
+        let ctx = ctx_granting(&[]);
+        assert!(decide_table(TableState::Occupied, TableCommand::RequestBill, &ctx).is_ok());
+        assert!(decide_table(TableState::AwaitingPayment, TableCommand::Settle, &ctx).is_ok());
     }
 
     #[test]
@@ -777,7 +973,10 @@ mod tests {
     fn firing_consumes_the_recipe_and_asks_for_a_recheck() {
         let item = menu_item(1);
         let ing = ingredient(2);
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::FireLines),
+            CapabilityContext::NONE,
+        );
         let book = book_with_one_recipe(item, ing);
         let fired = decide_line(
             OrderLineState::Added,
@@ -823,7 +1022,7 @@ mod tests {
 
         // Courses on → allowed.
         let with_courses = ctx_with(
-            PermissionSet::EMPTY,
+            PermissionSet::EMPTY.with(Permission::FireLines),
             CapabilityContext::NONE.with(Capability::Courses),
         );
         assert!(decide_line(OrderLineState::Added, command(), &with_courses, &book).is_ok());
@@ -887,8 +1086,11 @@ mod tests {
 
     #[test]
     fn voiding_an_unfired_line_is_an_ordinary_cancel() {
-        // No permission, no PIN, no ticket — the kitchen never saw it.
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        // Taking the order's permission, and no PIN and no ticket: the kitchen never saw it.
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::AddLine),
+            CapabilityContext::NONE,
+        );
         let book = RecipeBook::new();
         let decision = decide_line(
             OrderLineState::Added,
@@ -905,9 +1107,12 @@ mod tests {
 
     #[test]
     fn a_line_still_being_taken_can_change_how_many() {
-        // No permission and no capability: changing the number on an order nobody has started making
-        // is an ordinary edit, exactly like adding the line was.
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        // Taking the order's permission and no capability: changing the number on an order nobody
+        // has started making is an ordinary edit, exactly like adding the line was.
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::AddLine),
+            CapabilityContext::NONE,
+        );
         let book = RecipeBook::new();
         for state in [OrderLineState::Added, OrderLineState::Held] {
             let decision = decide_line(
@@ -968,7 +1173,10 @@ mod tests {
 
     #[test]
     fn settling_a_bill_proves_the_invariant_and_prints_a_receipt() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::TakePayment),
+            CapabilityContext::NONE,
+        );
         let decision = decide_bill(
             BillState::Open,
             BillCommand::Settle {
@@ -985,7 +1193,10 @@ mod tests {
 
     #[test]
     fn a_bill_that_does_not_sum_is_refused() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::TakePayment),
+            CapabilityContext::NONE,
+        );
         assert!(matches!(
             decide_bill(
                 BillState::Open,
@@ -1365,7 +1576,7 @@ mod tests {
     #[test]
     fn the_table_cycle_runs_free_to_free() {
         let ctx = ctx_with(
-            PermissionSet::EMPTY,
+            PermissionSet::EMPTY.with(Permission::ManageTables),
             CapabilityContext::NONE.with(Capability::Tables),
         );
         let occupied = decide_table(TableState::Free, TableCommand::Seat, &ctx).expect("seat");
@@ -1410,23 +1621,25 @@ mod tests {
     #[test]
     fn moving_guests_to_another_table_needs_the_transfer_permission() {
         let ctx = ctx_with(
-            PermissionSet::EMPTY,
+            PermissionSet::EMPTY.with(Permission::ManageTables),
             CapabilityContext::NONE.with(Capability::Tables),
         );
         assert!(matches!(
             decide_table(TableState::Occupied, TableCommand::Transfer, &ctx),
-            Err(DomainError::PermissionDenied { .. })
+            Err(DomainError::PermissionDenied {
+                permission: "sales.order.transfer"
+            })
         ));
-        // Seating the table they move to asks for nothing more than it ever did.
+        // Seating the table they move to asks only what seating any table asks.
         let seated = decide_table(TableState::Free, TableCommand::Seat, &ctx).expect("seat");
         assert_eq!(seated.next_state, TableState::Occupied);
     }
 
     #[test]
     fn a_table_seated_by_mistake_goes_straight_back_to_service() {
-        // Releasing moves no money, so it asks for nothing beyond the capability, as seating does.
+        // Releasing moves no money, so it asks what seating asks: `sales.table.manage`.
         let ctx = ctx_with(
-            PermissionSet::EMPTY,
+            PermissionSet::EMPTY.with(Permission::ManageTables),
             CapabilityContext::NONE.with(Capability::Tables),
         );
         let released =
@@ -1467,14 +1680,18 @@ mod tests {
         OrderLineId::new(Ulid::from_u128(n))
     }
 
-    /// A partition goes through, with **no permission at all** in the context.
+    /// A partition goes through with `billing.bill.split` and no PIN.
     ///
-    /// That empty set is the assertion, not scenery (ADR-0128 decision 6): a split creates,
-    /// forgives and moves no money, so gating it would put a PIN prompt in the busiest flow on the
-    /// floor for an act that cannot lose anything.
+    /// No PIN is the assertion (ADR-0128 decision 6): a split creates, forgives and moves no money,
+    /// so a manager's code would be a prompt in the busiest flow on the floor for an act that cannot
+    /// lose anything. The permission is ADR-0158's, so a role can say who splits.
     #[test]
-    fn a_split_that_partitions_the_lines_needs_no_permission() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+    fn a_split_that_partitions_the_lines_needs_the_split_permission_and_no_pin() {
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::SplitBill),
+            CapabilityContext::NONE,
+        );
+        assert!(!Permission::SplitBill.meta().pin_required);
         let decided = decide_bill(
             BillState::Open,
             BillCommand::Split {
@@ -1493,7 +1710,10 @@ mod tests {
     /// different to whoever has to fix it.
     #[test]
     fn a_split_that_is_not_a_partition_is_refused_and_says_which_rule() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::SplitBill),
+            CapabilityContext::NONE,
+        );
         let covers = vec![line(1), line(2)];
         let split = |parts: Vec<Vec<OrderLineId>>| {
             decide_bill(
@@ -1582,10 +1802,13 @@ mod tests {
         }
     }
 
-    /// A merge moves the **absorbed** bill and needs no permission either.
+    /// A merge moves the **absorbed** bill, with the split permission and no PIN.
     #[test]
     fn a_merge_moves_the_absorbed_bill_to_merged() {
-        let ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        let ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::SplitBill),
+            CapabilityContext::NONE,
+        );
         let decided =
             decide_bill(BillState::Open, BillCommand::Merge, &ctx).expect("an open bill folds in");
         assert_eq!(decided.next_state, BillState::Merged);

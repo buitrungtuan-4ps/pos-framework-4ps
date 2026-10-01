@@ -22,6 +22,8 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use pos_core::billing::BillTotals;
+use pos_core::decision::Actor;
+use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
 use pos_proto::ids::{BillId, OrderId, TableId};
@@ -162,8 +164,12 @@ pub(crate) struct PrintResponse {
 
 /// `POST /api/tables/{id}/check/print` — print the table's pre-bill (roadmap-v3 B2.1): one per open
 /// part once its bill is split.
+///
+/// Printing a pre-bill is presenting the bill, so it needs `billing.bill.open`, as opening one does
+/// (ADR-0158), on all three print routes.
 pub(crate) async fn print_for_table<S>(
     State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
     Path(table_id): Path<String>,
 ) -> Response
@@ -173,6 +179,9 @@ where
     let Some(table_id) = parse_ulid(&table_id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
+    if let Err(refused) = edge.authorise(actor, Permission::OpenBill) {
+        return error_response(&refused);
+    }
     let Some(order_id) = edge.order_for_table(table_id) else {
         return error_response(&AppError::NothingToPrint);
     };
@@ -184,6 +193,7 @@ where
 /// the guest wants to see priced before paying.
 pub(crate) async fn print_for_order<S>(
     State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
     Path(order_id): Path<String>,
 ) -> Response
@@ -193,6 +203,9 @@ where
     let Some(order_id) = parse_ulid(&order_id).map(OrderId::new) else {
         return bad_request("an order id is a ULID");
     };
+    if let Err(refused) = edge.authorise(actor, Permission::OpenBill) {
+        return error_response(&refused);
+    }
     let pre_bills = edge.pre_bills_for_order(order_id);
     print_all(printers.as_deref(), &edge, order_id, pre_bills).await
 }
@@ -201,6 +214,7 @@ where
 /// a split table.
 pub(crate) async fn print_for_bill<S>(
     State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
     Path(bill_id): Path<String>,
 ) -> Response
@@ -210,6 +224,9 @@ where
     let Some(bill_id) = parse_ulid(&bill_id).map(BillId::new) else {
         return bad_request("a bill id is a ULID");
     };
+    if let Err(refused) = edge.authorise(actor, Permission::OpenBill) {
+        return error_response(&refused);
+    }
     let Some(order_id) = edge.order_for_bill(bill_id) else {
         return error_response(&AppError::UnknownBill);
     };

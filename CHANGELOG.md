@@ -82,6 +82,23 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     on any release read it as they did. `pos-proto` gains the `people` module, additively; no
     event, migration, permission or protocol change.
 
+- **Every state-changing till route names the permission it needs**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 2). Seating,
+  adding a line, firing, bumping, opening a bill, splitting, settling and opening a shift each now
+  check their own permission, one of the seven #560 added, as voiding and discounting always did.
+  - Holding and resuming a line count as firing (`sales.line.fire`). Changing a line's quantity,
+    voiding a line that never fired and starting a counter order count as adding a line
+    (`sales.line.add`). Printing a pre-bill counts as opening the bill (`billing.bill.open`). A
+    transfer also needs `sales.table.manage` for the table it seats.
+  - A split and a merge need `billing.bill.split` and still ask for no PIN. That amends
+    ADR-0128 decision 6, which said they need no permission.
+  - `crates/pos-edge/src/http/route_permissions.rs` lists every `POST` route and what it needs. A
+    test holds the list to `docs/snapshots/routes.txt`, so a new route that names nothing fails CI.
+  - **Upgrade note:** nothing is refused yet. Until each person's own set decides, the edge decides
+    with a store-wide set that grants every permission, so these checks pass for everyone. They are
+    what per-person enforcement will refuse, and before it lands a migration grants the seven new
+    permissions to every existing role. No event, route, migration or protocol change.
+
 - **The cloud's API documents are generated with utoipa 6** (#537). The `/v1` API is unchanged. In
   `docs/openapi.json` the two choices for an order line's `quoted_unit_price` swap places, so
   `MoneyDto` now comes before `null`. The admin document is unchanged.
