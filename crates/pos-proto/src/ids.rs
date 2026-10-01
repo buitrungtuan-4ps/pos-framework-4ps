@@ -170,6 +170,14 @@ resource_id! {
     CampaignId
 }
 resource_id! {
+    /// A fee rule on the published `fees` node: a service charge, a packaging fee, a delivery fee
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
+    ///
+    /// Stable across a rename, so a fee renamed in the console is still the same fee. It is also
+    /// the key ADR-0159 decision 1 merges a tenant's, a brand's and a store's rules by.
+    FeeId
+}
+resource_id! {
     /// A single event. Doubles as the receiver's idempotency key, which is why a
     /// retry must reuse it rather than mint a fresh one.
     EventId
