@@ -52,3 +52,8 @@
 **Vulnerability:** Webhook SSRF validation only checked `2001:db8::/32` (RFC 3849) for documentation addresses, allowing expanded RFC 9637 IPv6 documentation prefix addresses (`3fff::/20`) to fall through `classify_v6` as public unicast addresses.
 **Learning:** IETF expanded IPv6 documentation allocations under RFC 9637 (`3fff::/20`). Checking only legacy RFC 3849 ranges leaves modern documentation prefix blocks unclassified.
 **Prevention:** Always include `first == 0x3fff && (second & 0xf000 == 0x0000)` (`3fff::/20`) alongside `2001:db8::/32` when matching non-routable documentation ranges in `classify_v6`.
+
+## 2026-09-28 - [SSRF IPv6 PCP and TURN Anycast Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check `2001:1::/32`, which holds the PCP (RFC 7723) and TURN (RFC 8155) anycast addresses, so those destinations fell through `classify_v6` as public unicast addresses.
+**Learning:** `2001:1::/32` lies in the IETF Protocol Assignments block `2001::/23` (RFC 2928). Its anycast addresses reach a nearby network service, never a webhook receiver. A range's name and RFC come from the IANA IPv6 special-purpose registry, not from memory.
+**Prevention:** Check `first == 0x2001 && second == 0x0001` (`2001:1::/32`) in `classify_v6`, and cite the registry's name for the range.
