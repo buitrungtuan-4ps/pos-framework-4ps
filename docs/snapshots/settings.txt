@@ -2,11 +2,12 @@
 # hand-edit. Regenerate with:  just snapshot
 #
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
-# rely on it, so it may be added to but never renamed or removed. A default or a since
-# line may change. ADR-0160 decision 9.
+# rely on it, so it may be added to but never renamed or removed. A default, a preset or
+# a since line may change. ADR-0160 decision 9.
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE
+shift.no_shift_selling	preset=NO_SHIFT_SELLING_REFUSE
 shift.no_shift_selling	scope=SETTING_SCOPE_BRAND
 shift.no_shift_selling	scope=SETTING_SCOPE_STORE
 shift.no_shift_selling	scope=SETTING_SCOPE_STORE_GROUP

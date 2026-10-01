@@ -111,6 +111,7 @@ use pos_proto::origins::PublishedOrigins;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
+use pos_proto::settings::SettingScope;
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -231,6 +232,7 @@ use crate::releases::{
 use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
+use crate::settings::SettingsStore;
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
     StoreGroupStore, StoreGroupStoreError,
@@ -16793,6 +16795,1121 @@ where
         })),
     )
         .into_response()
+}
+
+// --- Settings (`/admin/settings`, ADR-0160 decision 3) -----------------------------------------
+
+/// The collaborators the settings routes need: the values; the registry and the store groups that
+/// say which stores a value reaches; the config trees the resolved values are written onto; and the
+/// admin, clock and audit every route carries.
+#[derive(Clone)]
+struct SettingsState<St, Rg, Grp, Cfg, A, C> {
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+/// Builds the settings sub-router
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 3).
+///
+/// A value is written once, at the tenant, a brand, a store group or one store, and every store it
+/// reaches is republished in the same request: each one's resolved values are composed onto its
+/// Tenant layer ([`crate::settings::tenant_layer_nodes`]), so they merge with the nodes the console
+/// publishes on the Store layer. Reads are behind [`ConsolePermission::Read`]; a write publishes, so
+/// it is behind [`ConsolePermission::PublishConfig`], like every node publish.
+pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> Router
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/admin/settings/catalogue",
+            get(admin_settings_catalogue::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/settings",
+            get(admin_list_settings::<St, Rg, Grp, Cfg, A, C>)
+                .put(admin_put_setting::<St, Rg, Grp, Cfg, A, C>)
+                .delete(admin_clear_setting::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/settings/effective",
+            get(admin_effective_settings::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/settings/presets",
+            post(admin_apply_setting_presets::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/settings/publish",
+            post(admin_publish_settings::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .with_state(SettingsState {
+            settings,
+            registry,
+            groups,
+            config_trees,
+            admin,
+            clock,
+            audit,
+        })
+}
+
+/// One setting as the console's settings screen draws it: the register entry, without its
+/// summary. The screen labels a setting and each of its values from its own translations, keyed by
+/// the setting's key, so no English sentence reaches it from here.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SettingCatalogueEntry {
+    setting_key: String,
+    node: &'static str,
+    field: &'static str,
+    kind: &'static str,
+    values: Vec<&'static str>,
+    default: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset: Option<&'static str>,
+    scopes: Vec<&'static str>,
+    since: &'static str,
+}
+
+impl SettingCatalogueEntry {
+    fn of(setting: &pos_proto::settings::Setting) -> Self {
+        Self {
+            setting_key: setting.key(),
+            node: setting.node,
+            field: setting.field,
+            kind: setting.kind.as_wire(),
+            values: setting.values.clone(),
+            default: setting.default,
+            preset: setting.preset,
+            scopes: setting.scopes.iter().map(|scope| scope.as_wire()).collect(),
+            since: setting.since,
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/settings/catalogue",
+    responses(
+        (status = 200, description = "Every setting in the register: its key, node and field, its \
+                                      kind and values, its default, the value a new store is \
+                                      given, the scopes it may be written at, and the first \
+                                      release that honours it"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `GET /admin/settings/catalogue` — the settings register, for the console's settings screen.
+async fn admin_settings_catalogue<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+) -> Response
+where
+    St: Clone + Send + Sync + 'static,
+    Rg: Clone + Send + Sync + 'static,
+    Grp: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let entries: Vec<SettingCatalogueEntry> = pos_proto::settings::register()
+        .iter()
+        .map(SettingCatalogueEntry::of)
+        .collect();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "settings": entries })),
+    )
+        .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/settings",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose values to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every value the tenant has written: the setting, the scope \
+                                      and the id it was written for, the value and when"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `GET /admin/settings` — the values a tenant has written, at every scope.
+async fn admin_list_settings<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<SettingsTenantQuery>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: Clone + Send + Sync + 'static,
+    Grp: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    match state.settings.list(tenant_id).await {
+        Ok(values) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "values": values })),
+        )
+            .into_response(),
+        Err(error) => settings_store_error_response(&error),
+    }
+}
+
+/// The tenant a settings read is for.
+#[derive(Debug, Clone, Deserialize)]
+struct SettingsTenantQuery {
+    tenant_id: String,
+}
+
+/// A `PUT /admin/settings` body: one value, at one scope.
+#[derive(Debug, Clone, Deserialize)]
+struct PutSettingRequest {
+    tenant_id: String,
+    setting_key: String,
+    /// `SETTING_SCOPE_TENANT`, `_BRAND`, `_STORE_GROUP` or `_STORE`.
+    scope: String,
+    /// The tenant, brand, store group or store the value is for.
+    scope_id: String,
+    value: serde_json::Value,
+}
+
+#[utoipa::path(
+    put,
+    path = "/admin/settings",
+    request_body(
+        description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
+                       _STORE_GROUP or _STORE), the id it is for, and the value",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Written, and every store it reaches republished. The body \
+                                      lists each store with SETTING_PUBLISH_APPLIED and the new \
+                                      config version, SETTING_PUBLISH_UNCHANGED, or \
+                                      SETTING_PUBLISH_FAILED"),
+        (status = 400, description = "An id is not a ULID, the scope is not a scope, the setting \
+                                      is not in the register, the setting cannot be set at that \
+                                      scope, the value is not one it takes, or a tenant-scope \
+                                      value names another tenant", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such brand, store group or store", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The store group is archived, so its values reach no store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store, the registry, the store groups or the \
+                                      config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `PUT /admin/settings` — writes one value and republishes every store it reaches.
+async fn admin_put_setting<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<PutSettingRequest>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let scope = match parse_setting_scope(&request.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    if let Err(refusal) = crate::settings::validate(&request.setting_key, scope, &request.value) {
+        return setting_refusal_response(&refusal);
+    }
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let scope_id = match layout.scope_target(scope, &request.scope_id) {
+        Ok(scope_id) => scope_id,
+        Err(refusal) => return refusal,
+    };
+    let before = match state.settings.list(tenant_id).await {
+        Ok(values) => values
+            .into_iter()
+            .find(|held| {
+                held.setting_key == request.setting_key
+                    && held.scope.known() == scope
+                    && held.scope_id == scope_id
+            })
+            .map(|held| held.value),
+        Err(error) => return settings_store_error_response(&error),
+    };
+    let value = crate::settings::SettingValue {
+        setting_key: request.setting_key.clone(),
+        scope: Open::from_known(scope),
+        scope_id: scope_id.clone(),
+        value: request.value.clone(),
+        update_time: state.clock.now(),
+    };
+    if let Err(error) = state.settings.put(tenant_id, &value).await {
+        return settings_store_error_response(&error);
+    }
+    let results = publish_settings_to(
+        &state,
+        tenant_id,
+        &layout,
+        &layout.reached_by(scope, &scope_id),
+    )
+    .await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "setting.set",
+        "setting",
+        &setting_audit_id(&request.setting_key, scope, &scope_id),
+        before.map(|value| serde_json::json!({ "value": value })),
+        Some(serde_json::json!({ "value": request.value })),
+    )
+    .await;
+    publish_results_response(&results)
+}
+
+/// The value a `DELETE /admin/settings` clears.
+#[derive(Debug, Clone, Deserialize)]
+struct ClearSettingQuery {
+    tenant_id: String,
+    setting_key: String,
+    scope: String,
+    scope_id: String,
+}
+
+#[utoipa::path(
+    delete,
+    path = "/admin/settings",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("setting_key" = String, Query, description = "The setting's key, node.field"),
+        ("scope" = String, Query, description = "SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE"),
+        ("scope_id" = String, Query, description = "The tenant, brand, store group or store the value was written for"),
+    ),
+    responses(
+        (status = 200, description = "Cleared, and every store it reached republished, with the \
+                                      same per-store outcomes as a write"),
+        (status = 400, description = "An id is not a ULID or the scope is not a scope", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "No value is written there", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store, the registry, the store groups or the \
+                                      config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `DELETE /admin/settings` — clears one value and republishes every store it reached, which then
+/// run the next most specific value, or the default.
+async fn admin_clear_setting<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<ClearSettingQuery>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &query.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let scope = match parse_setting_scope(&query.scope) {
+        Ok(scope) => scope,
+        Err(refusal) => return refusal,
+    };
+    let scope_id = match parse_ulid_fields([("scope_id", &query.scope_id)]) {
+        Ok([scope_id]) => scope_id.to_string(),
+        Err(refusal) => return refusal,
+    };
+    let held = match state.settings.list(tenant_id).await {
+        Ok(values) => values.into_iter().find(|held| {
+            held.setting_key == query.setting_key
+                && held.scope.known() == scope
+                && held.scope_id == scope_id
+        }),
+        Err(error) => return settings_store_error_response(&error),
+    };
+    let Some(held) = held else {
+        return not_found("setting value");
+    };
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    match state
+        .settings
+        .delete(tenant_id, &query.setting_key, scope, &scope_id)
+        .await
+    {
+        Ok(_) => {}
+        Err(error) => return settings_store_error_response(&error),
+    }
+    let results = publish_settings_to(
+        &state,
+        tenant_id,
+        &layout,
+        &layout.reached_by(scope, &scope_id),
+    )
+    .await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "setting.clear",
+        "setting",
+        &setting_audit_id(&query.setting_key, scope, &scope_id),
+        Some(serde_json::json!({ "value": held.value })),
+        None,
+    )
+    .await;
+    publish_results_response(&results)
+}
+
+/// The store whose effective settings to read.
+#[derive(Debug, Clone, Deserialize)]
+struct EffectiveSettingsQuery {
+    tenant_id: String,
+    store_id: String,
+}
+
+/// One setting as one store runs it, and where its value comes from.
+#[derive(Debug, Clone, serde::Serialize)]
+struct EffectiveSetting {
+    setting_key: String,
+    value: serde_json::Value,
+    /// The scope that set it, or absent when the store runs the default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'static str>,
+    /// The tenant, brand, store group or store that set it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_id: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/settings/effective",
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, description = "Every setting as the store runs it: the value, and the scope \
+                                      and id it comes from, which are absent for a default"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store, the registry or the store groups is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `GET /admin/settings/effective` — what one store runs, and why.
+async fn admin_effective_settings<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<EffectiveSettingsQuery>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    if let Err(denied) = require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::Read,
+    )
+    .await
+    {
+        return denied;
+    }
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &query.tenant_id),
+        ("store_id", &query.store_id),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let Some(placement) = layout.placement(store_id) else {
+        return not_found("store");
+    };
+    let values = match state.settings.list(tenant_id).await {
+        Ok(values) => values,
+        Err(error) => return settings_store_error_response(&error),
+    };
+    let resolved = crate::settings::resolve_for_store(&values, &placement);
+    let effective: Vec<EffectiveSetting> = pos_proto::settings::register()
+        .iter()
+        .map(|setting| {
+            let key = setting.key();
+            match resolved
+                .iter()
+                .find(|resolved| resolved.node == setting.node && resolved.field == setting.field)
+            {
+                Some(resolved) => EffectiveSetting {
+                    setting_key: key,
+                    value: resolved.value.clone(),
+                    scope: Some(resolved.scope.as_wire()),
+                    scope_id: Some(resolved.scope_id.clone()),
+                },
+                None => EffectiveSetting {
+                    setting_key: key,
+                    value: serde_json::Value::String(setting.default.to_owned()),
+                    scope: None,
+                    scope_id: None,
+                },
+            }
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "settings": effective })),
+    )
+        .into_response()
+}
+
+/// A store to publish settings to, or every store of the tenant.
+#[derive(Debug, Clone, Deserialize)]
+struct SettingsStoreRequest {
+    tenant_id: String,
+    #[serde(default)]
+    store_id: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/settings/presets",
+    request_body(
+        description = "The tenant and the store to give the new-store values",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Each setting with a new-store value that the store did not \
+                                      already set is written at the store's own scope, and the \
+                                      store republished. The body lists the settings written and \
+                                      the store's publish outcome"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store, the registry, the store groups or the \
+                                      config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `POST /admin/settings/presets` — gives a store the values the owner chose for a new store
+/// (ADR-0160 decision 1), which the console calls when it creates one.
+///
+/// Only settings the store does not set itself are written, so calling it twice, or on a store an
+/// operator has already configured, changes nothing the operator chose.
+async fn admin_apply_setting_presets<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<SettingsStoreRequest>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let store_field = request.store_id.clone().unwrap_or_default();
+    let (tenant_id, store_id) = match parse_ulid_fields([
+        ("tenant_id", &request.tenant_id),
+        ("store_id", &store_field),
+    ]) {
+        Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
+        Err(refusal) => return refusal,
+    };
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    if layout.placement(store_id).is_none() {
+        return not_found("store");
+    }
+    let held = match state.settings.list(tenant_id).await {
+        Ok(values) => values,
+        Err(error) => return settings_store_error_response(&error),
+    };
+    let store_scope_id = store_id.to_string();
+    let mut applied = Vec::new();
+    for setting in pos_proto::settings::register() {
+        let Some(preset) = setting.preset else {
+            continue;
+        };
+        let key = setting.key();
+        let already = held.iter().any(|value| {
+            value.setting_key == key
+                && value.scope.known() == SettingScope::Store
+                && value.scope_id == store_scope_id
+        });
+        if already {
+            continue;
+        }
+        let value = crate::settings::SettingValue {
+            setting_key: key.clone(),
+            scope: Open::from_known(SettingScope::Store),
+            scope_id: store_scope_id.clone(),
+            value: serde_json::Value::String(preset.to_owned()),
+            update_time: state.clock.now(),
+        };
+        if let Err(error) = state.settings.put(tenant_id, &value).await {
+            return settings_store_error_response(&error);
+        }
+        applied.push(key);
+    }
+    let results = publish_settings_to(&state, tenant_id, &layout, &[store_id]).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "setting.presets.apply",
+        "store",
+        &store_scope_id,
+        None,
+        Some(serde_json::json!({ "settings": applied })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "applied": applied, "stores": results })),
+    )
+        .into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/settings/publish",
+    request_body(
+        description = "The tenant, and optionally one store. Without a store, every store of the \
+                       tenant is republished",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, description = "Each store's resolved settings republished, with the same \
+                                      per-store outcomes as a write"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The settings store, the registry, the store groups or the \
+                                      config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "settings",
+)]
+/// `POST /admin/settings/publish` — republishes the settings of one store, or of every store of the
+/// tenant.
+///
+/// A write republishes every store it reaches by itself. What it cannot see is a store that moved:
+/// a store given another brand, or added to or removed from a store group, keeps the values it was
+/// last published until this runs for it, as a group's batch publish works
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).
+async fn admin_publish_settings<St, Rg, Grp, Cfg, A, C>(
+    State(state): State<SettingsState<St, Rg, Grp, Cfg, A, C>>,
+    headers: HeaderMap,
+    Json(request): Json<SettingsStoreRequest>,
+) -> Response
+where
+    St: SettingsStore + Clone + Send + Sync + 'static,
+    Rg: RegistryStore + Clone + Send + Sync + 'static,
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::PublishConfig,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let tenant_id = match parse_ulid_fields([("tenant_id", &request.tenant_id)]) {
+        Ok([tenant_id]) => TenantId::new(tenant_id),
+        Err(refusal) => return refusal,
+    };
+    let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
+        Ok(layout) => layout,
+        Err(refusal) => return refusal,
+    };
+    let stores: Vec<StoreId> = match request.store_id.as_deref().map(str::trim) {
+        None | Some("") => layout.stores.iter().map(|store| store.store_id).collect(),
+        Some(text) => {
+            let store_id = match parse_ulid_fields([("store_id", text)]) {
+                Ok([store_id]) => StoreId::new(store_id),
+                Err(refusal) => return refusal,
+            };
+            if layout.placement(store_id).is_none() {
+                return not_found("store");
+            }
+            vec![store_id]
+        }
+    };
+    let results = publish_settings_to(&state, tenant_id, &layout, &stores).await;
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant_id),
+        "setting.publish",
+        "tenant",
+        &tenant_id.to_string(),
+        None,
+        Some(serde_json::json!({ "stores": stores.len() })),
+    )
+    .await;
+    publish_results_response(&results)
+}
+
+/// Where a tenant's stores sit — their brands and their active store groups — read once per
+/// request, so one write resolves every store it reaches against the same picture.
+struct TenantLayout {
+    tenant_id: TenantId,
+    stores: Vec<StoreRecord>,
+    brand_ids: Vec<BrandId>,
+    /// Every group of the tenant with its members, archived ones included so a write to one can be
+    /// told apart from a write to a group that does not exist.
+    groups: Vec<(StoreGroup, Vec<StoreId>)>,
+}
+
+impl TenantLayout {
+    /// Reads the tenant's stores, brands and store groups.
+    async fn load<Rg, Grp>(
+        registry: &Rg,
+        groups: &Grp,
+        tenant_id: TenantId,
+    ) -> Result<Self, Response>
+    where
+        Rg: RegistryStore,
+        Grp: StoreGroupStore,
+    {
+        let stores = registry
+            .list_stores(tenant_id)
+            .await
+            .map_err(|error| registry_error_response(&error))?
+            .into_iter()
+            .map(|store| store.record)
+            .collect();
+        let brand_ids = registry
+            .list_brands(tenant_id)
+            .await
+            .map_err(|error| registry_error_response(&error))?
+            .into_iter()
+            .map(|brand| brand.record.brand_id)
+            .collect();
+        let mut with_members = Vec::new();
+        for group in groups
+            .list_groups(tenant_id)
+            .await
+            .map_err(|error| store_group_error_response(&error))?
+        {
+            let members = groups
+                .list_members(tenant_id, group.record.group_id)
+                .await
+                .map_err(|error| store_group_error_response(&error))?;
+            with_members.push((group.record, members));
+        }
+        Ok(Self {
+            tenant_id,
+            stores,
+            brand_ids,
+            groups: with_members,
+        })
+    }
+
+    /// Where one store sits, or `None` if the tenant has no such store.
+    fn placement(&self, store_id: StoreId) -> Option<crate::settings::StorePlacement> {
+        let store = self
+            .stores
+            .iter()
+            .find(|store| store.store_id == store_id)?;
+        Some(crate::settings::StorePlacement {
+            tenant_id: self.tenant_id.to_string(),
+            brand_id: store.brand_id.map(|brand| brand.to_string()),
+            store_group_ids: self
+                .groups
+                .iter()
+                .filter(|(group, members)| {
+                    group.status == EntityStatus::Active && members.contains(&store_id)
+                })
+                .map(|(group, _)| group.group_id.to_string())
+                .collect(),
+            store_id: store_id.to_string(),
+        })
+    }
+
+    /// The canonical id a value at `scope` is written for, refusing one the tenant does not have.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+    )]
+    fn scope_target(&self, scope: SettingScope, scope_id: &str) -> Result<String, Response> {
+        let id = match parse_ulid_fields([("scope_id", scope_id)]) {
+            Ok([id]) => id,
+            Err(refusal) => return Err(refusal),
+        };
+        match scope {
+            SettingScope::Tenant if id == self.tenant_id.as_ulid() => Ok(id.to_string()),
+            SettingScope::Tenant => Err(api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "a tenant-scope value is written for the tenant itself",
+                &[("scope_id", "MUST_BE_THE_TENANT")],
+            )),
+            SettingScope::Brand if self.brand_ids.contains(&BrandId::new(id)) => Ok(id.to_string()),
+            SettingScope::Brand => Err(not_found("brand")),
+            SettingScope::StoreGroup => {
+                match self
+                    .groups
+                    .iter()
+                    .find(|(group, _)| group.group_id == StoreGroupId::new(id))
+                {
+                    Some((group, _)) if group.status == EntityStatus::Active => Ok(id.to_string()),
+                    Some(_) => Err(api_error(
+                        ErrorStatus::FailedPrecondition,
+                        "the store group is archived, so its values reach no store",
+                    )),
+                    None => Err(not_found("store group")),
+                }
+            }
+            SettingScope::Store if self.placement(StoreId::new(id)).is_some() => Ok(id.to_string()),
+            SettingScope::Store => Err(not_found("store")),
+            SettingScope::Unspecified => Err(setting_scope_refusal()),
+        }
+    }
+
+    /// The stores a value at `scope` reaches.
+    fn reached_by(&self, scope: SettingScope, scope_id: &str) -> Vec<StoreId> {
+        match scope {
+            SettingScope::Tenant => self.stores.iter().map(|store| store.store_id).collect(),
+            SettingScope::Brand => self
+                .stores
+                .iter()
+                .filter(|store| {
+                    store
+                        .brand_id
+                        .is_some_and(|brand| brand.to_string() == scope_id)
+                })
+                .map(|store| store.store_id)
+                .collect(),
+            // A membership row for a store the registry does not have reaches nothing, as a
+            // group's batch publish skips it.
+            SettingScope::StoreGroup => self
+                .groups
+                .iter()
+                .filter(|(group, _)| group.group_id.to_string() == scope_id)
+                .flat_map(|(_, members)| members.iter().copied())
+                .filter(|member| self.placement(*member).is_some())
+                .collect(),
+            SettingScope::Store => self
+                .stores
+                .iter()
+                .filter(|store| store.store_id.to_string() == scope_id)
+                .map(|store| store.store_id)
+                .collect(),
+            SettingScope::Unspecified => Vec::new(),
+        }
+    }
+}
+
+/// How one store's settings publish went.
+#[derive(Debug, Clone, serde::Serialize)]
+struct SettingPublishResult {
+    store_id: String,
+    /// `SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`.
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
+}
+
+/// Republishes each store's resolved settings onto its Tenant layer.
+///
+/// One store failing does not stop the others: each answers for itself, and a failed one is
+/// retried with `POST /admin/settings/publish`. A store whose layer already holds what it resolves
+/// to is not given a new version, so a write that changes nothing for a store does not make its
+/// tills reload.
+///
+/// The values are read once, before the stores are written. Two writes racing for one store can
+/// therefore leave it holding the earlier write's picture until its next publish; the values
+/// themselves are stored correctly, and `POST /admin/settings/publish` brings the store level.
+async fn publish_settings_to<St, Rg, Grp, Cfg, A, C>(
+    state: &SettingsState<St, Rg, Grp, Cfg, A, C>,
+    tenant_id: TenantId,
+    layout: &TenantLayout,
+    stores: &[StoreId],
+) -> Vec<SettingPublishResult>
+where
+    St: SettingsStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let values = match state.settings.list(tenant_id).await {
+        Ok(values) => values,
+        Err(error) => {
+            tracing::error!(%error, "the settings store could not be read for a settings publish");
+            return stores
+                .iter()
+                .map(|store_id| SettingPublishResult {
+                    store_id: store_id.to_string(),
+                    outcome: "SETTING_PUBLISH_FAILED",
+                    config_version_id: None,
+                })
+                .collect();
+        }
+    };
+    let mut results = Vec::with_capacity(stores.len());
+    for store_id in stores {
+        let resolved = layout
+            .placement(*store_id)
+            .map(|placement| crate::settings::resolve_for_store(&values, &placement))
+            .unwrap_or_default();
+        let outcome = publish_settings_to_store(state, tenant_id, *store_id, &resolved).await;
+        results.push(match outcome {
+            Ok(Some(version)) => SettingPublishResult {
+                store_id: store_id.to_string(),
+                outcome: "SETTING_PUBLISH_APPLIED",
+                config_version_id: Some(version.to_string()),
+            },
+            Ok(None) => SettingPublishResult {
+                store_id: store_id.to_string(),
+                outcome: "SETTING_PUBLISH_UNCHANGED",
+                config_version_id: None,
+            },
+            Err(()) => SettingPublishResult {
+                store_id: store_id.to_string(),
+                outcome: "SETTING_PUBLISH_FAILED",
+                config_version_id: None,
+            },
+        });
+    }
+    results
+}
+
+/// Writes one store's resolved settings onto its Tenant layer: the new version, or `None` when the
+/// layer already holds them.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design — the shape every other \
+              node publish's closure carries — and this closure never takes the Err branch"
+)]
+async fn publish_settings_to_store<St, Rg, Grp, Cfg, A, C>(
+    state: &SettingsState<St, Rg, Grp, Cfg, A, C>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    resolved: &[crate::settings::ResolvedSetting],
+) -> Result<Option<ConfigVersionId>, ()>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let tenant_layer = |tree: Option<&ConfigTreeState>| {
+        tree.map_or(serde_json::Value::Null, |tree| {
+            tree.layer(ConfigLevel::Tenant).clone()
+        })
+    };
+    let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
+        tracing::error!(%store_id, "a store's configuration could not be read for a settings publish");
+        return Err(());
+    };
+    let layer = tenant_layer(loaded.state.as_ref());
+    let nodes = crate::settings::tenant_layer_nodes(&layer, resolved);
+    if nodes
+        .iter()
+        .all(|(node, value)| layer.get(node) == Some(value))
+    {
+        return Ok(None);
+    }
+    match publish_config_nodes_with(
+        &state.config_trees,
+        &state.clock,
+        tenant_id,
+        store_id,
+        ConfigLevel::Tenant,
+        |tree| {
+            Ok(crate::settings::tenant_layer_nodes(
+                &tenant_layer(tree),
+                resolved,
+            ))
+        },
+    )
+    .await
+    {
+        Ok(version) => Ok(Some(version)),
+        Err(_refused) => {
+            tracing::warn!(%store_id, "a store's configuration refused a settings publish");
+            Err(())
+        }
+    }
+}
+
+/// The `200` a write answers: every store it reached and how its publish went.
+fn publish_results_response(results: &[SettingPublishResult]) -> Response {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "stores": results })),
+    )
+        .into_response()
+}
+
+/// What the audit trail names a value by: its setting, its scope and the id it was written for.
+fn setting_audit_id(setting_key: &str, scope: SettingScope, scope_id: &str) -> String {
+    format!("{setting_key} {scope} {scope_id}")
+}
+
+/// Reads a scope token, refusing anything but the four scopes.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn parse_setting_scope(token: &str) -> Result<SettingScope, Response> {
+    match SettingScope::from_wire(token.trim()) {
+        Some(SettingScope::Unspecified) | None => Err(setting_scope_refusal()),
+        Some(scope) => Ok(scope),
+    }
+}
+
+/// The refusal for a `scope` that is not one of the four.
+fn setting_scope_refusal() -> Response {
+    enum_refusal(
+        "scope",
+        SettingScope::ALL
+            .iter()
+            .filter(|scope| **scope != SettingScope::Unspecified)
+            .map(|scope| scope.as_wire()),
+    )
+}
+
+/// The `400` a value the register refuses becomes, naming the field at fault.
+fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Response {
+    let (field, reason) = match refusal {
+        crate::settings::SettingRefusal::UnknownSetting(_) => ("setting_key", "UNKNOWN_SETTING"),
+        crate::settings::SettingRefusal::ScopeNotAllowed { .. } => ("scope", "SCOPE_NOT_ALLOWED"),
+        crate::settings::SettingRefusal::ValueNotAllowed { .. } => ("value", "INVALID_ENUM_VALUE"),
+    };
+    api_error_with_details(
+        ErrorStatus::InvalidArgument,
+        refusal.to_string(),
+        &[(field, reason)],
+    )
+}
+
+/// The `503` for a settings store that did not answer.
+fn settings_store_error_response(error: &crate::settings::SettingsStoreError) -> Response {
+    tracing::error!(%error, "the settings store failed");
+    service_unavailable("settings")
 }
 
 // --- Inventory publish (`/admin/config/inventory`, ADR-0079, Track M6) -------------------------
