@@ -76,4 +76,25 @@ describe("the command palette", () => {
       expect(input.getAttribute("aria-activedescendant")).toBe("command-palette-option-0");
     }
   });
+
+  it("restores focus to previous active element on close", async () => {
+    const trigger = document.createElement("button");
+    trigger.id = "external-trigger";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    mount();
+    openPalette();
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeTruthy());
+
+    const input = screen.getByRole("combobox");
+    await waitFor(() => expect(document.activeElement).toBe(input));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+
+    document.body.removeChild(trigger);
+  });
 });
