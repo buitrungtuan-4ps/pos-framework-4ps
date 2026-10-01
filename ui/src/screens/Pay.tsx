@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onMount } from "solid-js";
+import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
@@ -494,8 +494,9 @@ export function Pay() {
     void showBill(id);
   };
 
-  // The lines the bill on screen covers, as the order holds them, oldest first.
-  const coveredLines = () => {
+  // Optimization: Memoize coveredLines and isPart using createMemo to avoid redundant O(N log N) re-filtering
+  // and sorting on every access/re-render. Placed below `covered` signal to avoid TDZ errors.
+  const coveredLines = createMemo(() => {
     const ids = covered();
     if (ids === null) {
       return [];
@@ -503,14 +504,15 @@ export function Pay() {
     return linesForTable(params.id)
       .filter((line) => ids.includes(line.orderLineId))
       .sort((a, b) => a.orderLineId.localeCompare(b.orderLineId));
-  };
+  });
+
   // Whether the bill on screen is a part of its table rather than all of it: it covers fewer lines
   // than the table has live ones. Then the screen says what this guest is paying for.
-  const isPart = () => {
+  const isPart = createMemo(() => {
     const ids = covered();
     const live = linesForTable(params.id).filter((line) => line.state !== "ORDER_LINE_STATE_VOIDED");
     return ids !== null && ids.length < live.length;
-  };
+  });
   const partItems = () =>
     coveredLines()
       .map((line) => `${formatQuantity(line.quantityMilli)} × ${line.name}`)
