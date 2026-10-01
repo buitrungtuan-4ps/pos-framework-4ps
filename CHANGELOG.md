@@ -218,6 +218,32 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till's everyday actions have permissions of their own**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)), so that every till
+  action that changes state can be named by one. Seating a table, adding and firing a line, bumping
+  a ticket, and opening, splitting and paying a bill named no permission, so a role could not say
+  who may do them. Seven join the catalogue, each low risk and asking no PIN:
+  - `sales.table.manage`: seat, clean or release a table.
+  - `sales.line.add`: add a line to an order, or change its quantity.
+  - `sales.line.fire`: send lines to the kitchen.
+  - `sales.ticket.bump`: mark a ticket done on the kitchen board.
+  - `billing.bill.open`: open a bill when the guests ask for it.
+  - `billing.bill.split`: split a bill, or merge bills.
+  - `billing.payment.take`: take a payment and settle a bill.
+
+  By default they go to servers, cashiers, supervisors, managers and owners, except
+  `sales.ticket.bump`, which goes to cooks, supervisors, managers and owners (see
+  `docs/permissions.md`). The console's role editor offers them with the other sales and billing
+  permissions.
+
+  **Nothing enforces them yet.** The edge still decides each of these actions with every permission
+  granted store-wide, so nobody can do less at the till than before.
+
+  **Upgrade note:** the permission snapshot (`docs/snapshots/permissions.txt`) grows by seven ids,
+  and none is renamed or removed. A later migration grants all seven to every existing role before
+  the edge enforces them, so no role loses an action because the action gained a name. Nothing else
+  changes: no migration, route, event or `PROTOCOL_VERSION`.
+
 - **An open till picks up a new store configuration without a new sign-in**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   item 7). A till used to read the floor, the menus, the layout, the money settings and the reason

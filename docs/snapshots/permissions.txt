@@ -12,6 +12,24 @@ admin.device.manage	default_role=OWNER
 admin.device.manage	group=STORE_ADMINISTRATION
 admin.device.manage	pin_required=false
 admin.device.manage	risk=HIGH
+billing.bill.open
+billing.bill.open	default_role=CASHIER
+billing.bill.open	default_role=MANAGER
+billing.bill.open	default_role=OWNER
+billing.bill.open	default_role=SERVER
+billing.bill.open	default_role=SUPERVISOR
+billing.bill.open	group=BILLING
+billing.bill.open	pin_required=false
+billing.bill.open	risk=LOW
+billing.bill.split
+billing.bill.split	default_role=CASHIER
+billing.bill.split	default_role=MANAGER
+billing.bill.split	default_role=OWNER
+billing.bill.split	default_role=SERVER
+billing.bill.split	default_role=SUPERVISOR
+billing.bill.split	group=BILLING
+billing.bill.split	pin_required=false
+billing.bill.split	risk=LOW
 billing.bill.void
 billing.bill.void	default_role=MANAGER
 billing.bill.void	default_role=OWNER
@@ -40,6 +58,15 @@ billing.discount.override_ceiling	default_role=OWNER
 billing.discount.override_ceiling	group=BILLING
 billing.discount.override_ceiling	pin_required=true
 billing.discount.override_ceiling	risk=HIGH
+billing.payment.take
+billing.payment.take	default_role=CASHIER
+billing.payment.take	default_role=MANAGER
+billing.payment.take	default_role=OWNER
+billing.payment.take	default_role=SERVER
+billing.payment.take	default_role=SUPERVISOR
+billing.payment.take	group=BILLING
+billing.payment.take	pin_required=false
+billing.payment.take	risk=LOW
 billing.price.override
 billing.price.override	default_role=MANAGER
 billing.price.override	default_role=OWNER
@@ -148,6 +175,24 @@ sales.item.open	default_role=SUPERVISOR
 sales.item.open	group=SALES
 sales.item.open	pin_required=false
 sales.item.open	risk=MEDIUM
+sales.line.add
+sales.line.add	default_role=CASHIER
+sales.line.add	default_role=MANAGER
+sales.line.add	default_role=OWNER
+sales.line.add	default_role=SERVER
+sales.line.add	default_role=SUPERVISOR
+sales.line.add	group=SALES
+sales.line.add	pin_required=false
+sales.line.add	risk=LOW
+sales.line.fire
+sales.line.fire	default_role=CASHIER
+sales.line.fire	default_role=MANAGER
+sales.line.fire	default_role=OWNER
+sales.line.fire	default_role=SERVER
+sales.line.fire	default_role=SUPERVISOR
+sales.line.fire	group=SALES
+sales.line.fire	pin_required=false
+sales.line.fire	risk=LOW
 sales.line.void_fired
 sales.line.void_fired	default_role=MANAGER
 sales.line.void_fired	default_role=OWNER
@@ -172,3 +217,20 @@ sales.order.transfer	default_role=SUPERVISOR
 sales.order.transfer	group=SALES
 sales.order.transfer	pin_required=false
 sales.order.transfer	risk=LOW
+sales.table.manage
+sales.table.manage	default_role=CASHIER
+sales.table.manage	default_role=MANAGER
+sales.table.manage	default_role=OWNER
+sales.table.manage	default_role=SERVER
+sales.table.manage	default_role=SUPERVISOR
+sales.table.manage	group=SALES
+sales.table.manage	pin_required=false
+sales.table.manage	risk=LOW
+sales.ticket.bump
+sales.ticket.bump	default_role=COOK
+sales.ticket.bump	default_role=MANAGER
+sales.ticket.bump	default_role=OWNER
+sales.ticket.bump	default_role=SUPERVISOR
+sales.ticket.bump	group=SALES
+sales.ticket.bump	pin_required=false
+sales.ticket.bump	risk=LOW
