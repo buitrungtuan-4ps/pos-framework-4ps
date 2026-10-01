@@ -1,6 +1,6 @@
 # ADR-0164 — A receipt is reprinted as a marked copy, and every reprint is counted
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-30
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-30
 · Relates to [ADR-0025](0025-receipt-number-authority.md),
 [ADR-0100](0100-receipt-and-ticket-printing.md),
 [ADR-0129](0129-a-receipt-itemises-what-was-sold.md),
@@ -25,7 +25,7 @@ puts each employee's reprint rate on the dashboard. None of it exists:
 | B | Reprint under a new receipt number | One sale with two numbers in a gapless series (ADR-0025) |
 | C | **A marked copy under the same number, and an event for each reprint** | One additive event, two routes, one screen |
 
-## Decision (proposed)
+## Decision
 
 Option **C**. The owner approved these five points on 2026-09-30.
 

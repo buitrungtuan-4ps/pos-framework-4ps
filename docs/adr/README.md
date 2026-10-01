@@ -1,8 +1,10 @@
 # Architecture Decision Records
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-02
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-01
 
 Each record states the context, the decision, and the consequences we accept. Records are immutable once merged: to change a decision, add a new record that supersedes the old one.
+
+A record's status says where its decision stands. **Proposed**: it waits on a decision it names, by the owner, accounting or legal. **Accepted**: the owner approved it. A record the owner approves before it merges is merged as Accepted; a Proposed record is marked Accepted when the decision it waits on is made, and says when. **Superseded**: a later record replaced it. Marking its status is the only edit a merged record takes.
 
 | ID | Decision | Status |
 |---|---|---|
@@ -167,10 +169,10 @@ Each record states the context, the decision, and the consequences we accept. Re
 | [0158](0158-the-till-enforces-each-persons-own-permissions.md) | The till enforces each signed-in person's own permissions, deny by default: every state-changing route names its permission, a person may hold several roles, approval is set per role, and a per-store switch rolls it out | Proposed |
 | [0159](0159-a-fee-is-configuration.md) | A fee is configuration: a published list of rules, each a rate or an amount, taxed or not, by channel and by item; the core computes them, a bill keeps the rules it opened with, and events and receipts itemise them | Proposed |
 | [0160](0160-everything-a-store-runs-differently-is-published-configuration.md) | Everything a store runs differently is typed, defaulted configuration, authored at tenant, brand, group or store scope and per device; every console switch is honoured or hidden; one generated register of settings | Proposed |
-| [0161](0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md) | A paid order without a table stays on the kitchen board and the pass until a station bumps it, it is voided, or its business day ends; its guest note stays with it, amending ADR-0157's drop rule; `GET /api/orders/kitchen` serves what the kitchen still has to make | Proposed |
+| [0161](0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md) | A paid order without a table stays on the kitchen board and the pass until a station bumps it, it is voided, or its business day ends; its guest note stays with it, amending ADR-0157's drop rule; `GET /api/orders/kitchen` serves what the kitchen still has to make | Accepted |
 | [0162](0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md) | A bill is taxed at the rates of one stated moment: frozen when it opens by default, or at settlement where the country pack's `tax_point` says so; the settled bill records the rates it used. Awaits accounting's reading of the Vietnamese tax point | Proposed |
-| [0163](0163-a-table-seated-by-mistake-is-released.md) | A table seated by mistake is released, `OCCUPIED → FREE`, only while nothing is sold on it, and a bill is never opened on an order with nothing to bill | Proposed |
-| [0164](0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md) | A receipt is reprinted as a copy marked COPY under its own number, for today's settled bills, under `billing.receipt.reprint`; every reprint is a `billing.receipt.reprinted` event, so the dashboard can count it per employee; a copy never prints a figure the settle did not record | Proposed |
-| [0165](0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) | Cash paid in and out is recorded from the shift screen under `cash.movement.record` and counted in the expected drawer; a drawer opened outside a sale needs a manager's PIN and a reason; a drawer opens only through a USB printer the console marks **Cash drawer attached**, published as the device's additive `drawer_attached` field | Proposed |
+| [0163](0163-a-table-seated-by-mistake-is-released.md) | A table seated by mistake is released, `OCCUPIED → FREE`, only while nothing is sold on it, and a bill is never opened on an order with nothing to bill | Accepted |
+| [0164](0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md) | A receipt is reprinted as a copy marked COPY under its own number, for today's settled bills, under `billing.receipt.reprint`; every reprint is a `billing.receipt.reprinted` event, so the dashboard can count it per employee; a copy never prints a figure the settle did not record | Accepted |
+| [0165](0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) | Cash paid in and out is recorded from the shift screen under `cash.movement.record` and counted in the expected drawer; a drawer opened outside a sale needs a manager's PIN and a reason; a drawer opens only through a USB printer the console marks **Cash drawer attached**, published as the device's additive `drawer_attached` field | Accepted |
 
 **When a new ADR is required:** changing a port or wire protocol, adding a third-party dependency or infrastructure component, changing a security or data-retention boundary, or reversing any record above.
