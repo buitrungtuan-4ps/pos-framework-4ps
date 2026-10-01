@@ -1,6 +1,6 @@
 # ADR-0163 — A table seated by mistake is released, and a bill is never opened on nothing
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-30
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-30
 · Relates to [ADR-0072](0072-floor-and-kitchen.md), [ADR-0093](0093-bill-keyed-on-order.md),
 [ADR-0128](0128-a-bill-splits-and-merges.md)
 
@@ -26,9 +26,9 @@ owner put releasing a table first in the order of work on 2026-09-30.
 | B | Allow `Clean` from `OCCUPIED` | Merges two different acts (clearing up after guests, and saying nobody ate), and needs a guard against cleaning a table that still has food on it anyway |
 | C | **A `Release` trigger, `OCCUPIED → FREE`, only while nothing is sold** | One trigger, one edge command, one route |
 
-## Decision (proposed)
+## Decision
 
-Option **C**.
+Option **C**. The owner approved it on 2026-09-30.
 
 1. **pos-core.** The table machine gains `Release`, `OCCUPIED → FREE`. `decide_table` asks for
    nothing beyond the tables capability, as seating and clearing do: releasing moves no money.

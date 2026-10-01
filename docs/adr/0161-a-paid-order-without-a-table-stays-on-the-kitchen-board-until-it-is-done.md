@@ -1,6 +1,6 @@
 # ADR-0161 — A paid order without a table stays on the kitchen board until the kitchen is done, and its note stays with it
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-30
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-30
 · Amends [ADR-0157](0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md) decision 2
 · Relates to [ADR-0146](0146-a-counter-store-starts-its-own-orders.md),
 [ADR-0093](0093-bill-keyed-on-order.md)
@@ -32,7 +32,7 @@ never bumps relies on payment to clear its board.
 | B | Keep every paid order's unbumped lines until they are bumped | A table-service kitchen that never bumps fills its board with food already served |
 | C | **Keep a paid order's unbumped lines until they are bumped, only when the order has no table** | One rule on the board and one read at the edge |
 
-## Decision (proposed)
+## Decision
 
 Option **C**. The owner approved on 2026-09-30 that the ticket stays until it is bumped or voided,
 that the note stays with it, and that leftovers clear when the business day ends.
@@ -63,6 +63,8 @@ grows by one.
 - The owner confirms that a table's ticket still leaves when its bill settles (option C rather than
   B). A store that takes payment at the table before cooking would want B, as a setting under
   ADR-0160's `pay_first` switch.
+
+Met on 2026-09-30: the owner confirmed option C, so a table's ticket leaves when its bill settles.
 
 ## Consequences accepted
 

@@ -1,6 +1,6 @@
 # ADR-0165 — Cash paid in and out is counted in the drawer, and a no-sale opening needs a manager
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-30
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-30
 · Relates to [ADR-0100](0100-receipt-and-ticket-printing.md),
 [ADR-0103](0103-directly-attached-printers.md),
 [ADR-0112](0112-print-agents.md),
@@ -33,7 +33,7 @@ outside a sale requires a permission and is logged". The parts exist and nothing
 For the kick alone, sending it to every USB receipt printer needs no field, and ADR-0103 has
 already rejected it as "a behaviour nobody asked for".
 
-## Decision (proposed)
+## Decision
 
 Option **C**. The owner approved these five points on 2026-09-30.
 
