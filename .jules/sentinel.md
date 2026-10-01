@@ -53,7 +53,7 @@
 **Learning:** IETF expanded IPv6 documentation allocations under RFC 9637 (`3fff::/20`). Checking only legacy RFC 3849 ranges leaves modern documentation prefix blocks unclassified.
 **Prevention:** Always include `first == 0x3fff && (second & 0xf000 == 0x0000)` (`3fff::/20`) alongside `2001:db8::/32` when matching non-routable documentation ranges in `classify_v6`.
 
-## 2026-09-28 - [SSRF IPv6 LISP Control Plane Address Bypass]
-**Vulnerability:** Webhook SSRF validation did not check RFC 6830 / RFC 9301 LISP Control Plane IPv6 range `2001:1::/32`, allowing non-globally-routable special-purpose IPv6 destinations to fall through `classify_v6` as public unicast addresses.
-**Learning:** Special-purpose IPv6 blocks allocated for protocol control planes such as `2001:1::/32` (LISP Control Plane) are non-globally-routable and must never be targeted by outbound webhooks.
-**Prevention:** Explicitly check `first == 0x2001 && second == 0x0001` (`2001:1::/32`) in `classify_v6` to refuse LISP Control Plane addresses.
+## 2026-09-28 - [SSRF IPv6 PCP and TURN Anycast Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check `2001:1::/32`, which holds the PCP (RFC 7723) and TURN (RFC 8155) anycast addresses, so those destinations fell through `classify_v6` as public unicast addresses.
+**Learning:** `2001:1::/32` lies in the IETF Protocol Assignments block `2001::/23` (RFC 2928). Its anycast addresses reach a nearby network service, never a webhook receiver. A range's name and RFC come from the IANA IPv6 special-purpose registry, not from memory.
+**Prevention:** Check `first == 0x2001 && second == 0x0001` (`2001:1::/32`) in `classify_v6`, and cite the registry's name for the range.
