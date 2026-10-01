@@ -81,6 +81,12 @@ pub enum DomainError {
         what: &'static str,
     },
 
+    /// The lines a bill's fee rules are matched against do not describe the bill its class bases
+    /// do: a class's lines do not sum to its base, or a line is taxed at a class the bases lack
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)). A fee counted on one bill
+    /// and taxed on another would be a pricing mistake, so the domain refuses instead.
+    LinesDoNotMatchBases,
+
     /// The acting role's [`PermissionSet`](crate::permission::PermissionSet) does not grant the
     /// permission the action needs. Deny by default: every gated action fails this way unless the
     /// set explicitly carries the permission
@@ -131,6 +137,9 @@ impl core::fmt::Display for DomainError {
                 "no tax rate configured for class {tax_class_id} on channel {sales_channel}"
             ),
             Self::Empty { what } => write!(f, "{what} must not be empty"),
+            Self::LinesDoNotMatchBases => {
+                f.write_str("the bill's lines do not sum to its class bases")
+            }
             Self::PermissionDenied { permission } => {
                 write!(f, "permission denied: {permission}")
             }
@@ -152,6 +161,7 @@ impl core::error::Error for DomainError {
             | Self::NotAPartition { .. }
             | Self::TaxRateNotConfigured { .. }
             | Self::Empty { .. }
+            | Self::LinesDoNotMatchBases
             | Self::PermissionDenied { .. }
             | Self::CapabilityDisabled { .. } => None,
         }

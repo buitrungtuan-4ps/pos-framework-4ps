@@ -2007,6 +2007,9 @@ impl SettledReceipt {
             discount_total,
             comp_total,
             service_charge: self.service_charge,
+            // The settle records no fee lines yet (ADR-0159 decision 4); its service charge is
+            // their sum.
+            fee_lines: Vec::new(),
             tax_lines: Vec::new(),
             tax_total: self.tax_total,
             rounding_adjustment: self.rounding_adjustment,
@@ -5750,6 +5753,7 @@ impl<S: EventStore> Edge<S> {
             discount_total: zero,
             comp_total: zero,
             service_charge: zero,
+            fee_lines: Vec::new(),
             tax_lines: Vec::new(),
             tax_total: zero,
             rounding_adjustment: zero,
@@ -7136,6 +7140,9 @@ impl<S: EventStore> Edge<S> {
             cash_rounding_increment: session.cash_rounding_increment,
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: session.prices_include_tax,
+            // No fee rules until the edge installs the `fees` node (ADR-0159), so no lines either.
+            fee_rules: &[],
+            lines: &[],
         }
     }
 
@@ -9864,6 +9871,7 @@ mod tests {
             discount_total: vnd(discount),
             comp_total: vnd(comp),
             service_charge: vnd(0),
+            fee_lines: Vec::new(),
             tax_lines: vec![TaxLine {
                 tax_class_id: EdgeSession::standard_tax_class(),
                 taxable_base: vnd(150_000 - discount - comp),

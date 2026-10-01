@@ -4,9 +4,10 @@
 //! Bill totals, tax, and settlement — the arithmetic ADR-0028 pins down.
 //!
 //! Everything here is a pure function over `pos-proto` value types: no clock, no I/O, no state.
-//! Given the lines' pre-tax bases per tax class, the bill-level reductions, the service charge and
-//! the store's rate table, [`assemble`] produces a [`BillTotals`] whose components reconcile to the
-//! total exactly; given a total and a set of payments, [`settle`] proves the settlement invariant.
+//! Given the lines' pre-tax bases per tax class, the bill-level reductions, the service charge, the
+//! fee rules and the store's rate table, [`assemble`] produces a [`BillTotals`] whose components
+//! reconcile to the total exactly; given a total and a set of payments, [`settle`] proves the
+//! settlement invariant.
 //!
 //! # The three things ADR-0028 fixes, made mechanical
 //!
@@ -26,10 +27,22 @@
 //! recorded as cost. Here both reduce the taxable base and the total; the cost side of a comp is an
 //! inventory concern, tracked elsewhere. Keeping them distinct in [`BillTotals`] is what lets
 //! accounting and fraud analysis treat them differently, as the specification requires.
+//!
+//! # Fees
+//!
+//! A fee is a published rule ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)), and
+//! [`assemble`] charges every rule that applies to the bill as one [`FeeLine`]. A percentage is
+//! taken of the lines it counts, after their share of the bill's discount and comps, and never of
+//! another fee, so fees do not compound. Each fee rounds once, by the bill's rounding mode. Its
+//! taxed parts join their classes' bases before each class's tax is rounded, so tax still rounds
+//! once per class (ADR-0028). [`BillTotals::service_charge`] carries the sum of every fee, so the
+//! readers of that one figure stay right (ADR-0159 decision 4).
 
+use pos_proto::fees::{FeeKind, FeeTax, PublishedFee};
 use pos_proto::locale::{TaxComponent, TaxRateTable};
-use pos_proto::money::{Money, Rounding};
-use pos_proto::{CurrencyCode, PaymentMethod, SalesChannel, TaxClassId};
+use pos_proto::money::{Money, MoneyError, Ratio, Rounding, div_round};
+use pos_proto::quantity::Quantity;
+use pos_proto::{CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId};
 
 use crate::error::DomainError;
 
@@ -42,7 +55,7 @@ pub struct TaxLine {
     /// The class this tax was charged at.
     pub tax_class_id: TaxClassId,
     /// The base the rate was applied to, after discounts and comps, plus the service charge when it
-    /// is taxable and belongs to this class.
+    /// is taxable and belongs to this class, plus every fee's part taxed at this class.
     pub taxable_base: Money,
     /// The rate applied, in basis points, captured so the invoice shows it.
     pub rate_basis_points: u32,
@@ -118,6 +131,47 @@ pub struct ClassBase {
     pub amount: Money,
 }
 
+/// One sold line, as a fee rule matches it (ADR-0159 decision 2).
+///
+/// The caller passes the same lines it summed into its [`ClassBase`]s, so the two describe one
+/// bill: a rule matches a line by its item, and counts its quantity and its net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BillLine {
+    /// The item, which a rule's item scope counts or leaves out.
+    pub menu_item_id: MenuItemId,
+    /// How many were sold, which a fee per unit charges for. Fractional for a half-and-half line.
+    pub quantity: Quantity,
+    /// What the line comes to, as its class's [`ClassBase`] sums it: before the bill-level discount
+    /// and comps, which fall on every line in proportion to its net.
+    pub net: Money,
+    /// The class the line is taxed at.
+    pub tax_class_id: TaxClassId,
+}
+
+/// The part of a fee taxed at one class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeClassShare {
+    /// The class.
+    pub tax_class_id: TaxClassId,
+    /// The part of the fee that joins this class's taxable base.
+    pub amount: Money,
+}
+
+/// One fee rule applied to a bill: what it charged, and where that charge is taxed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeeLine {
+    /// The rule that charged it.
+    pub fee_id: FeeId,
+    /// What it charged, rounded once to the minor unit by the bill's rounding mode.
+    pub amount: Money,
+    /// The parts of `amount` taxed at each class, which sum to it. There are none for a fee that is
+    /// not taxed, one for a fee taxed at a named class, and for a fee that follows its lines one
+    /// per class of the lines it counts, in proportion to their nets (their quantities, for a fee
+    /// per unit). The tax itself is not split per fee: it rounds once per class, on the class's
+    /// whole base (ADR-0028).
+    pub class_shares: Vec<FeeClassShare>,
+}
+
 /// Everything needed to assemble a bill's totals.
 #[derive(Debug, Clone)]
 pub struct BillInput<'a> {
@@ -152,6 +206,18 @@ pub struct BillInput<'a> {
     /// `true` is Japan's 税込 and India's MRP: the base already contains the tax, so the tax is
     /// *extracted* from it and the guest's total does not move.
     pub prices_include_tax: bool,
+    /// The fee rules in force for the bill, from the store's `fees` node, in the order their
+    /// [`FeeLine`]s are reported. Empty, as the edge passes today, charges no fee and leaves every
+    /// other figure as it was.
+    ///
+    /// A rule applies to nothing when it is paused, faulted by [`PublishedFee::violations`] (which
+    /// covers an unknown kind or item scope), for another channel, counting no line, or charging in
+    /// another currency. So does a percentage whose base is in the other tax posture from
+    /// [`Self::prices_include_tax`]: this release does not convert between the two (ADR-0104).
+    pub fee_rules: &'a [PublishedFee],
+    /// The bill's sold lines, which the rules match. Read only when [`Self::fee_rules`] is not
+    /// empty, and then each class's lines must sum to its [`ClassBase`].
+    pub lines: &'a [BillLine],
 }
 
 /// A bill's computed totals, every component reconciling to [`Self::total_due`].
@@ -163,8 +229,11 @@ pub struct BillTotals {
     pub discount_total: Money,
     /// The comped amount.
     pub comp_total: Money,
-    /// The service charge.
+    /// The service charge: the input's service charge plus every fee in [`Self::fee_lines`], so the
+    /// readers of this one figure see every charge (ADR-0159 decision 4).
     pub service_charge: Money,
+    /// One line per fee rule that applied, in rule order.
+    pub fee_lines: Vec<FeeLine>,
     /// Per-class tax, each rounded once. Sums to [`Self::tax_total`].
     pub tax_lines: Vec<TaxLine>,
     /// The total tax.
@@ -223,56 +292,301 @@ fn tax_for(
     Ok((tax, reported_base, split_components(tax, components)?))
 }
 
-/// The service charge's own tax line, when it is taxable and its class was not among the bill's.
+/// The tax lines for classes a charge is taxed at but no line on the bill is: the service charge's,
+/// and any class a fee is taxed at that the bill has no line in.
 ///
-/// Without this the charge would be silently untaxed — it is added after discounts and before tax,
-/// so a class nobody ordered from carries it. `None` means the charge is untaxed, zero, or already
-/// folded into a class the bill has, all of which are handled where the classes are.
+/// Without these the charge would be silently untaxed — it is added after discounts and before
+/// tax, so a class nobody ordered from carries it. One line per class, so its tax rounds once; the
+/// service charge's class comes first, so a bill without fees has exactly the line it always had. A
+/// charge that is untaxed, zero, or in a class the bill has needs none here, because the per-class
+/// loop folds it in.
 ///
 /// # Errors
 ///
-/// [`DomainError::TaxRateNotConfigured`] if the charge's class has no rate on this channel, and
+/// [`DomainError::TaxRateNotConfigured`] if such a class has no rate on this channel, and
 /// [`DomainError::Money`] on overflow — the same refusals the per-class loop makes, for the same
 /// reason: a charge taxed at no rate is a tax-audit finding, not a default.
-fn service_charge_line(input: &BillInput<'_>) -> Result<Option<TaxLine>, DomainError> {
-    if !input.service_charge_taxable || input.service_charge.is_zero() {
-        return Ok(None);
-    }
-    let Some(sc_class) = input.service_charge_tax_class else {
-        return Ok(None);
+fn extra_class_lines(
+    input: &BillInput<'_>,
+    fee_shares: &[FeeClassShare],
+) -> Result<Vec<TaxLine>, DomainError> {
+    let on_bill = |class: TaxClassId| {
+        input
+            .class_bases
+            .iter()
+            .any(|base| base.tax_class_id == class)
     };
-    if input
-        .class_bases
+    // The service charge rides in the same shape as a fee's share: an amount taxed at a class.
+    let mut charges: Vec<FeeClassShare> = Vec::new();
+    if input.service_charge_taxable
+        && !input.service_charge.is_zero()
+        && let Some(class) = input.service_charge_tax_class
+        && !on_bill(class)
+    {
+        charges.push(FeeClassShare {
+            tax_class_id: class,
+            amount: input.service_charge,
+        });
+    }
+    for share in fee_shares {
+        if !share.amount.is_zero() && !on_bill(share.tax_class_id) {
+            add_share(&mut charges, *share)?;
+        }
+    }
+
+    let mut lines = Vec::with_capacity(charges.len());
+    for charge in charges {
+        let rate = input
+            .rates
+            .rate_for(charge.tax_class_id, input.sales_channel)
+            .ok_or_else(|| DomainError::TaxRateNotConfigured {
+                tax_class_id: charge.tax_class_id.to_string(),
+                sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel)
+                    .to_owned(),
+            })?;
+        let (tax, taxable_base, components) = tax_for(
+            charge.amount,
+            rate,
+            input
+                .rates
+                .components_for(charge.tax_class_id, input.sales_channel),
+            input.prices_include_tax,
+            input.rounding_mode,
+        )?;
+        lines.push(TaxLine {
+            tax_class_id: charge.tax_class_id,
+            taxable_base,
+            rate_basis_points: rate.basis_points(),
+            tax,
+            components,
+        });
+    }
+    Ok(lines)
+}
+
+/// What the fee rules add to a bill before tax.
+struct Fees {
+    /// One line per rule that applied, in rule order.
+    lines: Vec<FeeLine>,
+    /// Every fee's taxed parts, summed per class.
+    class_shares: Vec<FeeClassShare>,
+    /// What the lines charged together.
+    total: Money,
+}
+
+/// Charges the bill's fee rules (ADR-0159 decision 2). A percentage is taken of lines, never of
+/// another fee, so the fees do not compound and their order decides only the order of their lines.
+fn charge_fees(input: &BillInput<'_>, subtotal: Money) -> Result<Fees, DomainError> {
+    let mut fees = Fees {
+        lines: Vec::new(),
+        class_shares: Vec::new(),
+        total: Money::zero(input.currency_code),
+    };
+    if input.fee_rules.is_empty() {
+        return Ok(fees);
+    }
+    if !lines_match_bases(input.lines, input.class_bases)? {
+        return Err(DomainError::LinesDoNotMatchBases);
+    }
+    let reductions = input.bill_discount.checked_add(input.comps)?;
+    for rule in input.fee_rules {
+        if let Some(line) = fee_line(rule, input, subtotal, reductions)? {
+            fees.total = fees.total.checked_add(line.amount)?;
+            for share in &line.class_shares {
+                add_share(&mut fees.class_shares, *share)?;
+            }
+            fees.lines.push(line);
+        }
+    }
+    Ok(fees)
+}
+
+/// What one rule charges on the bill, or `None` when it applies to nothing.
+fn fee_line(
+    rule: &PublishedFee,
+    input: &BillInput<'_>,
+    subtotal: Money,
+    reductions: Money,
+) -> Result<Option<FeeLine>, DomainError> {
+    let counted: Vec<&BillLine> = input
+        .lines
         .iter()
-        .any(|base| base.tax_class_id == sc_class)
+        .filter(|line| rule.counts_item(line.menu_item_id))
+        .collect();
+    // Paused, refused by the shape check, for another channel, or counting no line.
+    if !rule.active
+        || !rule.violations().is_empty()
+        || !rule.applies_on(input.sales_channel)
+        || counted.is_empty()
     {
         return Ok(None);
     }
-
-    let rate = input
-        .rates
-        .rate_for(sc_class, input.sales_channel)
-        .ok_or_else(|| DomainError::TaxRateNotConfigured {
-            tax_class_id: sc_class.to_string(),
-            sales_channel: pos_proto::wire_enum::WireEnum::as_wire(input.sales_channel).to_owned(),
-        })?;
-    let (tax, taxable_base, components) = tax_for(
-        input.service_charge,
-        rate,
-        input.rates.components_for(sc_class, input.sales_channel),
-        input.prices_include_tax,
-        input.rounding_mode,
-    )?;
-    Ok(Some(TaxLine {
-        tax_class_id: sc_class,
-        taxable_base,
-        rate_basis_points: rate.basis_points(),
-        tax,
-        components,
+    let Some(kind) = rule.kind() else {
+        return Ok(None);
+    };
+    let amount = match kind {
+        FeeKind::Percent => {
+            // The base is taken in the posture the lines are priced in: this release does not
+            // convert a tax-inclusive price to a net one, or back.
+            let Some(rate) = rule.rate else {
+                return Ok(None);
+            };
+            if rule.base_tax_inclusive != input.prices_include_tax {
+                return Ok(None);
+            }
+            let reductions = if rule.base_discounted {
+                reductions
+            } else {
+                Money::zero(input.currency_code)
+            };
+            let counted_net = sum_nets(&counted, input.currency_code)?;
+            percent_of(counted_net, subtotal, reductions, rate, input.rounding_mode)?
+        }
+        FeeKind::AmountPerBill | FeeKind::AmountPerUnit => {
+            let Some(amount) = rule.amount else {
+                return Ok(None);
+            };
+            if kind == FeeKind::AmountPerUnit {
+                let units = counted
+                    .iter()
+                    .try_fold(Quantity::ZERO, |sum, line| sum.checked_add(line.quantity))?;
+                amount.mul_quantity(units, input.rounding_mode)?
+            } else {
+                amount
+            }
+        }
+        FeeKind::Unspecified => return Ok(None),
+    };
+    if amount.currency_code != input.currency_code {
+        return Ok(None);
+    }
+    let class_shares = match (rule.tax(), rule.tax_class_id) {
+        (FeeTax::NotTaxable, _) => Vec::new(),
+        (FeeTax::TaxClass, Some(tax_class_id)) => vec![FeeClassShare {
+            tax_class_id,
+            amount,
+        }],
+        (FeeTax::TaxClass, None) => return Ok(None),
+        (FeeTax::FollowLines | FeeTax::Unspecified, _) => {
+            follow_lines(amount, &counted, kind == FeeKind::AmountPerUnit)?
+        }
+    };
+    Ok(Some(FeeLine {
+        fee_id: rule.fee_id,
+        amount,
+        class_shares,
     }))
 }
 
-/// Assembles a bill's totals, computing tax per class and materialising cash rounding.
+/// `rate` of the counted lines' net after their share of the bill's reductions, rounded once.
+///
+/// The reductions fall on the lines in proportion to their nets, as they fall on the classes, so
+/// the base is `counted × (subtotal − reductions) / subtotal`. The share and the rate are taken in
+/// one division, so the fee is rounded once rather than once for its base and again for its rate.
+fn percent_of(
+    counted: Money,
+    subtotal: Money,
+    reductions: Money,
+    rate: Ratio,
+    mode: Rounding,
+) -> Result<Money, DomainError> {
+    if reductions.is_zero() {
+        return Ok(counted.mul_ratio(rate, mode)?);
+    }
+    let after = subtotal.checked_sub(reductions)?;
+    let numerator = i128::from(counted.amount_minor)
+        .checked_mul(i128::from(after.amount_minor))
+        .and_then(|value| value.checked_mul(i128::from(rate.numerator())))
+        .ok_or(MoneyError::Overflow)?;
+    let denominator = i128::from(subtotal.amount_minor)
+        .checked_mul(i128::from(rate.denominator().get()))
+        .ok_or(MoneyError::Overflow)?;
+    Ok(Money::new(
+        counted.currency_code,
+        div_round(numerator, denominator, mode)?,
+    ))
+}
+
+/// Spreads a fee across the classes of the lines it counts, in proportion to each class's part of
+/// what the fee was charged on: the lines' nets, or their quantities for a fee per unit.
+///
+/// The bill's reductions fall on every class in proportion to its base, so they leave these
+/// proportions as they are. With nothing to weigh by, when every counted line is free, the fee is
+/// spread evenly. The shares sum exactly to `amount`, as `Money::allocate` guarantees.
+fn follow_lines(
+    amount: Money,
+    counted: &[&BillLine],
+    by_quantity: bool,
+) -> Result<Vec<FeeClassShare>, DomainError> {
+    let mut weights: Vec<(TaxClassId, i64)> = Vec::new();
+    for line in counted {
+        let part = if by_quantity {
+            line.quantity.as_milli()
+        } else {
+            line.net.amount_minor
+        };
+        match weights
+            .iter_mut()
+            .find(|(class, _)| *class == line.tax_class_id)
+        {
+            Some((_, weight)) => *weight = weight.checked_add(part).ok_or(MoneyError::Overflow)?,
+            None => weights.push((line.tax_class_id, part)),
+        }
+    }
+    let mut parts: Vec<i64> = weights.iter().map(|(_, weight)| *weight).collect();
+    let total: i128 = parts.iter().map(|part| i128::from(*part)).sum();
+    if total <= 0 || parts.iter().any(|part| *part < 0) {
+        parts = vec![1; parts.len()];
+    }
+    let shares = amount.allocate(&parts)?;
+    Ok(weights
+        .into_iter()
+        .zip(shares)
+        .map(|((tax_class_id, _), amount)| FeeClassShare {
+            tax_class_id,
+            amount,
+        })
+        .collect())
+}
+
+/// Adds one taxed part to the per-class totals, merging it into its class's entry.
+fn add_share(shares: &mut Vec<FeeClassShare>, share: FeeClassShare) -> Result<(), DomainError> {
+    match shares
+        .iter_mut()
+        .find(|existing| existing.tax_class_id == share.tax_class_id)
+    {
+        Some(existing) => existing.amount = existing.amount.checked_add(share.amount)?,
+        None => shares.push(share),
+    }
+    Ok(())
+}
+
+/// Whether the lines describe the bill the class bases do: per class, the same total.
+fn lines_match_bases(lines: &[BillLine], class_bases: &[ClassBase]) -> Result<bool, DomainError> {
+    let mut sums: Vec<FeeClassShare> = Vec::new();
+    for line in lines {
+        let share = FeeClassShare {
+            tax_class_id: line.tax_class_id,
+            amount: line.net,
+        };
+        add_share(&mut sums, share)?;
+    }
+    Ok(sums.len() == class_bases.len()
+        && class_bases.iter().all(|base| {
+            sums.iter()
+                .any(|sum| sum.tax_class_id == base.tax_class_id && sum.amount == base.amount)
+        }))
+}
+
+/// The lines' nets added up.
+fn sum_nets(lines: &[&BillLine], currency: CurrencyCode) -> Result<Money, DomainError> {
+    Ok(lines
+        .iter()
+        .try_fold(Money::zero(currency), |sum, line| sum.checked_add(line.net))?)
+}
+
+/// Assembles a bill's totals, charging its fees, computing tax per class and materialising cash
+/// rounding.
 ///
 /// # Errors
 ///
@@ -280,6 +594,8 @@ fn service_charge_line(input: &BillInput<'_>) -> Result<Option<TaxLine>, DomainE
 /// - [`DomainError::Money`] on any currency mismatch or overflow.
 /// - [`DomainError::TaxRateNotConfigured`] if a class has no rate on this channel — the domain
 ///   refuses rather than silently charging no tax.
+/// - [`DomainError::LinesDoNotMatchBases`] if there are fee rules and the lines do not sum to the
+///   class bases.
 pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
     let currency = input.currency_code;
     if input.class_bases.is_empty() {
@@ -298,7 +614,11 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
     let discount_shares = allocate_across_classes(input.bill_discount, input.class_bases)?;
     let comp_shares = allocate_across_classes(input.comps, input.class_bases)?;
 
-    // Per-class taxable base = base − discount share − comp share (+ service charge if taxable here).
+    // The fees, from the bill before tax: a percentage is taken of lines, never of another fee.
+    let fees = charge_fees(input, subtotal)?;
+
+    // Per-class taxable base = base − discount share − comp share, plus the service charge if it
+    // is taxable here, plus every fee's part taxed at this class.
     let mut tax_lines = Vec::with_capacity(input.class_bases.len());
     let mut tax_total = Money::zero(currency);
     for (index, base) in input.class_bases.iter().enumerate() {
@@ -315,6 +635,13 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         if input.service_charge_taxable && input.service_charge_tax_class == Some(base.tax_class_id)
         {
             taxable = taxable.checked_add(input.service_charge)?;
+        }
+        if let Some(share) = fees
+            .class_shares
+            .iter()
+            .find(|share| share.tax_class_id == base.tax_class_id)
+        {
+            taxable = taxable.checked_add(share.amount)?;
         }
 
         let rate = input
@@ -344,8 +671,9 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         });
     }
 
-    // The service charge may need a tax line of its own; see `service_charge_line`.
-    if let Some(line) = service_charge_line(input)? {
+    // A charge taxed at a class the bill has no line in needs a line of its own; see
+    // `extra_class_lines`.
+    for line in extra_class_lines(input, &fees.class_shares)? {
         tax_total = tax_total.checked_add(line.tax)?;
         tax_lines.push(line);
     }
@@ -360,11 +688,12 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         subtotal = subtotal.checked_sub(tax_total)?;
     }
 
-    // Grand total before cash rounding.
+    // Grand total before cash rounding. The service charge carries every fee (ADR-0159 decision 4).
+    let service_charge = input.service_charge.checked_add(fees.total)?;
     let unrounded = subtotal
         .checked_sub(input.bill_discount)?
         .checked_sub(input.comps)?
-        .checked_add(input.service_charge)?
+        .checked_add(service_charge)?
         .checked_add(tax_total)?;
 
     // Cash rounding, materialised as an explicit adjustment so the receipt reconciles.
@@ -383,7 +712,8 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         subtotal,
         discount_total: input.bill_discount,
         comp_total: input.comps,
-        service_charge: input.service_charge,
+        service_charge,
+        fee_lines: fees.lines,
         tax_lines,
         tax_total,
         rounding_adjustment,
@@ -531,11 +861,22 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 
 #[cfg(test)]
 mod tests {
-    use super::{BillInput, ClassBase, Payment, assemble, settle, split_by_weights, split_evenly};
+    use std::collections::BTreeMap;
+
+    use super::{
+        BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, Payment, assemble,
+        settle, split_by_weights, split_evenly,
+    };
     use crate::error::DomainError;
+    use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, PublishedFee};
     use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
-    use pos_proto::money::{Money, Rounding};
-    use pos_proto::{CurrencyCode, PaymentMethod, SalesChannel, TaxClassId, Ulid};
+    use pos_proto::money::{Money, Ratio, Rounding};
+    use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
+    use pos_proto::wire_enum::Open;
+    use pos_proto::{
+        CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId, Ulid,
+    };
     use proptest::prelude::*;
 
     const VND: CurrencyCode = CurrencyCode::VND;
@@ -573,12 +914,14 @@ mod tests {
             cash_rounding_increment: None,
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: false,
+            fee_rules: &[],
+            lines: &[],
         }
     }
 
     /// Every component reconciles to the total. This is the arithmetic ADR-0028 fixes, and the
     /// property a VAT invoice depends on.
-    fn assert_reconciles(totals: &super::BillTotals) {
+    fn assert_reconciles(totals: &BillTotals) {
         // tax lines sum to tax_total
         let mut tax = vnd(0);
         for line in &totals.tax_lines {
@@ -979,6 +1322,367 @@ mod tests {
         ));
     }
 
+    // ---- ADR-0159: fees -----------------------------------------------------------------------
+
+    fn service() -> TaxClassId {
+        TaxClassId::new(Ulid::from_u128(3))
+    }
+
+    fn item(n: u128) -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(10 + n))
+    }
+
+    fn line(n: u128, units: i64, net: i64, tax_class_id: TaxClassId) -> BillLine {
+        BillLine {
+            menu_item_id: item(n),
+            quantity: Quantity::from_whole(units).expect("a small quantity"),
+            net: vnd(net),
+            tax_class_id,
+        }
+    }
+
+    /// Two pizzas (item 0) and a bottle of wine (item 1): 200,000 of food at 10 % and 100,000 of
+    /// alcohol at 15 %.
+    fn dinner() -> Vec<BillLine> {
+        vec![line(0, 2, 200_000, food()), line(1, 1, 100_000, alcohol())]
+    }
+
+    /// A rule as the cloud publishes one by default — every item, every channel, following its
+    /// lines — at `value` basis points for a percentage, or `value` đồng for an amount.
+    fn fee(id: u128, kind: FeeKind, value: i64) -> PublishedFee {
+        let percent = kind == FeeKind::Percent;
+        PublishedFee {
+            fee_id: FeeId::new(Ulid::from_u128(id)),
+            code: FeeCode::new("FEE"),
+            display_name: DisplayName::new("Fee"),
+            display_name_translations: BTreeMap::new(),
+            kind: kind.into(),
+            rate: percent.then(|| Ratio::basis_points(value).expect("a rate")),
+            amount: (!percent).then_some(vnd(value)),
+            channels: Vec::new(),
+            item_scope: Open::default(),
+            menu_item_ids: Vec::new(),
+            base_discounted: true,
+            base_tax_inclusive: false,
+            tax: Open::default(),
+            tax_class_id: None,
+            waivable: false,
+            active: true,
+        }
+    }
+
+    fn altered(mut fee: PublishedFee, change: impl FnOnce(&mut PublishedFee)) -> PublishedFee {
+        change(&mut fee);
+        fee
+    }
+
+    fn untaxed(fee: PublishedFee) -> PublishedFee {
+        altered(fee, |fee| fee.tax = FeeTax::NotTaxable.into())
+    }
+
+    fn only(scope: FeeItems, n: u128, fee: PublishedFee) -> PublishedFee {
+        altered(fee, |fee| {
+            fee.item_scope = scope.into();
+            fee.menu_item_ids = vec![item(n)];
+        })
+    }
+
+    fn share(tax_class_id: TaxClassId, amount: i64) -> FeeClassShare {
+        FeeClassShare {
+            tax_class_id,
+            amount: vnd(amount),
+        }
+    }
+
+    /// The class bases a caller sums from its lines.
+    fn bases_of(lines: &[BillLine]) -> Vec<ClassBase> {
+        let mut bases: Vec<ClassBase> = Vec::new();
+        for line in lines {
+            match bases
+                .iter_mut()
+                .find(|b| b.tax_class_id == line.tax_class_id)
+            {
+                Some(base) => base.amount = base.amount.checked_add(line.net).expect("in range"),
+                None => bases.push(ClassBase {
+                    tax_class_id: line.tax_class_id,
+                    amount: line.net,
+                }),
+            }
+        }
+        bases
+    }
+
+    /// Assembles `lines` under `rules`, with `adjust` setting anything else on the input.
+    fn assemble_with(
+        lines: &[BillLine],
+        rules: &[PublishedFee],
+        rates: &TaxRateTable,
+        adjust: impl FnOnce(&mut BillInput<'_>),
+    ) -> Result<BillTotals, DomainError> {
+        let bases = bases_of(lines);
+        let mut input = base_input(&bases, rates);
+        input.fee_rules = rules;
+        input.lines = lines;
+        adjust(&mut input);
+        assemble(&input)
+    }
+
+    #[test]
+    fn a_percentage_is_taken_of_the_lines_after_the_bills_reductions_and_never_of_a_fee() {
+        let rates = rates();
+        let discounted = |input: &mut BillInput<'_>| input.bill_discount = vnd(30_000);
+        let rules = [
+            fee(1, FeeKind::Percent, 1_000),
+            untaxed(fee(2, FeeKind::Percent, 500)),
+        ];
+        let totals = assemble_with(&dinner(), &rules, &rates, discounted).expect("assembles");
+        // 10 % of 300,000 less the 30,000 off, spread 2:1 as the lines are; then 5 % of the same
+        // lines, not of the lines and the first fee.
+        let ten = FeeLine {
+            fee_id: FeeId::new(Ulid::from_u128(1)),
+            amount: vnd(27_000),
+            class_shares: vec![share(food(), 18_000), share(alcohol(), 9_000)],
+        };
+        assert_eq!(totals.fee_lines.first(), Some(&ten));
+        assert_eq!(
+            totals.fee_lines.get(1).map(|line| line.amount),
+            Some(vnd(13_500))
+        );
+        assert_eq!(totals.service_charge, vnd(27_000 + 13_500));
+        // Food 200,000 − 20,000 + 18,000 at 10 %, alcohol 100,000 − 10,000 + 9,000 at 15 %.
+        assert_eq!(totals.tax_total, vnd(19_800 + 14_850));
+        assert_eq!(totals.total_due, vnd(270_000 + 40_500 + 34_650));
+        assert_reconciles(&totals);
+
+        let before = altered(fee(1, FeeKind::Percent, 1_000), |f| {
+            f.base_discounted = false;
+        });
+        let totals = assemble_with(&dinner(), &[before], &rates, discounted).expect("assembles");
+        assert_eq!(
+            totals.service_charge,
+            vnd(30_000),
+            "10 % of the 300,000 sold"
+        );
+        assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn each_tax_treatment_puts_the_fee_where_its_rule_says() {
+        let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+        let taxed = |tax: FeeTax, class: Option<TaxClassId>| {
+            altered(fee(1, FeeKind::AmountPerBill, 10_000), |f| {
+                f.tax = tax.into();
+                f.tax_class_id = class;
+            })
+        };
+        let cases = [
+            (taxed(FeeTax::NotTaxable, None), vec![], 20_000 + 15_000),
+            (
+                taxed(FeeTax::TaxClass, Some(alcohol())),
+                vec![share(alcohol(), 10_000)],
+                20_000 + 16_500,
+            ),
+            // A class no line on the bill is in gets a tax line of its own.
+            (
+                taxed(FeeTax::TaxClass, Some(service())),
+                vec![share(service(), 10_000)],
+                20_000 + 15_000 + 800,
+            ),
+            // Spread 2:1 as the lines are, each class's tax rounded once on its whole base.
+            (
+                taxed(FeeTax::FollowLines, None),
+                vec![share(food(), 6_666), share(alcohol(), 3_334)],
+                20_667 + 15_500,
+            ),
+        ];
+        for (rule, shares, tax) in cases {
+            let totals = assemble_with(&dinner(), &[rule], &rates, |_| {}).expect("assembles");
+            let charged = totals.fee_lines.first().expect("the fee applies");
+            assert_eq!(charged.class_shares, shares);
+            assert_eq!(totals.tax_total, vnd(tax));
+            assert_eq!(totals.total_due, vnd(300_000 + 10_000 + tax));
+            assert_reconciles(&totals);
+        }
+    }
+
+    #[test]
+    fn a_fee_per_unit_charges_each_unit_it_counts() {
+        let rates = rates();
+        let boxes = only(FeeItems::Include, 0, fee(1, FeeKind::AmountPerUnit, 3_000));
+        let totals = assemble_with(&dinner(), &[boxes], &rates, |_| {}).expect("assembles");
+        // Two pizzas, two boxes, taxed with the pizzas they hold.
+        let charged = totals.fee_lines.first().expect("the fee applies");
+        assert_eq!(charged.amount, vnd(6_000));
+        assert_eq!(charged.class_shares, vec![share(food(), 6_000)]);
+        assert_eq!(totals.tax_total, vnd(20_600 + 15_000));
+        assert_reconciles(&totals);
+    }
+
+    #[test]
+    fn a_fee_applies_only_on_its_channels_and_to_the_items_it_counts() {
+        let rates = rates();
+        let on = |channel: SalesChannel| {
+            altered(fee(1, FeeKind::AmountPerBill, 15_000), |f| {
+                f.channels = vec![channel.into(), SalesChannel::Delivery.into()];
+            })
+        };
+        let charged = |rule: PublishedFee| {
+            let totals = assemble_with(&dinner(), &[rule], &rates, |_| {}).expect("assembles");
+            assert_reconciles(&totals);
+            totals.service_charge
+        };
+        assert_eq!(charged(on(SalesChannel::Qr)), vnd(0), "not on dine-in");
+        assert_eq!(charged(on(SalesChannel::DineIn)), vnd(15_000));
+        let wine = only(
+            FeeItems::Exclude,
+            0,
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+        );
+        assert_eq!(charged(wine), vnd(10_000), "10 % of the wine alone");
+        let absent = only(FeeItems::Include, 9, fee(3, FeeKind::AmountPerBill, 15_000));
+        assert_eq!(charged(absent), vnd(0), "it counts no line on this bill");
+    }
+
+    #[test]
+    fn a_rule_that_cannot_apply_changes_nothing() {
+        let rates = rates();
+        for inclusive in [false, true] {
+            let per_bill = || fee(1, FeeKind::AmountPerBill, 15_000);
+            let cannot = [
+                altered(per_bill(), |f| f.kind = Open::parse("FEE_KIND_TOP_UP_TO")),
+                altered(per_bill(), |f| {
+                    f.item_scope = Open::parse("FEE_ITEMS_CATEGORY");
+                }),
+                altered(per_bill(), |f| f.active = false),
+                altered(per_bill(), |f| f.amount = None),
+                altered(per_bill(), |f| {
+                    f.amount = Some(Money::new(CurrencyCode::JPY, 500));
+                }),
+                // A percentage of a base in the other tax posture waits for a release that
+                // converts it.
+                altered(fee(2, FeeKind::Percent, 1_000), |f| {
+                    f.base_tax_inclusive = !inclusive;
+                }),
+            ];
+            let busy = |input: &mut BillInput<'_>| {
+                input.bill_discount = vnd(30_001);
+                input.comps = vnd(7);
+                input.service_charge = vnd(9_999);
+                input.cash_rounding_increment = Some(500);
+                input.prices_include_tax = inclusive;
+            };
+            let without = assemble_with(&dinner(), &[], &rates, busy).expect("assembles");
+            assert!(without.fee_lines.is_empty());
+            assert_eq!(without.service_charge, vnd(9_999));
+            for rule in cannot {
+                let id = rule.fee_id;
+                let charged = assemble_with(&dinner(), &[rule], &rates, busy).expect("assembles");
+                assert_eq!(charged, without, "{id} must apply to nothing");
+            }
+        }
+    }
+
+    #[test]
+    fn a_fee_rounds_once_by_the_bills_rounding_mode() {
+        let rates = rates();
+        let charge = |lines: &[BillLine], rule: PublishedFee, mode: Rounding, discount: i64| {
+            let set = |input: &mut BillInput<'_>| {
+                input.rounding_mode = mode;
+                input.bill_discount = vnd(discount);
+            };
+            let rules = [untaxed(rule)];
+            let totals = assemble_with(lines, &rules, &rates, set).expect("assembles");
+            totals.service_charge
+        };
+        // 10 % of 25 is 2.5, a tie the mode breaks.
+        let small = [line(0, 1, 25, food())];
+        let ten = || fee(1, FeeKind::Percent, 1_000);
+        assert_eq!(charge(&small, ten(), Rounding::HalfUp, 0), vnd(3));
+        assert_eq!(charge(&small, ten(), Rounding::HalfEven, 0), vnd(2));
+        // Half a unit at 3,001 is 1,500.5.
+        let half = [BillLine {
+            quantity: Quantity::HALF,
+            ..line(0, 1, 40_000, food())
+        }];
+        let box_fee = || fee(1, FeeKind::AmountPerUnit, 3_001);
+        assert_eq!(charge(&half, box_fee(), Rounding::HalfUp, 0), vnd(1_501));
+        assert_eq!(charge(&half, box_fee(), Rounding::HalfEven, 0), vnd(1_500));
+        // 75 % of the first line's share of a 3-đồng bill with 1 off is exactly 0.5, so half-even
+        // gives 0. Rounding the base first (0.67 to 1) and then the rate (0.75) would give 1.
+        let tiny = [line(0, 1, 1, food()), line(1, 1, 2, food())];
+        let first = only(FeeItems::Include, 0, fee(1, FeeKind::Percent, 7_500));
+        assert_eq!(charge(&tiny, first, Rounding::HalfEven, 1), vnd(0));
+    }
+
+    #[test]
+    fn lines_that_are_not_the_bills_are_refused() {
+        let rates = rates();
+        let bases = bases_of(&dinner());
+        let total = |lines: &[BillLine], rules: &[PublishedFee]| {
+            let mut input = base_input(&bases, &rates);
+            input.fee_rules = rules;
+            input.lines = lines;
+            assemble(&input).map(|totals| totals.total_due)
+        };
+        let rules = [fee(1, FeeKind::AmountPerBill, 1_000)];
+        let short = [line(0, 2, 199_999, food()), line(1, 1, 100_000, alcohol())];
+        let stray = [line(0, 2, 200_000, food()), line(1, 1, 100_000, service())];
+        for lines in [&[][..], &short[..], &stray[..]] {
+            assert_eq!(total(lines, &rules), Err(DomainError::LinesDoNotMatchBases));
+        }
+        // With no rule the lines are not read at all.
+        assert_eq!(total(&short, &[]), Ok(vnd(335_000)));
+    }
+
+    #[test]
+    fn an_inclusive_store_takes_a_fee_as_quoted() {
+        let rates =
+            TaxRateTable::new().with(food(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let quoted = [line(0, 1, 1_100, food())];
+        let inclusive = |input: &mut BillInput<'_>| input.prices_include_tax = true;
+        // An amount carries its tax inside, as the menu's prices do.
+        let per_bill = [fee(1, FeeKind::AmountPerBill, 1_100)];
+        let totals = assemble_with(&quoted, &per_bill, &rates, inclusive).expect("assembles");
+        assert_eq!(
+            totals.total_due,
+            vnd(2_200),
+            "the price and the fee, as quoted"
+        );
+        assert_eq!(totals.tax_total, vnd(200), "2,200 × 10/110");
+        assert_reconciles(&totals);
+        // A percentage of the tax-inclusive price is taken of the price as quoted.
+        let on_quoted = [altered(fee(2, FeeKind::Percent, 1_000), |f| {
+            f.base_tax_inclusive = true;
+        })];
+        let totals = assemble_with(&quoted, &on_quoted, &rates, inclusive).expect("assembles");
+        assert_eq!(totals.service_charge, vnd(110));
+        assert_eq!(totals.total_due, vnd(1_210));
+        assert_reconciles(&totals);
+    }
+
+    /// A rule from a property test's choices of kind, tax treatment, item scope and value.
+    fn chosen(id: u128, kind: u8, tax: u8, scope: u8, value: i64) -> PublishedFee {
+        let kind = match kind {
+            0 => FeeKind::Percent,
+            1 => FeeKind::AmountPerBill,
+            _ => FeeKind::AmountPerUnit,
+        };
+        let fee = fee(id, kind, value);
+        let fee = match tax {
+            0 => untaxed(fee),
+            1 => fee,
+            _ => altered(fee, |f| {
+                f.tax = FeeTax::TaxClass.into();
+                f.tax_class_id = Some(food());
+            }),
+        };
+        match scope {
+            0 => fee,
+            1 => only(FeeItems::Include, 0, fee),
+            _ => only(FeeItems::Exclude, 0, fee),
+        }
+    }
+
     proptest! {
         // Data-correctness law §14.3, at the domain level: a split sums exactly to the original.
         #[test]
@@ -1022,6 +1726,52 @@ mod tests {
             let settlement = settle(vnd(total), &[payment]).expect("settles");
             // tendered − applied − tip == change
             prop_assert_eq!(settlement.change_given, vnd(over));
+        }
+
+        /// The sum law with fees (ADR-0159 decision 2): whatever the rules, the total is the lines
+        /// less their reductions, plus the fees, the tax and the rounding; each fee's taxed parts
+        /// sum to it; and every taxed part lands in exactly one class's base.
+        #[test]
+        fn a_bill_with_fees_still_reconciles(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            choices in prop::collection::vec((0_u8..3, 0_u8..3, 0_u8..3, 0_i64..=20_000), 0..=3),
+            half_even in any::<bool>(),
+            cash_rounding in any::<bool>(),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<PublishedFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = sold_total * discount_percent / 100;
+            let rates = rates();
+            let totals = assemble_with(&lines, &rules, &rates, |input| {
+                input.bill_discount = vnd(discount);
+                input.rounding_mode = if half_even { Rounding::HalfEven } else { Rounding::HalfUp };
+                input.cash_rounding_increment = cash_rounding.then_some(500);
+            })
+            .expect("assembles");
+
+            assert_reconciles(&totals);
+            let fees: i64 = totals.fee_lines.iter().map(|fee| fee.amount.amount_minor).sum();
+            prop_assert_eq!(totals.service_charge, vnd(fees));
+            let mut taxed = 0;
+            for fee in &totals.fee_lines {
+                let parts: i64 = fee.class_shares.iter().map(|part| part.amount.amount_minor).sum();
+                prop_assert!(fee.class_shares.is_empty() || parts == fee.amount.amount_minor);
+                taxed += parts;
+            }
+            let bases: i64 = totals.tax_lines.iter().map(|tax| tax.taxable_base.amount_minor).sum();
+            prop_assert_eq!(bases, sold_total - discount + taxed);
         }
     }
 }

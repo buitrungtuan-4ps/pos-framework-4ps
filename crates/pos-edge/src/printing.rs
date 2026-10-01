@@ -1817,6 +1817,7 @@ mod tests {
             discount_total: zero,
             comp_total: zero,
             service_charge: zero,
+            fee_lines: Vec::new(),
             tax_lines: Vec::new(),
             tax_total: zero,
             rounding_adjustment: zero,
@@ -2880,6 +2881,7 @@ mod tests {
             discount_total: money(0),
             comp_total: money(0),
             service_charge: money(0),
+            fee_lines: Vec::new(),
             tax_lines: vec![TaxLine {
                 tax_class_id: TaxClassId::new(Ulid::from_u128(1)),
                 taxable_base: money(100_000),
