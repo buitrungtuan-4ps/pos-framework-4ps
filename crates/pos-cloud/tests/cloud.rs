@@ -18802,6 +18802,122 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
     assert!(dump.contains("C01"), "the staff code is recorded");
 }
 
+/// The audit trail shows the staff code an employee write records only to a role holding
+/// `console.people.read`
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// `employee.create` and `employee.update` record the employee's id, code and status (ADR-0070),
+/// and every console role reads the trail. A Viewer or an Ops user still sees each entry and who
+/// did what to which employee, but not the code; an Owner or Admin reads the entry as written,
+/// which is also what shows the trail still records it. The window and the page answer alike, and
+/// a role's name, which names no person, stays.
+#[tokio::test]
+async fn the_audit_trail_shows_a_staff_code_only_to_a_role_that_reads_staff_records() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        admin.clone(),
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    )
+    .merge(http::audit_router(audit, admin.clone(), clock()));
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    // An employee created and then archived, each entry recording the code, and a role.
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/employees",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "code": "C01", "name": "Alice" }),
+            &owner,
+        ))
+        .await
+        .expect("route create employee");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created_etag = etag_of(&created);
+    let employee_id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let archived = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/employees/{employee_id}"),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice", "status": "archived" }),
+            &owner,
+            &created_etag,
+        ))
+        .await
+        .expect("route update employee");
+    assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+    let cashier = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/roles",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Cashier", "permissions": [] }),
+            &owner,
+        ))
+        .await
+        .expect("route create role");
+    assert_eq!(cashier.status(), StatusCode::CREATED);
+
+    for (role, token, names_staff) in [
+        (AdminRole::Viewer, "viewer-audit", false),
+        (AdminRole::Ops, "ops-audit", false),
+        (AdminRole::Admin, "admin-audit", true),
+        (AdminRole::Owner, "owner-audit", true),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        for url in [
+            format!("/admin/audit?tenant_id={tenant_ulid}"),
+            format!("/admin/audit?tenant_id={tenant_ulid}&limit=10&offset=0"),
+        ] {
+            let read = router
+                .clone()
+                .oneshot(get_with_cookie(&url, &cookie))
+                .await
+                .expect("route the audit read");
+            assert_eq!(read.status(), StatusCode::OK, "{role:?} reads {url}");
+            let body = json_body(read).await;
+            let entries = body
+                .as_array()
+                .or_else(|| body["items"].as_array())
+                .expect("the window is an array and the page carries one");
+            let mut sides = 0;
+            for entry in entries
+                .iter()
+                .filter(|entry| entry["entity_type"] == "employee")
+            {
+                for side in ["before", "after"] {
+                    let Some(fields) = entry[side].as_object() else {
+                        continue; // a create has no before
+                    };
+                    sides += 1;
+                    assert_eq!(fields["id"], employee_id.as_str(), "{role:?}: {url}");
+                    assert!(fields.contains_key("status"), "{role:?}: the status stays");
+                    assert!(!fields.contains_key("name"), "{role:?}: never a name");
+                    let code = names_staff.then(|| serde_json::json!("C01"));
+                    assert_eq!(
+                        fields.get("code"),
+                        code.as_ref(),
+                        "{role:?}: a staff code only with console.people.read: {url} {fields:?}"
+                    );
+                }
+            }
+            assert_eq!(sides, 3, "{role:?} sees both employee entries: {url}");
+            let role_entry = entries
+                .iter()
+                .find(|entry| entry["entity_type"] == "role")
+                .expect("the role entry is read too");
+            assert_eq!(
+                role_entry["after"]["name"], "Cashier",
+                "{role:?}: a role's name names no person"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn the_roster_read_returns_the_whole_tenant_unpaged_and_a_page_when_a_limit_is_named() {
     let router = people_app_with_audit(
@@ -24602,6 +24718,259 @@ async fn a_node_the_registry_does_not_carry_is_refused_by_name() {
         message.contains("locale") && message.contains("menu"),
         "the refusal names what was asked for and what is on offer: {message}"
     );
+}
+
+/// The people publish and both previews — the generic one and the campaigns one — over one roster
+/// and one config-tree fake, so a test can publish a store's `permissions` node, change a person,
+/// and ask what a publish would do next.
+fn people_preview_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    config: FakeConfigTrees,
+) -> axum::Router {
+    people_publish_app(
+        admin.clone(),
+        people.clone(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    )
+    .merge(http::config_preview_router(
+        config.clone(),
+        http::batch_nodes(
+            FakeCatalog::default(),
+            FakeTaxRates::default(),
+            FakeCampaigns,
+            FakeInventory::default(),
+            FakeReasonCodes::default(),
+            people,
+            FakeFloor::default(),
+        ),
+        admin.clone(),
+        clock(),
+    ))
+    .merge(http::config_campaigns_router(
+        FakeCampaigns,
+        config,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// A preview of the `permissions` node names the store's staff only to a role holding
+/// `console.people.read`, and carries a PIN hash to nobody
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// The preview needs only `console.config.publish`, which Ops holds, and the node it compiles is
+/// the store's roster: each member's name, staff code and PIN hash. Its diff gets the config
+/// reads' treatment — the credential for nobody (S7), the person only for Owner and Admin — and
+/// keeps the member and what they may do.
+#[tokio::test]
+async fn a_permissions_preview_names_staff_only_to_a_role_that_reads_staff_records() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (alice, _cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_preview_app(admin.clone(), people, FakeConfigTrees::default());
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "node": "permissions",
+    });
+
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-preview").await;
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/config/preview", &body, &viewer))
+        .await
+        .expect("route the viewer's preview");
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "a Viewer cannot publish, so cannot preview"
+    );
+
+    for (role, token, names_staff) in [
+        (AdminRole::Ops, "ops-preview", false),
+        (AdminRole::Admin, "admin-preview", true),
+        (AdminRole::Owner, "owner-preview", true),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let previewed = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/config/preview", &body, &cookie))
+            .await
+            .expect("route the preview");
+        assert_eq!(previewed.status(), StatusCode::OK, "{role:?} may publish");
+        let preview = json_body(previewed).await;
+        let text = preview.to_string();
+        let member = preview["diff"]["permissions"]["staff"][0]
+            .as_object()
+            .expect("the store has no node yet, so the diff is the whole node");
+        assert_eq!(
+            member["id"],
+            serde_json::json!(alice.as_ulid().to_string()),
+            "{role:?}: the member stays"
+        );
+        assert_eq!(
+            member["permissions"],
+            serde_json::json!(["billing.discount.apply"]),
+            "{role:?}: and so does what they may do"
+        );
+        assert!(
+            !member.contains_key("pin_phc") && !text.contains("argon2id"),
+            "{role:?}: never the credential (S7): {text}"
+        );
+        if names_staff {
+            assert_eq!(
+                member["name"], "Alice",
+                "{role:?} holds console.people.read"
+            );
+            assert_eq!(member["code"], "C01", "{role:?} holds console.people.read");
+        } else {
+            assert!(
+                !member.contains_key("name") && !member.contains_key("code"),
+                "{role:?} lacks console.people.read: {member:?}"
+            );
+            assert!(
+                !text.contains("Alice") && !text.contains("C01"),
+                "{role:?}: the person is nowhere in the answer: {text}"
+            );
+        }
+    }
+}
+
+/// A preview is redacted *after* it is computed, never before. A PIN reset changes nothing but the
+/// hash, so a preview that diffed redacted documents would say nothing would change, and the
+/// operator would not publish the PIN the till is waiting for. The change shows; the hash does not.
+#[tokio::test]
+async fn a_preview_after_a_pin_reset_still_has_something_to_publish_and_carries_no_hash() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (alice, _cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_preview_app(admin.clone(), people.clone(), FakeConfigTrees::default());
+    let owner = admin_cookie(&router).await;
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-pin-reset").await;
+    let store = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/people/publish", &store, &owner))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    // The same roster with a new PIN: the store needs the new hash, and nothing else changed.
+    EmployeeStore::set_pin(&people, tenant(), alice, "argon2id$phc$alice-reset")
+        .await
+        .expect("reset the pin");
+
+    let mut body = store.clone();
+    body["node"] = serde_json::json!("permissions");
+    for (who, cookie, names_staff) in [("Ops", &ops, false), ("the Owner", &owner, true)] {
+        let previewed = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/config/preview", &body, cookie))
+            .await
+            .expect("route the preview");
+        assert_eq!(previewed.status(), StatusCode::OK);
+        let preview = json_body(previewed).await;
+        assert_eq!(
+            preview["unchanged"], false,
+            "{who}: a new PIN is a change the store must receive: {preview}"
+        );
+        assert!(
+            preview["from_version_id"].is_string(),
+            "{who}: the diff is against the version just published: {preview}"
+        );
+        let member = preview["diff"]["permissions"]["staff"][0]
+            .as_object()
+            .expect("the changed staff array is in the diff, whole");
+        assert!(
+            !member.contains_key("pin_phc") && !preview.to_string().contains("argon2id"),
+            "{who}: the new hash is not in the answer: {preview}"
+        );
+        assert_eq!(
+            member.contains_key("name"),
+            names_staff,
+            "{who}: {member:?}"
+        );
+        assert_eq!(
+            member.contains_key("code"),
+            names_staff,
+            "{who}: {member:?}"
+        );
+    }
+}
+
+/// Every preview's diff is redacted, whichever node it previews, because any of them can carry the
+/// staff. A store whose layers were written without a published version — by a migration or a
+/// fixture — has nothing to diff against, so the diff of any node is the whole document.
+#[tokio::test]
+async fn a_preview_of_another_node_carries_no_staff_credential_or_unread_identity() {
+    let admin = provisioned_admin();
+    let config = FakeConfigTrees::default();
+    config.rows.lock().expect("lock").insert(
+        (tenant(), store_id()),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    serde_json::json!({ "permissions": { "staff": [{
+                        "id": "01J",
+                        "code": "C01",
+                        "name": "Alice",
+                        "permissions": ["billing.discount.apply"],
+                        "pin_phc": "argon2id$phc$alice",
+                    }] } }),
+                    serde_json::json!({}),
+                ],
+                history: Vec::new(),
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+    let router = people_preview_app(admin.clone(), FakePeople::default(), config);
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-other-node").await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+
+    for (url, body) in [
+        (
+            "/admin/config/preview",
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "store_id": store_ulid,
+                "node": "capabilities",
+                "arguments": { "flags": { "tips_enabled": true } },
+            }),
+        ),
+        (
+            "/admin/config/campaigns/preview",
+            serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+        ),
+    ] {
+        let previewed = router
+            .clone()
+            .oneshot(post_with_cookie(url, &body, &ops))
+            .await
+            .expect("route the preview");
+        assert_eq!(previewed.status(), StatusCode::OK, "{url}");
+        let preview = json_body(previewed).await;
+        let member = preview["diff"]["permissions"]["staff"][0]
+            .as_object()
+            .expect("with no version to diff against, the roster is in the diff");
+        for field in ["pin_phc", "name", "code"] {
+            assert!(
+                !member.contains_key(field),
+                "{url}: `{field}` reached Ops: {member:?}"
+            );
+        }
+        assert_eq!(member["id"], "01J", "{url}: the member stays");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

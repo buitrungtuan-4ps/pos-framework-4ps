@@ -234,13 +234,15 @@ console_permissions! {
         description: "Read revenue and product-mix reports (prices are commercially sensitive, T2)",
     },
     /// Read staff records: the employee roster, the store assignments, and each staff member's name
-    /// and code in a store's `permissions` config node
+    /// and code wherever the console shows them — a store's `permissions` config node, a publish
+    /// preview's diff, and an `employee` entry in the audit trail
     /// ([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
     ///
     /// Owner/Admin, the roles that manage people. A person's name and staff code are T1 personal
     /// data ([ADR-0070](../adr/0070-people-and-access.md), Decree 13/2023), so this is narrower
     /// than `Read` the way `ReadRevenue` is: Ops and Viewer keep the role templates and the
-    /// permission catalogue, which name nobody, and a store's config with the names taken out.
+    /// permission catalogue, which name nobody, and a store's config, its previews and the audit
+    /// trail with the names and codes taken out.
     ReadPeople {
         id: "console.people.read",
         roles: [Owner, Admin],

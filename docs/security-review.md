@@ -118,14 +118,17 @@ Following the organisation's T1/T2/T3 scheme:
 
 - **T1 Restricted** — staff PIN hashes, employee records, and any customer identifier a subject
   request touches. PIN hashes live in `employees` and ride to the store on `/sync`; they are
-  **stripped unconditionally** from both console config reads (**S7**), because no console screen
-  needs one. Employee records — the roster, one employee, and the assignment list, whose rows name
-  the person — need `console.people.read`, which only Owner and Admin hold
+  **stripped unconditionally** from both console config reads and from the diff of both publish
+  previews (**S7**), because no console screen needs one. Employee records — the roster, one
+  employee, and the assignment list, whose rows name the person — need `console.people.read`,
+  which only Owner and Admin hold
   ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md)); for any other role the
-  same two config reads take each staff member's name and code out of the `permissions` node, so
-  Ops and Viewer see who may do what by id only. Subject-request tooling exists
-  ([ADR-0076](adr/0076-subject-request-tooling.md)) and hands the payload to a person — it never
-  fulfils a rights request autonomously.
+  same two config reads and the two previews take each staff member's name and code out of the
+  `permissions` node, and the audit trail returns an `employee` entry without the staff code it
+  records, so Ops and Viewer see who may do what, and whose record changed, by id only. A preview
+  is redacted after its diff is computed, so a PIN reset still reads as a change to publish.
+  Subject-request tooling exists ([ADR-0076](adr/0076-subject-request-tooling.md)) and hands the
+  payload to a person — it never fulfils a rights request autonomously.
 - **T2 Confidential** — prices, the compiled menu, tax rates, vendor terms. `ReadRevenue` is carved
   out of `Read` for exactly this (**S5**), so Ops and Viewer see the menu structure and not what
   anything costs.

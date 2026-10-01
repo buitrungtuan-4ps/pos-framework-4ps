@@ -18,6 +18,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Staff names and codes stay out of publish previews and the audit trail without
+  `console.people.read`.** #561 took them out of a store's config reads, but two other reads still
+  handed them to a Viewer or an Ops user
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+  - The publish previews, `POST /admin/config/preview` and `POST /admin/config/campaigns/preview`,
+    need `console.config.publish`, which Ops holds. A preview of the `permissions` node returned
+    each staff member's name, staff code and PIN hash, and a preview of any node could, for a store
+    with configuration but no published version. A preview's `diff` now never carries a `pin_phc`,
+    for any role, and carries a member's `name` and `code` only for a role holding
+    `console.people.read`. The member's id and permissions stay. The diff is still computed from
+    the whole documents, so a PIN reset or a rename still shows as a change to publish.
+  - `GET /admin/audit` needs only `console.data.read`, and `employee.create` and
+    `employee.update` record the employee's staff code. For a role without
+    `console.people.read`, an `employee` entry's `before` and `after` now leave out `code` and
+    `name`. The employee id, the status and every other entry are unchanged, and so is what the
+    trail records.
+
+  **Upgrade note:** no route, event, migration or permission changes. Ops and Viewer users no
+  longer see staff names or codes in a publish preview or the audit trail; an Owner or Admin still
+  does. No role sees a PIN hash in a preview.
+
 - **Staff records in the console need their own permission, `console.people.read`.** The employee
   list, a single employee and the assignment list, whose rows name the person, needed only
   `console.data.read`. Every console role holds that, so a Viewer or an Ops user could read each
