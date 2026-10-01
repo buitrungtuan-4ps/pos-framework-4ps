@@ -237,6 +237,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console can write a setting once for many stores, and a new store gets the owner's
+  values** ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 3). The values the cloud resolves for each store now reach it.
+  - `PUT /admin/settings` writes a value at the tenant, a brand, a store group or one store.
+    `DELETE /admin/settings` clears one. Each republishes every store the value reaches, onto the
+    store's Tenant layer, and answers how each store's publish went: `SETTING_PUBLISH_APPLIED`,
+    `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`. A store whose value did not change
+    gets no new version.
+  - A value the register refuses is a `400`. So is a tenant-scope value written for another
+    tenant. A brand, store group or store the tenant does not have is a `404`, and an archived
+    store group is a `409`.
+  - `GET /admin/settings/catalogue` lists the register for the console's settings screen.
+    `GET /admin/settings` lists the tenant's values. `GET /admin/settings/effective` shows what one
+    store runs and which scope each value comes from.
+  - `POST /admin/settings/presets` gives a store the values the owner chose for a new store, at
+    the store's own scope, and skips any setting the store already sets. Today that is
+    `shift.no_shift_selling = NO_SHIFT_SELLING_REFUSE`.
+  - `POST /admin/settings/publish` republishes one store, or every store of the tenant. Run it after
+    a store moves to another brand or joins or leaves a store group: like a group's batch publish,
+    a write reaches the stores where they sit at the time.
+  - The register gains each setting's new-store value. `docs/configuration.md` shows it in a "New
+    store" column, and `docs/snapshots/settings.txt` as a `preset=` line, which may change.
+  - Reads need `console.data.read`. Writes publish, so they need `console.config.publish`. Every
+    write is audited: `setting.set`, `setting.clear`, `setting.presets.apply` and
+    `setting.publish`.
+  - **Upgrade note:** new `/admin/settings` routes, documented in `docs/openapi-admin.json`. No
+    migration beyond 0072, no event, and no edge change. A store changes only when a value is
+    written for it.
+
 - **The cloud keeps setting values per scope and resolves each store's value**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 3). A value is written at the tenant, a brand, a store group or one store. A store runs
@@ -249,8 +278,6 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - The resolved values are composed onto the store's Tenant layer, node by node. Each node keeps
     any field that is not a setting, so a setting on a node the console also publishes (such as
     `qr`) survives that node's next publish.
-  - Nothing writes or publishes a value yet. The console routes that write values, and the publish
-    onto each store's tree, come in the next slice.
   - **Upgrade note:** migration `0072_setting_values.sql` adds the `setting_values` table
     (tenant-scoped, RLS like the other configuration tables). It is additive and rollback-safe, and
     it starts empty, so no store changes.

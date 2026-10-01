@@ -61,6 +61,10 @@ pub struct Setting {
     /// The value a store runs when nothing sets one, which is what the edge did before the setting
     /// existed (ADR-0160 decision 1).
     pub default: &'static str,
+    /// The value a new store is given, when it differs from the default: the console's store
+    /// presets, which the owner chose (ADR-0160 decision 1). `None` leaves a new store on the
+    /// default.
+    pub preset: Option<&'static str>,
     /// Where the setting may be written.
     pub scopes: &'static [SettingScope],
     /// The first release that honours the setting. A store running an earlier release is not
@@ -99,6 +103,8 @@ pub fn register() -> Vec<Setting> {
         kind: SettingKind::Choice,
         values: choices::<NoShiftSelling>(),
         default: PublishedShift::default().no_shift_selling().as_wire(),
+        // Confirmed by the owner on 2026-09-30: a new store refuses, an existing one keeps selling.
+        preset: Some(NoShiftSelling::Refuse.as_wire()),
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
         summary: "Whether a till may seat a table, start a counter order or take a payment while \
@@ -120,7 +126,7 @@ fn choices<E: WireEnum>() -> Vec<&'static str> {
 ///
 /// Sorted, so the output depends on what the register holds and not on its order. A bare key, a
 /// `kind=`, a `value=` and a `scope=` line are contracts: a value stored in the cloud and an edge on
-/// an older release both rely on them. A `default=` and a `since=` line may change.
+/// an older release both rely on them. A `default=`, a `preset=` and a `since=` line may change.
 #[must_use]
 pub fn render_snapshot() -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -132,6 +138,9 @@ pub fn render_snapshot() -> String {
             lines.push(format!("{key}\tvalue={value}"));
         }
         lines.push(format!("{key}\tdefault={}", setting.default));
+        if let Some(preset) = setting.preset {
+            lines.push(format!("{key}\tpreset={preset}"));
+        }
         for scope in setting.scopes {
             lines.push(format!("{key}\tscope={scope}"));
         }
@@ -144,8 +153,8 @@ pub fn render_snapshot() -> String {
          # hand-edit. Regenerate with:  just snapshot\n\
          #\n\
          # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both\n\
-         # rely on it, so it may be added to but never renamed or removed. A default or a since\n\
-         # line may change. ADR-0160 decision 9.\n",
+         # rely on it, so it may be added to but never renamed or removed. A default, a preset or\n\
+         # a since line may change. ADR-0160 decision 9.\n",
     );
     for line in lines {
         out.push_str(&line);
@@ -167,15 +176,19 @@ pub fn render_markdown() -> String {
          A store whose configuration does not set a value runs the default, which is what the \
          edge did before the setting existed, so an upgrade changes nothing until someone sets \
          one. A value the edge does not recognise also reads as the default.\n\n\
-         - **Where it is set** lists the scopes a value may be written at (ADR-0160 decision \
-         3).\n\
+         - **Where it is set** lists the scopes a value may be written at, in the console's \
+         settings or with `PUT /admin/settings`. A store runs the value of the most specific \
+         scope that sets one: the store, then its store groups (the value written last, if two \
+         disagree), then its brand, then the tenant (ADR-0160 decision 3).\n\
+         - **New store** is the value the console gives a store it creates, where that differs \
+         from the default.\n\
          - **Honoured from** is the first release that honours the setting. A store running an \
          earlier release ignores it.\n\n",
     );
     out.push_str(
-        "| Setting | Values | Default | Where it is set | Honoured from | What it decides |\n",
+        "| Setting | Values | Default | New store | Where it is set | Honoured from | What it decides |\n",
     );
-    out.push_str("|---|---|---|---|---|---|\n");
+    out.push_str("|---|---|---|---|---|---|---|\n");
     for setting in register() {
         let values = setting
             .values
@@ -193,6 +206,9 @@ pub fn render_markdown() -> String {
             format!("`{}`", setting.key()),
             values,
             format!("`{}`", setting.default),
+            setting
+                .preset
+                .map_or_else(|| "the default".to_owned(), |preset| format!("`{preset}`")),
             scopes,
             setting.since.to_owned(),
             setting.summary.to_owned(),
@@ -301,6 +317,12 @@ mod tests {
                 "{key}: the default `{}` is not one of its values",
                 setting.default
             );
+            if let Some(preset) = setting.preset {
+                assert!(
+                    setting.values.contains(&preset) && preset != setting.default,
+                    "{key}: the preset `{preset}` is not a value other than the default"
+                );
+            }
             assert!(!setting.scopes.is_empty(), "{key} can be set nowhere");
             assert!(!setting.since.is_empty(), "{key} names no release");
             assert!(

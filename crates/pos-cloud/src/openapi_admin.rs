@@ -138,6 +138,13 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_read_store_group_batch,
         crate::http::admin_list_store_archives,
         crate::http::admin_config_nodes,
+        crate::http::admin_settings_catalogue,
+        crate::http::admin_list_settings,
+        crate::http::admin_put_setting,
+        crate::http::admin_clear_setting,
+        crate::http::admin_effective_settings,
+        crate::http::admin_apply_setting_presets,
+        crate::http::admin_publish_settings,
         crate::http::admin_list_releases,
         crate::http::admin_create_release,
         crate::http::admin_read_release,
@@ -205,6 +212,15 @@ pub(crate) struct ErrorResponse {
                            ADR-0114). The reads themselves are still coverage debt; the one write \
                            here is documented because it is the only one on this surface a person \
                            answers a compliance warning with."
+        ),
+        (
+            name = "settings",
+            description = "Every value a store may run differently (ADR-0160, \
+                           `docs/configuration.md`). A value is written once, at the tenant, a \
+                           brand, a store group or one store; each store runs the most specific \
+                           value that reaches it, and every store a write reaches is republished in \
+                           the same request. Documented because a fork's own console draws its \
+                           settings screen from the catalogue here."
         ),
         (
             name = "config",

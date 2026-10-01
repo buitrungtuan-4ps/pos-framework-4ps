@@ -1636,6 +1636,509 @@
         ]
       }
     },
+    "/admin/settings": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`GET /admin/settings` — the values a tenant has written, at every scope.",
+        "operationId": "admin_list_settings",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose values to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every value the tenant has written: the setting, the scope and the id it was written for, the value and when"
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`PUT /admin/settings` — writes one value and republishes every store it reaches.",
+        "operationId": "admin_put_setting",
+        "requestBody": {
+          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, and the value",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written, and every store it reaches republished. The body lists each store with SETTING_PUBLISH_APPLIED and the new config version, SETTING_PUBLISH_UNCHANGED, or SETTING_PUBLISH_FAILED"
+          },
+          "400": {
+            "description": "An id is not a ULID, the scope is not a scope, the setting is not in the register, the setting cannot be set at that scope, the value is not one it takes, or a tenant-scope value names another tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such brand, store group or store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The store group is archived, so its values reach no store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`DELETE /admin/settings` — clears one value and republishes every store it reached, which then\nrun the next most specific value, or the default.",
+        "operationId": "admin_clear_setting",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "setting_key",
+            "in": "query",
+            "description": "The setting's key, node.field",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "description": "The tenant, brand, store group or store the value was written for",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleared, and every store it reached republished, with the same per-store outcomes as a write"
+          },
+          "400": {
+            "description": "An id is not a ULID or the scope is not a scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No value is written there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/settings/catalogue": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`GET /admin/settings/catalogue` — the settings register, for the console's settings screen.",
+        "operationId": "admin_settings_catalogue",
+        "responses": {
+          "200": {
+            "description": "Every setting in the register: its key, node and field, its kind and values, its default, the value a new store is given, the scopes it may be written at, and the first release that honours it"
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/settings/effective": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`GET /admin/settings/effective` — what one store runs, and why.",
+        "operationId": "admin_effective_settings",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "query",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every setting as the store runs it: the value, and the scope and id it comes from, which are absent for a default"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry or the store groups is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/settings/presets": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`POST /admin/settings/presets` — gives a store the values the owner chose for a new store\n(ADR-0160 decision 1), which the console calls when it creates one.",
+        "description": "Only settings the store does not set itself are written, so calling it twice, or on a store an\noperator has already configured, changes nothing the operator chose.",
+        "operationId": "admin_apply_setting_presets",
+        "requestBody": {
+          "description": "The tenant and the store to give the new-store values",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each setting with a new-store value that the store did not already set is written at the store's own scope, and the store republished. The body lists the settings written and the store's publish outcome"
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/settings/publish": {
+      "post": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`POST /admin/settings/publish` — republishes the settings of one store, or of every store of the\ntenant.",
+        "description": "A write republishes every store it reaches by itself. What it cannot see is a store that moved:\na store given another brand, or added to or removed from a store group, keeps the values it was\nlast published until this runs for it, as a group's batch publish works\n([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)).",
+        "operationId": "admin_publish_settings",
+        "requestBody": {
+          "description": "The tenant, and optionally one store. Without a store, every store of the tenant is republished",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Each store's resolved settings republished, with the same per-store outcomes as a write"
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/setup": {
       "post": {
         "tags": [
@@ -2882,6 +3385,10 @@
     {
       "name": "fleet",
       "description": "Where each store runs and how it is standing (ADR-0068, ADR-0110, ADR-0114). The reads themselves are still coverage debt; the one write here is documented because it is the only one on this surface a person answers a compliance warning with."
+    },
+    {
+      "name": "settings",
+      "description": "Every value a store may run differently (ADR-0160, `docs/configuration.md`). A value is written once, at the tenant, a brand, a store group or one store; each store runs the most specific value that reaches it, and every store a write reaches is republished in the same request. Documented because a fork's own console draws its settings screen from the catalogue here."
     },
     {
       "name": "config",

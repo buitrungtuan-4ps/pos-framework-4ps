@@ -39,7 +39,7 @@
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 9): a bare setting key and its `kind=`, `value=` and `scope=` lines are contracts — a
 //! value stored in the cloud and an edge on an older release both rely on them — while its tabbed
-//! `default=` and `since=` may change.
+//! `default=`, `preset=` and `since=` may change.
 //!
 //! The route snapshot (`docs/snapshots/routes.txt`) has no mutable half at all: every
 //! line is `METHOD /path`, and every line is a contract
@@ -73,6 +73,7 @@ const MUTABLE_KEYS: &[&str] = &[
     "\tdefault_role=",
     "\tdefault=",
     "\tsince=",
+    "\tpreset=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -208,6 +209,9 @@ mod tests {
             "shift.no_shift_selling\tdefault=NO_SHIFT_SELLING_ALLOW"
         ));
         assert!(is_mutable("shift.no_shift_selling\tsince=0.14.1"));
+        assert!(is_mutable(
+            "shift.no_shift_selling\tpreset=NO_SHIFT_SELLING_REFUSE"
+        ));
     }
 
     #[test]

@@ -27204,3 +27204,537 @@ async fn publishing_integrations_sends_a_store_what_serves_it_and_no_secret() {
         .expect("route the publish");
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }
+
+// --- Settings (ADR-0160 decision 3) -----------------------------------------------------------
+
+/// A tenant-scoped in-memory `SettingsStore`: a write replaces the value in its slot.
+#[derive(Default, Clone)]
+struct FakeSettings {
+    rows: Arc<Mutex<Vec<(TenantId, pos_cloud::settings::SettingValue)>>>,
+}
+
+impl pos_cloud::settings::SettingsStore for FakeSettings {
+    async fn list(
+        &self,
+        tenant_id: TenantId,
+    ) -> Result<Vec<pos_cloud::settings::SettingValue>, pos_cloud::settings::SettingsStoreError>
+    {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(owner, _)| *owner == tenant_id)
+            .map(|(_, value)| value.clone())
+            .collect())
+    }
+
+    async fn put(
+        &self,
+        tenant_id: TenantId,
+        value: &pos_cloud::settings::SettingValue,
+    ) -> Result<(), pos_cloud::settings::SettingsStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        rows.retain(|(owner, held)| {
+            !(*owner == tenant_id
+                && held.setting_key == value.setting_key
+                && held.scope == value.scope
+                && held.scope_id == value.scope_id)
+        });
+        rows.push((tenant_id, value.clone()));
+        Ok(())
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        setting_key: &str,
+        scope: pos_proto::settings::SettingScope,
+        scope_id: &str,
+    ) -> Result<bool, pos_cloud::settings::SettingsStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        let before = rows.len();
+        rows.retain(|(owner, held)| {
+            !(*owner == tenant_id
+                && held.setting_key == setting_key
+                && held.scope.known() == scope
+                && held.scope_id == scope_id)
+        });
+        Ok(rows.len() < before)
+    }
+}
+
+const NO_SHIFT_SELLING: &str = "shift.no_shift_selling";
+
+fn settings_brand() -> pos_cloud::registry::BrandId {
+    pos_cloud::registry::BrandId::new(Ulid::from_u128(0xB4A0D))
+}
+
+/// Three stores of one tenant: two of a brand, one without; a group holding the first and the
+/// third; and a second group, archived.
+fn settings_stores() -> [StoreId; 3] {
+    [
+        StoreId::new(Ulid::from_u128(0x5A01)),
+        StoreId::new(Ulid::from_u128(0x5A02)),
+        StoreId::new(Ulid::from_u128(0x5A03)),
+    ]
+}
+
+fn settings_group() -> StoreGroupId {
+    StoreGroupId::new(Ulid::from_u128(0x6A01))
+}
+
+fn archived_group() -> StoreGroupId {
+    StoreGroupId::new(Ulid::from_u128(0x6A02))
+}
+
+/// The settings routes over fakes, with the layout above seeded.
+fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
+    let admin = provisioned_admin();
+    let config_trees = FakeConfigTrees::default();
+    let registry = FakeRegistry::default();
+    let [first, second, third] = settings_stores();
+    registry.brands.lock().expect("lock").push(Versioned::new(
+        BrandRecord {
+            brand_id: settings_brand(),
+            tenant_id: tenant(),
+            name: "Brand".to_owned(),
+            status: EntityStatus::Active,
+        },
+        Version::new("1"),
+    ));
+    for (store_id, brand_id) in [
+        (first, Some(settings_brand())),
+        (second, Some(settings_brand())),
+        (third, None),
+    ] {
+        registry.stores.lock().expect("lock").push(Versioned::new(
+            StoreRecord {
+                store_id,
+                tenant_id: tenant(),
+                brand_id,
+                name: format!("Store {}", store_id.as_ulid()),
+                status: EntityStatus::Active,
+            },
+            Version::new("1"),
+        ));
+    }
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id: settings_group(),
+            tenant_id: tenant(),
+            name: "North".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[first, third],
+    );
+    groups.seed(
+        StoreGroup {
+            group_id: archived_group(),
+            tenant_id: tenant(),
+            name: "Closed".to_owned(),
+            status: EntityStatus::Archived,
+        },
+        &[second],
+    );
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    );
+    let router = http::router(app).merge(http::settings_router(
+        FakeSettings::default(),
+        registry,
+        groups.clone(),
+        config_trees.clone(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    (router, config_trees, groups)
+}
+
+fn put_setting(scope: &str, scope_id: &str, value: &str) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "setting_key": NO_SHIFT_SELLING,
+        "scope": scope,
+        "scope_id": scope_id,
+        "value": value,
+    })
+}
+
+/// The value a store's Tenant layer carries for `shift.no_shift_selling`, if any.
+async fn tenant_layer_shift(config_trees: &FakeConfigTrees, store_id: StoreId) -> Option<String> {
+    let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
+    tree.record.layers[0]["shift"]["no_shift_selling"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// Each store a write reached and its outcome, in the order the response lists them.
+fn outcomes(body: &serde_json::Value) -> Vec<(String, String)> {
+    body["stores"]
+        .as_array()
+        .expect("a list of stores")
+        .iter()
+        .map(|store| {
+            (
+                store["store_id"].as_str().unwrap_or_default().to_owned(),
+                store["outcome"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_brand_value_reaches_the_brands_stores_on_their_tenant_layer_and_no_other() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, third] = settings_stores();
+    let brand = settings_brand().to_string();
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_setting("SETTING_SCOPE_BRAND", &brand, "NO_SHIFT_SELLING_REFUSE"),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    let body = json_body(written).await;
+    assert_eq!(
+        outcomes(&body),
+        vec![
+            (first.to_string(), "SETTING_PUBLISH_APPLIED".to_owned()),
+            (second.to_string(), "SETTING_PUBLISH_APPLIED".to_owned()),
+        ],
+        "the brand's two stores, and not the third"
+    );
+    for store_id in [first, second] {
+        assert_eq!(
+            tenant_layer_shift(&config_trees, store_id).await.as_deref(),
+            Some("NO_SHIFT_SELLING_REFUSE")
+        );
+        let tree = config_trees
+            .load(tenant(), store_id)
+            .await
+            .expect("load")
+            .expect("a tree");
+        assert!(
+            tree.record.layers[2].get("shift").is_none(),
+            "the Store layer, which node routes write, is not touched"
+        );
+    }
+    assert_eq!(tenant_layer_shift(&config_trees, third).await, None);
+
+    // The same write again changes nothing, so no store is given a new version.
+    let again = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_setting("SETTING_SCOPE_BRAND", &brand, "NO_SHIFT_SELLING_REFUSE"),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert!(
+        outcomes(&json_body(again).await)
+            .iter()
+            .all(|(_, outcome)| outcome == "SETTING_PUBLISH_UNCHANGED")
+    );
+
+    // What each store runs, and where it comes from.
+    let effective = |store_id: StoreId| {
+        get_with_cookie(
+            &format!(
+                "/admin/settings/effective?tenant_id={}&store_id={store_id}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        )
+    };
+    let first_runs = json_body(
+        router
+            .clone()
+            .oneshot(effective(first))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(
+        first_runs["settings"][0]["value"],
+        "NO_SHIFT_SELLING_REFUSE"
+    );
+    assert_eq!(first_runs["settings"][0]["scope"], "SETTING_SCOPE_BRAND");
+    let third_runs = json_body(router.oneshot(effective(third)).await.expect("route")).await;
+    assert_eq!(third_runs["settings"][0]["value"], "NO_SHIFT_SELLING_ALLOW");
+    assert!(
+        third_runs["settings"][0].get("scope").is_none(),
+        "a default comes from no scope"
+    );
+}
+
+#[tokio::test]
+async fn a_store_value_wins_over_its_brand_and_clearing_it_falls_back() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    for body in [
+        put_setting(
+            "SETTING_SCOPE_BRAND",
+            &settings_brand().to_string(),
+            "NO_SHIFT_SELLING_REFUSE",
+        ),
+        put_setting(
+            "SETTING_SCOPE_STORE",
+            &first.to_string(),
+            "NO_SHIFT_SELLING_ALLOW",
+        ),
+    ] {
+        let written = router
+            .clone()
+            .oneshot(put_with_cookie("/admin/settings", &body, &cookie))
+            .await
+            .expect("route the write");
+        assert_eq!(written.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        tenant_layer_shift(&config_trees, first).await.as_deref(),
+        Some("NO_SHIFT_SELLING_ALLOW"),
+        "the store's own value is the more specific"
+    );
+
+    let cleared = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/settings?tenant_id={}&setting_key={NO_SHIFT_SELLING}\
+                 &scope=SETTING_SCOPE_STORE&scope_id={first}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the clear");
+    assert_eq!(cleared.status(), StatusCode::OK);
+    assert_eq!(
+        tenant_layer_shift(&config_trees, first).await.as_deref(),
+        Some("NO_SHIFT_SELLING_REFUSE"),
+        "the brand's value again"
+    );
+
+    let nothing_there = router
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/settings?tenant_id={}&setting_key={NO_SHIFT_SELLING}\
+                 &scope=SETTING_SCOPE_STORE&scope_id={first}",
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the clear");
+    assert_eq!(nothing_there.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_new_store_is_given_the_owners_values_once() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [_, _, third] = settings_stores();
+    let presets = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": third.to_string(),
+    });
+
+    let applied = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/settings/presets",
+            &presets,
+            &cookie,
+        ))
+        .await
+        .expect("route the presets");
+    assert_eq!(applied.status(), StatusCode::OK);
+    assert_eq!(json_body(applied).await["applied"][0], NO_SHIFT_SELLING);
+    assert_eq!(
+        tenant_layer_shift(&config_trees, third).await.as_deref(),
+        Some("NO_SHIFT_SELLING_REFUSE"),
+        "a new store refuses to sell with no shift open (the owner, 2026-09-30)"
+    );
+
+    let again = router
+        .oneshot(post_with_cookie(
+            "/admin/settings/presets",
+            &presets,
+            &cookie,
+        ))
+        .await
+        .expect("route the presets");
+    assert_eq!(
+        json_body(again).await["applied"],
+        serde_json::json!([]),
+        "a store that already sets the value keeps it"
+    );
+}
+
+#[tokio::test]
+async fn a_group_value_reaches_a_store_that_joins_once_it_is_republished() {
+    let (router, config_trees, groups) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, third] = settings_stores();
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_setting(
+                "SETTING_SCOPE_STORE_GROUP",
+                &settings_group().to_string(),
+                "NO_SHIFT_SELLING_REFUSE",
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(
+        outcomes(&json_body(written).await)
+            .iter()
+            .map(|(store, _)| store.clone())
+            .collect::<Vec<_>>(),
+        vec![first.to_string(), third.to_string()]
+    );
+    assert_eq!(tenant_layer_shift(&config_trees, second).await, None);
+
+    groups
+        .members
+        .lock()
+        .expect("lock")
+        .insert((tenant(), settings_group()), vec![first, second, third]);
+    let republished = router
+        .oneshot(post_with_cookie(
+            "/admin/settings/publish",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": second.to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(republished.status(), StatusCode::OK);
+    assert_eq!(
+        tenant_layer_shift(&config_trees, second).await.as_deref(),
+        Some("NO_SHIFT_SELLING_REFUSE")
+    );
+}
+
+#[tokio::test]
+async fn a_write_the_register_or_the_tenant_refuses_reaches_no_store() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+    let store = first.to_string();
+
+    let refused = |body: serde_json::Value| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        async move {
+            router
+                .oneshot(put_with_cookie("/admin/settings", &body, &cookie))
+                .await
+                .expect("route the write")
+                .status()
+        }
+    };
+    let unknown_setting = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "setting_key": "shift.no_such_setting",
+        "scope": "SETTING_SCOPE_STORE",
+        "scope_id": store,
+        "value": "NO_SHIFT_SELLING_REFUSE",
+    });
+    assert_eq!(refused(unknown_setting).await, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        refused(put_setting(
+            "SETTING_SCOPE_STORE",
+            &store,
+            "NO_SHIFT_SELLING_LATER"
+        ))
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        refused(put_setting(
+            "SETTING_SCOPE_PLANET",
+            &store,
+            "NO_SHIFT_SELLING_REFUSE"
+        ))
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        refused(put_setting(
+            "SETTING_SCOPE_TENANT",
+            &Ulid::from_u128(0xBAD).to_string(),
+            "NO_SHIFT_SELLING_REFUSE"
+        ))
+        .await,
+        StatusCode::BAD_REQUEST,
+        "a tenant-scope value names its own tenant"
+    );
+    assert_eq!(
+        refused(put_setting(
+            "SETTING_SCOPE_BRAND",
+            &Ulid::from_u128(0xBAD).to_string(),
+            "NO_SHIFT_SELLING_REFUSE"
+        ))
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        refused(put_setting(
+            "SETTING_SCOPE_STORE_GROUP",
+            &archived_group().to_string(),
+            "NO_SHIFT_SELLING_REFUSE"
+        ))
+        .await,
+        StatusCode::CONFLICT,
+        "an archived group's values would reach no store"
+    );
+    assert_eq!(tenant_layer_shift(&config_trees, first).await, None);
+}
+
+#[tokio::test]
+async fn the_catalogue_lists_each_setting_with_its_default_and_new_store_value() {
+    let (router, _, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let catalogue = router
+        .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+        .await
+        .expect("route the catalogue");
+    assert_eq!(catalogue.status(), StatusCode::OK);
+    let body = json_body(catalogue).await;
+    let shift = body["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == NO_SHIFT_SELLING)
+        .expect("the no-shift setting is listed");
+    assert_eq!(shift["default"], "NO_SHIFT_SELLING_ALLOW");
+    assert_eq!(shift["preset"], "NO_SHIFT_SELLING_REFUSE");
+    assert_eq!(shift["kind"], "SETTING_KIND_CHOICE");
+    assert!(
+        shift.get("summary").is_none(),
+        "the screen labels a setting from its own translations"
+    );
+}

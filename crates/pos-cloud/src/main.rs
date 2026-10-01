@@ -798,6 +798,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Settings (ADR-0160 decision 3): a value written once, at the tenant, a brand, a store
+        // group or one store, and every store it reaches republished onto its Tenant layer in the
+        // same request. Reads are console.data.read; a write publishes, so console.config.publish.
+        .merge(http::settings_router(
+            store.settings(),
+            store.registry(),
+            store.store_groups(),
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(&audit),
+        ))
         // Capability publish (ADR-0071): the form editor writes a store's flags here; the flags are
         // merged into the store's Store config layer (preserving menu/layout/permissions) and versioned
         // through the config tree, which runs the §10 inter-flag rules.
