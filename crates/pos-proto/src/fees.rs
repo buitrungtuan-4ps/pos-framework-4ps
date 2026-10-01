@@ -18,9 +18,9 @@
 //! ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md)), so the edge needs no category model.
 //!
 //! This module is the wire shape, the defaults it is read with, and a check of a rule's shape. It
-//! computes nothing, and nothing authors the node or reads it yet. The calculation, one fee line
-//! per rule applied and folded into the tax and the total, belongs to `pos-core`
-//! (ADR-0159 decision 2), and the edge installs the node when that lands.
+//! computes nothing: `pos_core::billing::assemble` charges the rules, one fee line per rule applied
+//! and folded into the tax and the total (ADR-0159 decision 2). Nothing authors the node yet, and
+//! the edge does not install it.
 //!
 //! # Defaults, and refusing to guess
 //!

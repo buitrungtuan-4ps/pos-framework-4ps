@@ -300,6 +300,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The core computes a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decision 2). The `fees` node gave a fee a shape, and nothing charged it.
+  - `pos_core::billing::assemble` takes the fee rules and the bill's lines (item, quantity, net,
+    tax class), and returns one `FeeLine` per rule that applies: its amount, and the part of it
+    taxed at each class.
+  - A percentage is taken of the lines it counts, after their share of the bill's discount and
+    comps (or before them, when the rule says so), and never of another fee. A fee per unit
+    charges for each unit it counts. Each fee rounds once, by the bill's rounding mode.
+  - A fee is not taxed, taxed at one named class, or spread across the classes of the lines it
+    counts. Its parts join those classes' bases before each class's tax is rounded, once.
+    `service_charge` carries the sum of every fee.
+  - A rule applies to nothing when it is paused, faulted by its shape check, for another
+    channel, counting no line, or charging in another currency. So does a percentage whose base
+    is in the other tax posture from the store's prices; converting it comes later.
+  - **Upgrade note:** bills are unchanged until the edge passes rules. It passes none, and with no
+    rule every figure is what it was. `BillInput` gains `fee_rules` and `lines`, `BillTotals`
+    gains `fee_lines`, and `DomainError` gains `LinesDoNotMatchBases`, refused when the lines do
+    not sum to the class bases. No event, migration, permission or protocol version changes.
+
 - **A role can grant a permission directly or with approval, and a store can switch on each
   person's own set** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
   decisions 1 and 4), in the wire types and the core. Nothing sets them yet.
