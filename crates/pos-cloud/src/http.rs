@@ -209,7 +209,7 @@ use crate::people::{
     Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeListFilter,
     EmployeeSort, EmployeeStore, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
     PermissionInfo, RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate,
-    is_known_permission, permission_catalogue,
+    is_known_permission, is_pin_flagged_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
@@ -5830,7 +5830,19 @@ struct UpdateCourseRequest {
 struct CreateRoleRequest {
     tenant_id: String,
     name: String,
+    /// What the role grants directly, stored as sent.
     permissions: Vec<String>,
+    /// What the role grants only with approval (ADR-0158 decision 4), checked by
+    /// [`granted_with_approval`]. Absent is none: every permission in `permissions` is granted
+    /// directly, as before the list existed.
+    ///
+    /// The catalogue's PIN flag, the default a new role starts from, is the console's to apply: its
+    /// role editor starts a newly ticked PIN-flagged permission with approval and always sends both
+    /// lists. Applied here, it would give a role created by a script or an old console tab holders
+    /// who can no longer approve, since only a direct holder approves, and a `permissions` that
+    /// reads back without the ids it was sent.
+    #[serde(default)]
+    permissions_with_approval: Vec<String>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
     /// discount then needs a manager, exactly as it does today.
@@ -5838,12 +5850,18 @@ struct CreateRoleRequest {
     discount_ceiling_minor: Option<i64>,
 }
 
-/// Update a role template's name, permission set, and status.
+/// Update a role template's name, permission sets, ceiling and status.
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateRoleRequest {
     tenant_id: String,
     name: String,
+    /// What the role grants directly.
     permissions: Vec<String>,
+    /// What the role grants only with approval (ADR-0158 decision 4). Absent, the role keeps what
+    /// it grants with approval, less anything `permissions` now grants directly
+    /// ([`granted_with_approval`]).
+    #[serde(default)]
+    permissions_with_approval: Option<Vec<String>>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     /// Absent leaves the role with no configured ceiling, which the edge reads as zero — every
     /// discount then needs a manager, exactly as it does today.
@@ -6501,8 +6519,59 @@ fn first_unknown_permission(permissions: &[String]) -> Option<&str> {
         .find(|id| !is_known_permission(id))
 }
 
-/// A super-admin creates a role template. The permission set is validated against the catalogue.
-/// Audited `role.create` with id/name/permissions (a role name is not PII).
+/// What a role write stores as granted with approval, or why it is refused
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 4). `permissions` is what the role grants directly, stored as sent; it has already
+/// passed [`first_unknown_permission`].
+///
+/// `listed` is the request's own list. Each id in it must be in the catalogue and PIN-flagged, and
+/// none may also be granted directly: a permission is held one way. A create always has one, an
+/// absent list reading as none. An update may leave it out, as one written before the list existed
+/// does, and the role then keeps what it grants with approval today (`stored`), less anything
+/// `permissions` now grants directly.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn granted_with_approval(
+    permissions: &[String],
+    listed: Option<&[String]>,
+    stored: &[String],
+) -> Result<Vec<String>, Response> {
+    let Some(listed) = listed else {
+        let kept = stored.iter().filter(|id| !permissions.contains(id));
+        return Ok(kept.cloned().collect());
+    };
+    if let Some(unknown) = first_unknown_permission(listed) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("unknown permission id: {unknown}"),
+            &[("permissions_with_approval", "INVALID_ENUM_VALUE")],
+        ));
+    }
+    if let Some(unflagged) = listed.iter().find(|id| !is_pin_flagged_permission(id)) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("only a PIN-flagged permission is granted with approval: {unflagged}"),
+            &[("permissions_with_approval", "INVALID_VALUE")],
+        ));
+    }
+    if let Some(both) = listed.iter().find(|id| permissions.contains(id)) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            format!("a permission is granted directly or with approval, not both: {both}"),
+            &[
+                ("permissions", "MUTUALLY_EXCLUSIVE"),
+                ("permissions_with_approval", "MUTUALLY_EXCLUSIVE"),
+            ],
+        ));
+    }
+    Ok(listed.to_vec())
+}
+
+/// A super-admin creates a role template. Both permission sets are validated against the catalogue
+/// ([`granted_with_approval`]). Audited `role.create` with id, name, both sets and the ceiling (a
+/// role name is not PII).
 async fn admin_create_role<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6554,6 +6623,14 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
+    let permissions_with_approval = match granted_with_approval(
+        &request.permissions,
+        Some(&request.permissions_with_approval),
+        &[],
+    ) {
+        Ok(listed) => listed,
+        Err(refusal) => return refusal,
+    };
     let Some(role_template_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(RoleTemplateId::new)
     else {
@@ -6564,15 +6641,17 @@ where
         tenant_id,
         name: request.name.clone(),
         permissions: request.permissions.clone(),
+        permissions_with_approval,
         discount_ceiling_minor: request.discount_ceiling_minor,
     };
     match state.people.create(&new_role).await {
         Ok(version) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
-                "name": request.name,
-                "permissions": request.permissions,
-                "discount_ceiling_minor": request.discount_ceiling_minor,
+                "name": new_role.name,
+                "permissions": new_role.permissions,
+                "permissions_with_approval": new_role.permissions_with_approval,
+                "discount_ceiling_minor": new_role.discount_ceiling_minor,
             });
             audit_action(
                 &state.audit,
@@ -6599,7 +6678,8 @@ where
     }
 }
 
-/// A super-admin updates a role template's name, permissions, and status. Audited `role.update`.
+/// A super-admin updates a role template's name, permission sets, ceiling and status. Audited
+/// `role.update` with what was written, both sets included ([`granted_with_approval`]).
 ///
 /// An archived role grants nothing, so archiving one publishes the `permissions` node at once to
 /// every store where someone holds it
@@ -6666,18 +6746,11 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
-    let reached =
-        match stores_archiving_reaches(&state.people, tenant_id, role_template_id, status).await {
-            Ok(reached) => reached,
-            Err(refusal) => return refusal,
-        };
-    let update = RoleTemplateUpdate {
-        role_template_id,
-        tenant_id,
-        name: request.name.clone(),
-        permissions: request.permissions.clone(),
-        discount_ceiling_minor: request.discount_ceiling_minor,
-        status,
+    let planned =
+        planned_role_update(&state.people, tenant_id, role_template_id, &request, status).await;
+    let (update, reached) = match planned {
+        Ok(planned) => planned,
+        Err(refusal) => return refusal,
     };
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
@@ -6687,9 +6760,10 @@ where
         Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
-                "name": request.name,
-                "permissions": request.permissions,
-                "discount_ceiling_minor": request.discount_ceiling_minor,
+                "name": update.name,
+                "permissions": update.permissions,
+                "permissions_with_approval": update.permissions_with_approval,
+                "discount_ceiling_minor": update.discount_ceiling_minor,
                 "status": status.as_str(),
             });
             audit_action(
@@ -6967,31 +7041,52 @@ fn stores_of(assignments: &[Assignment]) -> BTreeSet<StoreId> {
         .collect()
 }
 
-/// Every store where someone holds the role, when an update to `status` archives it — read before
-/// the write, for the reason [`admin_update_employee`] gives — or `None` when the update does not
-/// archive it, whether it leaves the role active or finds it archived already.
-async fn stores_archiving_reaches<P>(
+/// The update `PATCH /admin/roles/{role_id}` writes, and the stores it publishes to at once, from
+/// the request and the role as stored, read once before the write and `404` if there is none.
+///
+/// The stored role answers two things. A request that leaves `permissions_with_approval` out keeps
+/// what the role grants with approval ([`granted_with_approval`]). And an update that archives the
+/// role reaches every store where someone holds it — read before the write, for the reason
+/// [`admin_update_employee`] gives — while one that leaves it active, or finds it archived
+/// already, reaches none (`None`).
+async fn planned_role_update<P>(
     people: &P,
     tenant_id: TenantId,
     role_template_id: RoleTemplateId,
+    request: &UpdateRoleRequest,
     status: EntityStatus,
-) -> Result<Option<BTreeSet<StoreId>>, Response>
+) -> Result<(RoleTemplateUpdate, Option<BTreeSet<StoreId>>), Response>
 where
     P: RoleTemplateStore + AssignmentStore,
 {
-    if status != EntityStatus::Archived {
-        return Ok(None);
-    }
-    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
-        Ok(Some(existing)) if existing.record.status == EntityStatus::Archived => return Ok(None),
-        Ok(Some(_)) => {}
+    let stored = match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+        Ok(Some(stored)) => stored.record,
         Ok(None) => return Err(not_found("role")),
         Err(error) => return Err(people_error_response(&error)),
-    }
-    AssignmentStore::list_for_role(people, tenant_id, role_template_id)
-        .await
-        .map(|assignments| Some(stores_of(&assignments)))
-        .map_err(|error| people_error_response(&error))
+    };
+    let permissions_with_approval = granted_with_approval(
+        &request.permissions,
+        request.permissions_with_approval.as_deref(),
+        &stored.permissions_with_approval,
+    )?;
+    let reached = if status == EntityStatus::Archived && stored.status != EntityStatus::Archived {
+        let assignments = AssignmentStore::list_for_role(people, tenant_id, role_template_id)
+            .await
+            .map_err(|error| people_error_response(&error))?;
+        Some(stores_of(&assignments))
+    } else {
+        None
+    };
+    let update = RoleTemplateUpdate {
+        role_template_id,
+        tenant_id,
+        name: request.name.clone(),
+        permissions: request.permissions.clone(),
+        permissions_with_approval,
+        discount_ceiling_minor: request.discount_ceiling_minor,
+        status,
+    };
+    Ok((update, reached))
 }
 
 /// Refuses an assignment to an employee, store or role the tenant does not have (`404`) or has

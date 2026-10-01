@@ -70,6 +70,7 @@ import type {
   NodePreview,
   ModifierGroup,
   PermissionInfo,
+  PermissionsPublishReport,
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
@@ -378,6 +379,30 @@ async function requestVoidIfMatch(
   if (!response.ok) {
     throw await failure(response);
   }
+}
+
+// A people write that may publish the `permissions` node at once (ADR-0158 decision 7). Removing
+// an assignment, or archiving a person or a role, answers `200` with how each store's publish
+// went; any other write answers `204`, which is `null` here. A conditional write passes the `etag`
+// it read the record at, as `requestVoidIfMatch` does.
+async function requestPublishReport(
+  method: string,
+  path: string,
+  etag?: ETag,
+  body?: unknown,
+): Promise<PermissionsPublishReport | null> {
+  const response = await fetch(path, {
+    method,
+    headers: {
+      ...(etag === undefined ? {} : { "if-match": `"${etag}"` }),
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await failure(response);
+  }
+  return response.status === 200 ? ((await response.json()) as PermissionsPublishReport) : null;
 }
 
 async function requestVoid(method: string, path: string, body?: unknown): Promise<void> {
@@ -866,13 +891,15 @@ export const api = {
     ),
   createEmployee: (tenantId: string, code: string, name: string) =>
     requestJson<CreatedId>("POST", "/admin/employees", { tenant_id: tenantId, code, name }),
+  // Archiving publishes to every store the person works at, and answers how each went; any other
+  // update answers `204`, read as `null` (ADR-0158 decision 7).
   updateEmployee: (
     id: string,
     tenantId: string,
     fields: { name: string; status: EntityStatus },
     etag: ETag,
   ) =>
-    requestVoidIfMatch("PATCH", `/admin/employees/${encodeURIComponent(id)}`, etag, {
+    requestPublishReport("PATCH", `/admin/employees/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       status: fields.status,
@@ -885,33 +912,41 @@ export const api = {
 
   listRoles: (tenantId: string) =>
     requestJson<RoleTemplate[]>("GET", `/admin/roles?${tenantQuery(tenantId)}`),
+  // Both lists are always sent: what this role grants directly, and what it grants only with
+  // approval (ADR-0158 decision 4). The editor is where a PIN-flagged permission starts with
+  // approval; the server reads a create that leaves the second list out as granting none.
   createRole: (
     tenantId: string,
     name: string,
-    permissions: string[],
+    grants: { permissions: string[]; permissionsWithApproval: string[] },
     discountCeilingMinor: number | null,
   ) =>
     requestJson<CreatedId>("POST", "/admin/roles", {
       tenant_id: tenantId,
       name,
-      permissions,
+      permissions: grants.permissions,
+      permissions_with_approval: grants.permissionsWithApproval,
       discount_ceiling_minor: discountCeilingMinor,
     }),
+  // Archiving publishes to every store where someone holds the role, and answers how each went;
+  // any other update answers `204`, read as `null` (ADR-0158 decision 7).
   updateRole: (
     id: string,
     tenantId: string,
     fields: {
       name: string;
       permissions: string[];
+      permissionsWithApproval: string[];
       discountCeilingMinor: number | null;
       status: EntityStatus;
     },
     etag: ETag,
   ) =>
-    requestVoidIfMatch("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
+    requestPublishReport("PATCH", `/admin/roles/${encodeURIComponent(id)}`, etag, {
       tenant_id: tenantId,
       name: fields.name,
       permissions: fields.permissions,
+      permissions_with_approval: fields.permissionsWithApproval,
       discount_ceiling_minor: fields.discountCeilingMinor,
       status: fields.status,
     }),
@@ -933,8 +968,12 @@ export const api = {
       store_id: storeId,
       role_template_id: roleTemplateId,
     }),
+  // Publishes to the assignment's store at once, and answers how it went (ADR-0158 decision 7).
   removeAssignment: (tenantId: string, id: string) =>
-    requestVoid("DELETE", `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),
+    requestPublishReport(
+      "DELETE",
+      `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
+    ),
 
   // The pos-core permission catalogue (§9) the role editor offers, so the console never invents a
   // permission string — it presents these and stores a chosen subset.

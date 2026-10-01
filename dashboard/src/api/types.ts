@@ -1496,7 +1496,14 @@ export interface RoleTemplate {
   readonly role_template_id: string;
   readonly tenant_id: string;
   readonly name: string;
+  /** What the role grants directly: its holder acts on these alone. */
   readonly permissions: readonly string[];
+  /**
+   * What the role grants only with approval: another person who holds one directly enters their
+   * code and PIN for each act (ADR-0158 decision 4). PIN-flagged ids, none also in `permissions`.
+   * Absent from a server too old to send it, which reads as nothing with approval.
+   */
+  readonly permissions_with_approval?: readonly string[];
   /**
    * How much this role may discount before it needs a manager, in the currency's minor unit.
    *
@@ -1530,6 +1537,22 @@ export interface Assignment {
   readonly employee_name: string | null;
   /** The assigned person's staff code, `null` on the same terms as the name. */
   readonly employee_code: string | null;
+}
+
+/** How one store's `permissions` publish went, when a people write publishes at once. */
+export interface PermissionsPublishResult {
+  readonly store_id: string;
+  readonly outcome: "PERMISSIONS_PUBLISH_APPLIED" | "PERMISSIONS_PUBLISH_FAILED";
+  /** The config version the publish produced, for `PERMISSIONS_PUBLISH_APPLIED`. */
+  readonly config_version_id?: string;
+}
+
+/**
+ * The `200` a people write answers when it publishes at once (ADR-0158 decision 7) — removing an
+ * assignment, or archiving a person or a role: every store it reached, and how each publish went.
+ */
+export interface PermissionsPublishReport {
+  readonly stores: readonly PermissionsPublishResult[];
 }
 
 /** One entry of the pos-core permission catalogue the role editor offers (ADR-0070, §9). */

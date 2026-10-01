@@ -9,11 +9,12 @@
 //! templates, and each assigned employee's stored PIN hash) and this turns it into the document the
 //! edge applies (a later slice). The document rides the config tree to the store like every other
 //! config change (ADR-0033) — no new channel. Per assigned, active employee it carries the `id`,
-//! `code`, `name`, the granted permission set (every active role they hold at the store, flattened
-//! to its `pos-core` permission ids, unioned, deduped and sorted), the highest of those roles'
-//! discount ceilings, and the **Argon2id PIN hash** the edge verifies against offline (ADR-0030) —
-//! never the PIN itself. Staff are emitted sorted by `code` so the document is stable (two
-//! publishes of the same state produce byte-identical JSON).
+//! `code`, `name`, the permissions they hold directly (every active role they hold at the store,
+//! flattened to its `pos-core` permission ids, unioned, deduped and sorted), those they hold only
+//! with approval (the same, less anything held directly), the highest of those roles' discount
+//! ceilings, and the **Argon2id PIN hash** the edge verifies against offline (ADR-0030) — never the
+//! PIN itself. Staff are emitted sorted by `code` so the document is stable (two publishes of the
+//! same state produce byte-identical JSON).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -28,6 +29,7 @@ use crate::registry::EntityStatus;
 struct Held<'a> {
     employee: &'a Employee,
     permissions: BTreeSet<String>,
+    permissions_with_approval: BTreeSet<String>,
     discount_ceiling_minor: Option<i64>,
 }
 
@@ -46,8 +48,13 @@ struct Held<'a> {
 /// group or every store will give one person several at once; a node listing the same code twice
 /// would leave the till to pick one of them.
 ///
-/// **An archived role contributes nothing** (decision 7): no permission and no ceiling, exactly as
-/// a role that is missing altogether. The person stays on the roster through the assignment,
+/// A role grants each permission directly or with approval (decision 4), and a person holds a
+/// permission with approval when one of their roles grants it so and **none grants it directly**:
+/// of two roles that disagree, the one that lets them act alone wins, so the two lists never
+/// overlap. The edge reads them the same way.
+///
+/// **An archived role contributes nothing** (decision 7): no permission, either way, and no
+/// ceiling, exactly as a role that is missing altogether. The person stays on the roster through the assignment,
 /// holding whatever their other roles grant, and nothing if they have none; it is archiving the
 /// person or removing the assignment that takes them off it.
 ///
@@ -85,10 +92,14 @@ pub fn compile_permissions(
         let person = held.entry(employee_id).or_insert_with(|| Held {
             employee,
             permissions: BTreeSet::new(),
+            permissions_with_approval: BTreeSet::new(),
             discount_ceiling_minor: None,
         });
         if let Some(role) = active_role_by_id.get(&assignment.role_template_id.to_string()) {
             person.permissions.extend(role.permissions.iter().cloned());
+            person
+                .permissions_with_approval
+                .extend(role.permissions_with_approval.iter().cloned());
             // Resolved from the role, like the permissions beside it and for the same reason: the
             // edge authorises one person at a time and should not have to hold the role table to do
             // it. `Option`'s order puts `None` below every ceiling, so `max` keeps the highest.
@@ -100,19 +111,26 @@ pub fn compile_permissions(
 
     let mut staff: Vec<PublishedStaffMember> = held
         .into_values()
-        .map(|person| PublishedStaffMember {
-            id: Some(person.employee.employee_id.to_string()),
-            code: person.employee.code.clone(),
-            name: person.employee.name.clone(),
-            permissions: person.permissions.into_iter().collect(),
-            // Roles do not yet say which permissions they grant with approval rather than directly
-            // (ADR-0158 decision 4), so nothing is granted with approval.
-            permissions_with_approval: Vec::new(),
-            discount_ceiling_minor: person.discount_ceiling_minor,
-            pin_phc: pins
-                .get(&person.employee.employee_id.to_string())
+        .map(|person| {
+            // Held directly wins (decision 4). Empty is left off the wire, so a person whose roles
+            // grant nothing with approval is published exactly as before the list existed.
+            let permissions_with_approval = person
+                .permissions_with_approval
+                .difference(&person.permissions)
                 .cloned()
-                .flatten(),
+                .collect();
+            PublishedStaffMember {
+                id: Some(person.employee.employee_id.to_string()),
+                code: person.employee.code.clone(),
+                name: person.employee.name.clone(),
+                permissions: person.permissions.into_iter().collect(),
+                permissions_with_approval,
+                discount_ceiling_minor: person.discount_ceiling_minor,
+                pin_phc: pins
+                    .get(&person.employee.employee_id.to_string())
+                    .cloned()
+                    .flatten(),
+            }
         })
         .collect();
     // By code, which is unique within a tenant, and then by id, so the order is total by
@@ -171,9 +189,22 @@ mod tests {
             tenant_id: TenantId::new(Ulid::from_u128(0x7E)),
             name: name.to_owned(),
             permissions: permissions.iter().map(|p| (*p).to_owned()).collect(),
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor,
             status: EntityStatus::Active,
         }
+    }
+
+    /// A role granting `directly` directly and `with_approval` only with somebody's approval.
+    fn role_with_approval(
+        id: u128,
+        name: &str,
+        directly: &[&str],
+        with_approval: &[&str],
+    ) -> RoleTemplate {
+        let mut role = role(id, name, directly);
+        role.permissions_with_approval = with_approval.iter().map(|p| (*p).to_owned()).collect();
+        role
     }
 
     fn assignment(id: u128, employee: u128, store: u128, role: u128) -> Assignment {
@@ -454,6 +485,84 @@ mod tests {
         assert!(
             one.find("\"C01\"") < one.find("\"C02\""),
             "sorted by code: {one}"
+        );
+    }
+
+    /// ADR-0158 decision 4: what a person's roles grant with approval reaches the node beside what
+    /// they grant directly, and a permission one role grants directly is not also listed with
+    /// approval because another grants it so.
+    #[test]
+    fn a_role_grants_with_approval_what_it_says_and_held_directly_wins() {
+        let store = StoreId::new(Ulid::from_u128(0x5703D));
+        let employees = vec![
+            employee(1, "C01", "Alice", EntityStatus::Active),
+            employee(2, "C02", "Bao", EntityStatus::Active),
+            employee(3, "C03", "Cam", EntityStatus::Active),
+        ];
+        let roles = vec![
+            role_with_approval(
+                10,
+                "Server",
+                &["sales.line.add"],
+                &["sales.line.void_fired", "billing.bill.void"],
+            ),
+            role_with_approval(
+                11,
+                "Supervisor",
+                &["sales.line.void_fired"],
+                &["billing.bill.void"],
+            ),
+            archived(role_with_approval(
+                12,
+                "Old shift lead",
+                &[],
+                &["cash.drawer.open_no_sale"],
+            )),
+            role(13, "Cook", &["sales.ticket.bump"]),
+        ];
+        let assignments = vec![
+            assignment(20, 1, 0x5703D, 10), // Alice: Server
+            assignment(21, 2, 0x5703D, 10), // Bao: Server and Supervisor
+            assignment(22, 2, 0x5703D, 11),
+            assignment(23, 3, 0x5703D, 12), // Cam: the archived role and Cook
+            assignment(24, 3, 0x5703D, 13),
+        ];
+
+        let document =
+            compile_permissions(store, &employees, &roles, &assignments, &BTreeMap::new());
+
+        let alice = &document.staff[0];
+        assert_eq!(alice.permissions, vec!["sales.line.add".to_owned()]);
+        assert_eq!(
+            alice.permissions_with_approval,
+            vec![
+                "billing.bill.void".to_owned(),
+                "sales.line.void_fired".to_owned()
+            ],
+            "what her role grants with approval, sorted"
+        );
+        let bao = &document.staff[1];
+        assert_eq!(
+            bao.permissions,
+            vec![
+                "sales.line.add".to_owned(),
+                "sales.line.void_fired".to_owned()
+            ]
+        );
+        assert_eq!(
+            bao.permissions_with_approval,
+            vec!["billing.bill.void".to_owned()],
+            "once, and not the void his other role grants him directly"
+        );
+        let cam = &document.staff[2];
+        assert!(
+            cam.permissions_with_approval.is_empty(),
+            "an archived role grants nothing with approval either: {cam:?}"
+        );
+        let json = serde_json::to_value(&document).expect("serialise");
+        assert!(
+            json["staff"][2].get("permissions_with_approval").is_none(),
+            "an empty list is left off the wire, as before it existed: {json}"
         );
     }
 }

@@ -3815,7 +3815,7 @@ impl EmployeeStore for PostgresPeople {
 }
 
 /// Converts a stored role-template row into the domain [`RoleTemplate`], parsing the ids, status, and
-/// the `jsonb` permission array.
+/// the two `jsonb` permission arrays.
 fn role_template_record(
     row: RoleTemplateRow,
 ) -> Result<Versioned<RoleTemplate>, RoleTemplateStoreError> {
@@ -3839,6 +3839,12 @@ fn role_template_record(
                 "stored role-template permissions are not JSON: {error}"
             ))
         })?;
+    let permissions_with_approval: Vec<String> =
+        serde_json::from_str(&row.permissions_with_approval_json).map_err(|error| {
+            RoleTemplateStoreError::new(format!(
+                "stored role-template permissions with approval are not JSON: {error}"
+            ))
+        })?;
     let version = Version::new(row.version);
     Ok(Versioned::new(
         RoleTemplate {
@@ -3846,6 +3852,7 @@ fn role_template_record(
             tenant_id,
             name: row.name,
             permissions,
+            permissions_with_approval,
             discount_ceiling_minor: row.discount_ceiling_minor,
             status: EntityStatus::from_db(&row.status),
         },
@@ -3853,16 +3860,24 @@ fn role_template_record(
     ))
 }
 
+/// A list of permission ids as the JSON array text a role's `jsonb` columns take.
+fn permission_ids_json(ids: &[String]) -> Result<String, RoleTemplateStoreError> {
+    serde_json::to_string(ids).map_err(|error| {
+        RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
+    })
+}
+
 impl RoleTemplateStore for PostgresPeople {
     async fn create(&self, template: &NewRoleTemplate) -> Result<Version, RoleTemplateStoreError> {
-        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
-            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
-        })?;
+        let permissions_json = permission_ids_json(&template.permissions)?;
+        let permissions_with_approval_json =
+            permission_ids_json(&template.permissions_with_approval)?;
         self.insert_role_template(
             &template.role_template_id.to_string(),
             &template.tenant_id.to_string(),
             &template.name,
             &permissions_json,
+            &permissions_with_approval_json,
             template.discount_ceiling_minor,
         )
         .await
@@ -3898,14 +3913,15 @@ impl RoleTemplateStore for PostgresPeople {
         template: &RoleTemplateUpdate,
         expected: &Version,
     ) -> Result<UpdateOutcome, RoleTemplateStoreError> {
-        let permissions_json = serde_json::to_string(&template.permissions).map_err(|error| {
-            RoleTemplateStoreError::new(format!("cannot serialize permissions: {error}"))
-        })?;
+        let permissions_json = permission_ids_json(&template.permissions)?;
+        let permissions_with_approval_json =
+            permission_ids_json(&template.permissions_with_approval)?;
         self.set_role_template(
             &template.tenant_id.to_string(),
             &template.role_template_id.to_string(),
             &template.name,
             &permissions_json,
+            &permissions_with_approval_json,
             template.status.as_str(),
             template.discount_ceiling_minor,
             expected.as_str(),
