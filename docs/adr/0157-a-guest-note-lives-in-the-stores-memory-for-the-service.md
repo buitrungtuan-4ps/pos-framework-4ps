@@ -1,6 +1,7 @@
 # ADR-0157 — A guest note lives in the store's memory for the service, and never on disk
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-29
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-29
+· Decision 2 amended by [ADR-0161](0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)
 · Relates to [ADR-0107](0107-the-buyer-is-a-subject.md),
 [ADR-0035](0035-retention-and-pii-masking.md), [ADR-0056](0056-public-order-intake.md),
 [ADR-0061](0061-order-relay.md)
@@ -30,7 +31,9 @@ A keeps health data for a year to serve a need that lasts a meal. C is the right
 restarts during service turn out to lose notes that matter, and it needs a port. **B is chosen.** It
 can grow into C later without changing what a device sees.
 
-## Decision (proposed)
+## Decision
+
+Option **B**. The owner approved it on 2026-10-01.
 
 1. **A note is written with its line.** `POST` on a table's, an order's or the counter's lines takes
    an optional `note`:
