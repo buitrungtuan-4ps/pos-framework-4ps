@@ -1888,7 +1888,7 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind and values, its default, the value a new store is given, the scopes it may be written at, and the first release that honours it"
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, and the first release that honours it"
           },
           "401": {
             "description": "No session",

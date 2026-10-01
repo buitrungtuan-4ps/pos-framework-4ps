@@ -111,7 +111,7 @@ use pos_proto::origins::PublishedOrigins;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
-use pos_proto::settings::SettingScope;
+use pos_proto::settings::{SettingScope, ValueRefusal};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
@@ -16877,30 +16877,52 @@ where
 /// One setting as the console's settings screen draws it: the register entry, without its
 /// summary. The screen labels a setting and each of its values from its own translations, keyed by
 /// the setting's key, so no English sentence reaches it from here.
+///
+/// What else it carries depends on the kind: a choice's `values`; a whole number's `min`, `max` and
+/// `unit`, which the screen bounds its input by and names in the operator's language; nothing more
+/// for a switch. `default` and `preset` are the value as the node carries it — a token, a number or
+/// a boolean.
 #[derive(Debug, Clone, serde::Serialize)]
 struct SettingCatalogueEntry {
     setting_key: String,
     node: &'static str,
     field: &'static str,
     kind: &'static str,
-    values: Vec<&'static str>,
-    default: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    preset: Option<&'static str>,
+    values: Option<Vec<&'static str>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    min: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unit: Option<&'static str>,
+    default: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preset: Option<serde_json::Value>,
     scopes: Vec<&'static str>,
     since: &'static str,
 }
 
 impl SettingCatalogueEntry {
     fn of(setting: &pos_proto::settings::Setting) -> Self {
+        use pos_proto::settings::SettingShape;
+
+        let (values, bounds) = match &setting.shape {
+            SettingShape::Choice { values, .. } => (Some(values.clone()), None),
+            SettingShape::Int { min, max, unit, .. } => (None, Some((*min, *max, unit.as_wire()))),
+            SettingShape::Bool { .. } => (None, None),
+        };
         Self {
             setting_key: setting.key(),
             node: setting.node,
             field: setting.field,
-            kind: setting.kind.as_wire(),
-            values: setting.values.clone(),
-            default: setting.default,
-            preset: setting.preset,
+            kind: setting.kind().as_wire(),
+            values,
+            min: bounds.map(|(min, _, _)| min),
+            max: bounds.map(|(_, max, _)| max),
+            unit: bounds.map(|(_, _, unit)| unit),
+            default: setting.default_value(),
+            preset: setting.preset_value(),
             scopes: setting.scopes.iter().map(|scope| scope.as_wire()).collect(),
             since: setting.since,
         }
@@ -16912,9 +16934,11 @@ impl SettingCatalogueEntry {
     path = "/admin/settings/catalogue",
     responses(
         (status = 200, description = "Every setting in the register: its key, node and field, its \
-                                      kind and values, its default, the value a new store is \
-                                      given, the scopes it may be written at, and the first \
-                                      release that honours it"),
+                                      kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it \
+                                      takes — a choice's values, or a whole number's min, max \
+                                      and unit — its default and the value a new store is given \
+                                      (each as the node carries it), the scopes it may be written \
+                                      at, and the first release that honours it"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
     ),
@@ -17350,7 +17374,7 @@ where
                 },
                 None => EffectiveSetting {
                     setting_key: key,
-                    value: serde_json::Value::String(setting.default.to_owned()),
+                    value: setting.default_value(),
                     scope: None,
                     scope_id: None,
                 },
@@ -17444,7 +17468,7 @@ where
     let store_scope_id = store_id.to_string();
     let mut applied = Vec::new();
     for setting in pos_proto::settings::register() {
-        let Some(preset) = setting.preset else {
+        let Some(preset) = setting.preset_value() else {
             continue;
         };
         let key = setting.key();
@@ -17460,7 +17484,7 @@ where
             setting_key: key.clone(),
             scope: Open::from_known(SettingScope::Store),
             scope_id: store_scope_id.clone(),
-            value: serde_json::Value::String(preset.to_owned()),
+            value: preset,
             update_time: state.clock.now(),
         };
         if let Err(error) = state.settings.put(tenant_id, &value).await {
@@ -17898,7 +17922,14 @@ fn setting_refusal_response(refusal: &crate::settings::SettingRefusal) -> Respon
     let (field, reason) = match refusal {
         crate::settings::SettingRefusal::UnknownSetting(_) => ("setting_key", "UNKNOWN_SETTING"),
         crate::settings::SettingRefusal::ScopeNotAllowed { .. } => ("scope", "SCOPE_NOT_ALLOWED"),
-        crate::settings::SettingRefusal::ValueNotAllowed { .. } => ("value", "INVALID_ENUM_VALUE"),
+        crate::settings::SettingRefusal::ValueNotAllowed { refusal, .. } => (
+            "value",
+            match refusal {
+                ValueRefusal::NotOneOfItsValues => "INVALID_ENUM_VALUE",
+                ValueRefusal::OutOfRange => "OUT_OF_RANGE",
+                ValueRefusal::NotAWholeNumber | ValueRefusal::NotTrueOrFalse => "INVALID_VALUE",
+            },
+        ),
     };
     api_error_with_details(
         ErrorStatus::InvalidArgument,
@@ -32917,5 +32948,161 @@ mod audit_read_redaction_tests {
             );
             assert_eq!(after["status"], "active", "{role:?}: the rest stays");
         }
+    }
+}
+
+#[cfg(test)]
+mod settings_catalogue_tests {
+    //! What the settings catalogue tells the console about each kind, and the reason a write of a
+    //! value the kind does not take is refused with (ADR-0160 decision 9).
+    //!
+    //! The console draws its form from these fields and nothing else, so each kind is pinned: a
+    //! choice carries its values; a whole number its bounds and unit and no values; a switch
+    //! neither. The register has no whole number or switch yet, so two are built here, as the
+    //! register's own tests build them.
+
+    use pos_proto::settings::{Setting, SettingScope, SettingShape, SettingUnit, register};
+    use serde_json::json;
+
+    use super::{SettingCatalogueEntry, setting_refusal_response};
+    use crate::settings::SettingRefusal;
+
+    fn entry(setting: &Setting) -> serde_json::Value {
+        serde_json::to_value(SettingCatalogueEntry::of(setting)).expect("an entry serialises")
+    }
+
+    fn wait_seconds() -> Setting {
+        Setting {
+            node: "example",
+            field: "wait_seconds",
+            shape: SettingShape::Int {
+                min: 0,
+                max: 3600,
+                unit: SettingUnit::Seconds,
+                default: 0,
+                preset: Some(120),
+            },
+            scopes: &[SettingScope::Store],
+            since: "0.15.0",
+            summary: "How long to wait.",
+        }
+    }
+
+    fn print_on_settle() -> Setting {
+        Setting {
+            node: "example",
+            field: "print_on_settle",
+            shape: SettingShape::Bool {
+                default: true,
+                preset: None,
+            },
+            scopes: &[SettingScope::Tenant, SettingScope::Store],
+            since: "0.15.0",
+            summary: "Whether to print.",
+        }
+    }
+
+    /// The status and the `details` the console reads when `setting` refuses `value`.
+    async fn refused(setting: &Setting, value: &serde_json::Value) -> (u16, serde_json::Value) {
+        let refusal = setting
+            .check(value)
+            .expect_err("the setting refuses the value");
+        let response = setting_refusal_response(&SettingRefusal::ValueNotAllowed {
+            setting_key: setting.key(),
+            allowed: setting.takes(),
+            refusal,
+        });
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("collect the refusal");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("a JSON envelope");
+        (status, body["error"]["details"].clone())
+    }
+
+    #[tokio::test]
+    async fn each_wrong_value_is_refused_with_the_reason_the_console_explains() {
+        let at_fault = |reason: &str| json!([{ "field": "value", "reason": reason }]);
+        let seconds = wait_seconds();
+        assert_eq!(
+            refused(&seconds, &json!(3601)).await,
+            (400, at_fault("OUT_OF_RANGE"))
+        );
+        assert_eq!(
+            refused(&seconds, &json!(-1)).await,
+            (400, at_fault("OUT_OF_RANGE"))
+        );
+        for not_whole in [json!(120.5), json!("120"), json!(true)] {
+            assert_eq!(
+                refused(&seconds, &not_whole).await,
+                (400, at_fault("INVALID_VALUE")),
+                "{not_whole} is not a whole number"
+            );
+        }
+        for not_a_switch in [json!("true"), json!(1)] {
+            assert_eq!(
+                refused(&print_on_settle(), &not_a_switch).await,
+                (400, at_fault("INVALID_VALUE")),
+                "{not_a_switch} is not true or false"
+            );
+        }
+    }
+
+    #[test]
+    fn a_choice_lists_its_values_and_no_bounds() {
+        let shift = register()
+            .into_iter()
+            .find(|setting| setting.key() == "shift.no_shift_selling")
+            .expect("the register has the shift setting");
+        let shown = entry(&shift);
+        assert_eq!(shown["kind"], "SETTING_KIND_CHOICE");
+        assert_eq!(
+            shown["values"],
+            json!(["NO_SHIFT_SELLING_ALLOW", "NO_SHIFT_SELLING_REFUSE"])
+        );
+        assert_eq!(shown["default"], "NO_SHIFT_SELLING_ALLOW");
+        assert_eq!(shown["preset"], "NO_SHIFT_SELLING_REFUSE");
+        for absent in ["min", "max", "unit"] {
+            assert!(
+                shown.get(absent).is_none(),
+                "a choice carries no `{absent}`"
+            );
+        }
+    }
+
+    #[test]
+    fn a_whole_number_carries_its_bounds_and_unit_and_numbers_for_its_default_and_preset() {
+        assert_eq!(
+            entry(&wait_seconds()),
+            json!({
+                "setting_key": "example.wait_seconds",
+                "node": "example",
+                "field": "wait_seconds",
+                "kind": "SETTING_KIND_INT",
+                "min": 0,
+                "max": 3600,
+                "unit": "SETTING_UNIT_SECONDS",
+                "default": 0,
+                "preset": 120,
+                "scopes": ["SETTING_SCOPE_STORE"],
+                "since": "0.15.0",
+            })
+        );
+    }
+
+    #[test]
+    fn a_switch_carries_booleans_and_nothing_to_choose_from() {
+        assert_eq!(
+            entry(&print_on_settle()),
+            json!({
+                "setting_key": "example.print_on_settle",
+                "node": "example",
+                "field": "print_on_settle",
+                "kind": "SETTING_KIND_BOOL",
+                "default": true,
+                "scopes": ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+                "since": "0.15.0",
+            })
+        );
     }
 }

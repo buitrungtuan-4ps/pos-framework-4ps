@@ -1792,16 +1792,26 @@ export interface SettingDefinition {
   readonly node: string;
   readonly field: string;
   /**
-   * The shape of the value. `SETTING_KIND_CHOICE` is the only one today; a kind this console does
-   * not know is shown and not offered for editing.
+   * The shape of the value: `SETTING_KIND_CHOICE` (one of `values`), `SETTING_KIND_INT` (a whole
+   * number from `min` to `max`, counting `unit`) or `SETTING_KIND_BOOL` (`true` or `false`). A kind
+   * this console does not know is shown and not offered for editing.
    */
   readonly kind: string;
-  /** For a choice, every value it takes, as wire tokens. */
-  readonly values: readonly string[];
-  /** What a store runs when nothing sets a value. */
-  readonly default: string;
+  /** For a choice, every value it takes, as wire tokens. Absent for the other kinds. */
+  readonly values?: readonly string[];
+  /** For a whole number, the smallest value it takes. */
+  readonly min?: number;
+  /** For a whole number, the largest value it takes. */
+  readonly max?: number;
+  /**
+   * For a whole number, what it counts — `SETTING_UNIT_SECONDS`, `_MINUTES` or `_COUNT` — which the
+   * console names in the operator's language.
+   */
+  readonly unit?: string;
+  /** What a store runs when nothing sets a value, as the node carries it: a token, a number or a boolean. */
+  readonly default: Json;
   /** What a new store is given, when the owner chose something other than the default. */
-  readonly preset?: string;
+  readonly preset?: Json;
   /** Where it may be written. */
   readonly scopes: readonly string[];
   /** The first release that honours it, `MAJOR.MINOR.PATCH` (ADR-0160 decision 5). */

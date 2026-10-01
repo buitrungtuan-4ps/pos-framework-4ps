@@ -96,6 +96,33 @@ const UNTRANSLATED = {
   since: "0.15.0",
 };
 
+/**
+ * A whole number and a switch, in the shapes the catalogue gives them (ADR-0160 decision 9). The
+ * register has neither yet, so these carry keys the console has no words for and fall back to them.
+ */
+const WAIT_SECONDS = {
+  setting_key: "example.wait_seconds",
+  node: "example",
+  field: "wait_seconds",
+  kind: "SETTING_KIND_INT",
+  min: 0,
+  max: 3600,
+  unit: "SETTING_UNIT_SECONDS",
+  default: 0,
+  preset: 120,
+  scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+  since: "0.14.1",
+};
+const PRINT_ON_SETTLE = {
+  setting_key: "example.print_on_settle",
+  node: "example",
+  field: "print_on_settle",
+  kind: "SETTING_KIND_BOOL",
+  default: true,
+  scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+  since: "0.14.1",
+};
+
 /** One store on the release that honours the setting, one behind it, and one that never said. */
 const FLEET = [
   { store_id: CURRENT.store_id, installed_version: "0.14.1" },
@@ -389,6 +416,121 @@ describe("shared settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     await waitFor(() => expect(applySettingPresets).toHaveBeenCalledWith(TENANT.id, CURRENT.store_id));
     expect(await screen.findByText("Gave this store 1 new-store value.")).toBeTruthy();
+  });
+
+  it("draws a whole number as a field bounded by its range and named in its unit", async () => {
+    settingsCatalogue.mockResolvedValue([WAIT_SECONDS]);
+    putSetting.mockResolvedValue({ stores: [] });
+    await mount();
+    expect(await screen.findByText("example.wait_seconds")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Default: 0 seconds · New stores: 120 seconds · Honoured from release 0.14.1",
+      ),
+    ).toBeTruthy();
+
+    const field = screen.getByLabelText(/^Value for every store/) as HTMLInputElement;
+    expect(field.type).toBe("number");
+    expect(field.min).toBe("0");
+    expect(field.max).toBe("3600");
+    expect(field.value).toBe("");
+    expect(field.placeholder).toBe("Not set here");
+    expect(screen.getByText("From 0 seconds to 3,600 seconds.")).toBeTruthy();
+
+    // A number outside the range is said beside the field, and nothing is sent.
+    fireEvent.input(field, { target: { value: "3601" } });
+    expect(
+      screen.getByText("This takes a whole number from 0 seconds to 3,600 seconds."),
+    ).toBeTruthy();
+    const save = screen.getByRole("button", { name: "Save and publish" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+
+    fireEvent.input(field, { target: { value: "90" } });
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(putSetting).toHaveBeenCalledWith(
+        TENANT.id,
+        WAIT_SECONDS.setting_key,
+        "SETTING_SCOPE_TENANT",
+        TENANT.id,
+        90,
+      ),
+    );
+  });
+
+  it("shows a whole number written here in its field, and in Vietnamese in its unit", async () => {
+    settingsCatalogue.mockResolvedValue([WAIT_SECONDS]);
+    listSettingValues.mockResolvedValue([
+      {
+        setting_key: WAIT_SECONDS.setting_key,
+        scope: "SETTING_SCOPE_TENANT",
+        scope_id: TENANT.id,
+        value: 300,
+        update_time: "2026-10-01T09:00:00Z",
+      },
+    ]);
+    setLocale("vi");
+    await mount();
+    await screen.findByText("example.wait_seconds");
+    expect((screen.getByLabelText(/^Giá trị cho mọi cửa hàng/) as HTMLInputElement).value).toBe(
+      "300",
+    );
+    expect(
+      screen.getByText("Mặc định: 0 giây · Cửa hàng mới: 120 giây · Có hiệu lực từ phiên bản 0.14.1"),
+    ).toBeTruthy();
+  });
+
+  it("draws a switch, says which way it shows when nothing is set, and writes a boolean", async () => {
+    settingsCatalogue.mockResolvedValue([PRINT_ON_SETTLE]);
+    putSetting.mockResolvedValue({ stores: [] });
+    await mount();
+    await screen.findByText("example.print_on_settle");
+
+    const toggle = screen.getByRole("switch", { name: "Value for every store" });
+    // Nothing is written for every store, so it shows the default, and says that is what it shows.
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(toggle.textContent).toContain("On");
+    expect(screen.getByText("Not set here: the switch shows the default.")).toBeTruthy();
+    const save = screen.getByRole("button", { name: "Save and publish" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.textContent).toContain("Off");
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(putSetting).toHaveBeenCalledWith(
+        TENANT.id,
+        PRINT_ON_SETTLE.setting_key,
+        "SETTING_SCOPE_TENANT",
+        TENANT.id,
+        false,
+      ),
+    );
+  });
+
+  it("shows one store's switch the way the store runs it, and says so", async () => {
+    settingsCatalogue.mockResolvedValue([PRINT_ON_SETTLE]);
+    effectiveSettings.mockResolvedValue([
+      {
+        setting_key: PRINT_ON_SETTLE.setting_key,
+        value: false,
+        scope: "SETTING_SCOPE_TENANT",
+        scope_id: TENANT.id,
+      },
+    ]);
+    selectStore(CURRENT.store_id, CURRENT.name);
+    await mount();
+    expect(
+      await screen.findByText("Bến Thành runs “Off”, set for every store."),
+    ).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Value for Bến Thành" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(
+      screen.getByText("Not set for this store itself: the switch shows what it runs."),
+    ).toBeTruthy();
   });
 
   it("offers a role that cannot publish nothing to write with", async () => {

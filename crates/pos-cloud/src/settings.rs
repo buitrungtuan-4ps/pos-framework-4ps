@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use pos_proto::ids::TenantId;
-use pos_proto::settings::{Setting, SettingKind, SettingScope, register};
+use pos_proto::settings::{Setting, SettingScope, ValueRefusal, register};
 use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
 
@@ -69,12 +69,14 @@ pub enum SettingRefusal {
         scope: String,
     },
     /// The value is not one the setting takes.
-    #[error("`{setting_key}` takes {allowed}")]
+    #[error("`{setting_key}` takes {allowed}: {refusal}")]
     ValueNotAllowed {
         /// The setting.
         setting_key: String,
         /// What it takes, for the refusal's message.
         allowed: String,
+        /// What is wrong with the value, which decides the reason the refusal names.
+        refusal: ValueRefusal,
     },
 }
 
@@ -99,16 +101,13 @@ pub fn validate(
             scope: scope.to_string(),
         });
     }
-    let accepted = match setting.kind {
-        SettingKind::Choice => value
-            .as_str()
-            .is_some_and(|token| setting.values.contains(&token)),
-        SettingKind::Unspecified => false,
-    };
-    if !accepted {
+    // The register's own rule, so the console's write and the resolve below cannot disagree about
+    // which values a setting takes.
+    if let Err(refusal) = setting.check(value) {
         return Err(SettingRefusal::ValueNotAllowed {
             setting_key: setting_key.to_owned(),
-            allowed: setting.values.join(", "),
+            allowed: setting.takes(),
+            refusal,
         });
     }
     Ok(setting)

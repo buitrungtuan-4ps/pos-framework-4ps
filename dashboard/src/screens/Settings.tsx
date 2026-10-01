@@ -34,7 +34,7 @@
 // Nothing on this screen is personal data: setting values, store, brand and group names, and the
 // release each store runs.
 
-import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 
 import { ApiError, api } from "../api/client";
 import type {
@@ -49,7 +49,7 @@ import type {
 } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
-import { formatInstant } from "../lib/format";
+import { formatCount, formatInstant } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -60,10 +60,12 @@ import {
   Button,
   Card,
   ComboboxField,
+  NumberField,
   PageHeader,
   SelectField,
   Skeleton,
   StatusBadge,
+  SwitchField,
 } from "../components/ui";
 import { ConfirmDialog, EmptyState, TechnicalDetails } from "../components/kit";
 import { toast } from "../components/Toast";
@@ -81,8 +83,20 @@ const SCOPES: readonly { readonly scope: SettingScope; readonly label: MessageKe
   { scope: STORE, label: "settings.scope.store" },
 ];
 
-/** The one kind of value this console can edit; any other is shown and not offered. */
+/** The kinds of value this console can edit; any other is shown and not offered. */
 const CHOICE = "SETTING_KIND_CHOICE";
+const INT = "SETTING_KIND_INT";
+const BOOL = "SETTING_KIND_BOOL";
+
+/**
+ * What a whole number counts, in the operator's words: each unit's key takes the number as `count`.
+ * A unit from a newer cloud is not here, and its number is shown bare rather than mislabelled.
+ */
+const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
+  SETTING_UNIT_SECONDS: "settings.unit.seconds",
+  SETTING_UNIT_MINUTES: "settings.unit.minutes",
+  SETTING_UNIT_COUNT: "settings.unit.count",
+};
 
 /**
  * The roles holding `console.config.publish`, which every write here needs because every write
@@ -145,12 +159,65 @@ function settingHelp(setting: SettingDefinition): string {
   return tFromServer(`settings.item.${setting.setting_key}.help`, "");
 }
 
-/** A value's label: the console's words for the token when it ships them, the token otherwise. */
-function valueLabel(value: Json | undefined): string {
+/**
+ * A value's label, as its setting means it: a token in the console's words when it ships them (the
+ * token otherwise), a whole number in its unit, a switch's value as On or Off.
+ */
+function valueLabel(setting: SettingDefinition, value: Json | undefined): string {
   if (typeof value === "string") {
     return tFromServer(`settings.value.${value}`, value);
   }
+  if (typeof value === "number") {
+    const unit = setting.unit === undefined ? undefined : UNIT_LABEL[setting.unit];
+    return unit === undefined ? formatCount(value) : t(unit, { count: value });
+  }
+  if (typeof value === "boolean") {
+    return value ? t("settings.on") : t("settings.off");
+  }
   return value === undefined ? "" : JSON.stringify(value);
+}
+
+/** The bounds a whole number takes, when the catalogue gave both. */
+function boundsOf(setting: SettingDefinition): { min: number; max: number } | null {
+  return setting.kind === INT && typeof setting.min === "number" && typeof setting.max === "number"
+    ? { min: setting.min, max: setting.max }
+    : null;
+}
+
+/** Whether `value` is one `setting` takes — the register's rule, checked before the cloud does. */
+function takes(setting: SettingDefinition, value: Json | undefined): boolean {
+  switch (setting.kind) {
+    case CHOICE:
+      return typeof value === "string" && (setting.values ?? []).includes(value);
+    case INT: {
+      const bounds = boundsOf(setting);
+      return (
+        bounds !== null &&
+        typeof value === "number" &&
+        Number.isInteger(value) &&
+        value >= bounds.min &&
+        value <= bounds.max
+      );
+    }
+    case BOOL:
+      return typeof value === "boolean";
+    default:
+      return false;
+  }
+}
+
+/** Whether this console can draw an editor for `setting`'s kind, with what the catalogue gave. */
+function editable(setting: SettingDefinition): boolean {
+  switch (setting.kind) {
+    case CHOICE:
+      return (setting.values ?? []).length > 0;
+    case INT:
+      return boundsOf(setting) !== null;
+    case BOOL:
+      return true;
+    default:
+      return false;
+  }
 }
 
 /** Two ULIDs naming the same thing. They are case-insensitive, and a URL may carry either case. */
@@ -170,7 +237,11 @@ function explained(caught: unknown, clearing: boolean): unknown {
   let key: MessageKey | null = null;
   if (reasons.includes("SCOPE_NOT_ALLOWED")) {
     key = "settings.notAtScope";
-  } else if (reasons.includes("INVALID_ENUM_VALUE")) {
+  } else if (
+    reasons.includes("INVALID_ENUM_VALUE") ||
+    reasons.includes("OUT_OF_RANGE") ||
+    reasons.includes("INVALID_VALUE")
+  ) {
     key = "settings.refused.value";
   } else if (reasons.includes("UNKNOWN_SETTING")) {
     key = "settings.refused.unknownSetting";
@@ -208,8 +279,9 @@ export function Settings() {
   const [kind, setKind] = createSignal<SettingScope>(TENANT);
   // The brand, group or store the value is for; unused for every store, whose id is the tenant's.
   const [target, setTarget] = createSignal("");
-  // A value picked and not yet saved, per setting.
-  const [drafts, setDrafts] = createSignal<Readonly<Record<string, string>>>({});
+  // A value picked and not yet saved, per setting: a token, a number (`null` for a number field left
+  // empty) or a boolean.
+  const [drafts, setDrafts] = createSignal<Readonly<Record<string, Json>>>({});
   const [report, setReport] = createSignal<Report | null>(null);
   // Which setting, or the store, at which place the last write was about: its refusal is shown there.
   const [subject, setSubject] = createSignal("");
@@ -402,7 +474,7 @@ export function Settings() {
 
   const save = (setting: SettingDefinition) => {
     const value = drafts()[setting.setting_key];
-    if (!value) {
+    if (!takes(setting, value) || value === undefined) {
       return;
     }
     const scope = kind();
@@ -509,7 +581,7 @@ export function Settings() {
     }
     const row = panel.value.find((entry) => entry.setting_key === setting.setting_key);
     const store = storeName(target());
-    const value = valueLabel(row?.value ?? setting.default);
+    const value = valueLabel(setting, row?.value ?? setting.default);
     switch (row?.scope) {
       case undefined:
         return t("settings.runs.default", { store, value });
@@ -629,24 +701,39 @@ export function Settings() {
     </Show>
   );
 
-  /** One setting, at the chosen scope. */
+  /** What the chosen store runs for `setting`, as the node carries it, once that has been read. */
+  const runsValue = (setting: SettingDefinition): Json | undefined => {
+    const panel = effective();
+    if (panel === null || panel.state !== "ready") {
+      return undefined;
+    }
+    return panel.value.find((entry) => entry.setting_key === setting.setting_key)?.value;
+  };
+
+  /**
+   * One setting, at the chosen scope, with the editor its kind draws: a select over a choice's
+   * values, a number field bounded by a whole number's `min` and `max`, a switch for on or off.
+   */
   const SettingCard = (props: { setting: SettingDefinition }) => {
     const setting = () => props.setting;
+    const key = () => setting().setting_key;
     const here = () => writtenHere(setting());
-    const hereValue = () => {
-      const value = here()?.value;
-      return typeof value === "string" ? value : "";
+    const hereValue = (): Json | undefined => here()?.value;
+    const draft = (): Json | undefined => drafts()[key()];
+    const pick = (value: Json) => setDrafts((current) => ({ ...current, [key()]: value }));
+    /** A value picked that the setting takes and that is not already what is written here. */
+    const changed = () => {
+      const picked = draft();
+      return picked !== undefined && takes(setting(), picked) && picked !== hereValue();
     };
-    const shown = () => drafts()[setting().setting_key] ?? hereValue();
-    const changed = () => shown() !== "" && shown() !== hereValue();
     const settable = () => setting().scopes.includes(kind());
-    const editable = () => setting().kind === CHOICE;
+    const bounds = () => boundsOf(setting());
     const facts = () =>
       [
-        t("settings.defaultIs", { value: valueLabel(setting().default) }),
+        t("settings.defaultIs", { value: valueLabel(setting(), setting().default) }),
         setting().preset === undefined
           ? null
-          : t("settings.presetIs", { value: valueLabel(setting().preset) }),
+          : t("settings.presetIs", { value: valueLabel(setting(), setting().preset) }),
         t("settings.sinceIs", { since: setting().since }),
       ]
         .filter((fact): fact is string => fact !== null)
@@ -654,6 +741,69 @@ export function Settings() {
     const setOn = () => {
       const at = Date.parse(here()?.update_time ?? "");
       return Number.isFinite(at) ? t("settings.setOn", { when: formatInstant(at) }) : undefined;
+    };
+    /** A choice: the token picked, else the one written here, else none — "Not set here". */
+    const choiceShown = () => {
+      const picked = draft();
+      if (typeof picked === "string") {
+        return picked;
+      }
+      const written = hereValue();
+      return typeof written === "string" ? written : "";
+    };
+    /** A whole number: the number picked, else the one written here, else an empty field. */
+    const numberShown = (): number | null => {
+      const picked = draft();
+      if (picked !== undefined) {
+        return typeof picked === "number" ? picked : null;
+      }
+      const written = hereValue();
+      return typeof written === "number" ? written : null;
+    };
+    /** A number typed that the setting does not take, said beside the field before any write. */
+    const numberRefused = () => {
+      const picked = draft();
+      return typeof picked === "number" && !takes(setting(), picked);
+    };
+    const rangeHint = () => {
+      const limits = bounds();
+      if (limits === null) {
+        return undefined;
+      }
+      const range = t("settings.range", {
+        min: valueLabel(setting(), limits.min),
+        max: valueLabel(setting(), limits.max),
+      });
+      const written = setOn();
+      return written === undefined ? range : `${range} ${written}`;
+    };
+    /**
+     * A switch: the way it is picked, else the way it is written here — and with nothing written
+     * here, the way that applies: what the chosen store runs, or the default. A switch has no
+     * "not set" position, so the line under it says which of those it is showing.
+     */
+    const switchShown = (): boolean => {
+      const picked = draft();
+      if (typeof picked === "boolean") {
+        return picked;
+      }
+      const written = hereValue();
+      if (typeof written === "boolean") {
+        return written;
+      }
+      const running = kind() === STORE ? runsValue(setting()) : undefined;
+      if (typeof running === "boolean") {
+        return running;
+      }
+      return setting().default === true;
+    };
+    const switchHint = () => {
+      if (here()) {
+        return setOn();
+      }
+      return kind() === STORE && typeof runsValue(setting()) === "boolean"
+        ? t("settings.switchShowsRuns")
+        : t("settings.switchShowsDefault");
     };
     return (
       <Card title={settingTitle(setting())}>
@@ -678,31 +828,70 @@ export function Settings() {
             fallback={<p class="text-sm text-ink-muted">{t("settings.notAtScope")}</p>}
           >
             <Show
-              when={canWrite() && editable()}
+              when={canWrite() && editable(setting())}
               fallback={
                 <div class="flex flex-col gap-1">
                   <p class="text-sm text-ink">
                     {here()
-                      ? t("settings.setHere", { value: valueLabel(here()?.value) })
+                      ? t("settings.setHere", { value: valueLabel(setting(), hereValue()) })
                       : t("settings.notSet")}
                   </p>
-                  <Show when={!editable()}>
+                  <Show when={!editable(setting())}>
                     <p class="text-sm text-ink-muted">{t("settings.kindUnsupported")}</p>
                   </Show>
                 </div>
               }
             >
-              <SelectField
-                label={t("settings.valueFor", { target: targetName() })}
-                value={shown()}
-                options={setting().values.map((value) => ({ value, label: valueLabel(value) }))}
-                placeholder={here() ? undefined : t("settings.notSet")}
-                onChange={(value) =>
-                  setDrafts((current) => ({ ...current, [setting().setting_key]: value }))
-                }
-                disabled={writing.saving()}
-                hint={setOn()}
-              />
+              <Switch>
+                <Match when={setting().kind === INT}>
+                  <NumberField
+                    label={t("settings.valueFor", { target: targetName() })}
+                    value={numberShown()}
+                    onChange={pick}
+                    min={bounds()?.min}
+                    max={bounds()?.max}
+                    step={1}
+                    placeholder={here() ? undefined : t("settings.notSet")}
+                    disabled={writing.saving()}
+                    hint={rangeHint()}
+                  />
+                  <Show when={numberRefused() ? bounds() : null}>
+                    {(limits) => (
+                      <p class="text-sm text-danger">
+                        {t("settings.outOfRange", {
+                          min: valueLabel(setting(), limits().min),
+                          max: valueLabel(setting(), limits().max),
+                        })}
+                      </p>
+                    )}
+                  </Show>
+                </Match>
+                <Match when={setting().kind === BOOL}>
+                  <SwitchField
+                    label={t("settings.valueFor", { target: targetName() })}
+                    checked={switchShown()}
+                    onChange={pick}
+                    onLabel={t("settings.on")}
+                    offLabel={t("settings.off")}
+                    disabled={writing.saving()}
+                    hint={switchHint()}
+                  />
+                </Match>
+                <Match when={setting().kind === CHOICE}>
+                  <SelectField
+                    label={t("settings.valueFor", { target: targetName() })}
+                    value={choiceShown()}
+                    options={(setting().values ?? []).map((value) => ({
+                      value,
+                      label: valueLabel(setting(), value),
+                    }))}
+                    placeholder={here() ? undefined : t("settings.notSet")}
+                    onChange={pick}
+                    disabled={writing.saving()}
+                    hint={setOn()}
+                  />
+                </Match>
+              </Switch>
               <div class="flex flex-wrap gap-2">
                 <Button
                   disabled={writing.saving() || !changed()}
@@ -917,7 +1106,7 @@ export function Settings() {
               .map((setting) =>
                 t("settings.pair", {
                   setting: settingTitle(setting),
-                  value: valueLabel(setting.preset),
+                  value: valueLabel(setting, setting.preset),
                 }),
               )
               .join("; "),

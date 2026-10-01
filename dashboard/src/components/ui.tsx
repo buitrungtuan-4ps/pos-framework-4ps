@@ -844,6 +844,71 @@ export function CheckboxField(props: {
 }
 
 /**
+ * A labelled on/off switch: a `role="switch"` button that says which way it is set.
+ *
+ * For a value that is on or off rather than a thing ticked into a list — a setting written for many
+ * stores (ADR-0160). A checkbox reads as "include this"; a switch reads as "this is on", which is
+ * what such a value is. The state is announced by `aria-checked` and written beside the track in
+ * words (`onLabel` / `offLabel`), so it is never carried by the colour of the track alone. The track
+ * wears the accent when on, as a picked option in {@link MultiComboboxField} does.
+ *
+ * `label` names the control through `aria-labelledby`, so its accessible name stays the label and
+ * does not change as the words beside the track do.
+ */
+export function SwitchField(props: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  /** Already-translated: what the switch says when on. */
+  onLabel: string;
+  /** Already-translated: what the switch says when off. */
+  offLabel: string;
+  hint?: string;
+  disabled?: boolean;
+}) {
+  const labelId = createUniqueId();
+  const hintId = createUniqueId();
+  return (
+    <div class="block">
+      <span id={labelId} class="mb-1 block text-sm font-medium text-ink">
+        {props.label}
+      </span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={props.checked}
+        aria-labelledby={labelId}
+        aria-describedby={props.hint ? hintId : undefined}
+        disabled={props.disabled}
+        class="inline-flex min-h-touch items-center gap-3 rounded-token px-1 text-ink focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={() => props.onChange(!props.checked)}
+      >
+        <span
+          aria-hidden="true"
+          class={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors ${
+            props.checked ? "border-accent bg-accent" : "border-line bg-surface-raised"
+          }`}
+        >
+          <span
+            class={`inline-block size-5 rounded-full border border-line bg-surface shadow-raised transition-transform ${
+              props.checked ? "translate-x-5" : "translate-x-0.5"
+            }`}
+          />
+        </span>
+        <span class="text-sm">{props.checked ? props.onLabel : props.offLabel}</span>
+      </button>
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+/**
  * A labelled whole-number input that emits a number, not a string
  * ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md) §5).
  *
