@@ -101,6 +101,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Command Palette combobox active option accessibility.**
   Added `aria-activedescendant` to the command palette combobox input in the dashboard to convey active option focus to screen reader users during keyboard navigation.
 
+- **Command Palette focus restoration & shortcut hint.**
+  Restored focus to the previously active element when closing the Command Palette overlay in `dashboard/src/components/CommandPalette.tsx`, and added a visual `Ctrl K` keyboard shortcut hint and focus-visible styling to the search trigger button in `dashboard/src/components/Shell.tsx`. The palette opens on Ctrl+K on every platform, and on ⌘K on a Mac as well.
+
 - **Memoize active areas and subcategories in console.**
   `activeAreas` in `dashboard/src/screens/Floor.tsx` and active subcategory lookups in `dashboard/src/screens/Layout.tsx` are now memoized with `createMemo` to avoid redundant array filtering and $O(N)$ scans on re-renders.
 

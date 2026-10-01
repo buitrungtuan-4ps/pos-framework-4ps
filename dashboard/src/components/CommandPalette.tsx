@@ -173,11 +173,17 @@ export function CommandPalette() {
   onMount(() => window.addEventListener("keydown", onGlobalKey));
   onCleanup(() => window.removeEventListener("keydown", onGlobalKey));
 
-  // Focus the field and reset the cursor each time the palette opens.
+  let previousFocus: HTMLElement | null = null;
+
+  // Focus the field on open, and restore focus to the previously active element on close.
   createEffect(() => {
     if (open()) {
+      previousFocus = document.activeElement as HTMLElement | null;
       setActive(0);
       queueMicrotask(() => input?.focus());
+    } else if (previousFocus) {
+      previousFocus.focus();
+      previousFocus = null;
     }
   });
 

@@ -181,9 +181,12 @@ export function Shell(props: ParentProps) {
           aria-label={t("palette.open")}
           title={t("palette.open")}
           onClick={openPalette}
-          class="flex min-h-touch items-center rounded-token border border-line bg-surface-raised px-3 text-sm text-ink"
+          class="flex min-h-touch items-center gap-2 rounded-token border border-line bg-surface-raised px-3 text-sm text-ink transition-colors hover:bg-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <Icon name="search" class="h-5 w-5 shrink-0" />
+          <kbd class="hidden rounded border border-line px-1 text-xs text-ink-muted sm:inline-block">
+            {t("palette.shortcut")}
+          </kbd>
         </button>
         <NotificationBell />
         <AccountMenu onSignOut={() => void logout()} />
