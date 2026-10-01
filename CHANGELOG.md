@@ -237,6 +237,34 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store can refuse to sell while no shift is open, and every setting is listed in one register**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+  A till could seat a table, start a counter order and take a payment with no shift open, so the
+  cash of such a sale belonged to no shift's drawer.
+  - A new `shift` configuration node carries `no_shift_selling`. With `NO_SHIFT_SELLING_REFUSE` the
+    edge refuses to seat a table, start a counter order or settle a bill while no shift is open,
+    with `409 OPEN_SHIFT_REQUIRED`, and the till says to open a shift on the Shift screen.
+  - An order a guest or a delivery partner sends is still taken; its payment waits for a shift.
+  - `docs/configuration.md` is the new register of settings, generated from `pos-proto`.
+    `docs/snapshots/settings.txt` records each setting, its values and its scopes, and
+    `cargo xtask snapshot` refuses a removal, as for events and permissions.
+  - **Upgrade note:** the default, `NO_SHIFT_SELLING_ALLOW`, is today's behaviour, so no store
+    changes until it is set. An absent `shift` node means the default, and an edge that predates
+    the node ignores it. `pos-proto` gains the `shift` and `settings` modules, additively; no event,
+    permission, migration or protocol version changes.
+
+- **An open till picks up a new store configuration without a new sign-in**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  item 7). A till used to read the floor, the menus, the layout, the money settings and the reason
+  codes only at boot and at sign-in, so a change published from the console reached it hours later,
+  at the next sign-in.
+  - When the edge applies a configuration version it sends `config_applied` on `/ws`, numbered on
+    the fan-out like every frame, so a till that reconnects is replayed it.
+  - Every open till then reloads those five reads. A resync reloads them as well, because the frames
+    a till missed may include a new configuration.
+  - **Upgrade note:** `/ws` gains a frame type, `config_applied { config_version_id }`. A till that
+    predates it ignores it, as it ignores any type it does not know, and keeps today's behaviour.
+
 - **Cash paid in and out of the drawer is recorded and counted, and the drawer opens without a sale
   only for a manager** ([ADR-0165](docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The events, permissions and reasons for
   both existed and nothing produced them, so cash taken out for a supplier showed up as a shortage

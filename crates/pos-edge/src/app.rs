@@ -61,6 +61,7 @@ use pos_proto::ids::{
 };
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
+use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::PermissionKey;
 // Only the `#[cfg(test)]` stock read names it; the fold itself works in `StockMovement`s.
@@ -464,6 +465,12 @@ pub struct EdgeSession {
     /// Empty in the bootstrap, which is what every store had before the node existed — the receipt
     /// then starts at its number, as it always did.
     pub profile: StoreProfile,
+    /// How the store runs its shifts, from the `shift` config node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    ///
+    /// The defaults in the bootstrap, and every default is what the edge did before the node
+    /// existed: a store sells with or without an open shift.
+    pub shift: PublishedShift,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -632,6 +639,7 @@ impl EdgeSession {
             // Nothing is invented here: a receipt headed with a guessed shop name is worse than one
             // headed with nothing (ADR-0106).
             profile: StoreProfile::default(),
+            shift: PublishedShift::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -919,6 +927,11 @@ pub enum AppError {
     /// A shift was opened while one is already open — one open shift per device (§6, archive).
     #[error("a shift is already open")]
     ShiftAlreadyOpen,
+    /// A table was seated, a counter order started or a payment taken while no shift is open, at a
+    /// store whose `shift` node refuses that
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    #[error("no shift is open; open a shift before selling")]
+    OpenShiftRequired,
     /// A line was fired on a guest's order a member of staff has not yet confirmed
     /// ([ADR-0116](../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)).
     ///
@@ -3153,6 +3166,16 @@ impl<S: EventStore> Edge<S> {
         &self.fanout
     }
 
+    /// Tells every connected device that a new store configuration is live
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// item 7), so an open till reloads its floor, menu, layout, locale and reason codes without a
+    /// new sign-in. Numbered on the fan-out like any frame, so a till that reconnects is replayed it.
+    pub fn announce_config(&self, config_version_id: &str) {
+        self.fanout.publish(&ServerMessage::ConfigApplied {
+            config_version_id: config_version_id.to_owned(),
+        });
+    }
+
     /// The store this edge is, so a driving-port caller (the inbound `OrderIn`) can bind an order to
     /// it and refuse one addressed to another store.
     #[must_use]
@@ -4323,8 +4346,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError`] if the transition is illegal, the store cannot be written, or the business date
-    /// cannot be derived.
+    /// [`AppError::OpenShiftRequired`] while no shift is open at a store that refuses selling
+    /// without one, or [`AppError`] if the transition is illegal, the store cannot be written, or
+    /// the business date cannot be derived.
     pub async fn seat_table(
         &self,
         actor: Actor,
@@ -4334,6 +4358,7 @@ impl<S: EventStore> Edge<S> {
         // A replaced machine seats nobody new (ADR-0123). The tables already seated on it finish
         // and settle here; this is what stops the floor refilling.
         self.refuse_if_superseded()?;
+        self.refuse_without_open_shift()?;
         let ctx = self.decision_ctx(actor)?;
         let current = self.table_state(table_id);
         let decision = decide_table(current, TableCommand::Seat, &ctx)?;
@@ -4695,8 +4720,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::Superseded`] on a replaced box, [`AppError::ChannelNotAccepted`] for a channel the
-    /// store does not take, or [`AppError`] if the store cannot be written.
+    /// [`AppError::Superseded`] on a replaced box, [`AppError::OpenShiftRequired`] while no shift is
+    /// open at a store that refuses selling without one, [`AppError::ChannelNotAccepted`] for a
+    /// channel the store does not take, or [`AppError`] if the store cannot be written.
     pub async fn open_counter_order(
         &self,
         actor: Actor,
@@ -4704,6 +4730,7 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<CounterOrderOpened, AppError> {
         // A replaced machine starts nothing (ADR-0123), exactly as it seats nobody.
         self.refuse_if_superseded()?;
+        self.refuse_without_open_shift()?;
         let ctx = self.decision_ctx(actor)?;
         if !self.session().channel_enabled(channel) {
             return Err(AppError::ChannelNotAccepted);
@@ -5890,9 +5917,10 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the bill
-    /// is not open, the table is not awaiting payment, the payments do not sum to the total, or a
-    /// line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
+    /// [`AppError::OpenShiftRequired`] while no shift is open at a store that refuses selling without
+    /// one; [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::Domain`] if the
+    /// bill is not open, the table is not awaiting payment, the payments do not sum to the total, or
+    /// a line's tax class has no configured rate; or [`AppError`] if the store cannot be written.
     pub async fn settle_bill(
         &self,
         actor: Actor,
@@ -5903,6 +5931,9 @@ impl<S: EventStore> Edge<S> {
     where
         S: SubjectStore,
     {
+        // Before anything is read: a store that refuses selling without a shift takes no money
+        // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
+        self.refuse_without_open_shift()?;
         let ctx = self.decision_ctx(actor)?;
         let bill = self
             .lock_projection()
@@ -7276,6 +7307,24 @@ impl<S: EventStore> Edge<S> {
     /// shift is open, which is the ordinary state before the first open of the day.
     fn current_shift_id(&self) -> Option<ShiftId> {
         self.lock_projection().open_shift
+    }
+
+    /// Refuses a sale while no shift is open, when the store's `shift` node says
+    /// `NO_SHIFT_SELLING_REFUSE`
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    ///
+    /// Called where a sale starts, seating a table or starting a counter order, and where a payment
+    /// is taken, so that at such a store every sale and every payment belongs to a shift. An order a
+    /// guest or a delivery partner sends is still taken, because nobody is at the till to open a
+    /// shift for it; its payment waits for one. Under the default, `NO_SHIFT_SELLING_ALLOW`, the
+    /// store sells as it always has.
+    fn refuse_without_open_shift(&self) -> Result<(), AppError> {
+        if self.session().shift.no_shift_selling() == NoShiftSelling::Refuse
+            && self.current_shift_id().is_none()
+        {
+            return Err(AppError::OpenShiftRequired);
+        }
+        Ok(())
     }
 
     /// Assembles the decision context from the clock and the session.
@@ -9024,6 +9073,102 @@ mod tests {
                 .expect("opens a shift");
             let refused = edge.open_shift(actor(), vnd(500_000)).await;
             assert!(matches!(refused, Err(super::AppError::ShiftAlreadyOpen)));
+        });
+    }
+
+    /// An edge at a store whose `shift` node refuses selling while no shift is open (ADR-0160).
+    fn edge_refusing_sales_without_a_shift() -> Edge<FakeStore> {
+        use pos_proto::shift::{NoShiftSelling, PublishedShift};
+        Edge::new(
+            FakeStore::default(),
+            identity(),
+            EdgeSession {
+                shift: PublishedShift {
+                    no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+                },
+                ..EdgeSession::bootstrap()
+            },
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds")
+    }
+
+    #[test]
+    fn a_store_that_refuses_selling_without_a_shift_starts_no_sale_until_one_opens() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge_refusing_sales_without_a_shift();
+            let table = TableId::new(Ulid::from_u128(140));
+
+            let seated = edge.seat_table(actor(), table, None).await;
+            assert!(matches!(seated, Err(super::AppError::OpenShiftRequired)));
+            assert_eq!(
+                edge.table_state(table),
+                TableState::Free,
+                "nobody was seated"
+            );
+            let counter = edge
+                .open_counter_order(actor(), SalesChannel::Takeaway)
+                .await;
+            assert!(matches!(counter, Err(super::AppError::OpenShiftRequired)));
+
+            edge.open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            edge.seat_table(actor(), table, None)
+                .await
+                .expect("seats once a shift is open");
+            edge.open_counter_order(actor(), SalesChannel::Takeaway)
+                .await
+                .expect("starts a counter order once a shift is open");
+        });
+    }
+
+    #[test]
+    fn a_store_that_refuses_selling_without_a_shift_takes_no_payment_after_its_shift_closes() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge_refusing_sales_without_a_shift();
+            let table = TableId::new(Ulid::from_u128(141));
+            let shift = edge
+                .open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens a shift");
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
+            edge.count_shift(actor(), shift.shift_id, 500_000)
+                .await
+                .expect("counts");
+            edge.close_shift(actor(), shift.shift_id)
+                .await
+                .expect("closes");
+
+            let refused = edge
+                .settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
+                .await;
+            assert!(matches!(refused, Err(super::AppError::OpenShiftRequired)));
+
+            edge.open_shift(actor(), vnd(500_000))
+                .await
+                .expect("opens the next shift");
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles inside a shift");
+        });
+    }
+
+    #[test]
+    fn a_store_on_the_default_sells_and_takes_payment_without_a_shift_as_before() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let table = TableId::new(Ulid::from_u128(142));
+            edge.seat_table(actor(), table, None)
+                .await
+                .expect("seats with no shift open");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let bill = edge.open_bill(actor(), table).await.expect("opens a bill");
+            edge.settle_bill(actor(), bill.bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles with no shift open");
         });
     }
 

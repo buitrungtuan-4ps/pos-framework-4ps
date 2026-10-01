@@ -57,6 +57,7 @@ use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
 use pos_proto::reason_codes::PublishedReasonCodes;
+use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
@@ -198,7 +199,8 @@ fn localized_book(book: &MenuBook, language: &str) -> MenuBook {
 /// Reads the compiled `menu` node (a [`MenuBook`], ADR-0066) and installs the whole book, with the
 /// catalog for the session's channel as its menu, and the `permissions` node (ADR-0070) into the
 /// staff roster the edge authorises against. Any node that is absent or does not parse is left as
-/// the base has it — a bad or partial publish never blanks a field, it just does not change it.
+/// the base has it — a bad or partial publish never blanks a field, it just does not change it. The
+/// exception is a node of settings (ADR-0160), such as `shift`: absent, it means its defaults.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
@@ -356,6 +358,22 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .and_then(|text| serde_json::from_str::<StoreProfile>(&text).ok())
     {
         session.profile = profile;
+    }
+    // The `shift` node (ADR-0160): how the store runs its shifts. Every field is a setting, and a
+    // setting the document does not carry means its default (ADR-0160 decision 1) — so, unlike the
+    // nodes above, an absent node puts the defaults back rather than keeping the last value: the
+    // cloud sends the whole document, and a node it no longer sends is a setting somebody cleared.
+    // An unparseable node keeps the last value, as every node here does.
+    match document.get(PublishedShift::NODE) {
+        None => session.shift = PublishedShift::default(),
+        Some(value) => {
+            if let Some(shift) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedShift>(&text).ok())
+            {
+                session.shift = shift;
+            }
+        }
     }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
@@ -958,6 +976,9 @@ where
                 }
             },
         };
+        // The session, the lease and the origins are all live now, so tell the open tills: each one
+        // reloads what it draws from configuration without a new sign-in (ADR-0160 item 7).
+        self.edge.announce_config(&synced.config_version_id);
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
         // after a restart), not a reason to refuse a document the counter is already selling on.
@@ -1203,6 +1224,31 @@ mod tests {
         let broken = serde_json::json!({ "integrations": "not a node" });
         let kept = session_from_config(&applied, &broken);
         assert_eq!(kept.integrations, applied.integrations);
+    }
+
+    #[test]
+    fn a_shift_node_is_applied_a_malformed_one_keeps_the_last_and_an_absent_one_resets() {
+        use pos_proto::shift::NoShiftSelling;
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.shift.no_shift_selling(),
+            NoShiftSelling::Allow,
+            "a box that never synced sells as it always has"
+        );
+        let refusing = session_from_config(
+            &base,
+            &serde_json::json!({ "shift": { "no_shift_selling": "NO_SHIFT_SELLING_REFUSE" } }),
+        );
+        assert_eq!(refusing.shift.no_shift_selling(), NoShiftSelling::Refuse);
+
+        // A publish that broke the node keeps the store's rule rather than relaxing it mid-service.
+        let kept = session_from_config(&refusing, &serde_json::json!({ "shift": "not a node" }));
+        assert_eq!(kept.shift.no_shift_selling(), NoShiftSelling::Refuse);
+
+        // A document without the node is one in which nothing sets the setting any more.
+        let cleared = session_from_config(&refusing, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.shift.no_shift_selling(), NoShiftSelling::Allow);
     }
 
     #[test]

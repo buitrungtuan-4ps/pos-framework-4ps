@@ -105,6 +105,7 @@
   "error.no_open_order": "Bàn chưa có order. Hãy mở bàn trước.",
   "error.not_awaiting_staff_confirmation": "Order này không chờ xác nhận.",
   "error.nothing_to_print": "Order này chưa có món nào để in.",
+  "error.open_shift_required": "Chưa có ca nào đang mở. Hãy mở ca ở màn hình Ca trước khi bán.",
   "error.order_rejected": "Order này đã bị nhân viên từ chối.",
   "error.payments_do_not_sum_to_total": "Tổng thanh toán chưa khớp với hoá đơn.",
   "error.permission_denied": "Vai trò của bạn không được phép thực hiện thao tác này.",

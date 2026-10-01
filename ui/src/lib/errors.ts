@@ -18,6 +18,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   INTERNAL: "error.internal",
   INVALID_ARGUMENT: "error.invalid_argument",
   SHIFT_ALREADY_OPEN: "error.shift_already_open",
+  OPEN_SHIFT_REQUIRED: "error.open_shift_required",
   UNKNOWN_SHIFT: "error.unknown_shift",
   NO_OPEN_ORDER: "error.no_open_order",
   UNKNOWN_LINE: "error.unknown_record",

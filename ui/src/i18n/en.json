@@ -105,6 +105,7 @@
   "error.no_open_order": "This table has no open order. Seat it first.",
   "error.not_awaiting_staff_confirmation": "This order is not waiting for confirmation.",
   "error.nothing_to_print": "There is nothing on this order to print yet.",
+  "error.open_shift_required": "No shift is open. Open a shift on the Shift screen before you sell.",
   "error.order_rejected": "This order was refused by a member of staff.",
   "error.payments_do_not_sum_to_total": "The payments do not add up to the bill total.",
   "error.permission_denied": "Your role is not allowed to do this.",

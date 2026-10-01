@@ -1656,15 +1656,15 @@ export async function loadLiveOrders(): Promise<void> {
 // Every loader is individually forgiving, so this is too: a blip leaves whatever was already loaded
 // rather than emptying the till.
 export async function loadStore(): Promise<void> {
-  await Promise.all([
-    loadFloor(),
-    loadMenu(),
-    loadLayout(),
-    loadLocale(),
-    loadReasonCodes(),
-    loadLiveOrders(),
-    loadShift(),
-  ]);
+  await Promise.all([loadConfiguration(), loadLiveOrders(), loadShift()]);
+}
+
+// What the till draws from the store's configuration: the floor, both price books, the console's
+// button plan, the money settings and the reason codes. The edge says `config_applied` on the live
+// link when a new version is live (ADR-0160 item 7), and an open till reloads these then, without a
+// new sign-in; the boot gate reads them through loadStore. Forgiving like each loader it calls.
+export async function loadConfiguration(): Promise<void> {
+  await Promise.all([loadFloor(), loadMenu(), loadLayout(), loadLocale(), loadReasonCodes()]);
 }
 
 // The shift open on this store right now (F4).
