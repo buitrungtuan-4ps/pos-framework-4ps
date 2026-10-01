@@ -3,15 +3,22 @@
 // key (shown once) → a handoff summary pointing at the next steps (activation, configuration). The
 // key is optional because an activated machine syncs with its device credential (ADR-0143); it is
 // for a box set up by hand. Composes the registry + API-key routes; tenant comes from the picker.
+//
+// A store it creates is given the owner's new-store values as soon as it exists
+// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+// decision 1) — today, refusing to sell while no shift is open. That call is the wizard's only write
+// after the store itself, and it is deliberately not part of creating it: a failure says so and
+// points at Shared settings, where the same values can be given again, but it neither undoes the
+// store nor holds the operator on the first step.
 
 import { createSignal, For, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
 import { api } from "../api/client";
 import type { Brand, CreateApiKeyResponse, Store } from "../api/types";
-import { type MessageKey, t } from "../i18n";
+import { type MessageKey, t, tFromServer } from "../i18n";
 import { tenantId, tenantName } from "../state/session";
-import { screenHref } from "../state/screens";
+import { screenHref, STORE_PARAM } from "../state/screens";
 import {
   Banner,
   Button,
@@ -55,6 +62,79 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
 ];
 
 const STEP_KEYS: readonly MessageKey[] = ["wizard.step1", "wizard.step2", "wizard.step3"];
+
+/** Where giving the new store the owner's new-store values stands. */
+type Presets =
+  | { readonly state: "applying" }
+  | {
+      readonly state: "applied";
+      /** The settings written, by key. */
+      readonly applied: readonly string[];
+      /** Whether the store's publish went through; the values are saved either way. */
+      readonly published: boolean;
+    }
+  | { readonly state: "failed"; readonly message: string };
+
+/**
+ * Shared settings, opened on `store`.
+ *
+ * The screen is tenant-scoped, so `screenHref` gives it no `?store=`; it opens on the store in
+ * context, and this link makes that the store the wizard just created rather than whatever store
+ * was in context before the wizard ran — the same reason {@link NextSteps}' links carry it.
+ */
+function settingsHref(tenant: string, store: string): string {
+  return `${screenHref("settings", tenant, "")}?${STORE_PARAM}=${encodeURIComponent(store)}`;
+}
+
+/**
+ * What became of the new store's new-store values, in a line or two.
+ *
+ * Exported for `tests/new-store-presets.test.tsx`, which pins the half that matters most: a failure
+ * says the store exists and where to finish the job, and does not read as the store having failed.
+ */
+export function PresetsNote(props: { presets: Presets; tenant: string; store: string }) {
+  const titles = (keys: readonly string[]) =>
+    keys.map((key) => tFromServer(`settings.item.${key}.title`, key)).join(", ");
+  return (
+    <div class="flex flex-col gap-1">
+      <Show when={props.presets.state === "applying"}>
+        <p role="status" class="text-sm text-ink-muted">
+          {t("wizard.presetsApplying")}
+        </p>
+      </Show>
+      <Show when={props.presets.state === "applied" ? props.presets : null}>
+        {(applied) => (
+          <Show
+            when={applied().published}
+            fallback={<Banner tone="danger" message={t("wizard.presetsUnpublished")} />}
+          >
+            <p role="status" class="text-sm text-ink-muted">
+              {t("wizard.presetsApplied", {
+                count: applied().applied.length,
+                list: titles(applied().applied),
+              })}
+            </p>
+          </Show>
+        )}
+      </Show>
+      <Show when={props.presets.state === "failed" ? props.presets : null}>
+        {(failed) => (
+          <Banner tone="danger" message={t("wizard.presetsFailed", { reason: failed().message })} />
+        )}
+      </Show>
+      <Show
+        when={
+          props.presets.state === "failed" ||
+          (props.presets.state === "applied" && !props.presets.published)
+        }
+      >
+        <a class="text-sm text-accent underline" href={settingsHref(props.tenant, props.store)}>
+          {t("wizard.presetsRetry")}
+        </a>
+      </Show>
+    </div>
+  );
+}
 
 /**
  * The two steps that remain once the wizard has finished, as links rather than as two screen names
@@ -114,6 +194,7 @@ export function NewStore() {
   const [name, setName] = createSignal("");
   const [brandId, setBrandId] = createSignal("");
   const [created, setCreated] = createSignal<Store | null>(null);
+  const [presets, setPresets] = createSignal<Presets | null>(null);
 
   const [scopes, setScopes] = createSignal<string[]>([
     "read_config",
@@ -149,6 +230,22 @@ export function NewStore() {
     );
   };
 
+  // The owner's new-store values for the store just created. Never thrown: whatever happens here,
+  // the store exists and the wizard carries on, so the outcome is a note rather than a refusal.
+  const applyPresets = async (store: string) => {
+    setPresets({ state: "applying" });
+    try {
+      const report = await api.applySettingPresets(tenantId(), store);
+      setPresets({
+        state: "applied",
+        applied: report.applied,
+        published: report.stores.every((row) => row.outcome !== "SETTING_PUBLISH_FAILED"),
+      });
+    } catch (caught) {
+      setPresets({ state: "failed", message: apiMessage(caught) });
+    }
+  };
+
   const createStore = async () => {
     // Idempotency (F0): the wizard mints the store exactly once. If it already did — the operator
     // stepped back to step 1 and forward again — advance without creating a second, orphaned store.
@@ -167,6 +264,8 @@ export function NewStore() {
       const store = await api.createStore(tenantId(), storeName, brandId() || undefined);
       setCreated(store);
       setStep(2);
+      // Not awaited: the wizard moves on while the store is given its values.
+      void applyPresets(store.store_id);
     } catch (caught) {
       fail(caught);
     } finally {
@@ -307,6 +406,19 @@ export function NewStore() {
         </ol>
 
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+
+        {/* Above the step cards, so the outcome stays in view from the key step to the handoff. */}
+        <Show when={step() >= 2 ? presets() : null}>
+          {(state) => (
+            <Show when={created()}>
+              {(store) => (
+                <div class="mb-4">
+                  <PresetsNote presets={state()} tenant={tenantId()} store={store().store_id} />
+                </div>
+              )}
+            </Show>
+          )}
+        </Show>
 
         {/* Step 1 — store details */}
         <Show when={step() === 1}>

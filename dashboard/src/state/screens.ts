@@ -264,6 +264,24 @@ export const SCREENS = {
     inPalette: true,
     icon: "file-cog",
   },
+  // Shared settings (ADR-0160 decision 3): every value a store may run differently, written once for
+  // every store, a brand, a store group or one store. Drawn from the register the cloud serves, so a
+  // setting added there needs only its translations to appear. Tenant-scoped rather than
+  // store-scoped: a value for every store needs no store, and a store in context is only where the
+  // screen opens. Open to every role, because reading is console.data.read; writing publishes, so it
+  // is console.config.publish, and the screen hides its write controls from a role without it.
+  //
+  // `layers` rather than a glyph of its own: a value resolved through layers (the store, its groups,
+  // its brand, every store) is what the screen is about, and the vendored set is transcribed, not
+  // drawn (`components/icons.tsx`) — two screens already share a glyph where one fits both.
+  settings: {
+    path: "/settings",
+    key: "nav.settings",
+    scope: "tenant",
+    tenantScoped: true,
+    inPalette: true,
+    icon: "layers",
+  },
   storeSettings: {
     path: "/store-settings",
     key: "nav.storeSettings",
@@ -415,14 +433,18 @@ export const NAV_GROUPS: readonly {
   // of them is made to behave the same. Store groups sit here rather than under the estate for the
   // reason the record gives: a group holds no configuration and changes no store's identity, it is
   // the cohort a configuration change is delivered to. The estate group is about the boxes and
-  // their lifecycle; this one is about what runs on them.
+  // their lifecycle; this one is about what runs on them. Shared settings (ADR-0160) is the
+  // generic home of every setting, so it sits beside the store's own settings.
   {
     key: "nav.group.settings",
-    items: ["config", "storeGroups", "releases", "storeSettings", "integrations", "translations"],
+    items: ["config", "storeGroups", "releases", "settings", "storeSettings", "translations"],
   },
-  // Who and what may reach this console: console users, machine keys, and the endpoints it calls
-  // out to. All three answer "who is allowed in, or out".
-  { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks"] },
+  // Who and what may reach this console, or be reached from it: console users, machine keys, the
+  // endpoints it calls out to, and the vendors it connects to. All four answer "who is allowed in,
+  // or out". Integrations moved here from Settings when Shared settings filled that group's sixth
+  // place: a vendor connection is credentials and an endpoint, which is this group's subject and
+  // its name.
+  { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks", "integrations"] },
   // What an auditor or a regulator asks for: what was done, by whom, what a named person's data
   // may be made to do (ADR-0076, Decree 13), and whether the trading record itself is intact
   // (ADR-0131, ADR-0132). Chain integrity sits here rather than under the estate because it is not

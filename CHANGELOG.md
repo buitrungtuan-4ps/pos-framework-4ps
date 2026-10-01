@@ -300,6 +300,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     migration, permission or protocol version changes, and nothing reads the node yet: bills are
     unchanged until the core calculation and the edge land.
 
+- **One console screen for every setting, written once for many stores**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decisions 1, 3 and 5). **Shared settings**, under Settings in the nav, is drawn from the settings
+  register, so a new setting needs only its translations to appear there.
+  - Pick every store, one brand, one store group or one store; a store in context is where the
+    screen opens. Each setting shows the value written there, a select over its values and **Clear
+    this value**. For one store it also shows what the store runs and where that comes from: the
+    default, every store, its brand, a store group or the store itself.
+  - A save or a clear lists every store it reached by name, as published, unchanged or failed.
+    **Publish again** republishes the stores that failed.
+  - Honour or hide: a store on a release older than the setting's is not shown it, and one line
+    says why. Every store, a brand or a group keeps the setting and counts the stores too old to
+    honour it. A store that has not reported its release is shown the setting, with a note.
+  - Writing needs `console.config.publish`. A viewer sees the values and no controls.
+  - The new-store wizard gives the store it creates the owner's new-store values. Today that is
+    refusing to sell while no shift is open. If it fails, the store is still created, and the
+    wizard says so and links to Shared settings for the store. There one store can be given the
+    values again, or have its settings published again.
+  - Integrations moves from the nav's Settings group to Access & integrations, so that no group
+    holds more than six screens.
+  - Docs: `docs/ui-ux.md` §5, `docs/guides/bring-a-store-online.md` Steps 1 and 4.
+  - **Upgrade note:** console only. No route, event, migration or permission changes: the screen
+    uses the `/admin/settings` routes below.
+
 - **The console can write a setting once for many stores, and a new store gets the owner's
   values** ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 3). The values the cloud resolves for each store now reach it.
