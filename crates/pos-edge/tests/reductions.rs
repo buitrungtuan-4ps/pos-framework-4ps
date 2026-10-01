@@ -451,6 +451,31 @@ fn a_server_discounts_under_a_published_ceiling_without_a_manager() {
     });
 }
 
+/// An approval sent with a discount **within** the ceiling approves nothing, so it is not checked and
+/// records no override.
+///
+/// A till that does not know the person's ceiling may ask for a manager anyway. Before this, the
+/// edge checked the PIN and wrote `security.permission.overridden` with an `exceeded_by` of zero or
+/// less: an audit trail that said a manager authorised going over a limit nobody went over.
+#[test]
+fn an_approval_for_a_discount_within_the_ceiling_records_no_override() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_with(store.clone(), session_with_a_server_ceiling(vnd(30_000)));
+        let bill = a_bill(&edge).await;
+
+        let totals = edge
+            .discount_bill(server(), bill, vnd(20_000), goodwill(), Some(&approval()))
+            .await
+            .expect("20,000 is under the published 30,000 ceiling, with or without a manager");
+        assert_eq!(totals.discount_total, vnd(20_000));
+        assert!(
+            overrides(&store).await.is_empty(),
+            "a discount inside the ceiling recorded an override"
+        );
+    });
+}
+
 /// A discount **at** the ceiling goes through, and a single minor unit over it does not.
 ///
 /// The boundary is the interesting part of any limit, and `over_ceiling` is written as
