@@ -17833,6 +17833,54 @@ fn people_app_with_audit(
     http::router(app).merge(http::people_router(people, admin, clock(), audit))
 }
 
+/// Seeds one store's people directly through the seam: Alice (`C01`) with a PIN hash, a Cashier
+/// role granting `billing.discount.apply`, and Alice assigned to `store` as a Cashier. Returns the
+/// two ids, for the tests that address either one.
+async fn seed_a_cashier(people: &FakePeople, store: StoreId) -> (EmployeeId, RoleTemplateId) {
+    let mine = tenant();
+    let alice = EmployeeId::new(Ulid::from_u128(0xA11));
+    let cashier = RoleTemplateId::new(Ulid::from_u128(0xCA5));
+    EmployeeStore::create(
+        people,
+        &NewEmployee {
+            employee_id: alice,
+            tenant_id: mine,
+            code: "C01".to_owned(),
+            name: "Alice".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    EmployeeStore::set_pin(people, mine, alice, "argon2id$phc$alice")
+        .await
+        .expect("set pin");
+    RoleTemplateStore::create(
+        people,
+        &NewRoleTemplate {
+            role_template_id: cashier,
+            tenant_id: mine,
+            name: "Cashier".to_owned(),
+            permissions: vec!["billing.discount.apply".to_owned()],
+            discount_ceiling_minor: None,
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: mine,
+            employee_id: alice,
+            store_id: store,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign");
+    (alice, cashier)
+}
+
 /// The main app merged with the floor & kitchen router, wired to a caller-supplied audit recorder
 /// (Track M2, ADR-0072).
 fn floor_app_with_audit(
@@ -19087,7 +19135,7 @@ async fn the_roster_page_sorts_by_name_or_code_and_refuses_an_unknown_token() {
 }
 
 #[tokio::test]
-async fn people_writes_require_manage_people_but_reads_need_only_read() {
+async fn people_writes_require_manage_people_and_the_roster_needs_people_read() {
     let admin = provisioned_admin();
     let router = people_app_with_audit(
         admin.clone(),
@@ -19096,7 +19144,7 @@ async fn people_writes_require_manage_people_but_reads_need_only_read() {
     );
     let tenant_ulid = tenant().as_ulid().to_string();
 
-    // A Viewer may read the roster…
+    // A Viewer may not read the roster — a staff record needs console.people.read (ADR-0158)…
     let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
     let read = router
         .clone()
@@ -19108,11 +19156,26 @@ async fn people_writes_require_manage_people_but_reads_need_only_read() {
         .expect("route read");
     assert_eq!(
         read.status(),
-        StatusCode::OK,
-        "read needs only console.data.read"
+        StatusCode::FORBIDDEN,
+        "the roster needs console.people.read, not console.data.read"
     );
 
-    // …but not create an employee (that needs console.people.manage).
+    // …still reads the role templates, which name nobody…
+    let roles = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/roles?tenant_id={tenant_ulid}"),
+            &viewer,
+        ))
+        .await
+        .expect("route list roles");
+    assert_eq!(
+        roles.status(),
+        StatusCode::OK,
+        "role templates need only console.data.read"
+    );
+
+    // …and may not create an employee (that needs console.people.manage).
     let forbidden = router
         .clone()
         .oneshot(post_with_cookie(
@@ -19136,6 +19199,79 @@ async fn people_writes_require_manage_people_but_reads_need_only_read() {
         .await
         .expect("route create role");
     assert_eq!(ops_forbidden.status(), StatusCode::FORBIDDEN);
+}
+
+/// Every read that hands back a person — the roster, one employee, and the assignment list, whose
+/// rows name who they grant — needs `console.people.read`, which only Owner and Admin hold
+/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// A name and a staff code are T1 personal data (ADR-0070), and these reads sat behind
+/// `console.data.read`, which Ops and Viewer hold too. The permission catalogue and the role
+/// templates name nobody, so every role keeps them.
+#[tokio::test]
+async fn staff_records_need_people_read_which_ops_and_viewer_do_not_hold() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_app_with_audit(admin.clone(), people, Arc::new(NoopAuditRecorder));
+
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let alice_ulid = alice.as_ulid().to_string();
+    let staff_records = [
+        format!("/admin/employees?tenant_id={tenant_ulid}"),
+        format!("/admin/employees?tenant_id={tenant_ulid}&limit=10"),
+        format!("/admin/employees/{alice_ulid}?tenant_id={tenant_ulid}"),
+        format!("/admin/assignments?tenant_id={tenant_ulid}&store_id={store_ulid}"),
+        format!("/admin/assignments?tenant_id={tenant_ulid}&employee_id={alice_ulid}"),
+    ];
+    let naming_nobody = [
+        "/admin/people/permissions".to_owned(),
+        format!("/admin/roles?tenant_id={tenant_ulid}"),
+        format!("/admin/roles/{}?tenant_id={tenant_ulid}", cashier.as_ulid()),
+    ];
+
+    for (role, token, reads_staff) in [
+        (AdminRole::Viewer, "viewer-staff", false),
+        (AdminRole::Ops, "ops-staff", false),
+        (AdminRole::Admin, "admin-staff", true),
+        (AdminRole::Owner, "owner-staff", true),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        for url in &staff_records {
+            let response = router
+                .clone()
+                .oneshot(get_with_cookie(url, &cookie))
+                .await
+                .expect("route a staff read");
+            if reads_staff {
+                assert_eq!(response.status(), StatusCode::OK, "{role:?} reads {url}");
+                let body = json_body(response).await.to_string();
+                assert!(
+                    body.contains("Alice"),
+                    "{role:?} is shown the person: {body}"
+                );
+            } else {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::FORBIDDEN,
+                    "{role:?} lacks console.people.read, so {url} is refused"
+                );
+            }
+        }
+        for url in &naming_nobody {
+            let response = router
+                .clone()
+                .oneshot(get_with_cookie(url, &cookie))
+                .await
+                .expect("route a read that names nobody");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{role:?} reads {url}, which needs only console.data.read"
+            );
+        }
+    }
 }
 
 /// The main app merged with the people-publish router, sharing one config-tree fake so the test can
@@ -19164,13 +19300,6 @@ fn people_publish_app(
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one end-to-end publish scenario: seed an employee+PIN+role+assignment through the seam, \
-              publish, then assert the compiled node landed on the config tree with the flattened \
-              permission and PIN hash and that the audit carries no name or PIN — kept together so the \
-              invariant is checked against the same state the publish produced"
-)]
 async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit() {
     let admin = provisioned_admin();
     let people = FakePeople::default();
@@ -19178,48 +19307,9 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
     let audit = FakeAudit::default();
     let mine = tenant();
     let store = store_id();
-    let alice = EmployeeId::new(Ulid::from_u128(0xA11));
-    let cashier = RoleTemplateId::new(Ulid::from_u128(0xCA5));
 
     // Seed a store's people directly through the seam: an employee with a PIN, a role, an assignment.
-    EmployeeStore::create(
-        &people,
-        &NewEmployee {
-            employee_id: alice,
-            tenant_id: mine,
-            code: "C01".to_owned(),
-            name: "Alice".to_owned(),
-        },
-    )
-    .await
-    .expect("create employee");
-    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
-        .await
-        .expect("set pin");
-    RoleTemplateStore::create(
-        &people,
-        &NewRoleTemplate {
-            role_template_id: cashier,
-            tenant_id: mine,
-            name: "Cashier".to_owned(),
-            permissions: vec!["billing.discount.apply".to_owned()],
-            discount_ceiling_minor: None,
-        },
-    )
-    .await
-    .expect("create role");
-    AssignmentStore::assign(
-        &people,
-        &NewAssignment {
-            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
-            tenant_id: mine,
-            employee_id: alice,
-            store_id: store,
-            role_template_id: cashier,
-        },
-    )
-    .await
-    .expect("assign");
+    seed_a_cashier(&people, store).await;
 
     let router = people_publish_app(
         admin,
@@ -22265,47 +22355,7 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
     let config = FakeConfigTrees::default();
     let mine = tenant();
     let store = StoreId::new(Ulid::from_u128(77));
-    let alice = EmployeeId::new(Ulid::from_u128(1));
-    let cashier = RoleTemplateId::new(Ulid::from_u128(1));
-
-    EmployeeStore::create(
-        &people,
-        &NewEmployee {
-            employee_id: alice,
-            tenant_id: mine,
-            code: "C01".to_owned(),
-            name: "Alice".to_owned(),
-        },
-    )
-    .await
-    .expect("create employee");
-    EmployeeStore::set_pin(&people, mine, alice, "argon2id$phc$alice")
-        .await
-        .expect("set pin");
-    RoleTemplateStore::create(
-        &people,
-        &NewRoleTemplate {
-            role_template_id: cashier,
-            tenant_id: mine,
-            name: "Cashier".to_owned(),
-            permissions: vec!["billing.discount.apply".to_owned()],
-            discount_ceiling_minor: None,
-        },
-    )
-    .await
-    .expect("create role");
-    AssignmentStore::assign(
-        &people,
-        &NewAssignment {
-            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
-            tenant_id: mine,
-            employee_id: alice,
-            store_id: store,
-            role_template_id: cashier,
-        },
-    )
-    .await
-    .expect("assign");
+    seed_a_cashier(&people, store).await;
 
     let router = people_publish_app(
         admin,
@@ -22345,7 +22395,7 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
     assert_eq!(
         staff[0]["code"],
         serde_json::json!("C01"),
-        "the roster is still readable — only the credential is withheld"
+        "an owner still sees who is on the node — only the credential is withheld"
     );
     assert!(
         staff[0].get("pin_phc").is_none(),
@@ -22358,6 +22408,111 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
             .contains("argon2id"),
         "no hash anywhere in the document"
     );
+}
+
+/// A store's config names its staff only to a role holding `console.people.read`
+/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// The `permissions` node lists every member of staff the store authorises, with their name and
+/// staff code. The config read needs only `console.data.read`, so without this a Viewer refused the
+/// roster could read every name in the fleet through the config screen, one store at a time. Only
+/// the two fields go — the member, what they may do and the rest of the document stay — and both
+/// reads take them out, because a past version holds past names.
+#[tokio::test]
+async fn a_config_read_names_staff_only_to_a_role_that_reads_staff_records() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let mine = tenant();
+    let store = store_id();
+    let (alice, _cashier) = seed_a_cashier(&people, store).await;
+
+    let router = people_publish_app(
+        admin.clone(),
+        people,
+        config,
+        Arc::new(NoopAuditRecorder) as Arc<dyn AuditRecorder>,
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = mine.as_ulid().to_string();
+    let store_ulid = store.as_ulid().to_string();
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &owner,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let version_ulid = json_body(published).await["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    let reads = [
+        format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+        format!(
+            "/admin/stores/{store_ulid}/config/versions/{version_ulid}?tenant_id={tenant_ulid}"
+        ),
+    ];
+
+    for (role, token, names_staff) in [
+        (AdminRole::Viewer, "viewer-config", false),
+        (AdminRole::Ops, "ops-config", false),
+        (AdminRole::Admin, "admin-config", true),
+        (AdminRole::Owner, "owner-config", true),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        for url in &reads {
+            let response = router
+                .clone()
+                .oneshot(get_with_cookie(url, &cookie))
+                .await
+                .expect("route a config read");
+            assert_eq!(
+                response.status(),
+                StatusCode::OK,
+                "{role:?} reads {url}: the config read needs only console.data.read"
+            );
+            let doc = json_body(response).await;
+            let member = doc["permissions"]["staff"][0]
+                .as_object()
+                .expect("the member is still listed");
+            assert_eq!(
+                member["id"],
+                serde_json::json!(alice.as_ulid().to_string()),
+                "{role:?}: the member stays"
+            );
+            assert_eq!(
+                member["permissions"],
+                serde_json::json!(["billing.discount.apply"]),
+                "{role:?}: and so does what they may do"
+            );
+            assert!(
+                !member.contains_key("pin_phc"),
+                "{role:?}: never the credential (S7)"
+            );
+            if names_staff {
+                assert_eq!(
+                    member["name"], "Alice",
+                    "{role:?} holds console.people.read"
+                );
+                assert_eq!(member["code"], "C01", "{role:?} holds console.people.read");
+            } else {
+                assert!(
+                    !member.contains_key("name") && !member.contains_key("code"),
+                    "{role:?} lacks console.people.read, so the name and code are removed: \
+                     {member:?}"
+                );
+                assert!(
+                    !doc.to_string().contains("Alice"),
+                    "{role:?}: the name is nowhere in the document"
+                );
+            }
+        }
+    }
 }
 
 /// A store's `origins` node is authored here and refused here, by the very rule the edge applies

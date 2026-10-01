@@ -233,6 +233,19 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Read revenue and product-mix reports (prices are commercially sensitive, T2)",
     },
+    /// Read staff records: the employee roster, the store assignments, and each staff member's name
+    /// and code in a store's `permissions` config node
+    /// ([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+    ///
+    /// Owner/Admin, the roles that manage people. A person's name and staff code are T1 personal
+    /// data ([ADR-0070](../adr/0070-people-and-access.md), Decree 13/2023), so this is narrower
+    /// than `Read` the way `ReadRevenue` is: Ops and Viewer keep the role templates and the
+    /// permission catalogue, which name nobody, and a store's config with the names taken out.
+    ReadPeople {
+        id: "console.people.read",
+        roles: [Owner, Admin],
+        description: "Read staff records: employees, store assignments, staff names and codes (T1)",
+    },
 }
 
 /// Whether `role` is granted `permission`. The one authorisation question every `/admin` route asks;
@@ -301,8 +314,9 @@ mod tests {
                 permission.meta().id
             );
         }
-        // Denied: API keys, org/brand and store creation, catalog authoring, translations, and both
-        // admin-management capabilities (inviting and managing).
+        // Denied: API keys, org/brand and store creation, catalog authoring, translations, staff
+        // records (managing or reading them, ADR-0158), and both admin-management capabilities
+        // (inviting and managing).
         for permission in [
             ConsolePermission::ManageApiKeys,
             ConsolePermission::ManageOrgs,
@@ -310,6 +324,7 @@ mod tests {
             ConsolePermission::ManageCatalog,
             ConsolePermission::ManageTranslations,
             ConsolePermission::ManagePeople,
+            ConsolePermission::ReadPeople,
             ConsolePermission::ManageInventory,
             ConsolePermission::ReadRevenue,
             ConsolePermission::InviteAdmins,

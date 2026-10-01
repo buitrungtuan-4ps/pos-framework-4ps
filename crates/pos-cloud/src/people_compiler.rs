@@ -25,8 +25,9 @@ use crate::registry::EntityStatus;
 
 /// One staff member as the edge reads them: identity, the flattened permission set, and the PIN hash to
 /// verify against offline. The name is here because the edge shows it on screen; the hash is here
-/// because the edge authenticates against it — neither is exposed back over the console API or the
-/// audit trail (ADR-0070).
+/// because the edge authenticates against it. Neither reaches the audit trail (ADR-0070). The
+/// console's reads of a store's config, current and past, never return the hash, and return the
+/// name and code only to a role holding `console.people.read` (ADR-0158).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StaffMember {
     /// The employee id (a ULID string).

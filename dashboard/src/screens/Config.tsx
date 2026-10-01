@@ -74,6 +74,13 @@ export function Config() {
     const role = actingAdmin()?.role;
     return role === "owner" || role === "admin";
   };
+  // Whether this admin's role carries `console.people.read`. A staff member's name and code are T1,
+  // so the server takes both out of each member of the `permissions` node for a role without it
+  // (ADR-0158). Mirrored for the same reason as prices: to say so, not to unlock anything.
+  const readsStaff = () => {
+    const role = actingAdmin()?.role;
+    return role === "owner" || role === "admin";
+  };
   const [level, setLevel] = createSignal<ConfigLevel>("store");
   const [document, setDocument] = createSignal("{\n}\n");
   const [error, setError] = createSignal("");
@@ -493,6 +500,9 @@ export function Config() {
               >
                 <Show when={!readsPrices()}>
                   <p class="mb-2 text-sm text-ink-muted">{t("config.pricesHidden")}</p>
+                </Show>
+                <Show when={!readsStaff()}>
+                  <p class="mb-2 text-sm text-ink-muted">{t("config.staffHidden")}</p>
                 </Show>
                 <pre class="max-h-96 overflow-auto rounded-token border border-line bg-surface-raised p-3 text-xs text-ink">
                   {JSON.stringify(effective(), null, 2)}

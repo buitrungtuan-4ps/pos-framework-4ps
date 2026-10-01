@@ -4,9 +4,11 @@
 // context; assignments also need a store chosen in the top bar.
 //
 // This is the console's first T1 Restricted data (employee name, code, PIN). The PIN is set/reset,
-// never read: it is hashed server-side and this screen only ever learns whether one is set. Write
-// affordances are gated on the operator holding console.people.manage (owner/admin) — the server
-// re-checks every route; the gate here only hides what a role cannot do.
+// never read: it is hashed server-side and this screen only ever learns whether one is set. Reading
+// the roster and the assignments needs console.people.read (owner/admin, ADR-0158), which is why the
+// nav offers this screen to those two roles only. Write affordances are gated on the operator
+// holding console.people.manage (owner/admin) — the server re-checks every route; the gate here only
+// hides what a role cannot do.
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 

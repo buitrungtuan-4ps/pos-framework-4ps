@@ -244,6 +244,9 @@ export const SCREENS = {
     tenantScoped: true,
     icon: "chef-hat",
   },
+  // People (ADR-0070): the staff roster and who works where. Owner/admin only, matching the server's
+  // console.people.read (ADR-0158) — a person's name and staff code are T1 personal data, which no
+  // other role reads.
   people: {
     path: "/people",
     key: "nav.people",

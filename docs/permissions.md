@@ -9,6 +9,10 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `sales.item.mark_unavailable` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `sales.order.transfer` | SALES | LOW | · | ✓ | ✓ | ✓ | · | ✓ | · |
 | `sales.order.confirm_qr` | SALES | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `sales.table.manage` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `sales.line.add` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `sales.line.fire` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `sales.ticket.bump` | SALES | LOW | · | ✓ | ✓ | ✓ | · | · | ✓ |
 | `billing.discount.apply` | BILLING | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `billing.discount.override_ceiling` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.comp.apply` | BILLING | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
@@ -16,6 +20,9 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `billing.bill.void` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.refund.issue` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.receipt.reprint` | BILLING | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |
+| `billing.bill.open` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `billing.bill.split` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `billing.payment.take` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `cash.drawer.open_no_sale` | CASH_AND_SHIFTS | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
 | `cash.shift.open` | CASH_AND_SHIFTS | LOW | · | ✓ | ✓ | ✓ | ✓ | · | · |
 | `cash.shift.close` | CASH_AND_SHIFTS | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |

@@ -262,6 +262,42 @@ permissions! {
         default_roles: [Cashier, Server, Supervisor, Manager, Owner],
         description: "Confirm or reject a guest's QR order",
     },
+    /// Seat a table, mark it cleaned, or release one seated by mistake (ADR-0158).
+    ManageTables {
+        id: "sales.table.manage",
+        group: Sales,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Seat, clean or release a table",
+    },
+    /// Add a line to an order, or change a line's quantity (ADR-0158).
+    AddLine {
+        id: "sales.line.add",
+        group: Sales,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Add a line to an order or change its quantity",
+    },
+    /// Fire lines to the kitchen: one line, a course, or the whole order (ADR-0158).
+    FireLines {
+        id: "sales.line.fire",
+        group: Sales,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Send lines to the kitchen",
+    },
+    /// Bump a ticket on the kitchen board once its dishes are done (ADR-0158).
+    BumpTicket {
+        id: "sales.ticket.bump",
+        group: Sales,
+        risk: Low,
+        pin: false,
+        default_roles: [Cook, Supervisor, Manager, Owner],
+        description: "Mark a ticket done on the kitchen board",
+    },
 
     // ---- Billing ----
     /// Apply a discount within the role's ceiling.
@@ -326,6 +362,33 @@ permissions! {
         pin: false,
         default_roles: [Cashier, Supervisor, Manager, Owner],
         description: "Reprint a receipt; the copy is marked and the reprint is counted",
+    },
+    /// Open the bill on an order, as when the guests ask for it (ADR-0158).
+    OpenBill {
+        id: "billing.bill.open",
+        group: Billing,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Open a bill when the guests ask for it",
+    },
+    /// Split a bill into parts, or merge bills back into one (ADR-0158).
+    SplitBill {
+        id: "billing.bill.split",
+        group: Billing,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Split a bill or merge bills",
+    },
+    /// Take a payment and settle a bill (ADR-0158).
+    TakePayment {
+        id: "billing.payment.take",
+        group: Billing,
+        risk: Low,
+        pin: false,
+        default_roles: [Cashier, Server, Supervisor, Manager, Owner],
+        description: "Take a payment and settle a bill",
     },
 
     // ---- Cash and shifts ----
@@ -695,9 +758,11 @@ mod tests {
         assert!(!cook.contains(Permission::VoidBill));
         assert!(!cook.contains(Permission::IssueRefund));
         assert!(!cook.contains(Permission::OpenDrawerNoSale));
-        // But does get to record waste and 86 an item.
+        assert!(!cook.contains(Permission::TakePayment));
+        // But does get to record waste, 86 an item and bump a ticket.
         assert!(cook.contains(Permission::RecordWaste));
         assert!(cook.contains(Permission::MarkItemUnavailable));
+        assert!(cook.contains(Permission::BumpTicket));
     }
 
     #[test]
