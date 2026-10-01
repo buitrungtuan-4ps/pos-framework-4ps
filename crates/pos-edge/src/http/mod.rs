@@ -637,6 +637,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
         AppError::UnknownShift => "UNKNOWN_SHIFT",
         AppError::ShiftAlreadyOpen => "SHIFT_ALREADY_OPEN",
+        AppError::OpenShiftRequired => "OPEN_SHIFT_REQUIRED",
         AppError::AwaitingStaffConfirmation => "AWAITING_STAFF_CONFIRMATION",
         AppError::OrderRejected => "ORDER_REJECTED",
         AppError::NotAwaitingStaffConfirmation => "NOT_AWAITING_STAFF_CONFIRMATION",
@@ -682,6 +683,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::BillsOnDifferentTables
         | AppError::UnknownShift
         | AppError::ShiftAlreadyOpen
+        | AppError::OpenShiftRequired
         | AppError::AwaitingStaffConfirmation
         | AppError::OrderRejected
         | AppError::NotAwaitingStaffConfirmation
