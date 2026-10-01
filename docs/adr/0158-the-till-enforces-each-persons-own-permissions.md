@@ -1,6 +1,6 @@
 # ADR-0158 — The till enforces each person's own permissions, and a role is whatever the business composes
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-09-26
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-09-26
 · Relates to [ADR-0070](0070-people-and-access.md), [ADR-0084](0084-device-authentication.md),
 [ADR-0091](0091-durable-edge-auth-state.md), [ADR-0118](0118-one-credential-per-box-and-the-cloud-learns.md),
 [ADR-0122](0122-a-store-group-is-a-delivery-cohort.md), [ADR-0115](0115-reason-codes-are-a-managed-list.md)
@@ -37,7 +37,9 @@ The other half does not: **the store does not enforce the role.**
 | B | A fixed ladder of built-in roles | Contradicts "create roles freely"; every new job title becomes a release |
 | C | **Each person's own set, deny by default, every route names its permission, approval set per role** | Staff lose actions their role never granted — which is the point — so it needs a rollout switch |
 
-## Decision (proposed)
+## Decision
+
+Option **C**. The owner approved it on 2026-10-01.
 
 1. **Per person, deny by default.** The edge decides every command with the signed-in person's own
    permission set from the published `permissions` node. The store-wide set is removed. A person the
@@ -88,6 +90,9 @@ today's `default_grants` — which they may rename, change or archive.
 - Out of scope, named so it is not assumed: console admin roles stay the four fixed roles of
   ADR-0067; per-device limits (a kitchen screen that can only bump) come with the till's role-aware
   menus; percentage discount ceilings and price-override limits come later.
+
+Met on 2026-10-01: the owner confirmed the rollout switch and that it is temporary, and that one
+assignment may cover every store of the tenant. The items named out of scope stay out of it.
 
 ## Consequences accepted
 
