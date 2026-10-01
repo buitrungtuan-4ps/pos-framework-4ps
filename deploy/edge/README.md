@@ -474,6 +474,20 @@ scope is granted. A box with no store key uses its device credential, which carr
 link always presents the device credential, so a key never needs `publish_events` for the edge's
 own sake.
 
+### `sign_in_idle_timeout_minutes` is deprecated
+
+How long a signed-in till may sit unused before it asks for a PIN again is a setting of the store's
+configuration now, `session.sign_in_idle_timeout_minutes`, written in the console's shared settings
+([`docs/configuration.md`](../../docs/configuration.md),
+[ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+decision 6). The key in `config.toml` is still read, so a box that sets it keeps its window, but
+only while the store's configuration sets none. Once the console sets one, the published window
+applies from the next request and the key is ignored. Remove the key then.
+
+| Line | What it means | What to do |
+|---|---|---|
+| `WARN config.toml sets sign_in_idle_timeout_minutes, which is deprecated, and it is the sign-in idle timeout in use` (`minutes`) | Logged at start-up when the file's value is the window in use. | Set `session.sign_in_idle_timeout_minutes` for the store in the console's shared settings, then remove the key. |
+
 ### The clock is measured against a time server
 
 Every fifteen minutes the edge asks a time server what time it is, over SNTP (outbound UDP 123), and

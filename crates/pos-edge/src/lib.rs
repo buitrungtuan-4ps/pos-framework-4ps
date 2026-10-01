@@ -91,7 +91,10 @@ pub use app::{
     OrderLineChoice, ReceiptCopy, ReceiptLine, SettledBillView, ShiftView, StaffAuth, StaffRoster,
     StoreIdentity, TableView, TransferView,
 };
-pub use auth::{DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, Sessions, SignIn, has_gone_idle};
+pub use auth::{
+    DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, LockoutPolicy, SessionSettingsSource, Sessions, SignIn,
+    has_gone_idle,
+};
 pub use backup::{ArchiveError, ArchiveKey};
 pub use clock::SystemClock;
 pub use config::EdgeConfig;

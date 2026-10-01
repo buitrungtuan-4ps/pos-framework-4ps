@@ -28775,3 +28775,162 @@ async fn a_value_of_the_wrong_kind_is_refused_with_the_reason_the_register_gives
     }
     assert_eq!(tenant_layer_shift(&config_trees, first).await, None);
 }
+
+const LOCKOUT_ATTEMPTS: &str = "session.lockout_attempts";
+
+/// A write of `value` for the whole-number setting `setting_key`, for every store of the tenant.
+fn put_number(setting_key: &str, value: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "setting_key": setting_key,
+        "scope": "SETTING_SCOPE_TENANT",
+        "scope_id": tenant().as_ulid().to_string(),
+        "value": value,
+    })
+}
+
+/// The `session` node a store's Tenant layer carries, if any.
+async fn tenant_layer_session(
+    config_trees: &FakeConfigTrees,
+    store_id: StoreId,
+) -> Option<serde_json::Value> {
+    let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
+    tree.record.layers[0].get("session").cloned()
+}
+
+#[tokio::test]
+async fn a_whole_number_setting_is_published_to_every_store_as_a_number() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number(LOCKOUT_ATTEMPTS, &serde_json::json!(3)),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert!(
+        outcomes(&json_body(written).await)
+            .iter()
+            .all(|(_, outcome)| outcome == "SETTING_PUBLISH_APPLIED"),
+        "every store of the tenant is given it"
+    );
+    for store_id in settings_stores() {
+        assert_eq!(
+            tenant_layer_session(&config_trees, store_id).await,
+            Some(serde_json::json!({ "lockout_attempts": 3 })),
+            "a number, as the edge's `session` node reads it"
+        );
+    }
+
+    // What one store runs, with its default beside it for the settings nothing sets.
+    let [first, _, _] = settings_stores();
+    let runs = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/settings/effective?tenant_id={}&store_id={first}",
+                    tenant().as_ulid()
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route"),
+    )
+    .await;
+    let running = |key: &str| {
+        runs["settings"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|setting| setting["setting_key"] == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("{key} is listed"))
+    };
+    assert_eq!(running(LOCKOUT_ATTEMPTS)["value"], 3);
+    assert_eq!(running(LOCKOUT_ATTEMPTS)["scope"], "SETTING_SCOPE_TENANT");
+    assert_eq!(running("session.lockout_minutes")["value"], 5);
+    assert!(running("session.lockout_minutes").get("scope").is_none());
+
+    // The catalogue gives the console the bounds and the unit to draw its field from.
+    let catalogue = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let attempts = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == LOCKOUT_ATTEMPTS)
+        .expect("the lockout attempts are listed");
+    assert_eq!(attempts["kind"], "SETTING_KIND_INT");
+    assert_eq!(attempts["min"], 3);
+    assert_eq!(attempts["max"], 10);
+    assert_eq!(attempts["unit"], "SETTING_UNIT_COUNT");
+    assert_eq!(attempts["default"], 5);
+    assert!(attempts.get("preset").is_none(), "a new store keeps five");
+    assert!(attempts.get("values").is_none(), "a number has no list");
+}
+
+#[tokio::test]
+async fn a_number_outside_its_bounds_or_not_whole_is_refused_and_reaches_no_store() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+
+    for (setting_key, value, reason) in [
+        // No value switches the PIN lockout off: zero attempts and zero minutes are out of range.
+        (LOCKOUT_ATTEMPTS, serde_json::json!(0), "OUT_OF_RANGE"),
+        (LOCKOUT_ATTEMPTS, serde_json::json!(11), "OUT_OF_RANGE"),
+        (
+            "session.lockout_minutes",
+            serde_json::json!(0),
+            "OUT_OF_RANGE",
+        ),
+        (
+            "session.sign_in_idle_timeout_minutes",
+            serde_json::json!(241),
+            "OUT_OF_RANGE",
+        ),
+        (
+            "session.sign_in_idle_timeout_minutes",
+            serde_json::json!(4),
+            "OUT_OF_RANGE",
+        ),
+        // A value of another JSON type is refused, not coerced.
+        (LOCKOUT_ATTEMPTS, serde_json::json!(3.5), "INVALID_VALUE"),
+        (LOCKOUT_ATTEMPTS, serde_json::json!("3"), "INVALID_VALUE"),
+        (LOCKOUT_ATTEMPTS, serde_json::json!(true), "INVALID_VALUE"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &put_number(setting_key, &value),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(
+            refused.status(),
+            StatusCode::BAD_REQUEST,
+            "{setting_key} = {value}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], "value");
+        assert_eq!(
+            body["error"]["details"][0]["reason"], reason,
+            "{setting_key} = {value}"
+        );
+    }
+    for store_id in settings_stores() {
+        assert_eq!(tenant_layer_session(&config_trees, store_id).await, None);
+    }
+}

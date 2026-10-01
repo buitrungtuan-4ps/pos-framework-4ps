@@ -58,6 +58,7 @@ use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
 use pos_proto::people::PublishedPermissions;
 use pos_proto::reason_codes::PublishedReasonCodes;
+use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
 
@@ -361,6 +362,22 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
                 .and_then(|text| serde_json::from_str::<PublishedShift>(&text).ok())
             {
                 session.shift = shift;
+            }
+        }
+    }
+    // The `session` node (ADR-0160): how long a sign-in lasts on an idle device and how many wrong
+    // PINs lock a person out. A node of settings like `shift`, so absent means the defaults and an
+    // unparseable one keeps the last value — a broken publish must not relax a lockout mid-service.
+    // The sign-in window and the lockout read it from the live session, so it applies from the next
+    // request, with no restart ([`crate::auth::Sessions`]).
+    match document.get(PublishedSession::NODE) {
+        None => session.session_settings = PublishedSession::default(),
+        Some(value) => {
+            if let Some(settings) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedSession>(&text).ok())
+            {
+                session.session_settings = settings;
             }
         }
     }
@@ -1106,6 +1123,7 @@ mod tests {
     use pos_proto::ids::{MenuItemId, ModifierGroupId, TaxClassId};
     use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry, MenuModifierGroup};
     use pos_proto::money::{CurrencyCode, Money};
+    use pos_proto::session::PublishedSession;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
 
@@ -1238,6 +1256,41 @@ mod tests {
         // A document without the node is one in which nothing sets the setting any more.
         let cleared = session_from_config(&refusing, &serde_json::json!({ "other": true }));
         assert_eq!(cleared.shift.no_shift_selling(), NoShiftSelling::Allow);
+    }
+
+    #[test]
+    fn a_session_node_is_applied_a_malformed_one_keeps_the_last_and_an_absent_one_resets() {
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.session_settings.lockout_attempts(),
+            5,
+            "a box that never synced locks out as it always has"
+        );
+        let strict = session_from_config(
+            &base,
+            &serde_json::json!({
+                "session": { "lockout_attempts": 3, "lockout_minutes": 15, "sign_in_idle_timeout_minutes": 10 }
+            }),
+        );
+        assert_eq!(strict.session_settings.lockout_attempts(), 3);
+        assert_eq!(strict.session_settings.lockout_minutes(), 15);
+        assert_eq!(
+            strict.session_settings.sign_in_idle_timeout_minutes(),
+            Some(10)
+        );
+
+        // A publish that broke the node keeps the store's lockout rather than relaxing it.
+        for broken in [
+            serde_json::json!({ "session": "not a node" }),
+            serde_json::json!({ "session": { "lockout_attempts": "3" } }),
+        ] {
+            let kept = session_from_config(&strict, &broken);
+            assert_eq!(kept.session_settings, strict.session_settings, "{broken}");
+        }
+
+        // A document without the node is one in which nothing sets these settings any more.
+        let cleared = session_from_config(&strict, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.session_settings, PublishedSession::default());
     }
 
     #[test]

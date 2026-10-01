@@ -78,17 +78,22 @@ pub struct EdgeConfig {
     /// a credential, so it comes from the environment (see [`NatsConfig`]).
     #[serde(default)]
     pub nats: Option<NatsConfig>,
-    /// How many minutes a signed-in device may sit idle before its sign-in stops counting
-    /// ([ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)). Defaults to 30.
+    /// **Deprecated** ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 6): how many minutes a signed-in device may sit idle before its sign-in stops
+    /// counting ([ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)). The store's
+    /// configuration sets it now, as `session.sign_in_idle_timeout_minutes`, and that value wins.
+    ///
+    /// Kept so a box that sets it here keeps its window until the console sets one: it applies
+    /// only while the published configuration sets none, and the edge logs a warning at start-up
+    /// when it is the window in use. Absent, the window is thirty minutes. `0` is refused by
+    /// [`Self::validate`], because a zero window signs a device out between its own two requests.
     ///
     /// Sign-in survives a restart, which is what stops a power blip or an OTA install making every
     /// member of staff re-enter a PIN mid-service. The cost of that is a till carried off while
     /// signed in as a manager, and this window is what bounds it: past it, the device is treated as
-    /// signed out. Lower it towards the pre-S0d behaviour, or raise it for continuity and accept the
-    /// wider window; `0` is refused by [`Self::validate`], because a zero window signs a device out
-    /// between its own two requests.
-    #[serde(default = "default_sign_in_idle_timeout_minutes")]
-    pub sign_in_idle_timeout_minutes: u64,
+    /// signed out.
+    #[serde(default)]
+    pub sign_in_idle_timeout_minutes: Option<u64>,
     /// Where to load printing fonts from
     /// ([ADR-0102](../../../docs/adr/0102-printing-any-script.md)).
     ///
@@ -179,11 +184,6 @@ const fn default_font_size_dots() -> u16 {
     24
 }
 
-/// Thirty minutes, as [`crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT`].
-const fn default_sign_in_idle_timeout_minutes() -> u64 {
-    30
-}
-
 /// The JetStream stream this store publishes into
 /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)).
 ///
@@ -218,7 +218,7 @@ impl EdgeConfig {
             cloud_url: None,
             store_path: default_store_path(),
             nats: None,
-            sign_in_idle_timeout_minutes: default_sign_in_idle_timeout_minutes(),
+            sign_in_idle_timeout_minutes: None,
             font_directories: default_font_directories(),
             font_size_dots: default_font_size_dots(),
             backup_interval_hours: default_backup_interval_hours(),
@@ -226,10 +226,14 @@ impl EdgeConfig {
         }
     }
 
-    /// How long a signed-in device may idle, as a [`Duration`].
+    /// How long a signed-in device may idle when the store's configuration sets no window: this
+    /// file's deprecated value, or [`DEFAULT_SIGN_IN_IDLE_TIMEOUT`](crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT).
     #[must_use]
-    pub const fn sign_in_idle_timeout(&self) -> Duration {
-        Duration::from_secs(self.sign_in_idle_timeout_minutes * 60)
+    pub fn sign_in_idle_timeout(&self) -> Duration {
+        self.sign_in_idle_timeout_minutes
+            .map_or(crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT, |minutes| {
+                Duration::from_secs(minutes.saturating_mul(60))
+            })
     }
 
     /// Rejects a configuration that would misbehave rather than starting with it.
@@ -245,7 +249,7 @@ impl EdgeConfig {
     /// rather than at mint time, because the alternative is a box that runs happily and hands an
     /// operator a URL that gives away a bearer token the first time anyone scans it (ADR-0111).
     pub fn validate(&self) -> Result<(), EdgeError> {
-        if self.sign_in_idle_timeout_minutes == 0 {
+        if self.sign_in_idle_timeout_minutes == Some(0) {
             return Err(EdgeError::Config(
                 "sign_in_idle_timeout_minutes must be at least 1: a zero window signs a device out \
                  between its own two requests (ADR-0091)"
@@ -373,6 +377,33 @@ mod tests {
         let config = EdgeConfig::from_toml_str(STORE_ID).expect("parses");
         assert!(config.public_origin.is_none());
         config.validate().expect("an absent origin is not a fault");
+    }
+
+    #[test]
+    fn the_deprecated_idle_timeout_is_read_only_when_the_file_sets_it() {
+        // Absent: nothing here to fall back on but the thirty minutes the register defaults to
+        // (ADR-0160 decision 6).
+        let config = EdgeConfig::from_toml_str(STORE_ID).expect("parses");
+        assert_eq!(config.sign_in_idle_timeout_minutes, None);
+        assert_eq!(
+            config.sign_in_idle_timeout(),
+            crate::auth::DEFAULT_SIGN_IN_IDLE_TIMEOUT
+        );
+        config.validate().expect("an absent window is not a fault");
+
+        let config =
+            EdgeConfig::from_toml_str(&format!("{STORE_ID}\nsign_in_idle_timeout_minutes = 45"))
+                .expect("the deprecated key still parses");
+        assert_eq!(config.sign_in_idle_timeout_minutes, Some(45));
+        assert_eq!(
+            config.sign_in_idle_timeout(),
+            std::time::Duration::from_secs(45 * 60)
+        );
+
+        let config =
+            EdgeConfig::from_toml_str(&format!("{STORE_ID}\nsign_in_idle_timeout_minutes = 0"))
+                .expect("the field parses; it is validate that objects");
+        assert!(config.validate().is_err(), "a zero window is refused");
     }
 
     #[test]

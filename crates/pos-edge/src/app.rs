@@ -61,6 +61,7 @@ use pos_proto::ids::{
 };
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
+use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::PermissionKey;
@@ -79,7 +80,7 @@ use pos_proto::{
     ReductionKind, SalesChannel, ShiftState, TableState,
 };
 
-use crate::auth::{Lockout, SignIn};
+use crate::auth::{Lockout, LockoutPolicy, SignIn};
 use crate::clock::SystemClock;
 use crate::fanout::{Fanout, ServerMessage};
 use crate::idgen::EdgeIdGenerator;
@@ -496,6 +497,14 @@ pub struct EdgeSession {
     /// The defaults in the bootstrap, and every default is what the edge did before the node
     /// existed: a store sells with or without an open shift.
     pub shift: PublishedShift,
+    /// How long a sign-in lasts on an idle device and how many wrong PINs lock a person out, from
+    /// the `session` config node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    ///
+    /// The defaults in the bootstrap, which are what the edge did before the node existed: five
+    /// wrong PINs lock a person out for five minutes, and the sign-in window is the local file's
+    /// or thirty minutes ([`crate::auth::Sessions`]).
+    pub session_settings: PublishedSession,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -666,6 +675,7 @@ impl EdgeSession {
             // headed with nothing (ADR-0106).
             profile: StoreProfile::default(),
             shift: PublishedShift::default(),
+            session_settings: PublishedSession::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
@@ -3813,10 +3823,14 @@ impl<S: EventStore> Edge<S> {
             .staff
             .approver(&approval.code)
             .ok_or(AppError::ApprovalRefused)?;
-        match self
-            .pin_lockout
-            .authenticate(approver, phc, &approval.pin, self.clock.now())
-        {
+        // The store's own lockout numbers (ADR-0160), the same ones its sign-in counts against.
+        match self.pin_lockout.authenticate(
+            approver,
+            phc,
+            &approval.pin,
+            self.clock.now(),
+            LockoutPolicy::of(&session.session_settings),
+        ) {
             SignIn::Ok => {}
             SignIn::Wrong { .. } => return Err(AppError::ApprovalRefused),
             SignIn::LockedOut { .. } => return Err(AppError::ApproverLockedOut),
