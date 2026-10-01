@@ -5862,8 +5862,9 @@ fn people_entropy_unavailable() -> Response {
 /// [`ConsolePermission::Read`] (every console role). Every write is behind
 /// [`ConsolePermission::ManagePeople`] (Owner/Admin) and emits an audit entry that records the
 /// employee **id, code, status, and role — never the name, and never the PIN or its hash** (ADR-0070).
-/// The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request body on
-/// writes.
+/// `GET /admin/audit` shows that code only to a role holding `ReadPeople`, which is the roster's
+/// gate. The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request
+/// body on writes.
 pub fn people_router<P, A, C>(
     people: P,
     admin: A,
@@ -18749,7 +18750,8 @@ fn preview_config_nodes(
 /// returns the merge patch it would apply to the store's effective document — without minting a
 /// version, saving, or auditing (it changes nothing). `422` with the same violations a real publish
 /// would reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience
-/// that can actually publish.
+/// that can actually publish. The diff's staff are redacted for the caller's role, as the generic
+/// preview's are ([`staff_redacted_for`]): it can carry the `permissions` node too.
 async fn preview_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -18761,7 +18763,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -18769,8 +18771,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (tenant_id, store_id) = match parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
@@ -18792,7 +18795,10 @@ where
     };
     let state_before = &loaded.state;
     match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
-        Ok(preview) => (StatusCode::OK, Json(preview)).into_response(),
+        Ok(mut preview) => {
+            preview.diff = staff_redacted_for(&preview.diff, context.admin.role);
+            (StatusCode::OK, Json(preview)).into_response()
+        }
         Err(violations) => unprocessable_violations(&violations),
     }
 }
@@ -18805,7 +18811,8 @@ where
 /// No `AuditRecorder`, and that is the point of the route: a preview mints no version, writes
 /// nothing and changes nothing, so there is nothing for the trail to record. The permission is
 /// still [`ConsolePermission::PublishConfig`] — seeing what a publish *would* do to a store is the
-/// same disclosure as doing it, and the compiled document can carry prices.
+/// same disclosure as doing it, and the compiled document can carry prices. Staff are where that
+/// stops being true, so the route redacts them ([`admin_preview_config_node`]).
 #[derive(Clone)]
 struct ConfigPreviewState<Cfg, A, C> {
     config_trees: Cfg,
@@ -18835,7 +18842,8 @@ struct NodePreview {
     node: String,
     /// The version the diff is computed against, or `null` when the store has no tree yet.
     from_version_id: Option<String>,
-    /// The RFC 7386 merge patch the publish would apply to the store's effective document.
+    /// The RFC 7386 merge patch the publish would apply to the store's effective document, with its
+    /// staff redacted for the caller's role ([`admin_preview_config_node`]).
     diff: serde_json::Value,
     /// True when nothing would change — there is nothing to publish.
     unchanged: bool,
@@ -18857,6 +18865,20 @@ struct NodePreview {
 /// not carry have no preview here, and deliberately: `locale` and `store_profile` are per-store by
 /// definition (ADR-0122 §4), so there is no tenant-wide document to compile.
 ///
+/// # Whom the diff names
+///
+/// A `permissions` preview carries the store's roster: each member's name, staff code and PIN
+/// hash. Publishing that node shows nobody any of them, and `PublishConfig` is Ops's permission
+/// too, so the diff gets a config read's treatment ([`staff_redacted_for`]): never a PIN hash, and
+/// a name or code only for a role holding [`ConsolePermission::ReadPeople`]
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every
+/// node's preview is redacted, not only that one's: a store with layers and no published version
+/// has nothing to diff against, so the diff of any node is the whole document, staff included.
+///
+/// It is redacted *after* it is computed, never before. Diffing redacted documents would answer
+/// `unchanged: true` to a PIN reset or a rename, and an operator told that nothing would change
+/// would not publish the change the till is waiting for.
+///
 /// Mints no version, saves nothing, audits nothing. `422` carries the violations a real publish
 /// would refuse the candidate with, verbatim.
 async fn admin_preview_config_node<Cfg, A, C>(
@@ -18869,7 +18891,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -18877,8 +18899,9 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
     let (tenant_id, store_id) = match parse_ulid_fields([
         ("tenant_id", &request.tenant_id),
         ("store_id", &request.store_id),
@@ -18916,7 +18939,7 @@ where
             Json(NodePreview {
                 node: request.node,
                 from_version_id: preview.from_version_id,
-                diff: preview.diff,
+                diff: staff_redacted_for(&preview.diff, context.admin.role),
                 unchanged: preview.unchanged,
             }),
         )
@@ -26733,7 +26756,10 @@ impl AuditEntryView {
 /// Builds the audit-read sub-router ([ADR-0069](../../../docs/adr/0069-audit-trail.md) slice 4).
 ///
 /// One read, `GET /admin/audit`, behind [`ConsolePermission::Read`] (every console role may read the
-/// trail). It names its tenant the admin-is-global way — a `?tenant_id=` query
+/// trail). An entry about an employee records the person's staff code, so a role without
+/// [`ConsolePermission::ReadPeople`] reads that entry without it
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// It names its tenant the admin-is-global way — a `?tenant_id=` query
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)); absent, it is the fleet-wide
 /// read. Like the other reads it carries its own state and is merged into the main router.
 pub fn audit_router<Au, A, C>(audit: Au, admin: A, clock: C) -> Router
@@ -26762,7 +26788,7 @@ where
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
-    if let Err(denied) = require_permission(
+    let context = match require_permission(
         &state.admin,
         &state.clock,
         &headers,
@@ -26770,8 +26796,10 @@ where
     )
     .await
     {
-        return denied;
-    }
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let role = context.admin.role;
     let tenant = match query.tenant_id.as_deref() {
         Some(text) => match text.parse::<Ulid>().map(TenantId::new) {
             Ok(tenant) => Some(tenant),
@@ -26802,7 +26830,7 @@ where
             Err(refusal) => return refusal,
         };
         return match state.audit.query(&filter, limit).await {
-            Ok(entries) => (StatusCode::OK, Json(audit_views(entries))).into_response(),
+            Ok(entries) => (StatusCode::OK, Json(audit_views(entries, role))).into_response(),
             Err(error) => audit_read_failure(&error),
         };
     };
@@ -26815,7 +26843,7 @@ where
         Err(refusal) => return refusal,
     };
     match state.audit.query_page(&filter, page, order).await {
-        Ok(read) => paged_ok(Page::new(audit_views(read.items), read.total), page),
+        Ok(read) => paged_ok(Page::new(audit_views(read.items, role), read.total), page),
         Err(error) => audit_read_failure(&error),
     }
 }
@@ -26858,12 +26886,51 @@ fn windowed_read_cannot_be_ordered_refusal() -> Response {
     )
 }
 
-/// The wire view of a batch of audit entries, shared by the windowed and paged reads.
-fn audit_views(entries: Vec<AuditEntry>) -> Vec<AuditEntryView> {
+/// The wire view of a batch of audit entries, shared by the windowed and paged reads, as `role`
+/// may read them: without the staff code of an employee entry unless it holds
+/// [`ConsolePermission::ReadPeople`] ([`without_audited_staff_identity`]).
+fn audit_views(entries: Vec<AuditEntry>, role: AdminRole) -> Vec<AuditEntryView> {
+    let names_staff = role_grants(role, ConsolePermission::ReadPeople);
     entries
         .into_iter()
+        .map(|entry| {
+            if names_staff {
+                entry
+            } else {
+                without_audited_staff_identity(entry)
+            }
+        })
         .map(AuditEntryView::from_entry)
         .collect()
+}
+
+/// Removes the staff code, and a name if one is there, from the `before` and `after` of an audit
+/// entry about an employee, for a reader without [`ConsolePermission::ReadPeople`]
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// `employee.create` and `employee.update` record the person's id, staff code and status
+/// (ADR-0070), and the trail is behind [`ConsolePermission::Read`], which every console role holds.
+/// Without this the Audit screen would be the way round the roster's gate, as the config screen
+/// was before [`without_staff_identities`]: a Viewer refused the roster could collect every staff
+/// code the console ever wrote, each beside the employee id it belongs to.
+///
+/// **Only `employee` entries**, because only they identify a person. An `assignment` records ids,
+/// a `role`'s `name` is the role's, and a `store`'s is the shop's. The `name` goes as well as the
+/// `code` although no route writes one, because ADR-0070 forbids it and this read should not rely
+/// on every writer, past and future, remembering that. Everything else stays, so the trail still
+/// says who changed which employee, how and when. The fields are *removed*, not blanked, for the
+/// reason S7 gives. What the trail *records* is unchanged: an Owner or Admin reads the same entry
+/// with the code in it.
+fn without_audited_staff_identity(mut entry: AuditEntry) -> AuditEntry {
+    if entry.entity_type == "employee" {
+        for recorded in [&mut entry.before, &mut entry.after].into_iter().flatten() {
+            if let Some(fields) = recorded.as_object_mut() {
+                fields.remove("code");
+                fields.remove("name");
+            }
+        }
+    }
+    entry
 }
 
 /// Maps an audit read failure to a retryable `503`, logging the detail rather than leaking it.
@@ -28373,7 +28440,6 @@ where
             Err(denied) => return denied,
         };
     let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
-    let staff = role_grants(context.admin.role, ConsolePermission::ReadPeople);
     let (tenant_id, store_id) =
         match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
@@ -28390,15 +28456,9 @@ where
             match tree.current_effective() {
                 // Never the staff PIN hashes (S7), never a staff name or code to a role without
                 // `ReadPeople` (ADR-0158), and never a price to a role without `ReadRevenue` (S8)
-                // — see `without_staff_credentials`, `without_staff_identities` and
-                // `without_prices`.
+                // — see `staff_redacted_for` and `without_prices`.
                 Some(effective) => {
-                    let document = without_staff_credentials(effective);
-                    let document = if staff {
-                        document
-                    } else {
-                        without_staff_identities(&document)
-                    };
+                    let document = staff_redacted_for(effective, context.admin.role);
                     let document = if prices {
                         document
                     } else {
@@ -28666,6 +28726,26 @@ fn without_staff_identities(document: &serde_json::Value) -> serde_json::Value {
     document
 }
 
+/// A config document with its staff as `role` may read them: never a PIN hash, whoever asks
+/// ([`without_staff_credentials`], **S7**), and a name or staff code only for a role holding
+/// [`ConsolePermission::ReadPeople`] ([`without_staff_identities`],
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+///
+/// The two rules always travel together, so every console surface that hands back configuration
+/// applies them through this one function: the current and past config reads, and the merge patch
+/// both publish previews answer with. The patch needs nothing of its own. Every value in an
+/// RFC 7386 patch is either the candidate's own or a `null` that deletes a key, and a changed array
+/// is carried whole rather than patched, so wherever a patch reaches `permissions.staff` it holds
+/// complete members, exactly as the document does.
+fn staff_redacted_for(document: &serde_json::Value, role: AdminRole) -> serde_json::Value {
+    let document = without_staff_credentials(document);
+    if role_grants(role, ConsolePermission::ReadPeople) {
+        document
+    } else {
+        without_staff_identities(&document)
+    }
+}
+
 /// The config nodes whose published shape carries money, and which a console caller therefore reads
 /// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
 ///
@@ -28731,7 +28811,6 @@ where
             Err(denied) => return denied,
         };
     let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
-    let staff = role_grants(context.admin.role, ConsolePermission::ReadPeople);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -28757,12 +28836,7 @@ where
                 // past staff names (ADR-0158) and past prices (S8) — none is less sensitive for
                 // being last month's.
                 Some(effective) => {
-                    let document = without_staff_credentials(effective);
-                    let document = if staff {
-                        document
-                    } else {
-                        without_staff_identities(&document)
-                    };
+                    let document = staff_redacted_for(effective, context.admin.role);
                     let document = if prices {
                         document
                     } else {
@@ -32534,10 +32608,12 @@ mod console_config_redaction_tests {
     //! Three independent redactions run on the same document and the tests keep them independent:
     //! the staff credential goes unconditionally (**S7**), the staff names and codes go by role
     //! (ADR-0158), and the priced nodes go by role (**S8**). A change that merged any two would be a
-    //! change in behaviour for one of them.
+    //! change in behaviour for one of them. `staff_redacted_for` applies the two staff rules
+    //! together, as the config reads and the publish previews must, and still as two rules.
 
     use super::{
-        PRICED_CONFIG_NODES, without_prices, without_staff_credentials, without_staff_identities,
+        AdminRole, PRICED_CONFIG_NODES, diff, staff_redacted_for, without_prices,
+        without_staff_credentials, without_staff_identities,
     };
     use serde_json::json;
 
@@ -32658,5 +32734,188 @@ mod console_config_redaction_tests {
         // A store that has published capabilities and nothing else is the common case on day one.
         let plain = json!({ "capabilities": { "tips_enabled": false } });
         assert_eq!(without_prices(&plain), plain);
+    }
+
+    #[test]
+    fn every_role_reads_the_staff_its_permissions_allow_and_none_reads_a_pin_hash() {
+        for (role, names_staff) in [
+            (AdminRole::Owner, true),
+            (AdminRole::Admin, true),
+            (AdminRole::Ops, false),
+            (AdminRole::Viewer, false),
+        ] {
+            let redacted = staff_redacted_for(&document(), role);
+            let member = redacted["permissions"]["staff"][0]
+                .as_object()
+                .expect("the member is still listed");
+            assert!(
+                !member.contains_key("pin_phc"),
+                "{role:?}: never the credential (S7)"
+            );
+            assert_eq!(
+                member.contains_key("name"),
+                names_staff,
+                "{role:?}: a name only with ReadPeople (ADR-0158): {member:?}"
+            );
+            assert_eq!(
+                member.contains_key("code"),
+                names_staff,
+                "{role:?}: a staff code only with ReadPeople (ADR-0158): {member:?}"
+            );
+            assert_eq!(member["id"], "01J", "{role:?}: the member stays");
+            assert!(
+                redacted.get("menu").is_some(),
+                "{role:?}: the prices are S8's to remove, not this function's"
+            );
+        }
+    }
+
+    #[test]
+    fn a_preview_patch_is_redacted_at_the_documents_own_path() {
+        // A preview answers with the merge patch from the store's document to the candidate.
+        // RFC 7386 carries a changed array whole, so renaming one member and resetting their PIN
+        // puts the whole staff array in the patch: complete members, where the document keeps them.
+        let before = document();
+        let mut after = document();
+        after["permissions"]["staff"][0]["name"] = json!("Alicia");
+        after["permissions"]["staff"][0]["pin_phc"] = json!("$argon2id$v=19$new...");
+        let patch = diff(&before, &after);
+        assert!(
+            patch["permissions"]["staff"][0]["pin_phc"].is_string(),
+            "unredacted, the patch carries the new hash; that is what the redaction is for: {patch}"
+        );
+
+        let ops = staff_redacted_for(&patch, AdminRole::Ops);
+        let member = ops["permissions"]["staff"][0]
+            .as_object()
+            .expect("the member is still in the patch");
+        for field in ["pin_phc", "name", "code"] {
+            assert!(
+                !member.contains_key(field),
+                "Ops reads the patch without `{field}`: {member:?}"
+            );
+        }
+        assert_eq!(member["id"], "01J", "and still sees which member changed");
+
+        let owner = staff_redacted_for(&patch, AdminRole::Owner);
+        let member = &owner["permissions"]["staff"][0];
+        assert_eq!(member["name"], "Alicia", "an Owner reads the rename");
+        assert!(member.get("pin_phc").is_none(), "and nobody reads the hash");
+
+        // A patch that does not reach the staff comes back as it went in. `{}` is the preview of a
+        // publish that would change nothing, and must stay `{}`.
+        for untouched in [
+            json!({}),
+            json!({ "permissions": null }),
+            json!({ "permissions": { "store_id": "01S" } }),
+            json!({ "capabilities": { "tips_enabled": true } }),
+        ] {
+            assert_eq!(staff_redacted_for(&untouched, AdminRole::Viewer), untouched);
+        }
+    }
+}
+
+#[cfg(test)]
+mod audit_read_redaction_tests {
+    //! What a role without `console.people.read` reads of the audit trail (ADR-0158 decision 9): an
+    //! entry about an employee without the person's staff code, and everything else as written.
+
+    use super::{
+        AdminRole, AuditActor, AuditEntry, AuditId, audit_views, without_audited_staff_identity,
+    };
+    use pos_proto::time::Timestamp;
+    use pos_proto::ulid::Ulid;
+    use serde_json::json;
+
+    /// An entry as a console write records it, about one entity of `entity_type`.
+    fn entry(
+        entity_type: &str,
+        before: Option<serde_json::Value>,
+        after: Option<serde_json::Value>,
+    ) -> AuditEntry {
+        AuditEntry {
+            id: AuditId::new(Ulid::from_u128(1)),
+            tenant_id: None,
+            actor: AuditActor {
+                admin_id: "01ADMIN".to_owned(),
+                email: "owner@example.test".to_owned(),
+                role: AdminRole::Owner,
+            },
+            action: format!("{entity_type}.update"),
+            entity_type: entity_type.to_owned(),
+            entity_id: "01J".to_owned(),
+            before,
+            after,
+            request_id: None,
+            at: Timestamp::from_milliseconds_since_epoch(0).expect("the epoch is an instant"),
+        }
+    }
+
+    #[test]
+    fn an_employee_entry_loses_the_staff_code_and_keeps_the_rest() {
+        let read = without_audited_staff_identity(entry(
+            "employee",
+            Some(json!({ "id": "01J", "code": "C01", "status": "active" })),
+            // No route writes a name (ADR-0070); if one ever did, it goes the same way.
+            Some(json!({ "id": "01J", "code": "C01", "status": "archived", "name": "Alice" })),
+        ));
+        for (side, recorded) in [("before", &read.before), ("after", &read.after)] {
+            let fields = recorded
+                .as_ref()
+                .and_then(serde_json::Value::as_object)
+                .expect("both sides are still there");
+            assert!(
+                !fields.contains_key("code") && !fields.contains_key("name"),
+                "{side}: {fields:?}"
+            );
+            assert_eq!(fields["id"], "01J", "{side}: which employee stays");
+        }
+        assert_eq!(read.entity_id, "01J");
+        assert_eq!(read.before.expect("before")["status"], "active");
+        assert_eq!(read.after.expect("after")["status"], "archived");
+
+        // A role's name is the role's and a store's is the shop's: only an employee is a person.
+        for (entity_type, recorded) in [
+            (
+                "role",
+                json!({ "id": "01R", "name": "Cashier", "permissions": [] }),
+            ),
+            ("store", json!({ "name": "Bến Thành" })),
+            (
+                "assignment",
+                json!({ "id": "01A", "employee_id": "01J", "store_id": "01S" }),
+            ),
+        ] {
+            let kept =
+                without_audited_staff_identity(entry(entity_type, None, Some(recorded.clone())));
+            assert_eq!(kept.after, Some(recorded), "{entity_type}");
+        }
+    }
+
+    #[test]
+    fn only_a_role_holding_read_people_reads_the_staff_code() {
+        for (role, names_staff) in [
+            (AdminRole::Owner, true),
+            (AdminRole::Admin, true),
+            (AdminRole::Ops, false),
+            (AdminRole::Viewer, false),
+        ] {
+            let written = entry(
+                "employee",
+                None,
+                Some(json!({ "id": "01J", "code": "C01", "status": "active" })),
+            );
+            let views = audit_views(vec![written], role);
+            let after = views
+                .first()
+                .and_then(|view| view.after.as_ref())
+                .expect("the entry and its after are read");
+            assert_eq!(
+                after.get("code").is_some(),
+                names_staff,
+                "{role:?}: {after}"
+            );
+            assert_eq!(after["status"], "active", "{role:?}: the rest stays");
+        }
     }
 }
