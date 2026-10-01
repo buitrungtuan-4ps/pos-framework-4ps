@@ -581,7 +581,12 @@ fn approvals_and_sign_ins_share_one_count() {
         // Four wrong PINs at the sign-in screen...
         let lockout = edge.pin_lockout();
         for _ in 0..4 {
-            let _ = lockout.record(manager_id(), false, long_ago());
+            let _ = lockout.record(
+                manager_id(),
+                false,
+                long_ago(),
+                pos_edge::LockoutPolicy::default(),
+            );
         }
         // ...and the fifth at an approval prompt locks the manager out of both.
         let fifth = edge
@@ -592,7 +597,13 @@ fn approvals_and_sign_ins_share_one_count() {
             "got {fifth:?}"
         );
         assert!(matches!(
-            lockout.authenticate(manager_id(), &hash_of(MANAGER_PIN), MANAGER_PIN, long_ago()),
+            lockout.authenticate(
+                manager_id(),
+                &hash_of(MANAGER_PIN),
+                MANAGER_PIN,
+                long_ago(),
+                pos_edge::LockoutPolicy::default(),
+            ),
             pos_edge::SignIn::LockedOut { .. }
         ));
     });

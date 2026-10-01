@@ -367,6 +367,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     approver is asked for as before. The edge stays the authority. No route, event, migration,
     permission or protocol change.
 
+- **A store sets its own sign-in idle timeout and PIN lockout**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decisions 2 and 6). Five wrong PINs and five minutes were constants in the edge, and the sign-in
+  idle timeout lived in each box's local file, where the console could not reach it.
+  - A new `session` configuration node carries three security settings, written in Shared
+    settings at any scope: `sign_in_idle_timeout_minutes` (5 to 240, default 30),
+    `lockout_attempts` (3 to 10, default 5) and `lockout_minutes` (1 to 60, default 5). No value
+    switches the lockout off. The cloud refuses one outside the bounds with `OUT_OF_RANGE`, and an
+    edge that is sent one anyway runs the default.
+  - The edge reads the node from the live configuration at every sign-in, approval and request, so
+    a published change applies without a restart. The lockout still counts sign-in and approval
+    failures together. A lockout already running keeps the end it was given.
+  - The sign-in idle timeout is the node's value, then `sign_in_idle_timeout_minutes` from
+    `config.toml`, then 30 minutes. The local key is **deprecated**: it applies only while the store's
+    configuration sets none, and the edge logs a warning at start-up when it is the one in use
+    (`deploy/edge/README.md`).
+  - The PIN's length stays a rule the cloud applies when a PIN is set. It is not on the node.
+  - **Upgrade note:** every default is today's behaviour, so no store changes until a value is
+    set. An absent `session` node means the defaults, and an edge that predates the node ignores
+    it. A box whose `config.toml` sets `sign_in_idle_timeout_minutes` keeps that window until the
+    console sets one; set the store's window there, then remove the key. `pos-proto` gains the
+    `session` module, additively. No route, event, migration, permission or protocol version
+    changes.
+
 - **A bill records its fees, and each fee carries its tax**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decisions 3 and 4), in the wire types and
   the core. The edge records none of it yet.
@@ -456,7 +480,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `docs/snapshots/settings.txt` lists a whole number's `min=`, `max=` and `unit=`. These may change
     as a default may, because the cloud checks every value when it is written. A switch lists
     `value=false` and `value=true`.
-  - No setting of either kind exists yet; the `session` settings are the first.
+  - The `session` settings are the first whole numbers. No switch exists yet.
   - **Upgrade note:** additive. `values` is absent from the catalogue for a setting that is not a
     choice, and `default` and `preset` are typed JSON rather than always a string. The console this
     cloud serves reads both, and the one existing setting's entry is unchanged. No route, event,

@@ -212,7 +212,8 @@ async fn a_store_where(adjust: impl FnOnce(EdgeSession) -> EdgeSession) -> Store
         cloud_url: None,
         store_path: "unused-in-memory.sqlite".into(),
         nats: None,
-        sign_in_idle_timeout_minutes: 30,
+        // Not set, as on a store whose window is the console's to publish (ADR-0160 decision 6).
+        sign_in_idle_timeout_minutes: None,
         // No fonts: this suite exercises the domain, and printing is an effect it does not compose.
         // A store that does load them still prints ASCII the same way (ADR-0102).
         font_directories: Vec::new(),
@@ -2009,6 +2010,64 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
     assert_eq!(signed_out["signed_in"], json!(false));
     assert_eq!(signed_out["permissions_enforced"], json!(true));
     assert_eq!(signed_out["permissions"], json!([]));
+}
+
+/// The PIN lockout counts against the store's own numbers from its `session` node
+/// ([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+/// read from the live configuration at each attempt: a number published while the store trades
+/// applies from the next attempt, with no restart.
+#[tokio::test]
+async fn sign_in_locks_out_after_the_stores_own_number_of_wrong_pins() {
+    let store = a_store_where(|session| session).await;
+    let wrong = || {
+        post(
+            store.app.clone(),
+            Some(&store.token),
+            "/api/session/sign-in",
+            Some(json!({ "code": STAFF_CODE, "pin": "1357" })),
+        )
+    };
+
+    // Nothing published: five attempts, as every store had.
+    let (status, refused) = wrong().await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(refused, json!({ "outcome": "wrong", "remaining": 4 }));
+
+    // The console publishes three. The one failure already counted is weighed against it.
+    let mut strict = (*store.edge.session()).clone();
+    strict.session_settings = pos_proto::session::PublishedSession {
+        lockout_attempts: Some(3),
+        lockout_minutes: Some(10),
+        ..pos_proto::session::PublishedSession::default()
+    };
+    store.edge.apply_session(strict);
+
+    let (_, refused) = wrong().await;
+    assert_eq!(refused, json!({ "outcome": "wrong", "remaining": 1 }));
+    let (status, locked) = wrong().await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        locked["outcome"],
+        json!("locked_out"),
+        "the third wrong PIN locks the badge out"
+    );
+
+    // Locked for the store's ten minutes, and the right PIN does not get through meanwhile.
+    let until = locked["locked_until_ms"].as_i64().expect("an instant");
+    let now = pos_edge::SystemClock.now().as_milliseconds_since_epoch();
+    assert!(
+        (9 * 60_000..=10 * 60_000).contains(&(until - now)),
+        "locked for ten minutes from now, not five: {until} - {now}"
+    );
+    let (status, still) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/session/sign-in",
+        Some(json!({ "code": STAFF_CODE, "pin": STAFF_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(still["outcome"], json!("locked_out"));
 }
 
 /// A store with a manager — somebody who may manage devices — signed in on its one device.

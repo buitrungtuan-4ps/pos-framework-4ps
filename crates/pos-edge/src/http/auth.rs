@@ -44,7 +44,7 @@ use pos_proto::ClockSource;
 use pos_proto::ids::DeviceId;
 
 use crate::app::Edge;
-use crate::auth::{Lockout, Sessions, SignIn};
+use crate::auth::{Lockout, LockoutPolicy, Sessions, SignIn};
 use crate::clock::SystemClock;
 use crate::pairing::{DeviceToken, Pairing};
 
@@ -297,9 +297,11 @@ where
         )
             .into_response();
     };
+    // The store's own lockout numbers (ADR-0160), read from the session this attempt runs on.
+    let policy = LockoutPolicy::of(&session.session_settings);
     match deps
         .lockout
-        .authenticate(employee_id, phc, &request.pin, now)
+        .authenticate(employee_id, phc, &request.pin, now, policy)
     {
         SignIn::Ok => {
             // Recorded durably before it is reported (ADR-0091): telling someone they are signed in

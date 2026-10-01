@@ -6,8 +6,11 @@
 //! The cloud syncs each employee's **Argon2id** PIN hash to the edge as configuration
 //! ([ADR-0004](../../../docs/adr/0004-cloud-owned-configuration.md)); the edge verifies a PIN against
 //! that hash with no network at all ([ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)).
-//! Because a PIN is short, the Argon2id cost **and a local lockout** — five consecutive failures lock
-//! an employee out for five minutes — are the brute-force defence, not the PIN's entropy.
+//! Because a PIN is short, the Argon2id cost **and a local lockout** — by default, five consecutive
+//! failures lock an employee out for five minutes — are the brute-force defence, not the PIN's
+//! entropy. A store may set its own numbers in its `session` node
+//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+//! within bounds that never switch the lockout off ([`LockoutPolicy`]).
 //!
 //! # No secrets in logs
 //!
@@ -17,9 +20,10 @@
 //!
 //! # Why the lockout is separable from the hashing
 //!
-//! [`Lockout::record`] is a pure state machine over `(employee, verified, now)` — no Argon2, no
-//! clock of its own — so the five-minute window is unit-tested in microseconds with a fixed
-//! [`Timestamp`]. [`verify_pin`] is the thin Argon2 wrapper. [`Lockout::authenticate`] combines them.
+//! [`Lockout::record`] is a pure state machine over `(employee, verified, now, policy)` — no Argon2,
+//! no clock of its own, and the store's numbers passed in rather than held — so the window is
+//! unit-tested in microseconds with a fixed [`Timestamp`]. [`verify_pin`] is the thin Argon2
+//! wrapper. [`Lockout::authenticate`] combines them.
 
 use core::fmt;
 use std::collections::HashMap;
@@ -31,7 +35,9 @@ use argon2::password_hash::PasswordVerifier;
 use pos_ports::device_registry::DeviceSession;
 use pos_ports::error::PortError;
 use pos_proto::ids::{DeviceId, EmployeeId};
+use pos_proto::session::PublishedSession;
 
+use crate::app::Edge;
 use crate::durable_auth::DurableAuth;
 use pos_proto::time::Timestamp;
 
@@ -43,11 +49,37 @@ use pos_proto::time::Timestamp;
 /// if the module moves.
 pub(crate) const LOG_TARGET: &str = module_path!();
 
-/// Consecutive wrong PINs that trigger a lockout.
-pub const MAX_FAILURES: u32 = 5;
+/// How many consecutive wrong PINs lock a person out, and for how long: the store's own numbers from
+/// its `session` node ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+/// read afresh from the live session at every attempt.
+///
+/// The node's accessors hold each number to bounds that keep the lockout on — at least three
+/// attempts and at least a minute — so no publish, and no value an edge cannot read, switches it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LockoutPolicy {
+    /// Consecutive wrong PINs that trigger a lockout. Never zero.
+    pub max_failures: u32,
+    /// How long a locked-out employee must wait. Never zero.
+    pub lockout: Duration,
+}
 
-/// How long a locked-out employee must wait.
-pub const LOCKOUT: Duration = Duration::from_secs(5 * 60);
+impl LockoutPolicy {
+    /// The numbers a store's `session` node sets, and the defaults for any it does not.
+    #[must_use]
+    pub fn of(settings: &PublishedSession) -> Self {
+        Self {
+            max_failures: settings.lockout_attempts(),
+            lockout: Duration::from_secs(u64::from(settings.lockout_minutes()).saturating_mul(60)),
+        }
+    }
+}
+
+impl Default for LockoutPolicy {
+    /// Five wrong PINs, five minutes: what every store ran before the `session` node existed.
+    fn default() -> Self {
+        Self::of(&PublishedSession::default())
+    }
+}
 
 /// The outcome of a sign-in attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,10 +160,20 @@ impl Lockout {
 
     /// Records the outcome of a verification and returns what the caller may do.
     ///
-    /// Pure but for the internal map: given whether the PIN `verified` and the current instant
-    /// `now`, it advances the lockout state machine. A correct PIN while locked out is still refused
-    /// — serving the lockout is the point.
-    pub fn record(&self, employee: EmployeeId, verified: bool, now: Timestamp) -> SignIn {
+    /// Pure but for the internal map: given whether the PIN `verified`, the current instant `now`
+    /// and the store's `policy`, it advances the lockout state machine. A correct PIN while locked
+    /// out is still refused — serving the lockout is the point.
+    ///
+    /// The policy is the one in force at this attempt, so a store that changes its numbers changes
+    /// them from the next attempt: the failures already counted are weighed against the new number,
+    /// and a lockout already running keeps the end it was given.
+    pub fn record(
+        &self,
+        employee: EmployeeId,
+        verified: bool,
+        now: Timestamp,
+        policy: LockoutPolicy,
+    ) -> SignIn {
         let now_ms = now.as_milliseconds_since_epoch();
         let mut guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let record = guard.entry(employee).or_default();
@@ -154,25 +196,26 @@ impl Lockout {
         }
 
         record.failures = record.failures.saturating_add(1);
-        if record.failures >= MAX_FAILURES {
-            let lockout_ms = i64::try_from(LOCKOUT.as_millis()).unwrap_or(i64::MAX);
+        if record.failures >= policy.max_failures {
+            let lockout_ms = i64::try_from(policy.lockout.as_millis()).unwrap_or(i64::MAX);
             let until = now_ms.saturating_add(lockout_ms);
             record.locked_until_ms = Some(until);
             SignIn::LockedOut { until_ms: until }
         } else {
             SignIn::Wrong {
-                remaining: MAX_FAILURES - record.failures,
+                remaining: policy.max_failures.saturating_sub(record.failures),
             }
         }
     }
 
-    /// Verifies `pin` against `phc_hash` and records the outcome under the lockout policy.
+    /// Verifies `pin` against `phc_hash` and records the outcome under the store's lockout `policy`.
     pub fn authenticate(
         &self,
         employee: EmployeeId,
         phc_hash: &str,
         pin: &str,
         now: Timestamp,
+        policy: LockoutPolicy,
     ) -> SignIn {
         // A locked-out employee is refused before the (costly) Argon2 verification even runs.
         {
@@ -185,7 +228,7 @@ impl Lockout {
                 return SignIn::LockedOut { until_ms: until };
             }
         }
-        self.record(employee, verify_pin(phc_hash, pin), now)
+        self.record(employee, verify_pin(phc_hash, pin), now, policy)
     }
 }
 
@@ -194,8 +237,13 @@ impl Lockout {
 ///
 /// Thirty minutes: long enough that a reboot, a shift-change lull or a quiet hour does not sign
 /// anyone out mid-service; short enough that a device which left the store is not still trading as
-/// that person the next day. Configurable per store — see
-/// [`EdgeConfig::sign_in_idle_timeout`](crate::EdgeConfig::sign_in_idle_timeout).
+/// that person the next day. A store sets its own window with the `session.sign_in_idle_timeout_minutes`
+/// setting ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
+/// one that does not runs the local file's deprecated value, if it sets one
+/// ([`EdgeConfig::sign_in_idle_timeout`](crate::EdgeConfig::sign_in_idle_timeout)), and this
+/// otherwise. The same thirty as
+/// [`DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES`](pos_proto::session::DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES),
+/// which a test holds it to.
 pub const DEFAULT_SIGN_IN_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// How far `last_seen_at` must move before it is written through to the registry.
@@ -255,14 +303,48 @@ pub fn has_gone_idle(last_seen: Timestamp, now: Timestamp, timeout: Duration) ->
 ///
 /// With no registry ([`Sessions::new`]) this is memory-only, as it was before S0d.
 ///
+/// # Whose window
+///
+/// The store's, when its `session` node sets one
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)):
+/// [`Sessions::following`] points this at the live configuration, which it reads at every check, so
+/// a window the console publishes applies from the next request without a restart. A store whose
+/// node sets none runs the fallback it was built with — the local file's deprecated value or
+/// [`DEFAULT_SIGN_IN_IDLE_TIMEOUT`].
+///
 /// It holds identifiers only — never a PIN or a hash.
-#[derive(Default)]
 pub struct Sessions {
     by_device: Mutex<HashMap<DeviceId, DeviceSession>>,
     registry: Option<Arc<dyn DurableAuth>>,
-    /// How long a device may idle. Read from configuration, so a deployment can trade continuity
-    /// against the stolen-till window.
-    idle_timeout: Duration,
+    /// How long a device may idle when the store's configuration sets no window: the local file's
+    /// deprecated value, or thirty minutes.
+    fallback_idle_timeout: Duration,
+    /// Where the store's published `session` node is read from, when this follows one.
+    settings: Option<Arc<dyn SessionSettingsSource>>,
+}
+
+/// Where [`Sessions`] reads the store's `session` node from: the live configuration, which the
+/// config-pull loop swaps while the store trades.
+///
+/// A seam rather than an `Arc<Edge<S>>`, so `Sessions` carries no store type parameter — the same
+/// shape as [`DurableAuth`].
+pub trait SessionSettingsSource: Send + Sync {
+    /// The `session` node the store is running now.
+    fn session_settings(&self) -> PublishedSession;
+}
+
+impl<S: Send + Sync> SessionSettingsSource for Edge<S> {
+    fn session_settings(&self) -> PublishedSession {
+        self.session().session_settings
+    }
+}
+
+/// The window a `session` node sets, if it sets one.
+#[must_use]
+pub fn published_idle_timeout(settings: &PublishedSession) -> Option<Duration> {
+    settings
+        .sign_in_idle_timeout_minutes()
+        .map(|minutes| Duration::from_secs(u64::from(minutes).saturating_mul(60)))
 }
 
 #[expect(
@@ -276,9 +358,17 @@ impl fmt::Debug for Sessions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sessions")
             .field("signed_in", &self.count())
-            .field("idle_timeout", &self.idle_timeout)
+            .field("idle_timeout", &self.idle_timeout())
             .field("durable", &self.registry.is_some())
             .finish()
+    }
+}
+
+impl Default for Sessions {
+    /// [`Sessions::new`]. Written out rather than derived, because a derived default would hold a
+    /// zero window, which signs every device out between its own two requests.
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -289,18 +379,29 @@ impl Sessions {
         Self {
             by_device: Mutex::new(HashMap::new()),
             registry: None,
-            idle_timeout: DEFAULT_SIGN_IN_IDLE_TIMEOUT,
+            fallback_idle_timeout: DEFAULT_SIGN_IN_IDLE_TIMEOUT,
+            settings: None,
         }
     }
 
-    /// Sign-in state that survives a restart, expiring a device idle past `idle_timeout`.
+    /// Sign-in state that survives a restart, expiring a device idle past `idle_timeout` — or past
+    /// the store's own window, once it [follows](Self::following) a configuration that sets one.
     #[must_use]
     pub fn durable(registry: Arc<dyn DurableAuth>, idle_timeout: Duration) -> Self {
         Self {
             by_device: Mutex::new(HashMap::new()),
             registry: Some(registry),
-            idle_timeout,
+            fallback_idle_timeout: idle_timeout,
+            settings: None,
         }
+    }
+
+    /// Takes the idle window from the store's `session` node whenever it sets one, read from
+    /// `settings` at every check, and falls back to the window this was built with when it does not.
+    #[must_use]
+    pub fn following(mut self, settings: Arc<dyn SessionSettingsSource>) -> Self {
+        self.settings = Some(settings);
+        self
     }
 
     /// Refills the map from the registry at boot. Returns how many sign-ins were restored,
@@ -315,13 +416,14 @@ impl Sessions {
             return Ok(0);
         };
         let sessions = registry.sign_ins().await?;
+        let idle_timeout = self.idle_timeout();
         let mut by_device = self
             .by_device
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         by_device.clear();
         for session in sessions {
-            if !has_gone_idle(session.last_seen_at, now, self.idle_timeout) {
+            if !has_gone_idle(session.last_seen_at, now, idle_timeout) {
                 by_device.insert(session.device_id, session);
             }
         }
@@ -391,7 +493,8 @@ impl Sessions {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&device)
             .copied()?;
-        (!has_gone_idle(held.last_seen_at, now, self.idle_timeout)).then_some(held.employee_id)
+        // Read after the map's lock is released, so the two locks are never held together.
+        (!has_gone_idle(held.last_seen_at, now, self.idle_timeout())).then_some(held.employee_id)
     }
 
     /// Records that `device` was just heard from, so it does not go idle while in use.
@@ -431,10 +534,21 @@ impl Sessions {
         Ok(())
     }
 
-    /// How long a device may idle before its sign-in stops counting.
+    /// How long a device may idle before its sign-in stops counting: the store's published window
+    /// when it sets one, and the fallback this was built with otherwise.
     #[must_use]
-    pub const fn idle_timeout(&self) -> Duration {
-        self.idle_timeout
+    pub fn idle_timeout(&self) -> Duration {
+        self.published_idle_timeout()
+            .unwrap_or(self.fallback_idle_timeout)
+    }
+
+    /// The window the store's `session` node sets, or `None` when this follows no configuration or
+    /// the node sets none.
+    #[must_use]
+    pub fn published_idle_timeout(&self) -> Option<Duration> {
+        self.settings
+            .as_ref()
+            .and_then(|settings| published_idle_timeout(&settings.session_settings()))
     }
 
     /// Whether sign-ins survive a restart.
@@ -457,7 +571,7 @@ mod tests {
     /// A fixed 16-byte salt, so a hashed fixture is deterministic. Tests only.
     const SALT: &[u8] = b"a-fixed-test-slt";
 
-    use super::{Lockout, MAX_FAILURES, SignIn, verify_pin};
+    use super::{Lockout, LockoutPolicy, SignIn, verify_pin};
     use argon2::Argon2;
     use argon2::password_hash::PasswordHasher as _;
     use pos_proto::ids::EmployeeId;
@@ -471,6 +585,13 @@ mod tests {
     fn employee() -> EmployeeId {
         EmployeeId::new(Ulid::from_u128(7))
     }
+
+    /// The numbers every store ran before the `session` node: five wrong PINs, five minutes.
+    fn usual() -> LockoutPolicy {
+        LockoutPolicy::default()
+    }
+
+    const MAX_FAILURES: u32 = 5;
 
     /// A real Argon2id PHC hash of `pin`, computed with a fixed salt so the test needs no RNG.
     fn hash_of(pin: &str) -> String {
@@ -500,13 +621,13 @@ mod tests {
 
         // Four wrong attempts count down without locking.
         for expected_remaining in (1..MAX_FAILURES).rev() {
-            match lockout.record(who, false, at(0)) {
+            match lockout.record(who, false, at(0), usual()) {
                 SignIn::Wrong { remaining } => assert_eq!(remaining, expected_remaining),
                 other => panic!("expected Wrong, got {other:?}"),
             }
         }
         // The fifth locks out, five minutes from now.
-        match lockout.record(who, false, at(1_000)) {
+        match lockout.record(who, false, at(1_000), usual()) {
             SignIn::LockedOut { until_ms } => assert_eq!(until_ms, 1_000 + 5 * 60 * 1_000),
             other => panic!("expected LockedOut, got {other:?}"),
         }
@@ -517,11 +638,11 @@ mod tests {
         let lockout = Lockout::new();
         let who = employee();
         for _ in 0..MAX_FAILURES {
-            let _ = lockout.record(who, false, at(0));
+            let _ = lockout.record(who, false, at(0), usual());
         }
         // Even a correct PIN one second later is refused: the lockout must be served.
         assert!(matches!(
-            lockout.record(who, true, at(1_000)),
+            lockout.record(who, true, at(1_000), usual()),
             SignIn::LockedOut { .. }
         ));
     }
@@ -531,14 +652,14 @@ mod tests {
         let lockout = Lockout::new();
         let who = employee();
         for _ in 0..MAX_FAILURES {
-            let _ = lockout.record(who, false, at(0));
+            let _ = lockout.record(who, false, at(0), usual());
         }
         // Just past five minutes, a correct PIN is accepted again.
         let after = 5 * 60 * 1_000 + 1;
-        assert_eq!(lockout.record(who, true, at(after)), SignIn::Ok);
+        assert_eq!(lockout.record(who, true, at(after), usual()), SignIn::Ok);
         // And the counter reset: one failure now reports four remaining, not zero.
         assert_eq!(
-            lockout.record(who, false, at(after + 1)),
+            lockout.record(who, false, at(after + 1), usual()),
             SignIn::Wrong {
                 remaining: MAX_FAILURES - 1
             }
@@ -549,12 +670,12 @@ mod tests {
     fn a_success_resets_the_failure_count() {
         let lockout = Lockout::new();
         let who = employee();
-        let _ = lockout.record(who, false, at(0));
-        let _ = lockout.record(who, false, at(0));
-        assert_eq!(lockout.record(who, true, at(0)), SignIn::Ok);
+        let _ = lockout.record(who, false, at(0), usual());
+        let _ = lockout.record(who, false, at(0), usual());
+        assert_eq!(lockout.record(who, true, at(0), usual()), SignIn::Ok);
         // Back to a full allowance.
         assert_eq!(
-            lockout.record(who, false, at(0)),
+            lockout.record(who, false, at(0), usual()),
             SignIn::Wrong {
                 remaining: MAX_FAILURES - 1
             }
@@ -567,13 +688,158 @@ mod tests {
         let who = employee();
         let hash = hash_of("2468");
 
-        assert_eq!(lockout.authenticate(who, &hash, "2468", at(0)), SignIn::Ok);
         assert_eq!(
-            lockout.authenticate(who, &hash, "0000", at(0)),
+            lockout.authenticate(who, &hash, "2468", at(0), usual()),
+            SignIn::Ok
+        );
+        assert_eq!(
+            lockout.authenticate(who, &hash, "0000", at(0), usual()),
             SignIn::Wrong {
                 remaining: MAX_FAILURES - 1
             }
         );
+    }
+
+    /// A `session` node carrying `fields`, as a store publishes it (ADR-0160).
+    fn published(fields: serde_json::Value) -> pos_proto::session::PublishedSession {
+        serde_json::from_value(fields).expect("the node parses")
+    }
+
+    #[test]
+    fn a_store_locks_out_after_its_own_number_of_attempts_for_its_own_minutes() {
+        let lockout = Lockout::new();
+        let who = employee();
+        let strict = LockoutPolicy::of(&published(
+            serde_json::json!({ "lockout_attempts": 3, "lockout_minutes": 1 }),
+        ));
+
+        assert_eq!(
+            lockout.record(who, false, at(0), strict),
+            SignIn::Wrong { remaining: 2 }
+        );
+        assert_eq!(
+            lockout.record(who, false, at(0), strict),
+            SignIn::Wrong { remaining: 1 }
+        );
+        assert_eq!(
+            lockout.record(who, false, at(1_000), strict),
+            SignIn::LockedOut {
+                until_ms: 1_000 + 60 * 1_000
+            },
+            "the third wrong PIN locks out, for one minute"
+        );
+        assert_eq!(
+            lockout.record(who, true, at(1_000 + 60 * 1_000), strict),
+            SignIn::Ok,
+            "and a minute later the right PIN is let in"
+        );
+    }
+
+    #[test]
+    fn a_number_published_mid_count_applies_from_the_next_attempt() {
+        let lockout = Lockout::new();
+        let who = employee();
+        for _ in 0..3 {
+            let _ = lockout.record(who, false, at(0), usual());
+        }
+        // Three failures counted against five; the store now allows three, so the next failure is
+        // past the number and locks.
+        let strict = LockoutPolicy::of(&published(serde_json::json!({ "lockout_attempts": 3 })));
+        assert_eq!(
+            lockout.record(who, false, at(0), strict),
+            SignIn::LockedOut {
+                until_ms: 5 * 60 * 1_000
+            }
+        );
+        // A lockout already running keeps the end it was given, whatever the store sets next.
+        let lenient = LockoutPolicy::of(&published(serde_json::json!({ "lockout_minutes": 1 })));
+        assert_eq!(
+            lockout.record(who, true, at(2 * 60 * 1_000), lenient),
+            SignIn::LockedOut {
+                until_ms: 5 * 60 * 1_000
+            }
+        );
+    }
+
+    #[test]
+    fn no_published_number_switches_the_lockout_off() {
+        for fields in [
+            serde_json::json!({ "lockout_attempts": 0, "lockout_minutes": 0 }),
+            serde_json::json!({ "lockout_attempts": -5, "lockout_minutes": -5 }),
+            serde_json::json!({ "lockout_attempts": 1_000_000, "lockout_minutes": 1_000_000 }),
+        ] {
+            assert_eq!(
+                LockoutPolicy::of(&published(fields.clone())),
+                usual(),
+                "{fields} reads as the defaults"
+            );
+        }
+        assert_eq!(usual().max_failures, MAX_FAILURES);
+        assert_eq!(usual().lockout, std::time::Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn the_default_window_is_the_registers_thirty_minutes() {
+        use super::DEFAULT_SIGN_IN_IDLE_TIMEOUT;
+        use pos_proto::session::DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES;
+
+        assert_eq!(
+            DEFAULT_SIGN_IN_IDLE_TIMEOUT.as_secs(),
+            u64::from(DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES) * 60
+        );
+    }
+
+    /// The store's live configuration, as the config-pull loop swaps it.
+    #[derive(Default)]
+    struct LiveSettings(std::sync::Mutex<pos_proto::session::PublishedSession>);
+
+    impl LiveSettings {
+        fn publish(&self, fields: serde_json::Value) {
+            *self.0.lock().expect("lock") = published(fields);
+        }
+    }
+
+    impl super::SessionSettingsSource for LiveSettings {
+        fn session_settings(&self) -> pos_proto::session::PublishedSession {
+            *self.0.lock().expect("lock")
+        }
+    }
+
+    #[test]
+    fn the_sign_in_window_is_the_stores_then_the_fallback_and_follows_a_publish() {
+        use super::Sessions;
+        use pos_proto::ids::DeviceId;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let live = Arc::new(LiveSettings::default());
+        // Built on a fallback of an hour, as a local file that sets one builds it.
+        let sessions = Sessions {
+            fallback_idle_timeout: Duration::from_secs(60 * 60),
+            ..Sessions::new()
+        }
+        .following(Arc::<LiveSettings>::clone(&live));
+        let device = DeviceId::new(Ulid::from_u128(0xD));
+        let alice = EmployeeId::new(Ulid::from_u128(1));
+        let minute = 60 * 1_000;
+        block_on(sessions.sign_in(device, alice, at(0))).expect("no registry");
+
+        // The node sets nothing: the fallback holds.
+        assert_eq!(sessions.idle_timeout(), Duration::from_secs(60 * 60));
+        assert_eq!(sessions.employee_for(device, at(59 * minute)), Some(alice));
+
+        // The store publishes ten minutes: the next check uses it, with no restart.
+        live.publish(serde_json::json!({ "sign_in_idle_timeout_minutes": 10 }));
+        assert_eq!(sessions.idle_timeout(), Duration::from_secs(10 * 60));
+        assert_eq!(
+            sessions.employee_for(device, at(10 * minute - 1)),
+            Some(alice)
+        );
+        assert_eq!(sessions.employee_for(device, at(10 * minute)), None);
+
+        // A window outside the bounds is no window: the fallback holds again.
+        live.publish(serde_json::json!({ "sign_in_idle_timeout_minutes": 0 }));
+        assert_eq!(sessions.idle_timeout(), Duration::from_secs(60 * 60));
     }
 
     /// Drives a future on a current-thread runtime. `Sessions`' write paths are async because they

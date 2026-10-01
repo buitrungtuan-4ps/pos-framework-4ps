@@ -21,6 +21,7 @@ use pos_ports::key_vault::{KeyVault, SecretName};
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::ClockSource;
 use pos_proto::ids::{DeviceId, StoreId};
+use pos_proto::session::PublishedSession;
 use updater_minisign::MinisignVerifier;
 
 use crate::activation::{activation_router, boot_standing};
@@ -735,7 +736,22 @@ where
     let lease_authority = Arc::new(lease_authority);
     let lease_watch = lease_at_boot(&edge, Arc::clone(&lease_authority), store_id).await;
     let nats = config.nats.clone();
-    let idle_timeout = config.sign_in_idle_timeout();
+    // The sign-in idle window, in the order it is chosen (ADR-0160 decision 6): the store's `session`
+    // node, read live by `Sessions` below; else this file's deprecated value; else thirty minutes.
+    // The last two are the fallback the sessions are built on.
+    let fallback_idle_timeout = config.sign_in_idle_timeout();
+    let idle_window = idle_window_source(&config, &edge.session().session_settings);
+    if let (IdleWindowSource::LocalFile, Some(minutes)) =
+        (idle_window, config.sign_in_idle_timeout_minutes)
+    {
+        tracing::warn!(
+            minutes,
+            "config.toml sets sign_in_idle_timeout_minutes, which is deprecated, and it is the sign-in \
+             idle timeout in use because the store's configuration sets none: set \
+             session.sign_in_idle_timeout_minutes in the console's shared settings, and it replaces \
+             this one (ADR-0160 decision 6)"
+        );
+    }
     // Pairing and sign-in are recorded in the store's own database, so a power blip, an OTA install
     // or a `systemctl restart` no longer unpairs every tablet in the shop (ADR-0091). The registry
     // is the edge's existing store, reached through the seam in `crate::durable_auth` — no new
@@ -758,9 +774,14 @@ where
     );
     // Cloned rather than moved: `revocations_at_boot` below reads the applied-revocation record
     // through this same seam (ADR-0118 §6).
-    let sessions = Arc::new(Sessions::durable(Arc::clone(&registry), idle_timeout));
+    // Following the live configuration, so a window the console publishes applies from the next
+    // request, and the restored sign-ins below are weighed against the window the store runs.
+    let sessions = Arc::new(
+        Sessions::durable(Arc::clone(&registry), fallback_idle_timeout)
+            .following(Arc::<Edge<S>>::clone(&edge)),
+    );
 
-    restore_auth_tables(&pairing, &sessions, idle_timeout).await?;
+    restore_auth_tables(&pairing, &sessions, idle_window).await?;
 
     // The deny-list the console published while this box was down (ADR-0118 §6).
     let revocations = revocations_at_boot(&edge, &pairing, registry).await;
@@ -1089,7 +1110,7 @@ where
 async fn restore_auth_tables(
     pairing: &Pairing,
     sessions: &Sessions,
-    idle_timeout: Duration,
+    idle_window: IdleWindowSource,
 ) -> Result<(), EdgeError> {
     let restored_devices = pairing.load().await.map_err(EdgeError::DeviceRegistry)?;
     let restored_sessions = sessions
@@ -1099,10 +1120,47 @@ async fn restore_auth_tables(
     tracing::info!(
         devices = restored_devices,
         sign_ins = restored_sessions,
-        idle_timeout_minutes = idle_timeout.as_secs() / 60,
+        idle_timeout_minutes = sessions.idle_timeout().as_secs() / 60,
+        idle_timeout_from = idle_window.as_str(),
         "restored device pairings and sign-ins from the store"
     );
     Ok(())
+}
+
+/// Where the sign-in idle window a box starts on comes from
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdleWindowSource {
+    /// The store's `session` node sets it, and it wins.
+    Published,
+    /// The node sets none, and `config.toml` still carries the deprecated value.
+    LocalFile,
+    /// Neither does: thirty minutes.
+    Default,
+}
+
+impl IdleWindowSource {
+    /// The word the start-up log gives it.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Published => "the store's configuration",
+            Self::LocalFile => "config.toml (deprecated)",
+            Self::Default => "the default",
+        }
+    }
+}
+
+/// Which window a box with this `config` and this restored `session` node starts on, in the order
+/// the edge chooses one: the node, the file, the default.
+fn idle_window_source(config: &EdgeConfig, settings: &PublishedSession) -> IdleWindowSource {
+    if settings.sign_in_idle_timeout_minutes().is_some() {
+        IdleWindowSource::Published
+    } else if config.sign_in_idle_timeout_minutes.is_some() {
+        IdleWindowSource::LocalFile
+    } else {
+        IdleWindowSource::Default
+    }
 }
 
 /// This box's lease, weighed once **before** the socket binds
@@ -1899,7 +1957,10 @@ mod tests {
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
 
-    use super::{ServeOutcome, choose_sync_key, system_device_id, usable_env_key};
+    use super::{
+        IdleWindowSource, ServeOutcome, choose_sync_key, idle_window_source, system_device_id,
+        usable_env_key,
+    };
 
     fn holding(secrets: &[(SecretName, &str)]) -> FakeKeyVault {
         let vault = FakeKeyVault::new();
@@ -1908,6 +1969,52 @@ mod tests {
                 .expect("the fake stores");
         }
         vault
+    }
+
+    /// The sign-in idle window is the store's when its `session` node sets one, the local file's
+    /// deprecated value when only that does — the one case the start-up warning names — and thirty
+    /// minutes when neither does (ADR-0160 decision 6).
+    #[test]
+    fn the_idle_window_is_the_nodes_then_the_files_then_the_default() {
+        use crate::config::EdgeConfig;
+        use pos_proto::session::PublishedSession;
+
+        let store = "store_id = \"01J0000000000000000000000A\"";
+        let plain = EdgeConfig::from_toml_str(store).expect("parses");
+        let with_file =
+            EdgeConfig::from_toml_str(&format!("{store}\nsign_in_idle_timeout_minutes = 45"))
+                .expect("parses");
+        let unset = PublishedSession::default();
+        let published = PublishedSession {
+            sign_in_idle_timeout_minutes: Some(15),
+            ..PublishedSession::default()
+        };
+        // Outside the bounds, so the node sets nothing the edge can run.
+        let unreadable = PublishedSession {
+            sign_in_idle_timeout_minutes: Some(0),
+            ..PublishedSession::default()
+        };
+
+        assert_eq!(
+            idle_window_source(&with_file, &published),
+            IdleWindowSource::Published
+        );
+        assert_eq!(
+            idle_window_source(&plain, &published),
+            IdleWindowSource::Published
+        );
+        assert_eq!(
+            idle_window_source(&with_file, &unset),
+            IdleWindowSource::LocalFile
+        );
+        assert_eq!(
+            idle_window_source(&with_file, &unreadable),
+            IdleWindowSource::LocalFile
+        );
+        assert_eq!(
+            idle_window_source(&plain, &unset),
+            IdleWindowSource::Default
+        );
     }
 
     /// A store key wins wherever it is set, and a box given nothing but its activation code syncs

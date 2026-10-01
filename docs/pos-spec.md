@@ -181,7 +181,7 @@ The framework hardcodes **no retention period** and makes no legal determination
 
 ## 16. Other operational rules
 
-- **Employee PINs**: minimum length configurable, unique within a store, locked for 5 minutes after 5 failures (enforced offline too), every failure audited. Device activation codes and setup tokens are rate-limited and expire after repeated failures.
+- **Employee PINs**: minimum length configurable, unique within a store, locked out after a number of wrong PINs in a row for a number of minutes (enforced offline too), every failure audited. By default five wrong PINs lock a person out for five minutes. A store sets its own numbers with `session.lockout_attempts` (3 to 10) and `session.lockout_minutes` (1 to 60) ([configuration register](configuration.md)), so no value switches the lockout off. Device activation codes and setup tokens are rate-limited and expire after repeated failures.
 - **Queue numbers reset daily**, on the store's business date. They are a customer-facing call number for counter service and are a different counter from the store-lifetime, gapless receipt number (§5) — the two must never share an implementation.
 - **Bulk menu import** (CSV/Excel with preview, per-row errors, and column mapping) at brand creation — required for chains migrating from another POS.
 - **Employees belong to a tenant; roles are granted per store.** Working at two stores means two grants, one `employee_id`, one PIN.

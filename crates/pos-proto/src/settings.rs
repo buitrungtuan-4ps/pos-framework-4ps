@@ -22,6 +22,7 @@
 //! A test reads every value of every setting back through its node's own type, so the register
 //! cannot offer a value or claim a default that the edge does not have.
 
+use crate::session::{self, PublishedSession};
 use crate::shift::{NoShiftSelling, PublishedShift};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
@@ -237,22 +238,76 @@ const NEXT_RELEASE: &str = "0.14.1";
 /// Every setting, in the order the register lists them.
 #[must_use]
 pub fn register() -> Vec<Setting> {
-    vec![Setting {
-        node: PublishedShift::NODE,
-        field: "no_shift_selling",
-        shape: SettingShape::Choice {
-            values: choices::<NoShiftSelling>(),
-            default: PublishedShift::default().no_shift_selling().as_wire(),
-            // Confirmed by the owner on 2026-09-30: a new store refuses, an existing one keeps
-            // selling.
-            preset: Some(NoShiftSelling::Refuse.as_wire()),
+    // What the edge reads a `session` node that sets nothing as.
+    let unset = PublishedSession::default();
+    vec![
+        Setting {
+            node: PublishedShift::NODE,
+            field: "no_shift_selling",
+            shape: SettingShape::Choice {
+                values: choices::<NoShiftSelling>(),
+                default: PublishedShift::default().no_shift_selling().as_wire(),
+                // Confirmed by the owner on 2026-09-30: a new store refuses, an existing one keeps
+                // selling.
+                preset: Some(NoShiftSelling::Refuse.as_wire()),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "Whether a till may seat a table, start a counter order or take a payment \
+                      while no shift is open. `NO_SHIFT_SELLING_REFUSE` refuses each of them with \
+                      `OPEN_SHIFT_REQUIRED` until a shift opens.",
         },
-        scopes: STORE_WIDE,
-        since: NEXT_RELEASE,
-        summary: "Whether a till may seat a table, start a counter order or take a payment while \
-                  no shift is open. `NO_SHIFT_SELLING_REFUSE` refuses each of them with \
-                  `OPEN_SHIFT_REQUIRED` until a shift opens.",
-    }]
+        Setting {
+            node: PublishedSession::NODE,
+            field: "sign_in_idle_timeout_minutes",
+            shape: SettingShape::Int {
+                min: *session::SIGN_IN_IDLE_TIMEOUT_MINUTES.start(),
+                max: *session::SIGN_IN_IDLE_TIMEOUT_MINUTES.end(),
+                unit: SettingUnit::Minutes,
+                default: i64::from(session::DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A security setting: how long a signed-in device may go unused before its \
+                      sign-in lapses and it asks for a PIN again, which bounds how long a till \
+                      carried off while signed in keeps trading. A store that does not set it runs \
+                      `sign_in_idle_timeout_minutes` from its local file if that sets one, which \
+                      is deprecated.",
+        },
+        Setting {
+            node: PublishedSession::NODE,
+            field: "lockout_attempts",
+            shape: SettingShape::Int {
+                min: *session::LOCKOUT_ATTEMPTS.start(),
+                max: *session::LOCKOUT_ATTEMPTS.end(),
+                unit: SettingUnit::Count,
+                default: i64::from(unset.lockout_attempts()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A security setting: how many wrong PINs in a row lock a person out, \
+                      counted across sign-in and a manager's approval. No value switches the \
+                      lockout off.",
+        },
+        Setting {
+            node: PublishedSession::NODE,
+            field: "lockout_minutes",
+            shape: SettingShape::Int {
+                min: *session::LOCKOUT_MINUTES.start(),
+                max: *session::LOCKOUT_MINUTES.end(),
+                unit: SettingUnit::Minutes,
+                default: i64::from(unset.lockout_minutes()),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A security setting: how long a person stays locked out after too many wrong \
+                      PINs. A lockout already running keeps the end it was given. No value \
+                      switches the lockout off.",
+        },
+    ]
 }
 
 /// Every value of a wire enum but its `*_UNSPECIFIED`, which is never a choice.
@@ -444,6 +499,7 @@ mod tests {
         ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
         render_snapshot_of,
     };
+    use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
     use crate::wire_enum::WireEnum;
 
@@ -750,6 +806,21 @@ mod tests {
                 let shift: PublishedShift = serde_json::from_value(document).ok()?;
                 match field {
                     "no_shift_selling" => Some(json!(shift.no_shift_selling().as_wire())),
+                    _ => None,
+                }
+            }
+            PublishedSession::NODE => {
+                let session: PublishedSession = serde_json::from_value(document).ok()?;
+                match field {
+                    // A node that sets no window leaves the edge on its deprecated local file and
+                    // then on this default, so the default is what a store with neither runs.
+                    "sign_in_idle_timeout_minutes" => Some(json!(
+                        session
+                            .sign_in_idle_timeout_minutes()
+                            .unwrap_or(DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES)
+                    )),
+                    "lockout_attempts" => Some(json!(session.lockout_attempts())),
+                    "lockout_minutes" => Some(json!(session.lockout_minutes())),
                     _ => None,
                 }
             }
