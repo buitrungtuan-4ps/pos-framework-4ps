@@ -27,6 +27,7 @@ use pos_proto::ClockSource;
 use pos_proto::CurrencyCode;
 use pos_proto::Open;
 use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+use pos_proto::fees::PublishedFees;
 use pos_proto::ids::DeviceId;
 use pos_proto::ids::{EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
@@ -83,6 +84,16 @@ async fn app_with_shift(
     permissions: PermissionSet,
     shift: PublishedShift,
 ) -> (Router, String) {
+    app_with_config(printing, permissions, shift, PublishedFees::default()).await
+}
+
+/// [`app_with_shift`], at a store whose published `fees` node is `fees` as well (ADR-0159).
+async fn app_with_config(
+    printing: Option<(Arc<Printers>, PublishedDevices)>,
+    permissions: PermissionSet,
+    shift: PublishedShift,
+    fees: PublishedFees,
+) -> (Router, String) {
     let identity = StoreIdentity::for_store(StoreId::new(Ulid::from_u128(7)));
     let mut roster = StaffRoster::new();
     roster.insert(
@@ -106,6 +117,7 @@ async fn app_with_shift(
             EdgeSession {
                 devices,
                 shift,
+                fees,
                 ..EdgeSession::bootstrap().with_staff(roster)
             },
             Arc::new(InMemoryReceipts::new()),
@@ -315,6 +327,105 @@ async fn a_table_sells_end_to_end_over_http() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(cleaned["state"], "TABLE_STATE_FREE");
+}
+
+/// The check reads name each fee a bill charges (ADR-0159 decision 4): before the bill opens, as the
+/// rules in force would charge it, and once it is open, as the bill froze them. The settle takes the
+/// figure the check quoted.
+#[tokio::test]
+async fn a_check_shows_each_fee_and_the_settle_takes_its_total() {
+    let service: PublishedFees = serde_json::from_str(
+        &json!({ "fees": [{
+            "fee_id": "01JQ0000000000000000000003",
+            "code": "SERVICE",
+            "display_name": "Service charge",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+        }] })
+        .to_string(),
+    )
+    .expect("a fees node");
+    let (app, token) = app_with_config(
+        None,
+        PermissionSet::default(),
+        PublishedShift::default(),
+        service,
+    )
+    .await;
+    let table = TableId::new(Ulid::from_u128(701));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 5% of 150,000, and the 10% tax on 157,500, of which 750 is the fee's.
+    let fee_line = json!([{
+        "fee_id": "01JQ0000000000000000000003",
+        "code": "SERVICE",
+        "display_name": "Service charge",
+        "amount": vnd(7_500),
+        "tax": vnd(750),
+    }]);
+    let (status, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/tables/{table}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(check["fee_lines"], fee_line, "{check}");
+    assert_eq!(check["total_due"], json!(vnd(173_250)));
+
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+    for uri in [
+        format!("/api/bills/{bill_id}/check"),
+        format!("/api/tables/{table}/check"),
+    ] {
+        let (status, check) = send(app.clone(), &token, "GET", &uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}");
+        assert_eq!(check["fee_lines"], fee_line, "{uri}: {check}");
+        assert_eq!(check["total_due"], json!(vnd(173_250)), "{uri}");
+    }
+
+    let (status, settled) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/bills/{bill_id}/settle"),
+        Some(json!({
+            "payments": [{
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": vnd(173_250),
+                "applied_to_bill": vnd(173_250),
+            }],
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["state"], "BILL_STATE_SETTLED");
 }
 
 /// A transport that records what a printer would have received.

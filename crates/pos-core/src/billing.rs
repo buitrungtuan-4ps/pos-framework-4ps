@@ -39,10 +39,11 @@
 //! [`BillTotals::service_charge`] carries the sum of every fee, so the readers of that one figure
 //! stay right (ADR-0159 decision 4).
 
-use pos_proto::fees::{FeeKind, FeeTax, FrozenFee};
+use pos_proto::fees::{FeeCode, FeeKind, FeeTax, FrozenFee};
 use pos_proto::locale::{TaxComponent, TaxRateTable};
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding, div_round};
 use pos_proto::quantity::Quantity;
+use pos_proto::text::DisplayName;
 use pos_proto::{CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId};
 
 use crate::error::DomainError;
@@ -166,6 +167,10 @@ pub struct FeeClassShare {
 pub struct FeeLine {
     /// The rule that charged it.
     pub fee_id: FeeId,
+    /// The rule's code, what a report groups fees by.
+    pub code: FeeCode,
+    /// The rule's own name, as the bill froze it: what the bill prints the fee under.
+    pub display_name: DisplayName,
     /// What it charged, rounded once to the minor unit by the bill's rounding mode.
     pub amount: Money,
     /// The parts of `amount` taxed at each class, which sum to it. There are none for a fee that is
@@ -474,6 +479,8 @@ fn fee_line(
     };
     Ok(Some(FeeLine {
         fee_id: rule.fee_id,
+        code: rule.code.clone(),
+        display_name: rule.display_name.clone(),
         amount,
         class_shares,
         tax: Money::zero(amount.currency_code),
@@ -933,6 +940,78 @@ pub fn settle(total_due: Money, payments: &[Payment]) -> Result<Settlement, Doma
     })
 }
 
+/// The fee rules each part of a split bill keeps
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6): the rules the bill
+/// froze when it opened, one list per part of `parts`, which are the lines each part covers.
+///
+/// A percentage and a fee per unit are kept by every part as they are, and each part charges them
+/// on its own lines. A fee per bill is not charged in full on every part: its amount is allocated
+/// across the parts in proportion to the nets of the lines it counts on each, so together they
+/// charge exactly what the whole bill would have (`Money::allocate`), and each part keeps the rule
+/// for its share alone. A part that counts none of its lines, or whose share is nothing, does not
+/// keep it. When every line it counts is free, the parts that count one share it evenly.
+///
+/// A rule that [`FrozenFee::violations`] faults is kept by every part as it is: it applies to
+/// nothing on the whole bill, and to nothing on a part.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] if the nets a rule counts overflow.
+pub fn split_fee_rules(
+    rules: &[FrozenFee],
+    parts: &[Vec<BillLine>],
+) -> Result<Vec<Vec<FrozenFee>>, DomainError> {
+    let mut kept: Vec<Vec<FrozenFee>> = vec![Vec::with_capacity(rules.len()); parts.len()];
+    for rule in rules {
+        let per_bill = match (rule.kind(), rule.amount) {
+            (Some(FeeKind::AmountPerBill), Some(amount)) if rule.violations().is_empty() => {
+                Some(amount)
+            }
+            _ => None,
+        };
+        let Some(amount) = per_bill else {
+            for part in &mut kept {
+                part.push(rule.clone());
+            }
+            continue;
+        };
+        let mut counts = Vec::with_capacity(parts.len());
+        let mut weights = Vec::with_capacity(parts.len());
+        for lines in parts {
+            let counted: Vec<&BillLine> = lines
+                .iter()
+                .filter(|line| rule.counts_item(line.menu_item_id))
+                .collect();
+            counts.push(!counted.is_empty());
+            let weight = counted.iter().try_fold(0_i64, |sum, line| {
+                sum.checked_add(line.net.amount_minor.max(0))
+                    .ok_or(MoneyError::Overflow)
+            })?;
+            weights.push(weight);
+        }
+        if weights.iter().all(|weight| *weight == 0) {
+            weights = counts.iter().map(|counts| i64::from(*counts)).collect();
+        }
+        // The parts after the last that weighs anything take nothing, so what the allocation
+        // leaves over lands on a part that counts the rule's lines.
+        while weights.last() == Some(&0) {
+            weights.pop();
+        }
+        if weights.is_empty() {
+            continue;
+        }
+        for (part, share) in kept.iter_mut().zip(amount.allocate(&weights)?) {
+            if !share.is_zero() {
+                part.push(FrozenFee {
+                    amount: Some(share),
+                    ..rule.clone()
+                });
+            }
+        }
+    }
+    Ok(kept)
+}
+
 /// Splits a total into `parts` amounts summing **exactly** to it (`pos-spec.md` §14.3).
 ///
 /// A thin domain wrapper over `Money::split_into`, here so the split law is a domain operation with
@@ -960,13 +1039,14 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 mod tests {
     use super::{
         BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, Payment, assemble,
-        settle, split_by_weights, split_evenly,
+        settle, split_by_weights, split_evenly, split_fee_rules,
     };
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
     use pos_proto::locale::{TaxComponent, TaxRate, TaxRateTable};
     use pos_proto::money::{Money, Ratio, Rounding};
     use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
     use pos_proto::wire_enum::Open;
     use pos_proto::{
         CurrencyCode, FeeId, MenuItemId, PaymentMethod, SalesChannel, TaxClassId, Ulid,
@@ -1449,6 +1529,7 @@ mod tests {
         FrozenFee {
             fee_id: FeeId::new(Ulid::from_u128(id)),
             code: FeeCode::new("FEE"),
+            display_name: DisplayName::new("Fee"),
             kind: kind.into(),
             rate: percent.then(|| Ratio::basis_points(value).expect("a rate")),
             amount: (!percent).then_some(vnd(value)),
@@ -1545,6 +1626,8 @@ mod tests {
         // lines, not of the lines and the first fee. Each part carries its class's rate.
         let ten = FeeLine {
             fee_id: FeeId::new(Ulid::from_u128(1)),
+            code: FeeCode::new("FEE"),
+            display_name: DisplayName::new("Fee"),
             amount: vnd(27_000),
             class_shares: vec![share(food(), 18_000, 1_800), share(alcohol(), 9_000, 1_350)],
             tax: vnd(1_800 + 1_350),
@@ -1819,6 +1902,77 @@ mod tests {
         assert_reconciles(&totals);
     }
 
+    /// What each fee charged on a bill, by rule, in đồng: zero for a rule that charged nothing.
+    fn charged_by_rule(totals: &BillTotals, rules: &[FrozenFee]) -> Vec<i64> {
+        rules
+            .iter()
+            .map(|rule| {
+                totals
+                    .fee_lines
+                    .iter()
+                    .filter(|line| line.fee_id == rule.fee_id)
+                    .map(|line| line.amount.amount_minor)
+                    .sum()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_split_shares_a_fee_per_bill_and_each_part_charges_the_rest_on_its_own_lines() {
+        let rates = rates();
+        let rules = [
+            untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+            untaxed(only(
+                FeeItems::Include,
+                1,
+                fee(3, FeeKind::AmountPerBill, 5_000),
+            )),
+            untaxed(only(
+                FeeItems::Include,
+                0,
+                fee(4, FeeKind::AmountPerUnit, 3_000),
+            )),
+        ];
+        let parts = [
+            vec![line(0, 2, 200_000, food())],
+            vec![line(1, 1, 100_000, alcohol())],
+        ];
+        let kept = split_fee_rules(&rules, &parts).expect("splits");
+        let charged: Vec<Vec<i64>> = parts
+            .iter()
+            .zip(&kept)
+            .map(|(lines, kept)| {
+                let totals = assemble_with(lines, kept, &rates, |_| {}).expect("a part assembles");
+                assert_reconciles(&totals);
+                charged_by_rule(&totals, &rules)
+            })
+            .collect();
+        // The 10,000 per bill falls 2:1 as the parts' nets do, and the 5,000 that counts only the
+        // wine falls on the wine; the percentage and the boxes are charged on each part's own
+        // lines. Together the parts charge what the whole bill does.
+        assert_eq!(
+            charged,
+            vec![vec![6_666, 20_000, 0, 6_000], vec![3_334, 10_000, 5_000, 0]]
+        );
+        let whole = assemble_with(&dinner(), &rules, &rates, |_| {}).expect("assembles");
+        assert_eq!(
+            charged_by_rule(&whole, &rules),
+            vec![10_000, 30_000, 5_000, 6_000]
+        );
+        // A part keeps a fee per bill only for its share: the pizzas have no wine to charge for.
+        let ids: Vec<Vec<u128>> = kept
+            .iter()
+            .map(|rules| {
+                rules
+                    .iter()
+                    .map(|rule| rule.fee_id.as_ulid().to_u128())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(ids, vec![vec![1, 2, 4], vec![1, 2, 3, 4]]);
+    }
+
     /// A rule from a property test's choices of kind, tax treatment, item scope and value.
     fn chosen(id: u128, kind: u8, tax: u8, scope: u8, value: i64) -> FrozenFee {
         let kind = match kind {
@@ -1973,6 +2127,59 @@ mod tests {
                 }
             }
             prop_assert_eq!(placed, i128::from(taxed), "every fee part is in its class's base");
+        }
+
+        /// ADR-0159 decision 6: the parts of a split bill charge a fee per bill together exactly as
+        /// the whole would have, and a percentage or a fee per unit on their own lines, so those
+        /// come to the whole within a minor unit per part, each part rounding once.
+        #[test]
+        fn the_parts_of_a_split_bill_charge_what_the_whole_would_have(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 0_i64..=5_000_000, any::<bool>(), 0_usize..3),
+                1..=8,
+            ),
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
+            half_even in any::<bool>(),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let mut lines = Vec::new();
+            let mut parts: Vec<Vec<BillLine>> = vec![Vec::new(); 3];
+            for (n, units, net, is_food, part) in &sold {
+                let sold_line = line(*n, *units, *net, class(*is_food));
+                lines.push(sold_line);
+                if let Some(part) = parts.get_mut(*part) {
+                    part.push(sold_line);
+                }
+            }
+            parts.retain(|part| !part.is_empty());
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let mode = if half_even { Rounding::HalfEven } else { Rounding::HalfUp };
+            let round = |input: &mut BillInput<'_>| input.rounding_mode = mode;
+
+            let whole = assemble_with(&lines, &rules, &rates, round).expect("assembles");
+            let kept = split_fee_rules(&rules, &parts).expect("splits");
+            prop_assert_eq!(kept.len(), parts.len());
+            let mut together = vec![0_i64; rules.len()];
+            for (part, kept) in parts.iter().zip(&kept) {
+                let totals = assemble_with(part, kept, &rates, round).expect("a part assembles");
+                assert_reconciles(&totals);
+                for (sum, charged) in together.iter_mut().zip(charged_by_rule(&totals, &rules)) {
+                    *sum += charged;
+                }
+            }
+            let per_part = i64::try_from(parts.len()).expect("a few parts");
+            let wholes = charged_by_rule(&whole, &rules);
+            for ((rule, whole), together) in rules.iter().zip(wholes).zip(together) {
+                if rule.kind() == Some(FeeKind::AmountPerBill) {
+                    prop_assert_eq!(together, whole, "a fee per bill is shared, never repeated");
+                } else {
+                    prop_assert!((together - whole).abs() <= per_part, "{} for {}", together, whole);
+                }
+            }
         }
     }
 }

@@ -620,6 +620,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             DomainError::ReductionExceedsBill { .. } => "REDUCTION_EXCEEDS_BILL",
             DomainError::NotAPartition { .. } => "SPLIT_NOT_A_PARTITION",
             DomainError::TaxRateNotConfigured { .. } => "TAX_RATE_NOT_CONFIGURED",
+            // The edge reads a bill's lines and its class bases from one snapshot, so this is a
+            // broken invariant rather than a refusal, and answers as a server error.
+            DomainError::LinesDoNotMatchBases => "LINES_DO_NOT_MATCH_BASES",
             DomainError::Empty { .. } => "EMPTY",
             DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
             DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",
@@ -668,10 +671,14 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
 /// A refused command (an illegal transition, a missing permission, a disabled capability, or a
 /// table/line/bill/shift that is not in a state the command applies to) is the caller's fault, so it
 /// is `409 Conflict` rather than `500`. An unreachable store is `503`; a clock or encoding failure is
-/// the edge's own `500`.
+/// the edge's own `500`, and so is a bill whose lines do not come to its class bases, which the
+/// edge reads from one snapshot and so can only be a broken invariant (ADR-0159).
 pub(crate) fn error_response(error: &AppError) -> Response {
     let reason = error_reason(error);
     match error {
+        AppError::Domain(inner @ DomainError::LinesDoNotMatchBases) => {
+            refusal(StatusCode::INTERNAL_SERVER_ERROR, reason, inner.to_string())
+        }
         AppError::Domain(inner) => refusal(StatusCode::CONFLICT, reason, inner.to_string()),
         AppError::NoOpenOrder
         | AppError::UnknownLine
@@ -723,5 +730,34 @@ pub(crate) fn error_response(error: &AppError) -> Response {
             reason,
             "the edge could not apply the command".to_owned(),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use pos_core::error::DomainError;
+
+    use super::{ERROR_REASON_HEADER, error_reason, error_response};
+    use crate::app::AppError;
+
+    /// A bill whose lines do not come to its class bases is the edge's own broken invariant
+    /// (ADR-0159): a server error under a token of its own, where every other rule the core
+    /// enforces stays a refusal.
+    #[test]
+    fn lines_that_are_not_the_bills_answer_as_a_server_error() {
+        let broken = AppError::Domain(DomainError::LinesDoNotMatchBases);
+        assert_eq!(error_reason(&broken), "LINES_DO_NOT_MATCH_BASES");
+        let response = error_response(&broken);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            response
+                .headers()
+                .get(ERROR_REASON_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("LINES_DO_NOT_MATCH_BASES")
+        );
+        let refused = error_response(&AppError::Domain(DomainError::NegativeChange));
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
     }
 }

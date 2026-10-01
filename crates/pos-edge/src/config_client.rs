@@ -48,6 +48,7 @@ use pos_proto::campaign::PublishedCampaigns;
 use pos_proto::channels::{PublishedChannels, PublishedTender};
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::LayoutBook;
+use pos_proto::fees::PublishedFees;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::ConfigVersionId;
 use pos_proto::integrations::PublishedIntegrations;
@@ -175,14 +176,15 @@ fn localized_book(book: &MenuBook, language: &str) -> MenuBook {
 /// catalog for the session's channel as its menu, and the `permissions` node (ADR-0070) into the
 /// staff roster the edge authorises against. Any node that is absent or does not parse is left as
 /// the base has it — a bad or partial publish never blanks a field, it just does not change it. The
-/// exception is a node of settings (ADR-0160), such as `shift`: absent, it means its defaults.
+/// exceptions are a node of settings (ADR-0160), such as `shift`, and the `fees` node (ADR-0159):
+/// absent, each means its defaults, which for fees is none.
 #[must_use]
 #[expect(
     clippy::too_many_lines,
     reason = "a flat series of independent, self-contained node branches (menu, permissions, \
-              capabilities, floor, stations, tax, campaigns, inventory, channels, tender, qr, \
-              locale, fleet_update, device_ota, lease); each is a few lines and reads better inline \
-              behind a helper indirection"
+              capabilities, floor, stations, tax, campaigns, inventory, reason codes, fees, \
+              channels, tender, qr, locale, fleet_update, device_ota, lease); each is a few lines \
+              and reads better inline behind a helper indirection"
 )]
 pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> EdgeSession {
     let channel = base.sales_channel;
@@ -444,6 +446,23 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         .filter(|published| !published.is_empty())
     {
         session.reason_codes = published;
+    }
+    // The `fees` node ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1):
+    // every fee rule a bill may apply. Absent means no rule, as for a node of settings: the cloud
+    // sends the whole document, so a node it no longer sends is fees somebody removed, and an empty
+    // list is the same answer. An unparseable node keeps the rules the store had, as every node
+    // here does, so a bad publish never changes what a trading store charges. A bill freezes the
+    // rules in force when it opens, so neither reaches a bill already on a table.
+    match document.get(PublishedFees::NODE) {
+        None => session.fees = PublishedFees::default(),
+        Some(value) => {
+            if let Some(fees) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedFees>(&text).ok())
+            {
+                session.fees = fees;
+            }
+        }
     }
     // The `channels` node the channels publish writes (ADR-0080, Track M7): the sales channels a store
     // accepts. A present node is authoritative — the edge refuses an order on a channel it does not
@@ -2589,6 +2608,52 @@ mod tests {
                 framework,
                 "document {bad} should have left the framework set standing"
             );
+        }
+    }
+
+    /// The `fees` node (ADR-0159 decision 1) replaces the store's rules when it parses; absent, or
+    /// an empty list, it means no fee; unparseable, it leaves the rules the store had.
+    #[test]
+    fn a_fees_node_installs_its_rules_an_absent_one_means_none_and_a_bad_one_changes_nothing() {
+        let rule = serde_json::json!({
+            "fee_id": "01JQ0000000000000000000003",
+            "code": "SERVICE",
+            "display_name": "Service charge",
+            "kind": "FEE_KIND_PERCENT",
+            "rate": { "numerator": 5, "denominator": 100 },
+        });
+        let installed = session_from_config(
+            &EdgeSession::bootstrap(),
+            &serde_json::json!({ "fees": { "fees": [rule] } }),
+        );
+        let codes: Vec<&str> = installed
+            .fees
+            .fees
+            .iter()
+            .map(|fee| fee.code.as_str())
+            .collect();
+        assert_eq!(codes, ["SERVICE"]);
+
+        for bad in [
+            serde_json::json!({ "fees": "SERVICE" }),
+            serde_json::json!({ "fees": null }),
+            serde_json::json!({ "fees": { "fees": "not a list" } }),
+            // A rule without the id every rule needs.
+            serde_json::json!({ "fees": { "fees": [{ "code": "SERVICE" }] } }),
+        ] {
+            let kept = session_from_config(&installed, &bad);
+            assert_eq!(
+                kept.fees, installed.fees,
+                "document {bad} should change nothing"
+            );
+        }
+        for none in [
+            serde_json::json!({}),
+            serde_json::json!({ "fees": {} }),
+            serde_json::json!({ "fees": { "fees": [] } }),
+        ] {
+            let cleared = session_from_config(&installed, &none);
+            assert!(cleared.fees.fees.is_empty(), "document {none} means no fee");
         }
     }
 }
