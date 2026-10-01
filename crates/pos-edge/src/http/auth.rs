@@ -38,6 +38,7 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use pos_core::decision::Actor;
+use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
 use pos_proto::ids::DeviceId;
@@ -244,6 +245,30 @@ pub(crate) struct SessionState {
     /// It says nothing about any one badge code. It lets the sign-in screen tell a store the
     /// console has not staffed yet from a mistyped PIN; the refusal alone answers both the same.
     sign_in_ready: bool,
+    /// Whether the store decides with each person's own set
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 6). `false`: every control works as before, and the two lists below are what the
+    /// person's roles say, not what the store enforces.
+    permissions_enforced: bool,
+    /// The permission ids the signed-in person holds directly, sorted. Empty when nobody is signed
+    /// in. The till hides what is in neither list once the store enforces them; the edge stays the
+    /// authority and refuses it anyway.
+    permissions: Vec<&'static str>,
+    /// The permission ids the signed-in person holds only with approval, sorted: the till asks for
+    /// an approver before sending the act.
+    permissions_with_approval: Vec<&'static str>,
+}
+
+/// The ids of the permissions in `set`, sorted, as the session read reports them.
+fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
+    let mut ids: Vec<&'static str> = Permission::ALL
+        .iter()
+        .copied()
+        .filter(|permission| set.contains(*permission))
+        .map(|permission| permission.meta().id)
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
 /// `POST /api/session/sign-in` — verify a badge code + PIN against the synced roster and, on success,
@@ -355,19 +380,34 @@ where
     // (ADR-0123), so the state is answerable with `curl` and not only by a browser reading response
     // headers — and so the app has it on the one call it makes before drawing anything.
     let lease_standing = deps.edge.lease().token();
-    let sign_in_ready = deps.edge.session().staff.sign_in_ready();
+    let session = deps.edge.session();
+    let sign_in_ready = session.staff.sign_in_ready();
+    let permissions_enforced = session.permissions_enforced;
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
             employee_id: Some(employee_id.to_string()),
             lease_standing,
             sign_in_ready,
+            permissions_enforced,
+            permissions: permission_ids(
+                session
+                    .staff
+                    .permissions_for(employee_id)
+                    .unwrap_or(PermissionSet::EMPTY),
+            ),
+            permissions_with_approval: permission_ids(
+                session.staff.permissions_with_approval_for(employee_id),
+            ),
         },
         None => SessionState {
             signed_in: false,
             employee_id: None,
             lease_standing,
             sign_in_ready,
+            permissions_enforced,
+            permissions: Vec::new(),
+            permissions_with_approval: Vec::new(),
         },
     };
     Json(state).into_response()

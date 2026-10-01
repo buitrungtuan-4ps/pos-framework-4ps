@@ -90,6 +90,7 @@ async fn app_with_shift(
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
             permissions,
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(STAFF_PIN)),
         },

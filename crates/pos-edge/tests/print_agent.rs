@@ -63,6 +63,7 @@ async fn paired_pair() -> (Router, String, String) {
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
             permissions: [Permission::ManageDevices].into_iter().collect(),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(PIN)),
         },
@@ -72,6 +73,7 @@ async fn paired_pair() -> (Router, String, String) {
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(12))),
             permissions: PermissionSet::default(),
+            permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(PIN)),
         },

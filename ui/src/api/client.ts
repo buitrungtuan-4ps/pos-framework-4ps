@@ -162,6 +162,14 @@ export interface SessionState {
   // with a PIN. Absent from an edge too old to send it, which the sign-in screen reads as "ready",
   // because a hint that the store has no staff must never be shown on a guess.
   sign_in_ready?: boolean;
+  // Whether the store decides with each person's own permissions (ADR-0158 decision 6). Absent or
+  // false: every control works as before, whatever the two lists below say.
+  permissions_enforced?: boolean;
+  // The permission ids the signed-in person holds directly, and those they hold only with another
+  // person's approval. Empty when nobody is signed in; absent from an edge too old to send them.
+  // The edge stays the authority: it refuses what the person may not do whatever the till shows.
+  permissions?: string[];
+  permissions_with_approval?: string[];
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
