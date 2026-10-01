@@ -43,6 +43,7 @@ use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims
 use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
+use store_postgres::{PostgresSettings, SettingSlot};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
 
 use store_postgres::{AnchorRow, ConflictRow, PostgresAnchors};
@@ -71,6 +72,7 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::{TaxComponent, TaxRate};
+use pos_proto::settings::SettingScope;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
@@ -161,6 +163,7 @@ use crate::scheduling::{
     NewScheduledPublish, ScheduledPublish, ScheduledPublishError, ScheduledPublishStatus,
     ScheduledPublishStore,
 };
+use crate::settings::{SettingValue, SettingsStore, SettingsStoreError};
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
     StoreGroupStore, StoreGroupStoreError,
@@ -2808,6 +2811,59 @@ impl ConnectionStore for PostgresConnections {
         PostgresConnections::delete(self, &tenant_id.to_string(), connection_id)
             .await
             .map_err(|error| ConnectionStoreError::new(error.to_string()))
+    }
+}
+
+impl SettingsStore for PostgresSettings {
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<SettingValue>, SettingsStoreError> {
+        let docs = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| SettingsStoreError::new(error.to_string()))?;
+        docs.iter()
+            .map(|doc| {
+                serde_json::from_str(doc).map_err(|error| {
+                    SettingsStoreError::new(format!(
+                        "a stored setting could not be decoded: {error}"
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    async fn put(
+        &self,
+        tenant_id: TenantId,
+        value: &SettingValue,
+    ) -> Result<(), SettingsStoreError> {
+        let json = serde_json::to_string(value).map_err(|error| {
+            SettingsStoreError::new(format!("could not serialize a setting: {error}"))
+        })?;
+        let slot = SettingSlot {
+            setting_key: &value.setting_key,
+            scope: value.scope.as_wire(),
+            scope_id: &value.scope_id,
+        };
+        self.upsert(&tenant_id.to_string(), slot, &json)
+            .await
+            .map_err(|error| SettingsStoreError::new(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        setting_key: &str,
+        scope: SettingScope,
+        scope_id: &str,
+    ) -> Result<bool, SettingsStoreError> {
+        let slot = SettingSlot {
+            setting_key,
+            scope: scope.as_wire(),
+            scope_id,
+        };
+        PostgresSettings::delete(self, &tenant_id.to_string(), slot)
+            .await
+            .map_err(|error| SettingsStoreError::new(error.to_string()))
     }
 }
 

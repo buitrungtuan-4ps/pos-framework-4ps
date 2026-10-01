@@ -104,6 +104,7 @@ pub mod release_source;
 pub mod releases;
 pub mod retention;
 pub mod scheduling;
+pub mod settings;
 pub mod store_groups;
 pub mod tax;
 pub mod translations;

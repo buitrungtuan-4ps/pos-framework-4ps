@@ -50,6 +50,8 @@ Tenant ─► Brand ─► Store ─► Device
 
 Changes are versioned and shipped as deltas. A store applies a new version in under a second (hot reload) with no restart. If a delta cannot be applied, the store keeps the last known-good version and raises an alert. A store that has been offline too long, or has fallen too far behind, pulls a **full snapshot** instead of replaying deltas.
 
+A value a store may run differently is a **setting**, listed in [`configuration.md`](configuration.md) ([ADR-0160](adr/0160-everything-a-store-runs-differently-is-published-configuration.md)). Its values are kept per scope in `setting_values`: the tenant, a brand, a store group or one store. A store runs the value of the most specific scope that sets one. The order is the store, then its store groups (the value written last, if two disagree), then its brand, then the tenant. A store with no value runs the default.
+
 Employee PINs sync down as hashes so login works offline. Printers and displays follow a *store discovers → admin approves* flow: the store reports what it found on the network, and an administrator assigns roles from the dashboard.
 
 ### 3.2 Synchronisation
