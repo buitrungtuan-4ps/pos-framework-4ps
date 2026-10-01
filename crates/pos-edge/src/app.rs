@@ -4211,6 +4211,8 @@ impl<S: EventStore> Edge<S> {
                 bill_id: *part_id,
                 order_id: bill.order_id,
                 order_line_ids: lines.clone(),
+                // No rule is in force until the edge installs the `fees` node (ADR-0159).
+                fee_rules: Vec::new(),
             };
             let (envelope, message) = self.prepare(&ctx, &opened)?;
             envelopes.push(envelope);
@@ -5919,6 +5921,8 @@ impl<S: EventStore> Edge<S> {
             bill_id,
             order_id,
             order_line_ids: order_line_ids.clone(),
+            // No rule is in force until the edge installs the `fees` node (ADR-0159).
+            fee_rules: Vec::new(),
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
@@ -6076,6 +6080,10 @@ impl<S: EventStore> Edge<S> {
             rounding_adjustment: totals.rounding_adjustment,
             total_due: totals.total_due,
             buyer_subject_id,
+            // Not recorded yet (ADR-0159 decision 4): the bill charges no fee, and a reader takes
+            // the tax from `tax_total`.
+            fee_lines: Vec::new(),
+            tax_lines: Vec::new(),
         };
         let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
         envelopes.push(settled_envelope);
@@ -9751,6 +9759,7 @@ mod tests {
                         bill_id,
                         order_id,
                         order_line_ids: Vec::new(),
+                        fee_rules: Vec::new(),
                     },
                 )
                 .await
