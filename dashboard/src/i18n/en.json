@@ -573,6 +573,7 @@
   "config.rollbackConfirmBody": "This restores the selected version as a new current version. Nothing in the history is deleted, and the store pulls the restored configuration on its next sync.",
   "config.rollbackConfirmTitle": "Roll back configuration?",
   "config.rolledBack": "Rolled back — published version {version}.",
+  "config.staffHidden": "Staff names and codes are hidden by your role: the permissions node identifies each person by id only. Ask an owner or admin if you need them.",
   "config.stale": "Someone else published this store's configuration while you were editing. The screen has been reloaded — please check what changed and try again.",
   "config.thisVersion": "This version",
   "config.title": "Configuration",

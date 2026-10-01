@@ -18,6 +18,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Staff records in the console need their own permission, `console.people.read`.** The employee
+  list, a single employee and the assignment list, whose rows name the person, needed only
+  `console.data.read`. Every console role holds that, so a Viewer or an Ops user could read each
+  staff member's name and staff code, which are personal data under Decree 13/2023 (ADR-0158
+  decision 9).
+  - `console.people.read` is new, and Owner and Admin hold it. Without it,
+    `GET /admin/employees`, `GET /admin/employees/{employee_id}` and `GET /admin/assignments`
+    answer `403`. The permission catalogue and the role templates name nobody, so they still need
+    only `console.data.read`.
+  - A store's config reads, `GET /admin/stores/{store_id}/config` and
+    `GET /admin/stores/{store_id}/config/versions/{version_id}`, still need only
+    `console.data.read`. For a role without `console.people.read` they now also remove each staff
+    member's `name` and `code` from the `permissions` node. The member's id and permissions stay,
+    and so does the rest of the document. The Config screen says when the role hides them.
+
+  **Upgrade note:** `console.people.read` is a new permission identifier. Viewer and Ops users no
+  longer read staff records, or staff names and codes in a store's config; an Owner or Admin keeps
+  both. No route is added or removed, and no event or migration changes.
+
 - **A manager's PIN can no longer be guessed at an approval prompt.** A sign-in locked a person
   out after five wrong PINs in a row, but the prompt that approves a void, a discount over the
   ceiling or a bill void checked the PIN with no limit, so the same PIN could be tried forever.
