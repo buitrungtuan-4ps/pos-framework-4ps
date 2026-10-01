@@ -37,6 +37,7 @@ pub mod enums;
 pub mod envelope;
 pub mod error;
 pub mod events;
+pub mod fees;
 pub mod floor;
 pub mod ids;
 pub mod integrations;
@@ -74,9 +75,9 @@ pub use events::{EventType, TypedPayload};
 pub use floor::{FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule, StationPlan};
 pub use ids::{
     AreaId, BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
-    DisplaySubcategoryId, EmployeeId, EventId, IngredientId, MenuItemId, OrderId, OrderLineId,
-    PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId,
-    StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
+    DisplaySubcategoryId, EmployeeId, EventId, FeeId, IngredientId, MenuItemId, OrderId,
+    OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId,
+    StockLedgerEntryId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
 };
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,

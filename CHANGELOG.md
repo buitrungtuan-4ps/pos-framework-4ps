@@ -237,6 +237,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A fee is a published rule, in a new `fees` configuration node**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1). A bill has one fee today, a
+  service charge the edge always sets to zero, and nothing can configure it.
+  - `pos_proto::fees` defines the node: any number of fees, each with an id, a `code` for reports
+    and a name with per-locale translations. A fee is a rate of its base (`FEE_KIND_PERCENT`) or
+    an integer amount per bill or per unit (`FEE_KIND_AMOUNT_PER_BILL`,
+    `FEE_KIND_AMOUNT_PER_UNIT`), on the channels it lists, for all items or an include or exclude
+    list, taxed the way its lines are, at one tax class, or not at all.
+  - A field left out reads as the owner's confirmed default: after discounts (`base_discounted`),
+    net of tax (`base_tax_inclusive` false), `FEE_TAX_FOLLOW_LINES`, not waivable, active, every
+    channel and every item. A fee of a kind the release does not know applies to nothing, and an
+    unknown item scope counts no item.
+  - `PublishedFee::violations` names what is wrong with a rule's shape: a missing rate or one
+    outside 0–100 %, a missing or negative amount, `FEE_TAX_TAX_CLASS` without a class, an empty
+    include or exclude list, an unknown kind, or an unknown item scope. An unknown tax treatment
+    is not one: it reads as `FEE_TAX_FOLLOW_LINES`. It is the check the cloud is to make before it
+    publishes a fee.
+  - **Upgrade note:** `pos-proto` gains the `fees` module and `FeeId`, additively. No event,
+    migration, permission or protocol version changes, and nothing reads the node yet: bills are
+    unchanged until the core calculation and the edge land.
+
 - **The console can write a setting once for many stores, and a new store gets the owner's
   values** ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 3). The values the cloud resolves for each store now reach it.
