@@ -344,6 +344,15 @@ pub enum ServerMessage {
     /// The device fell behind the fan-out, or asked to resume from a position the fan-out cannot
     /// replay from, and must reload a fresh snapshot rather than trust an incomplete stream.
     Resync,
+    /// The edge applied a new store configuration
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// item 7). An open till reloads what it draws from configuration — the floor, the menu, the
+    /// layout, the locale and the reason codes — without a new sign-in. The reload reads whatever the
+    /// edge holds by then, so the version only names what was applied.
+    ConfigApplied {
+        /// The cloud's id for the configuration version the edge now runs.
+        config_version_id: String,
+    },
 }
 
 #[cfg(test)]

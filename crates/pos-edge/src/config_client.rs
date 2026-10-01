@@ -958,6 +958,9 @@ where
                 }
             },
         };
+        // The session, the lease and the origins are all live now, so tell the open tills: each one
+        // reloads what it draws from configuration without a new sign-in (ADR-0160 item 7).
+        self.edge.announce_config(&synced.config_version_id);
         // Store it before recording the version: the live session is already swapped either way, and
         // what this buys is the *next* boot. A failure here is a degradation (the box will re-pull
         // after a restart), not a reason to refuse a document the counter is already selling on.

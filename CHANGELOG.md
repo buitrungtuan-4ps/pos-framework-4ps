@@ -218,6 +218,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **An open till picks up a new store configuration without a new sign-in**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  item 7). A till used to read the floor, the menus, the layout, the money settings and the reason
+  codes only at boot and at sign-in, so a change published from the console reached it hours later,
+  at the next sign-in.
+  - When the edge applies a configuration version it sends `config_applied` on `/ws`, numbered on
+    the fan-out like every frame, so a till that reconnects is replayed it.
+  - Every open till then reloads those five reads. A resync reloads them as well, because the frames
+    a till missed may include a new configuration.
+  - **Upgrade note:** `/ws` gains a frame type, `config_applied { config_version_id }`. A till that
+    predates it ignores it, as it ignores any type it does not know, and keeps today's behaviour.
+
 - **Cash paid in and out of the drawer is recorded and counted, and the drawer opens without a sale
   only for a manager** ([ADR-0165](docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). The events, permissions and reasons for
   both existed and nothing produced them, so cash taken out for a supplier showed up as a shortage

@@ -30,6 +30,9 @@ export type LinkStatus = "connecting" | "open" | "closed";
 export interface LiveLinkHandlers {
   onEvent: (event: ServerEvent) => void;
   onResync: () => void;
+  // The edge applied a new store configuration (ADR-0160 item 7): reload what the till draws from
+  // it — the floor, the menu, the layout, the locale and the reason codes — without a new sign-in.
+  onConfigApplied: () => void;
   onStatus: (status: LinkStatus) => void;
 }
 
@@ -169,6 +172,8 @@ export class LiveLink {
       }
       if (message.type === "event" && typeof message.event_type === "string") {
         this.#handlers.onEvent({ eventType: message.event_type, payload: message.payload });
+      } else if (message.type === "config_applied") {
+        this.#handlers.onConfigApplied();
       }
       // Recorded once the frame is applied, because the position is the last frame this device
       // has, not the last one it was sent.

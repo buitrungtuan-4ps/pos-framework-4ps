@@ -3153,6 +3153,16 @@ impl<S: EventStore> Edge<S> {
         &self.fanout
     }
 
+    /// Tells every connected device that a new store configuration is live
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// item 7), so an open till reloads its floor, menu, layout, locale and reason codes without a
+    /// new sign-in. Numbered on the fan-out like any frame, so a till that reconnects is replayed it.
+    pub fn announce_config(&self, config_version_id: &str) {
+        self.fanout.publish(&ServerMessage::ConfigApplied {
+            config_version_id: config_version_id.to_owned(),
+        });
+    }
+
     /// The store this edge is, so a driving-port caller (the inbound `OrderIn`) can bind an order to
     /// it and refuse one addressed to another store.
     #[must_use]

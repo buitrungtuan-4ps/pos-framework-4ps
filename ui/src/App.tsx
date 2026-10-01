@@ -21,7 +21,7 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { fold, loadLiveOrders, loadStore, setLink } from "./state/store";
+import { fold, loadConfiguration, loadLiveOrders, loadStore, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
 // versions and nothing else: the operator cannot fix it, and the person who can needs the two
@@ -125,8 +125,12 @@ export function App() {
       // A resync says this client fell behind, so what it holds may be stale — and the events it
       // missed are exactly the ones it will never be sent. Re-reading what is open is the answer:
       // the same read the boot gate makes, merged over whatever the fold has since established.
+      // What it missed may include a new configuration, so that is read again too.
       void loadLiveOrders();
+      void loadConfiguration();
     },
+    // A new configuration is live on the edge: read it again, without a new sign-in (ADR-0160).
+    onConfigApplied: () => void loadConfiguration(),
     onStatus: setLink,
   });
   // The device half of the boot gate, once the store server itself is known to be usable: pair, then
