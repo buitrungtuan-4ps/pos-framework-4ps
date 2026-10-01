@@ -279,6 +279,20 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A role can grant a permission directly or with approval, and a store can switch on each
+  person's own set** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+  decisions 1 and 4), in the wire types and the core. Nothing sets them yet.
+  - The `permissions` node gains, per person, `permissions_with_approval`: what they may do only when
+    another person who holds it directly approves that one act with their code and PIN. The node
+    also gains the store's `enforced` switch.
+  - `pos_core::decision::DecisionCtx` gains `granted_directly`. A permission held directly asks for
+    nobody's PIN, even where the catalogue flags it for one; the flag stays the default a role
+    starts from.
+  - **Upgrade note:** additive. Both fields are skipped from the wire when empty or `false`, so a
+    node compiled today is byte-identical, and the edge passes an empty `granted_directly`, so every
+    PIN-flagged permission asks for a PIN as before. No event, migration, permission or protocol
+    change.
+
 - **A fee is a published rule, in a new `fees` configuration node**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1). A bill has one fee today, a
   service charge the edge always sets to zero, and nothing can configure it.
