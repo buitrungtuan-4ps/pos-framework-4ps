@@ -69,7 +69,10 @@ If the credential store refuses the token, the pairing still succeeds for this r
 single-use and already spent — and the status page says it will not survive a restart. That is the
 till's own rule: a device that cannot persist its token pairs again next session.
 
-Every round also asks `GET /api/pair/devices`, which sits behind the paired-device gate only. A `401`
+Every round also asks `GET /api/pair/devices`, which sits behind the paired-device gate only, and
+stays there while the app reads it this way: behind the signed-in gate it would answer `403` whenever
+nobody is signed in. (Retiring a device, `POST /api/pair/revoke`, does need a signed-in manager —
+[ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8.) A `401`
 there means the edge no longer knows the token (revoked, or an edge whose registry did not survive a
 restart): the app forgets it, stops the print agent, closes the till and reopens **connect** with a
 notice.

@@ -2,7 +2,10 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Minting the pairing code for the next device
-//! ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §3).
+//! ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §3), and
+//! retiring one ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+//! decision 8): the two acts that decide which hardware the store answers to, behind the same two
+//! gates.
 //!
 //! Before this route, a code was minted once per process start and nothing minted another, so
 //! commissioning a second till on a trading store meant stopping the service — which drops every
@@ -164,6 +167,52 @@ async fn mint(app: &Router, token: Option<&str>) -> (StatusCode, String) {
         .expect("read the body")
         .to_bytes();
     (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Posts a retirement — of one device, or of every device when `body` names none — returning the
+/// status and the body.
+async fn revoke(app: &Router, token: &str, body: serde_json::Value) -> (StatusCode, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/pair/revoke")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request builds"),
+        )
+        .await
+        .expect("route the revoke");
+    let status = response.status();
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("read the body")
+        .to_bytes();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Pairs a second device from a fresh code, returning its id.
+async fn a_second_device(pairing: &Pairing) -> pos_proto::ids::DeviceId {
+    let before = pairing.paired_devices();
+    let (code, _) = pairing
+        .mint(SystemClock.now(), Minter::Boot)
+        .expect("mint a code");
+    pairing
+        .redeem(&code, SystemClock.now())
+        .await
+        .expect("redeem")
+        .token()
+        .expect("a fresh code pairs a device");
+    pairing
+        .paired_devices()
+        .into_iter()
+        .map(|(device_id, _paired_at)| device_id)
+        .find(|device_id| !before.iter().any(|(known, _)| known == device_id))
+        .expect("the second device is listed")
 }
 
 fn code_from(body: &str) -> String {
@@ -373,4 +422,54 @@ async fn the_admission_names_the_till_the_code_was_minted_from() {
             .is_some_and(serde_json::Value::is_null),
         "and the boot code's admission still names nobody: {first}"
     );
+}
+
+#[tokio::test]
+async fn a_signed_in_manager_retires_a_device_and_nobody_else() {
+    let (app, pairing, _edge, token) = paired().await;
+    let lost = a_second_device(&pairing).await;
+    sign_in(&app, &token, MANAGER_CODE).await;
+
+    let (status, body) = revoke(&app, &token, json!({ "device_id": lost.to_string() })).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let still: Vec<_> = pairing
+        .paired_devices()
+        .into_iter()
+        .map(|(device_id, _paired_at)| device_id)
+        .collect();
+    assert!(!still.contains(&lost), "the lost tablet is retired");
+    assert_eq!(still.len(), 1, "the manager's own till keeps trading");
+}
+
+#[tokio::test]
+async fn a_waiter_on_a_paired_till_cannot_retire_a_device() {
+    // Retiring every till in the store is the break-glass: a waiter's tap must not reach it, and the
+    // refusal must say what is missing rather than send them back to sign in.
+    let (app, pairing, _edge, token) = paired().await;
+    a_second_device(&pairing).await;
+    sign_in(&app, &token, WAITER_CODE).await;
+
+    let (status, body) = revoke(&app, &token, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body.contains("manager"),
+        "the refusal should say what is missing: {body}"
+    );
+    assert_eq!(pairing.paired_devices().len(), 2, "nothing was retired");
+}
+
+#[tokio::test]
+async fn a_paired_device_with_nobody_signed_in_cannot_retire_a_device() {
+    // Holding a token was enough before ADR-0158 decision 8; it is not now. The signed-in gate answers
+    // first, so the till goes to the sign-in screen.
+    let (app, pairing, _edge, token) = paired().await;
+    a_second_device(&pairing).await;
+
+    let (status, body) = revoke(&app, &token, json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(
+        body.contains("sign in"),
+        "the refusal should send the till to the sign-in screen: {body}"
+    );
+    assert_eq!(pairing.paired_devices().len(), 2, "nothing was retired");
 }

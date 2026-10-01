@@ -2011,11 +2011,40 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
     assert_eq!(signed_out["permissions"], json!([]));
 }
 
+/// A store with a manager — somebody who may manage devices — signed in on its one device.
+async fn a_store_with_a_manager_signed_in() -> Store {
+    const MANAGER_CODE: &str = "M01";
+    let store = a_store_where(|mut session| {
+        session.staff.insert(
+            MANAGER_CODE,
+            StaffAuth {
+                employee_id: Some(pos_proto::ids::EmployeeId::new(Ulid::from_u128(12))),
+                permissions: PermissionSet::EMPTY.with(Permission::ManageDevices),
+                permissions_with_approval: PermissionSet::EMPTY,
+                discount_ceiling: None,
+                pin_phc: Some(hash_of(STAFF_PIN)),
+            },
+        );
+        session
+    })
+    .await;
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/session/sign-in",
+        Some(json!({ "code": MANAGER_CODE, "pin": STAFF_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the manager signs in");
+    store
+}
+
 /// Retiring a device is reachable on the composed router, and a retired token stops working
-/// immediately (ADR-0091).
+/// immediately (ADR-0091). Retiring needs a signed-in person who may manage devices (ADR-0158
+/// decision 8), so a manager signs in first.
 #[tokio::test]
 async fn a_revoked_device_is_refused_by_the_composed_edge() {
-    let store = a_store().await;
+    let store = a_store_with_a_manager_signed_in().await;
 
     let (status, devices) = send(
         store.app.clone(),

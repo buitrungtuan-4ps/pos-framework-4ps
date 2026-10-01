@@ -430,7 +430,8 @@ A tablet pairs once and stays paired: pairings are durable by design
 unpairs the store. That is the right default for a shop that reboots mid-service, and it means a
 tablet that walks out of the building keeps working until somebody retires it.
 
-On any **paired** device in the store, open **Devices** in the top bar:
+Sign in on any paired device as somebody whose role grants `admin.device.manage` — the Manager and
+Owner roles do by default — and open **Devices** in the top bar:
 
 1. Every device the store has admitted is listed, newest first, with the moment it paired. The
    tablet you are holding is marked **This device** — that is the one row not to retire by accident.
@@ -445,9 +446,10 @@ On any **paired** device in the store, open **Devices** in the top bar:
 
 The edge does not know a device's *name* — device names live in the cloud's approved-device registry,
 and a store that has never synced has none — so the pairing moment and the **This device** mark are
-what tell the tills apart. Retiring is behind the paired-device gate, not an operator login: the
-store server has no operator identity offline (the console is a browser on the LAN), so it is as
-strong as pairing and no stronger, and every retirement is written to the store's log.
+what tell the tills apart. Retiring needs that signed-in manager, as getting a pairing code does
+([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8): the store
+server checks the staff roster the console published, which works offline, so a waiter's tablet
+cannot retire every till in the store. Every retirement is written to the store's log.
 
 If a retirement answers an error, the store server could not write its durable device table — the
 tablet may still be paired after a restart. Try again rather than assuming it is locked out.
