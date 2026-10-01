@@ -16,53 +16,11 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
-
 use pos_proto::ids::StoreId;
+use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
 
 use crate::people::{Assignment, Employee, RoleTemplate};
 use crate::registry::EntityStatus;
-
-/// One staff member as the edge reads them: identity, the flattened permission set, and the PIN hash to
-/// verify against offline. The name is here because the edge shows it on screen; the hash is here
-/// because the edge authenticates against it. Neither reaches the audit trail (ADR-0070). The
-/// console's reads of a store's config, current and past, never return the hash, and return the
-/// name and code only to a role holding `console.people.read` (ADR-0158).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct StaffMember {
-    /// The employee id (a ULID string).
-    pub id: String,
-    /// The staff/badge code the person types at the edge.
-    pub code: String,
-    /// The person's name, for the edge's display.
-    pub name: String,
-    /// The granted `pos-core` permission ids, deduped and sorted.
-    pub permissions: Vec<String>,
-    /// How much this person may discount before it needs a manager, in the currency's minor unit,
-    /// from the role they are assigned under.
-    ///
-    /// Flattened onto the person for the same reason their permissions are: the edge authorises one
-    /// signed-in person at a time and would otherwise have to hold the tenant's role table to answer
-    /// a question about them. `None` — no ceiling configured, or no role found — is what every store
-    /// carries today, and the edge reads it as zero.
-    ///
-    /// Skipped from the wire when absent, so a node published before this field existed and one
-    /// published for a tenant that configures no ceiling are the same document.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub discount_ceiling_minor: Option<i64>,
-    /// The Argon2id PHC hash of the PIN, or `None` if no PIN is set (the person cannot sign in until
-    /// one is). Never the PIN itself.
-    pub pin_phc: Option<String>,
-}
-
-/// The `permissions` config node for one store: the store id and its staff, in a stable order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PermissionsDocument {
-    /// The store the document authorises staff for (a ULID string).
-    pub store_id: String,
-    /// The store's staff, sorted by `code`.
-    pub staff: Vec<StaffMember>,
-}
 
 /// Compiles a store's assignments into its `permissions` document.
 ///
@@ -77,7 +35,7 @@ pub fn compile_permissions(
     roles: &[RoleTemplate],
     assignments: &[Assignment],
     pins: &BTreeMap<String, Option<String>>,
-) -> PermissionsDocument {
+) -> PublishedPermissions {
     let employee_by_id: BTreeMap<String, &Employee> = employees
         .iter()
         .map(|employee| (employee.employee_id.to_string(), employee))
@@ -87,7 +45,7 @@ pub fn compile_permissions(
         .map(|role| (role.role_template_id.to_string(), role))
         .collect();
 
-    let mut staff: Vec<StaffMember> = assignments
+    let mut staff: Vec<PublishedStaffMember> = assignments
         .iter()
         .filter_map(|assignment| {
             let employee = employee_by_id.get(&assignment.employee_id.to_string())?;
@@ -100,8 +58,8 @@ pub fn compile_permissions(
                 .unwrap_or_default();
             permissions.sort_unstable();
             permissions.dedup();
-            Some(StaffMember {
-                id: employee.employee_id.to_string(),
+            Some(PublishedStaffMember {
+                id: Some(employee.employee_id.to_string()),
                 code: employee.code.clone(),
                 name: employee.name.clone(),
                 permissions,
@@ -121,15 +79,16 @@ pub fn compile_permissions(
         .collect();
     staff.sort_by(|a, b| a.code.cmp(&b.code));
 
-    PermissionsDocument {
-        store_id: store_id.to_string(),
+    PublishedPermissions {
+        store_id: Some(store_id.to_string()),
         staff,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{StaffMember, compile_permissions};
+    use super::compile_permissions;
+    use pos_proto::people::PublishedStaffMember;
 
     use std::collections::BTreeMap;
 
@@ -217,7 +176,7 @@ mod tests {
 
         let document = compile_permissions(store, &employees, &roles, &assignments, &pins);
 
-        assert_eq!(document.store_id, store.to_string());
+        assert_eq!(document.store_id, Some(store.to_string()));
         // Sorted by code: C01 (Alice) then C02 (Bao); the archived C99 is gone.
         assert_eq!(
             document
@@ -227,7 +186,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["C01", "C02"]
         );
-        let alice: &StaffMember = &document.staff[0];
+        let alice: &PublishedStaffMember = &document.staff[0];
         assert_eq!(alice.name, "Alice");
         assert_eq!(
             alice.permissions,

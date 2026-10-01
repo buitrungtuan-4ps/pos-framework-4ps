@@ -56,6 +56,7 @@ use pos_proto::locale::{NumberFormat, TaxRateTable};
 use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
+use pos_proto::people::PublishedPermissions;
 use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
@@ -68,33 +69,6 @@ use crate::origins::Origins;
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
 const RETRY_BACKOFF: Duration = Duration::from_secs(5);
-
-/// One staff member as the published `permissions` node carries them (ADR-0070). The edge reads the
-/// `id` (the employee a sign-in acts as, S0b/ADR-0084), the `code` a person types, the granted
-/// permission ids, and the PIN hash. `name` is present on the wire but not used here, and serde
-/// ignores it.
-#[derive(serde::Deserialize)]
-struct PublishedStaff {
-    #[serde(default)]
-    id: Option<String>,
-    code: String,
-    #[serde(default)]
-    permissions: Vec<String>,
-    /// How much this person may discount before it needs a manager, in minor units, resolved from
-    /// their role by the cloud's compiler. Absent on every node published before the field existed
-    /// and on every tenant that configures none, which the edge reads as zero.
-    #[serde(default)]
-    discount_ceiling_minor: Option<i64>,
-    #[serde(default)]
-    pin_phc: Option<String>,
-}
-
-/// The published `permissions` node: the store's staff (ADR-0070).
-#[derive(serde::Deserialize)]
-struct PublishedPermissions {
-    #[serde(default)]
-    staff: Vec<PublishedStaff>,
-}
 
 /// The published `locale` node: the store's currency, IANA timezone, and business-date cutoff hour
 /// (ADR-0074, Track M4). Each field is applied only if it parses, so a bad value leaves that setting
@@ -248,7 +222,7 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
     // authorises sign-ins against, replacing any local roster.
     if let Some(published) = document
-        .get("permissions")
+        .get(PublishedPermissions::NODE)
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<PublishedPermissions>(&text).ok())
     {

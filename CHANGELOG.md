@@ -73,6 +73,15 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **The `permissions` node has one type**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 10). The
+  cloud's compiler and the edge each kept a private struct for the document, so a field one side
+  added could be dropped silently by the other. Both now use `pos_proto::people::PublishedPermissions`.
+  Its `Debug` prints no name, staff code or PIN hash.
+  - **Upgrade note:** the compiled JSON is byte-identical to what the cloud wrote before, so stores
+    on any release read it as they did. `pos-proto` gains the `people` module, additively; no
+    event, migration, permission or protocol change.
+
 - **The cloud's API documents are generated with utoipa 6** (#537). The `/v1` API is unchanged. In
   `docs/openapi.json` the two choices for an order line's `quoted_unit_price` swap places, so
   `MoneyDto` now comes before `null`. The admin document is unchanged.
