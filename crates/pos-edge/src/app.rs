@@ -27,7 +27,7 @@ use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::decision::{
     Actor, BillCommand, DecisionCtx, Effect, LineCommand, ShiftCommand, TableCommand, decide_bill,
-    decide_line, decide_shift, decide_table,
+    decide_line, decide_shift, decide_table, over_ceiling,
 };
 use pos_core::error::DomainError;
 use pos_core::inventory::{RecipeBook, StockMovement, StockProjection};
@@ -4070,12 +4070,16 @@ impl<S: EventStore> Edge<S> {
 
         // The step-up is attempted only when the till sent one, exactly as a line void does: the
         // till does not have to know the ceiling rule, and the domain answers with the permission
-        // that was missing when it needed one and none came.
+        // that was missing when it needed one and none came. And only when the discount goes over
+        // the ceiling: under it there is nothing to approve, so an approval the till sent anyway is
+        // not checked and records no override, which would otherwise carry an `exceeded_by` of
+        // zero or less — an audit entry for nothing.
+        let over = over_ceiling(amount, ceiling).map_err(AppError::Domain)?;
         let approver = match approval {
-            Some(_) => {
+            Some(_) if over => {
                 self.resolve_step_up(&mut ctx, Permission::OverrideDiscountCeiling, approval)?
             }
-            None => None,
+            _ => None,
         };
 
         // The decision is the gate, not a value: a reduction moves the bill nowhere and runs no

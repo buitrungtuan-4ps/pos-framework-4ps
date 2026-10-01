@@ -442,8 +442,14 @@ fn check_partition(covers: &[OrderLineId], parts: &[Vec<OrderLineId>]) -> Result
 /// Whether a discount of `amount` is above what this role may give without a manager.
 ///
 /// An absent ceiling is **zero**, so any discount at all needs the override. See
-/// [`BillCommand::Reduce::ceiling`] for why that direction and not the other.
-fn over_ceiling(amount: Money, ceiling: Option<Money>) -> Result<bool, DomainError> {
+/// [`BillCommand::Reduce::ceiling`] for why that direction and not the other. Public so the edge
+/// asks the same question before it checks an approval: under the ceiling there is nothing to
+/// approve.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] if the amount and the ceiling are in different currencies.
+pub fn over_ceiling(amount: Money, ceiling: Option<Money>) -> Result<bool, DomainError> {
     let Some(ceiling) = ceiling else {
         return Ok(!amount.is_zero());
     };

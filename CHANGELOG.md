@@ -241,6 +241,16 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Fixed
 
+- **A discount within the ceiling records no override when the till sends a manager's approval
+  anyway.** `POST /api/bills/{id}/discount` checked any approval it was sent and wrote
+  `security.permission.overridden` for it, so a discount under a published ceiling, sent with a
+  manager's code and PIN, put an override with an `exceeded_by` of zero or less into the audit
+  trail. The approval is now checked only when the discount goes over the ceiling.
+  - **Upgrade note:** no store changes today. With no ceiling published, every store's, every
+    discount is over the ceiling and asks for the override as before. Where a ceiling is published, a
+    discount within it no longer needs, checks or records an approval. No event, migration,
+    permission or protocol change.
+
 - **A counter order paid before the kitchen made it stays on the kitchen board, with its note.**
   A counter, a delivery or a QR takeaway order is paid first and cooked after, and the board
   dropped every order the moment its bill settled. The ticket vanished while the food was still to
