@@ -818,9 +818,12 @@ export const api = {
     }),
 
   // --- people & access (ADR-0070, Track M1): employees, role templates, per-store assignments ---
-  // Reads need only console.data.read; every write needs console.people.manage (Owner/Admin) — the
-  // server re-checks, the console only hides what a role cannot do. A PIN is set/reset, never read: it
-  // is hashed server-side and this client never sees the digits back (only whether one is set).
+  // The staff records — the roster, one employee, and the assignments, which name each person — need
+  // console.people.read (Owner/Admin, ADR-0158); the role templates and the permission catalogue name
+  // nobody and need only console.data.read. Every write needs console.people.manage (Owner/Admin) —
+  // the server re-checks, the console only hides what a role cannot do. A PIN is set/reset, never
+  // read: it is hashed server-side and this client never sees the digits back (only whether one is
+  // set).
   // The whole roster, unpaged — what the publish path needs: the permission node is compiled from
   // every employee, and a node built from a page would be missing whoever fell off it (ADR-0098).
   listEmployees: (tenantId: string) =>
@@ -932,7 +935,8 @@ export const api = {
   permissionCatalogue: () => requestJson<PermissionInfo[]>("GET", "/admin/people/permissions"),
 
   // Compile a store's people + roles + assignments into its `permissions` config node and version it
-  // through the config tree, so the edge applies the published set. Needs console.people.manage.
+  // through the config tree, so the edge applies the published set. Needs console.config.publish, the
+  // gate every config publish shares — not console.people.manage.
   publishPermissions: (tenantId: string, storeId: string) =>
     requestJson<PublishedConfig>("POST", "/admin/people/publish", {
       tenant_id: tenantId,

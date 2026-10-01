@@ -574,7 +574,8 @@ impl fmt::Display for AssignmentId {
 ///
 /// The name and code are T1 personal data
 /// ([ADR-0070](../../docs/adr/0070-people-and-access.md)) and reaching them needs
-/// `console.people.manage`, the same gate as reading the roster.
+/// `console.people.read`, the same gate as reading the roster
+/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 #[derive(Debug, Clone, Serialize)]
 pub struct Assignment {
     /// The assignment id.

@@ -573,6 +573,7 @@
   "config.rollbackConfirmBody": "Thao tác này khôi phục phiên bản đã chọn thành phiên bản hiện tại mới. Không có gì trong lịch sử bị xóa, và cửa hàng sẽ tải cấu hình được khôi phục ở lần đồng bộ kế tiếp.",
   "config.rollbackConfirmTitle": "Khôi phục cấu hình?",
   "config.rolledBack": "Đã khôi phục — xuất bản phiên bản {version}.",
+  "config.staffHidden": "Tên và mã nhân viên bị ẩn theo vai trò của bạn: nhánh phân quyền chỉ nhận diện mỗi người bằng mã định danh (id). Cần xem thì hỏi chủ sở hữu hoặc quản trị viên.",
   "config.stale": "Ai đó vừa xuất bản cấu hình của cửa hàng này trong lúc bạn đang chỉnh sửa. Màn hình đã được tải lại — vui lòng kiểm tra thay đổi rồi thử lại.",
   "config.thisVersion": "Phiên bản này",
   "config.title": "Cấu hình",

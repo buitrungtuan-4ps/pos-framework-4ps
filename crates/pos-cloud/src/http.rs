@@ -5853,7 +5853,11 @@ fn people_entropy_unavailable() -> Response {
 
 /// Builds the people & access sub-router ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 ///
-/// Reads are behind [`ConsolePermission::Read`] (every console role); every write is behind the new
+/// The staff records — the employee list and read-one, and the assignment list, whose rows carry the
+/// person's name and code — are behind [`ConsolePermission::ReadPeople`] (Owner/Admin,
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// The permission catalogue and the role templates name nobody, so they stay behind
+/// [`ConsolePermission::Read`] (every console role). Every write is behind
 /// [`ConsolePermission::ManagePeople`] (Owner/Admin) and emits an audit entry that records the
 /// employee **id, code, status, and role — never the name, and never the PIN or its hash** (ADR-0070).
 /// The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request body on
@@ -5938,7 +5942,8 @@ where
         .into_response()
 }
 
-/// A super-admin lists a tenant's employees.
+/// A super-admin lists a tenant's employees. Behind [`ConsolePermission::ReadPeople`]: every row
+/// carries a person's name and staff code.
 async fn admin_list_employees<P, A, C>(
     State(state): State<PeopleState<P, A, C>>,
     headers: HeaderMap,
@@ -5953,7 +5958,7 @@ where
         &state.admin,
         &state.clock,
         &headers,
-        ConsolePermission::Read,
+        ConsolePermission::ReadPeople,
     )
     .await
     {
@@ -6043,7 +6048,8 @@ fn employee_list_filter(
     })
 }
 
-/// A super-admin reads one employee within its tenant.
+/// A super-admin reads one employee within its tenant. Behind [`ConsolePermission::ReadPeople`],
+/// like the list.
 async fn admin_get_employee<P, A, C>(
     State(state): State<PeopleState<P, A, C>>,
     headers: HeaderMap,
@@ -6059,7 +6065,7 @@ where
         &state.admin,
         &state.clock,
         &headers,
-        ConsolePermission::Read,
+        ConsolePermission::ReadPeople,
     )
     .await
     {
@@ -6589,7 +6595,8 @@ where
 }
 
 /// A super-admin lists assignments — everyone at a store (`?store_id=`) or every store a person works
-/// at (`?employee_id=`), exactly one.
+/// at (`?employee_id=`), exactly one. Behind [`ConsolePermission::ReadPeople`], the roster's gate:
+/// each row names the person it grants ([`Assignment`]).
 async fn admin_list_assignments<P, A, C>(
     State(state): State<PeopleState<P, A, C>>,
     headers: HeaderMap,
@@ -6604,7 +6611,7 @@ where
         &state.admin,
         &state.clock,
         &headers,
-        ConsolePermission::Read,
+        ConsolePermission::ReadPeople,
     )
     .await
     {
@@ -27249,6 +27256,7 @@ where
             Err(denied) => return denied,
         };
     let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
+    let staff = role_grants(context.admin.role, ConsolePermission::ReadPeople);
     let (tenant_id, store_id) =
         match parse_ulid_fields([("tenant_id", &query.tenant_id), ("store_id", &store_id)]) {
             Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
@@ -27263,10 +27271,17 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.current_effective() {
-                // Never the staff PIN hashes (S7), and never a price to a role without
-                // `ReadRevenue` (S8) — see `without_staff_credentials` and `without_prices`.
+                // Never the staff PIN hashes (S7), never a staff name or code to a role without
+                // `ReadPeople` (ADR-0158), and never a price to a role without `ReadRevenue` (S8)
+                // — see `without_staff_credentials`, `without_staff_identities` and
+                // `without_prices`.
                 Some(effective) => {
                     let document = without_staff_credentials(effective);
+                    let document = if staff {
+                        document
+                    } else {
+                        without_staff_identities(&document)
+                    };
                     let document = if prices {
                         document
                     } else {
@@ -27499,6 +27514,41 @@ fn without_staff_credentials(document: &serde_json::Value) -> serde_json::Value 
     document
 }
 
+/// Removes each staff member's name and staff code from a console read for a caller without
+/// [`ConsolePermission::ReadPeople`]
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+///
+/// The `permissions` node names every member of staff a store authorises: the till shows the name,
+/// and the person signs in with the code. Both are **T1** personal data (ADR-0070), and the console's
+/// own staff records — the roster and the assignments — are behind `ReadPeople`. Without this, the
+/// config screen would be the way round that gate: a Viewer refused the roster could read every
+/// name in the fleet here, one store at a time.
+///
+/// **Gated, unlike the credential.** An Owner or Admin manages these people and is shown the same
+/// names on the People screen, so the node tells them nothing new. A PIN hash is different in kind,
+/// which is why [`without_staff_credentials`] removes it from every read.
+///
+/// Only the two fields go. Each member's id, permission set and discount ceiling stay, and so does
+/// the rest of the document, so the config screen still shows what each person at the store may
+/// do. The fields are *removed*, not blanked, for the reason S7 gives: a blank name would read as a
+/// person who has none, not as a field this role is not shown.
+fn without_staff_identities(document: &serde_json::Value) -> serde_json::Value {
+    let mut document = document.clone();
+    if let Some(staff) = document
+        .get_mut("permissions")
+        .and_then(|node| node.get_mut("staff"))
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for member in staff {
+            if let Some(member) = member.as_object_mut() {
+                member.remove("name");
+                member.remove("code");
+            }
+        }
+    }
+    document
+}
+
 /// The config nodes whose published shape carries money, and which a console caller therefore reads
 /// only with [`ConsolePermission::ReadRevenue`] (production-readiness **S8**).
 ///
@@ -27515,7 +27565,8 @@ fn without_staff_credentials(document: &serde_json::Value) -> serde_json::Value 
 ///
 /// `layout` is deliberately absent — buttons and their order carry no money — and so are `tax`
 /// (published rates, which a receipt shows the guest anyway) and `permissions` (whose credential is
-/// removed unconditionally by [`without_staff_credentials`]).
+/// removed unconditionally by [`without_staff_credentials`], and whose names and codes go by role in
+/// [`without_staff_identities`]).
 const PRICED_CONFIG_NODES: &[&str] = &["menu", "campaigns"];
 
 /// Removes the priced nodes from a console read for a caller without `ReadRevenue`
@@ -27563,6 +27614,7 @@ where
             Err(denied) => return denied,
         };
     let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
+    let staff = role_grants(context.admin.role, ConsolePermission::ReadPeople);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -27584,10 +27636,16 @@ where
         Ok(Some(state)) => {
             let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
             match tree.effective_at(version_id) {
-                // The diff view reads a past version, and a past version holds past PIN hashes (S7)
-                // and past prices (S8) — a price is not less sensitive for being last month's.
+                // The diff view reads a past version, and a past version holds past PIN hashes (S7),
+                // past staff names (ADR-0158) and past prices (S8) — none is less sensitive for
+                // being last month's.
                 Some(effective) => {
                     let document = without_staff_credentials(effective);
+                    let document = if staff {
+                        document
+                    } else {
+                        without_staff_identities(&document)
+                    };
                     let document = if prices {
                         document
                     } else {
@@ -31356,11 +31414,14 @@ mod error_envelope_tests {
 mod console_config_redaction_tests {
     //! What a console read of a store's configuration must never carry.
     //!
-    //! Two independent redactions run on the same document and the tests keep them independent: the
-    //! staff credential goes unconditionally (**S7**), the priced nodes go by role (**S8**). A change
-    //! that merged them would be a change in behaviour for one of the two.
+    //! Three independent redactions run on the same document and the tests keep them independent:
+    //! the staff credential goes unconditionally (**S7**), the staff names and codes go by role
+    //! (ADR-0158), and the priced nodes go by role (**S8**). A change that merged any two would be a
+    //! change in behaviour for one of them.
 
-    use super::{PRICED_CONFIG_NODES, without_prices, without_staff_credentials};
+    use super::{
+        PRICED_CONFIG_NODES, without_prices, without_staff_credentials, without_staff_identities,
+    };
     use serde_json::json;
 
     /// A document shaped like a real effective config: a priced node, a free one, and the staff node.
@@ -31370,7 +31431,16 @@ mod console_config_redaction_tests {
             "campaigns": { "rules": [{ "amount": { "currency": "VND", "minor": 20_000 } }] },
             "layout": { "buttons": ["margherita"] },
             "capabilities": { "tips_enabled": true },
-            "permissions": { "staff": [{ "employee_id": "01J", "pin_phc": "$argon2id$v=19$..." }] },
+            "permissions": {
+                "store_id": "01S",
+                "staff": [{
+                    "id": "01J",
+                    "code": "C01",
+                    "name": "Alice",
+                    "permissions": ["billing.discount.apply"],
+                    "pin_phc": "$argon2id$v=19$...",
+                }],
+            },
         })
     }
 
@@ -31422,6 +31492,48 @@ mod console_config_redaction_tests {
 
         let both = without_prices(&priced);
         assert!(both.get("menu").is_none(), "and the prices go by role (S8)");
+    }
+
+    #[test]
+    fn a_role_without_read_people_gets_no_staff_name_or_code() {
+        let redacted = without_staff_identities(&document());
+        let member = redacted["permissions"]["staff"][0]
+            .as_object()
+            .expect("the staff member is still listed");
+        assert!(
+            !member.contains_key("name") && !member.contains_key("code"),
+            "a name and a staff code are T1 and need ReadPeople (ADR-0158): {member:?}"
+        );
+        // Only those two go: the config screen still shows what each person at the store may do.
+        assert_eq!(member["id"], "01J");
+        assert_eq!(member["permissions"], json!(["billing.discount.apply"]));
+        assert_eq!(redacted["permissions"]["store_id"], "01S");
+        assert_eq!(redacted["capabilities"], document()["capabilities"]);
+    }
+
+    #[test]
+    fn the_staff_redactions_are_independent() {
+        // A caller with ReadPeople still loses the PIN hash, and losing the PIN hash does not take
+        // the name with it — the credential goes for everyone, the person only for some roles.
+        let credential_gone = without_staff_credentials(&document());
+        let member = &credential_gone["permissions"]["staff"][0];
+        assert_eq!(
+            member["name"], "Alice",
+            "S7 removes the credential, not the person"
+        );
+        assert_eq!(member["code"], "C01");
+
+        let identity_gone = without_staff_identities(&document());
+        assert!(
+            identity_gone["permissions"]["staff"][0]
+                .get("pin_phc")
+                .is_some(),
+            "the credential is S7's to remove, and both config reads apply S7 on every read"
+        );
+        assert!(
+            identity_gone.get("menu").is_some(),
+            "and the prices are S8's: two permissions, however the four roles line up today"
+        );
     }
 
     #[test]

@@ -1478,7 +1478,8 @@ export interface AuditFilter {
 
 /**
  * An employee as `GET /admin/employees` lists it: identity, code, status, and whether a sign-in PIN
- * is set — never the PIN or its hash. This is the console's first T1 Restricted data (ADR-0070).
+ * is set — never the PIN or its hash. This is the console's first T1 Restricted data (ADR-0070),
+ * read only with console.people.read (ADR-0158).
  */
 export interface Employee {
   readonly employee_id: string;
@@ -1509,7 +1510,10 @@ export interface RoleTemplate {
   readonly etag: ETag;
 }
 
-/** An employee's assignment to a store with a role (ADR-0070) — three ids, no PII. */
+/**
+ * An employee's assignment to a store with a role (ADR-0070). It names the person it grants, so it
+ * is T1 like the roster and read only with console.people.read (ADR-0158).
+ */
 export interface Assignment {
   readonly assignment_id: string;
   readonly tenant_id: string;
