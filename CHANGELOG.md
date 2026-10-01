@@ -107,6 +107,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **What the console authors is what the store enforces**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3 and 7).
+  - **An archived role grants nothing.** It went on contributing every permission and its ceiling
+    to each node published after it was archived. Now it contributes neither, like a role that does
+    not exist; the people who held it stay on the roster with whatever their other roles grant.
+  - **A person with several roles at a store is listed once**, holding the union of their roles'
+    permissions and the highest of their ceilings. The schema still allows one assignment per
+    person and store; the compiler is right for several before assignments reach store groups.
+  - **Offboarding reaches the store at once.** Removing an assignment, archiving a person and
+    archiving a role publish the `permissions` node to every store the change reaches before they
+    answer: the same publish as `POST /admin/people/publish`, audited as `permissions.publish` with
+    the version, the staff count and the id of the assignment, person or role, never a name or a
+    code. Every other change still reaches a store when someone publishes.
+  - **`POST /admin/assignments` refuses a person, store or role the tenant does not have (`404`) or
+    has archived (`409`)**, naming the field with `NOT_FOUND` or `ARCHIVED`. Such an assignment used
+    to be written, and then published nobody or granted nothing.
+  - **Upgrade note:** no migration, event or permission changes. `DELETE
+    /admin/assignments/{assignment_id}` now answers `200` with `{"stores": [...]}` — each store's
+    `store_id`, `outcome` (`PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`) and
+    `config_version_id` — where it answered `204`, and `PATCH /admin/employees/{employee_id}` and
+    `PATCH /admin/roles/{role_id}` answer the same, with their `ETag`, when the update archives; any
+    other update still answers `204`. A failed store keeps its old node until it is published again.
+    The `assignment.remove` audit entry now records the ids it removed. The console treats every
+    success alike, so its screens are unchanged.
+
 - **Every role that exists keeps every till action it has**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). The seven
   permissions #560 named — seating, adding a line, firing, bumping, opening a bill, splitting and

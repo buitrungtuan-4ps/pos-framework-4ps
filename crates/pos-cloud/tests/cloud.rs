@@ -17360,7 +17360,7 @@ impl RoleTemplateStore for FakeRoleTemplates {
                 tenant_id: template.tenant_id,
                 name: template.name.clone(),
                 permissions: template.permissions.clone(),
-                discount_ceiling_minor: None,
+                discount_ceiling_minor: template.discount_ceiling_minor,
                 status: EntityStatus::Active,
             },
             version.clone(),
@@ -17418,6 +17418,7 @@ impl RoleTemplateStore for FakeRoleTemplates {
         }
         row.record.name.clone_from(&template.name);
         row.record.permissions.clone_from(&template.permissions);
+        row.record.discount_ceiling_minor = template.discount_ceiling_minor;
         row.record.status = template.status;
         row.etag = version.clone();
         Ok(UpdateOutcome::Updated(version))
@@ -17486,6 +17487,35 @@ impl AssignmentStore for FakeAssignments {
             .filter(|row| row.tenant_id == tenant && row.employee_id == employee_id)
             .cloned()
             .collect())
+    }
+
+    async fn list_for_role(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<Option<Assignment>, AssignmentStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|row| row.tenant_id == tenant && row.assignment_id == assignment_id)
+            .cloned())
     }
 
     async fn remove(
@@ -17806,6 +17836,27 @@ impl AssignmentStore for FakePeople {
             .await?;
         self.resolved(tenant, rows).await
     }
+    async fn list_for_role(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .assignments
+            .list_for_role(tenant, role_template_id)
+            .await?;
+        self.resolved(tenant, rows).await
+    }
+    async fn get(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<Option<Assignment>, AssignmentStoreError> {
+        let Some(row) = self.assignments.get(tenant, assignment_id).await? else {
+            return Ok(None);
+        };
+        Ok(self.resolved(tenant, vec![row]).await?.into_iter().next())
+    }
     async fn remove(
         &self,
         tenant: TenantId,
@@ -17816,10 +17867,28 @@ impl AssignmentStore for FakePeople {
 }
 
 /// The main app merged with the people router, wired to a caller-supplied audit recorder so a test can
-/// assert the audit trail (ADR-0070).
+/// assert the audit trail (ADR-0070). The registry holds the one store these tests assign people
+/// to, active, so an assignment to it passes the route's checks.
 fn people_app_with_audit(
     admin: FakeAdmin,
     people: FakePeople,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    people_app(admin, people, registry, FakeConfigTrees::default(), audit)
+}
+
+/// The people routes and the people publish over one roster, one registry and one config-tree fake:
+/// a test seeds the stores an assignment may name, and reads back the `permissions` node that a
+/// removal or an archive publishes at once
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7).
+fn people_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    registry: FakeRegistry,
+    config: FakeConfigTrees,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
     let app = app_all(
@@ -17827,10 +17896,25 @@ fn people_app_with_audit(
         FakeRollups::default(),
         FakeKeys::default(),
         admin.clone(),
-        FakeConfigTrees::default(),
+        config.clone(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::people_router(people, admin, clock(), audit))
+    http::router(app)
+        .merge(http::people_router(
+            people.clone(),
+            registry,
+            config.clone(),
+            admin.clone(),
+            clock(),
+            Arc::clone(&audit),
+        ))
+        .merge(http::people_publish_router(
+            people,
+            config,
+            admin,
+            clock(),
+            audit,
+        ))
 }
 
 /// Seeds one store's people directly through the seam: Alice (`C01`) with a PIN hash, a Cashier
@@ -18620,12 +18704,15 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
         "the header and the body name the same version"
     );
 
-    // Rename + archive, at the version the read-one handed out (ADR-0094).
+    // Rename, at the version the read-one handed out (ADR-0094). Not an archive: an archived person
+    // can no longer be assigned to a store below (ADR-0158 decision 7), and archiving publishes at
+    // once, which `archiving_a_person_tells_every_store_they_work_at_and_a_rename_tells_none`
+    // covers.
     let updated = router
         .clone()
         .oneshot(patch_with_etag(
             &format!("/admin/employees/{employee_id}"),
-            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "active" }),
             &cookie,
             &employee_etag,
         ))
@@ -18749,7 +18836,7 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
         1
     );
 
-    // Remove (offboard).
+    // Remove (offboard). The store is told at once, and the answer says how that went (ADR-0158).
     let remove = router
         .clone()
         .oneshot(delete_with_cookie(
@@ -18758,7 +18845,7 @@ async fn people_routes_crud_lifecycle_audited_without_pii() {
         ))
         .await
         .expect("route remove");
-    assert_eq!(remove.status(), StatusCode::NO_CONTENT);
+    assert_eq!(remove.status(), StatusCode::OK);
 
     // Every write was audited — and the trail never carries the employee's name, PIN, or PIN hash.
     let recorded = audit.list(None, 50).await.expect("list audit");
@@ -18850,7 +18937,8 @@ async fn the_audit_trail_shows_a_staff_code_only_to_a_role_that_reads_staff_reco
         ))
         .await
         .expect("route update employee");
-    assert_eq!(archived.status(), StatusCode::NO_CONTENT);
+    // An archive publishes at once (ADR-0158 decision 7) — here to no store, as she works at none.
+    assert_eq!(archived.status(), StatusCode::OK);
     let cashier = router
         .clone()
         .oneshot(post_with_cookie(
@@ -19493,6 +19581,542 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
     assert!(
         !dump.to_lowercase().contains("argon2"),
         "no PIN hash in the audit trail"
+    );
+}
+
+// --- ADR-0158 decision 7: what the console authors is what the store enforces -------------------
+
+/// The staff a store's `permissions` node lists on its Store layer now — none without a tree.
+async fn staff_at(config: &FakeConfigTrees, store: StoreId) -> Vec<serde_json::Value> {
+    config
+        .load(tenant(), store)
+        .await
+        .expect("load the tree")
+        .and_then(|tree| {
+            tree.record.layers[2]["permissions"]["staff"]
+                .as_array()
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
+/// How many versions a store's tree has been published at.
+async fn versions_at(config: &FakeConfigTrees, store: StoreId) -> usize {
+    config
+        .load(tenant(), store)
+        .await
+        .expect("load the tree")
+        .map_or(0, |tree| tree.record.history.len())
+}
+
+/// Publishes a store's people the way the console's button does.
+async fn publish_people(router: &axum::Router, cookie: &str, store: StoreId) {
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/people/publish",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store.as_ulid().to_string(),
+            }),
+            cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+}
+
+/// The `(store, outcome)` pairs a write that publishes at once answers with.
+async fn publish_report(response: axum::response::Response) -> Vec<(String, String)> {
+    json_body(response).await["stores"]
+        .as_array()
+        .expect("a stores array")
+        .iter()
+        .map(|row| {
+            (
+                row["store_id"].as_str().expect("a store id").to_owned(),
+                row["outcome"].as_str().expect("an outcome").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A store as the report names one it published to.
+fn applied(store: StoreId) -> (String, String) {
+    (
+        store.as_ulid().to_string(),
+        "PERMISSIONS_PUBLISH_APPLIED".to_owned(),
+    )
+}
+
+/// Seeds, through the seam, a person and a role that existed and have since been archived.
+async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, RoleTemplateId) {
+    let gone = EmployeeId::new(Ulid::from_u128(0x60E));
+    let version = EmployeeStore::create(
+        people,
+        &NewEmployee {
+            employee_id: gone,
+            tenant_id: tenant(),
+            code: "C09".to_owned(),
+            name: "Gone".to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    let archive = EmployeeUpdate {
+        employee_id: gone,
+        tenant_id: tenant(),
+        name: "Gone".to_owned(),
+        status: EntityStatus::Archived,
+    };
+    EmployeeStore::update(people, &archive, &version)
+        .await
+        .expect("archive employee");
+    let retired = RoleTemplateId::new(Ulid::from_u128(0x01D));
+    let version = RoleTemplateStore::create(
+        people,
+        &NewRoleTemplate {
+            role_template_id: retired,
+            tenant_id: tenant(),
+            name: "Old".to_owned(),
+            permissions: Vec::new(),
+            discount_ceiling_minor: None,
+        },
+    )
+    .await
+    .expect("create role");
+    let retire = RoleTemplateUpdate {
+        role_template_id: retired,
+        tenant_id: tenant(),
+        name: "Old".to_owned(),
+        permissions: Vec::new(),
+        discount_ceiling_minor: None,
+        status: EntityStatus::Archived,
+    };
+    RoleTemplateStore::update(people, &retire, &version)
+        .await
+        .expect("archive role");
+    (gone, retired)
+}
+
+/// The assignment route checks every id it binds before writing
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7,
+/// and ADR-0070's route check). An employee, store or role the tenant does not have is `404`, one
+/// it has archived is `409`, and each refusal names the field that carried the id.
+#[tokio::test]
+async fn an_assignment_to_an_unknown_or_archived_person_store_or_role_is_refused() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let (gone, retired) = seed_archived_person_and_role(&people).await;
+    let registry = FakeRegistry::default();
+    let open = StoreId::new(Ulid::from_u128(0x0BE));
+    let closed = StoreId::new(Ulid::from_u128(0xC1));
+    seed_store(&registry, tenant(), open, true);
+    seed_store(&registry, tenant(), closed, false);
+    let router = people_app(
+        admin,
+        people.clone(),
+        registry,
+        FakeConfigTrees::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    // Every id good: Alice, at a second store that is open, as a Cashier.
+    let good = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "employee_id": alice.as_ulid().to_string(),
+        "store_id": open.as_ulid().to_string(),
+        "role_template_id": cashier.as_ulid().to_string(),
+    });
+
+    // Each field in turn names something the tenant never had, then something it has archived.
+    let nobody = Ulid::from_u128(0xDEAD).to_string();
+    for (field, archived) in [
+        ("employee_id", gone.as_ulid().to_string()),
+        ("store_id", closed.as_ulid().to_string()),
+        ("role_template_id", retired.as_ulid().to_string()),
+    ] {
+        for (id, status, reason) in [
+            (&nobody, StatusCode::NOT_FOUND, "NOT_FOUND"),
+            (&archived, StatusCode::CONFLICT, "ARCHIVED"),
+        ] {
+            let mut request = good.clone();
+            request[field] = serde_json::json!(id);
+            let refused = router
+                .clone()
+                .oneshot(post_with_cookie("/admin/assignments", &request, &owner))
+                .await
+                .expect("route the assignment");
+            assert_eq!(refused.status(), status, "{field} {reason}");
+            let error = json_body(refused).await;
+            let detail = &error["error"]["details"][0];
+            assert_eq!(detail["field"], field, "{error}");
+            assert_eq!(detail["reason"], reason, "{error}");
+        }
+    }
+    let held = AssignmentStore::list_for_employee(&people, tenant(), alice)
+        .await
+        .expect("list");
+    assert_eq!(
+        held.len(),
+        1,
+        "no refusal wrote anything: Alice holds only her seeded grant"
+    );
+
+    let assigned = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/assignments", &good, &owner))
+        .await
+        .expect("route the assignment");
+    assert_eq!(
+        assigned.status(),
+        StatusCode::CREATED,
+        "every id good, so it is written"
+    );
+}
+
+/// Removing an assignment publishes its store's `permissions` node at once, so the person cannot
+/// sign in there a moment longer (ADR-0158 decision 7). The answer says how the store's publish
+/// went; the trail records the removal by the ids it bound and the publish by its version and
+/// count.
+#[tokio::test]
+async fn removing_an_assignment_takes_the_person_off_the_stores_node_at_once() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    publish_people(&router, &owner, store_id()).await;
+    assert_eq!(
+        staff_at(&config, store_id()).await.len(),
+        1,
+        "Alice is on the node"
+    );
+
+    let grant = AssignmentId::new(Ulid::from_u128(1));
+    let removed = router
+        .clone()
+        .oneshot(delete_with_cookie(
+            &format!(
+                "/admin/assignments/{}?tenant_id={}",
+                grant.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &owner,
+        ))
+        .await
+        .expect("route the removal");
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert_eq!(publish_report(removed).await, vec![applied(store_id())]);
+    assert!(
+        staff_at(&config, store_id()).await.is_empty(),
+        "the store's node no longer lists her, without anyone pressing publish"
+    );
+
+    let recorded = audit.list(None, 20).await.expect("list audit");
+    let removal = recorded
+        .iter()
+        .find(|entry| entry.action == "assignment.remove")
+        .expect("the removal is recorded");
+    assert_eq!(
+        removal.before,
+        Some(serde_json::json!({
+            "id": grant.to_string(),
+            "employee_id": alice.to_string(),
+            "store_id": store_id().to_string(),
+            "role_template_id": cashier.to_string(),
+        })),
+        "the ids it bound, and no name or code"
+    );
+    let caused = recorded
+        .iter()
+        .find(|entry| {
+            entry.action == "permissions.publish"
+                && entry
+                    .after
+                    .as_ref()
+                    .is_some_and(|after| after.get("assignment_id").is_some())
+        })
+        .expect("the publish the removal caused is recorded");
+    assert_eq!(caused.entity_id, store_id().to_string());
+    let after = caused.after.as_ref().expect("an after");
+    assert_eq!(after["assignment_id"], serde_json::json!(grant.to_string()));
+    assert_eq!(after["staff_count"], 0);
+    assert!(
+        !serde_json::to_string(after)
+            .expect("serialise")
+            .contains("Alice"),
+        "never a name"
+    );
+}
+
+/// Archiving a person publishes the node at once to every store they work at; a rename publishes as
+/// before, which is to say not until someone presses publish (ADR-0158 decision 7).
+#[tokio::test]
+async fn archiving_a_person_tells_every_store_they_work_at_and_a_rename_tells_none() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let second = StoreId::new(Ulid::from_u128(0x5EC));
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(2)),
+            tenant_id: tenant(),
+            employee_id: alice,
+            store_id: second,
+            role_template_id: cashier,
+        },
+    )
+    .await
+    .expect("assign the second store");
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    for store in [store_id(), second] {
+        publish_people(&router, &owner, store).await;
+    }
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/employees/{}", alice.as_ulid());
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{url}?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+    let renamed = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "active" }),
+            &owner,
+            &etag_of(&read),
+        ))
+        .await
+        .expect("route the rename");
+    assert_eq!(
+        renamed.status(),
+        StatusCode::NO_CONTENT,
+        "a rename answers as before"
+    );
+    for store in [store_id(), second] {
+        assert_eq!(
+            versions_at(&config, store).await,
+            1,
+            "and publishes nothing"
+        );
+    }
+
+    let archived = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({ "tenant_id": tenant_ulid, "name": "Alice Nguyen", "status": "archived" }),
+            &owner,
+            &etag_of(&renamed),
+        ))
+        .await
+        .expect("route the archive");
+    assert_eq!(archived.status(), StatusCode::OK);
+    assert!(
+        !etag_of(&archived).is_empty(),
+        "the person's new version still comes back"
+    );
+    let mut expected = vec![applied(store_id()), applied(second)];
+    expected.sort();
+    assert_eq!(
+        publish_report(archived).await,
+        expected,
+        "both of her stores, at once"
+    );
+    for store in [store_id(), second] {
+        assert!(
+            staff_at(&config, store).await.is_empty(),
+            "she is off {store}'s node"
+        );
+        assert_eq!(versions_at(&config, store).await, 2);
+    }
+}
+
+/// Archiving a role publishes the node at once to every store where someone holds it, and there it
+/// grants nothing: the person stays on the roster through the assignment and holds what their other
+/// roles grant, here nothing (ADR-0158 decision 7). A store where nobody holds the role is left
+/// alone.
+#[tokio::test]
+async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let elsewhere = StoreId::new(Ulid::from_u128(0x5EC));
+    let cook = RoleTemplateId::new(Ulid::from_u128(0xC00C));
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: cook,
+            tenant_id: tenant(),
+            name: "Cook".to_owned(),
+            permissions: vec!["sales.ticket.bump".to_owned()],
+            discount_ceiling_minor: None,
+        },
+    )
+    .await
+    .expect("create role");
+    AssignmentStore::assign(
+        &people,
+        &NewAssignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(2)),
+            tenant_id: tenant(),
+            employee_id: alice,
+            store_id: elsewhere,
+            role_template_id: cook,
+        },
+    )
+    .await
+    .expect("assign");
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    for store in [store_id(), elsewhere] {
+        publish_people(&router, &owner, store).await;
+    }
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/roles/{}", cashier.as_ulid());
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{url}?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+
+    let archived = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Cashier",
+                "permissions": ["billing.discount.apply"],
+                "status": "archived",
+            }),
+            &owner,
+            &etag_of(&read),
+        ))
+        .await
+        .expect("route the archive");
+    assert_eq!(archived.status(), StatusCode::OK);
+    assert_eq!(
+        publish_report(archived).await,
+        vec![applied(store_id())],
+        "only the store where someone holds the role"
+    );
+    let staff = staff_at(&config, store_id()).await;
+    assert_eq!(
+        staff.len(),
+        1,
+        "Alice stays on the roster through her assignment"
+    );
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!([]),
+        "but the archived role grants her nothing"
+    );
+    assert_eq!(
+        versions_at(&config, elsewhere).await,
+        1,
+        "the other store was left alone"
+    );
+    assert_eq!(
+        staff_at(&config, elsewhere).await[0]["permissions"],
+        serde_json::json!(["sales.ticket.bump"])
+    );
+}
+
+/// A person with several roles at one store holds the union of their permissions and the highest of
+/// their ceilings (ADR-0158 decision 3). The schema keeps one assignment per person and store
+/// today, so the second grant is written beside the first directly, as an assignment that reaches a
+/// store group or every store will one day write it.
+#[tokio::test]
+async fn a_person_with_two_roles_at_a_store_holds_both() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (alice, _cashier) = seed_a_cashier(&people, store_id()).await;
+    let lead = RoleTemplateId::new(Ulid::from_u128(0x1EAD));
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: lead,
+            tenant_id: tenant(),
+            name: "Shift lead".to_owned(),
+            permissions: vec![
+                "cash.shift.open".to_owned(),
+                "billing.discount.apply".to_owned(),
+            ],
+            discount_ceiling_minor: Some(50_000),
+        },
+    )
+    .await
+    .expect("create role");
+    people
+        .assignments
+        .rows
+        .lock()
+        .expect("lock")
+        .push(Assignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(2)),
+            tenant_id: tenant(),
+            employee_id: alice,
+            store_id: store_id(),
+            role_template_id: lead,
+            employee_name: None,
+            employee_code: None,
+        });
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    publish_people(&router, &owner, store_id()).await;
+
+    let staff = staff_at(&config, store_id()).await;
+    assert_eq!(staff.len(), 1, "one person, listed once");
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!(["billing.discount.apply", "cash.shift.open"]),
+        "both roles, once each"
+    );
+    assert_eq!(
+        staff[0]["discount_ceiling_minor"], 50_000,
+        "the higher ceiling"
     );
 }
 

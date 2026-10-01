@@ -5981,6 +5981,95 @@ mod role_templates_and_assignments {
             );
         });
     }
+
+    /// The two reads a removal and a role's archive need to know which stores to tell
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 7): one assignment by its id, and every assignment granting a role. Both are
+    /// tenant-scoped, and both name the person the way every assignment read does.
+    #[test]
+    fn an_assignment_reads_by_id_and_by_role_within_its_tenant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+
+            people
+                .insert("01EMP00000000000000000LAN1", "tenant-a", "C21", "Lan")
+                .await
+                .expect("insert the employee");
+            for (id, store_id, role) in [
+                (
+                    "01ASSIGN0000000000000ROLE1",
+                    "01STORE000000000000000000S",
+                    "01ROLE000000000000000000A1",
+                ),
+                (
+                    "01ASSIGN0000000000000ROLE2",
+                    "01STORE000000000000000000T",
+                    "01ROLE000000000000000000A1",
+                ),
+                (
+                    "01ASSIGN0000000000000ROLE3",
+                    "01STORE000000000000000000U",
+                    "01ROLE000000000000000000B2",
+                ),
+            ] {
+                people
+                    .insert_assignment(id, "tenant-a", "01EMP00000000000000000LAN1", store_id, role)
+                    .await
+                    .expect("assign");
+            }
+
+            let one = people
+                .fetch_assignment("tenant-a", "01ASSIGN0000000000000ROLE2")
+                .await
+                .expect("by id")
+                .expect("the assignment exists");
+            assert_eq!(
+                one.store_id, "01STORE000000000000000000T",
+                "the store a removal must tell"
+            );
+            assert_eq!(one.employee_name.as_deref(), Some("Lan"));
+            assert!(
+                people
+                    .fetch_assignment("tenant-b", "01ASSIGN0000000000000ROLE2")
+                    .await
+                    .expect("other tenant")
+                    .is_none(),
+                "another tenant cannot read it by id"
+            );
+            assert!(
+                people
+                    .fetch_assignment("tenant-a", "01ASSIGN000000000000NOSUCH")
+                    .await
+                    .expect("missing")
+                    .is_none()
+            );
+
+            let mut stores: Vec<String> = people
+                .fetch_assignments_for_role("tenant-a", "01ROLE000000000000000000A1")
+                .await
+                .expect("by role")
+                .into_iter()
+                .map(|row| row.store_id)
+                .collect();
+            stores.sort();
+            assert_eq!(
+                stores,
+                vec!["01STORE000000000000000000S", "01STORE000000000000000000T"],
+                "every store where the role is held, and none where it is not"
+            );
+            assert!(
+                people
+                    .fetch_assignments_for_role("tenant-b", "01ROLE000000000000000000A1")
+                    .await
+                    .expect("other tenant")
+                    .is_empty(),
+                "another tenant sees none of these grants"
+            );
+
+            drop(admin);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

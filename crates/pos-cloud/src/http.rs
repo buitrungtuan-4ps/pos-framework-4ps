@@ -5672,12 +5672,58 @@ where
 /// `PostgresPeople` implements all three), plus the admin and clock every session guard uses, and the
 /// audit recorder every write emits to. Like [`RegistryState`], it carries its own state and is merged
 /// into the main router.
+///
+/// The registry and the config trees are here for
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7:
+/// an assignment is refused for a store the tenant does not have or has archived, and a removal or
+/// an archive publishes the `permissions` node to every store it affects in the same request.
 #[derive(Clone)]
-struct PeopleState<P, A, C> {
+struct PeopleState<P, R, Cfg, A, C> {
     people: P,
+    registry: R,
+    config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+}
+
+impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
+    /// The publish `POST /admin/people/publish` makes, over these routes' own collaborators.
+    fn publisher(&self) -> PermissionsPublisher<'_, P, Cfg, C> {
+        PermissionsPublisher {
+            people: &self.people,
+            config_trees: &self.config_trees,
+            clock: &self.clock,
+            audit: &self.audit,
+        }
+    }
+
+    /// What an employee or role update answers once it is saved, always with the record's new
+    /// version: `204` when it published nothing, or — when it archived the record, and `reached`
+    /// holds the stores read before the write — the report of publishing to each of them at once
+    /// (ADR-0158 decision 7).
+    async fn answer_update(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        version: &Version,
+        reached: Option<BTreeSet<StoreId>>,
+        (cause, cause_id): (&'static str, String),
+    ) -> Response
+    where
+        P: EmployeeStore + RoleTemplateStore + AssignmentStore,
+        Cfg: ConfigTreeStore,
+        C: ClockSource,
+    {
+        let Some(reached) = reached else {
+            return with_etag(StatusCode::NO_CONTENT.into_response(), version);
+        };
+        let report = self
+            .publisher()
+            .publish_each(context, tenant_id, &reached, (cause, &cause_id))
+            .await;
+        with_etag(report, version)
+    }
 }
 
 /// The tenant a people read/write is scoped to (the super-admin is global, ADR-0060).
@@ -5865,52 +5911,68 @@ fn people_entropy_unavailable() -> Response {
 /// `GET /admin/audit` shows that code only to a role holding `ReadPeople`, which is the roster's
 /// gate. The tenant is named the admin-is-global way: a `?tenant_id=` query on reads, the request
 /// body on writes.
-pub fn people_router<P, A, C>(
+///
+/// What the console authors is what the store enforces
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7). An assignment is refused for an employee, store or role the tenant does not have
+/// (`404`) or has archived (`409`). Removing an assignment, archiving a person and archiving a role
+/// publish the `permissions` node to every store the change reaches before they answer, and answer
+/// with each store's outcome; every other write publishes as before, when someone presses publish.
+pub fn people_router<P, R, Cfg, A, C>(
     people: P,
+    registry: R,
+    config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/admin/people/permissions",
-            get(admin_list_permissions::<P, A, C>),
+            get(admin_list_permissions::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/employees",
-            get(admin_list_employees::<P, A, C>).post(admin_create_employee::<P, A, C>),
+            get(admin_list_employees::<P, R, Cfg, A, C>)
+                .post(admin_create_employee::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/employees/{employee_id}",
-            get(admin_get_employee::<P, A, C>).patch(admin_update_employee::<P, A, C>),
+            get(admin_get_employee::<P, R, Cfg, A, C>)
+                .patch(admin_update_employee::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/employees/{employee_id}/pin",
-            axum::routing::put(admin_set_employee_pin::<P, A, C>),
+            axum::routing::put(admin_set_employee_pin::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/roles",
-            get(admin_list_roles::<P, A, C>).post(admin_create_role::<P, A, C>),
+            get(admin_list_roles::<P, R, Cfg, A, C>).post(admin_create_role::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/roles/{role_id}",
-            get(admin_get_role::<P, A, C>).patch(admin_update_role::<P, A, C>),
+            get(admin_get_role::<P, R, Cfg, A, C>).patch(admin_update_role::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/assignments",
-            get(admin_list_assignments::<P, A, C>).post(admin_create_assignment::<P, A, C>),
+            get(admin_list_assignments::<P, R, Cfg, A, C>)
+                .post(admin_create_assignment::<P, R, Cfg, A, C>),
         )
         .route(
             "/admin/assignments/{assignment_id}",
-            delete(admin_remove_assignment::<P, A, C>),
+            delete(admin_remove_assignment::<P, R, Cfg, A, C>),
         )
         .with_state(PeopleState {
             people,
+            registry,
+            config_trees,
             admin,
             clock,
             audit,
@@ -5919,12 +5981,14 @@ where
 
 /// The `pos-core` permission catalogue (§9), for the console's role editor to offer. Behind `Read` and
 /// tenant-independent — the catalogue is the same for every tenant.
-async fn admin_list_permissions<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_list_permissions<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
 ) -> Response
 where
     P: Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -5947,13 +6011,15 @@ where
 
 /// A super-admin lists a tenant's employees. Behind [`ConsolePermission::ReadPeople`]: every row
 /// carries a person's name and staff code.
-async fn admin_list_employees<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_list_employees<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<EmployeeListQuery>,
 ) -> Response
 where
     P: EmployeeStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6053,14 +6119,16 @@ fn employee_list_filter(
 
 /// A super-admin reads one employee within its tenant. Behind [`ConsolePermission::ReadPeople`],
 /// like the list.
-async fn admin_get_employee<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_get_employee<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(employee_id): Path<String>,
     Query(query): Query<PeopleTenantQuery>,
 ) -> Response
 where
     P: EmployeeStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6090,13 +6158,15 @@ where
 
 /// A super-admin creates an employee (no PIN yet). Audited `employee.create` with id/code/status —
 /// never the name.
-async fn admin_create_employee<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_create_employee<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Json(request): Json<CreateEmployeeRequest>,
 ) -> Response
 where
     P: EmployeeStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6177,14 +6247,22 @@ where
 
 /// A super-admin renames an employee and/or sets their status. Audited `employee.update` with
 /// before/after id/code/status — never the name.
-async fn admin_update_employee<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+///
+/// Archiving the person publishes the `permissions` node at once to every store they are assigned
+/// to, so they cannot sign in at any of them a moment longer
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and the answer is then `200` with each store's outcome. Any other update — a
+/// rename, or restoring an archived person — publishes as before, and answers `204`.
+async fn admin_update_employee<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(employee_id): Path<String>,
     Json(request): Json<UpdateEmployeeRequest>,
 ) -> Response
 where
-    P: EmployeeStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6217,11 +6295,23 @@ where
         return entity_status_refusal();
     };
     // Read the current row for the audit `before` (id/code/status, never the name) and to answer 404.
-    let existing = match state.people.get(tenant_id, employee_id).await {
+    let existing = match EmployeeStore::get(&state.people, tenant_id, employee_id).await {
         Ok(Some(employee)) => employee,
         Ok(None) => return not_found("employee"),
         Err(error) => return people_error_response(&error),
     };
+    // When this update archives the person, the stores to tell are read before the write, so a
+    // failed read refuses a write that has not happened rather than leaving one done with nobody
+    // told. `None` when it archives nobody.
+    let reached =
+        if existing.record.status != EntityStatus::Archived && status == EntityStatus::Archived {
+            match AssignmentStore::list_for_employee(&state.people, tenant_id, employee_id).await {
+                Ok(assignments) => Some(stores_of(&assignments)),
+                Err(error) => return people_error_response(&error),
+            }
+        } else {
+            None
+        };
     let update = EmployeeUpdate {
         employee_id,
         tenant_id,
@@ -6232,7 +6322,7 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state.people.update(&update, &expected).await {
+    match EmployeeStore::update(&state.people, &update, &expected).await {
         Ok(UpdateOutcome::Updated(version)) => {
             let before = serde_json::json!({
                 "id": employee_id.to_string(),
@@ -6256,7 +6346,10 @@ where
                 Some(after),
             )
             .await;
-            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
+            let cause = ("employee_id", employee_id.to_string());
+            state
+                .answer_update(&context, tenant_id, &version, reached, cause)
+                .await
         }
         Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
         Ok(UpdateOutcome::NotFound) => not_found("employee"),
@@ -6267,14 +6360,16 @@ where
 /// A super-admin sets or resets an employee's PIN. The digits are hashed with Argon2id here and never
 /// returned, stored raw, or **audited** — the entry records only that a PIN was set, by whom
 /// (ADR-0070).
-async fn admin_set_employee_pin<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_set_employee_pin<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(employee_id): Path<String>,
     Json(request): Json<SetPinRequest>,
 ) -> Response
 where
     P: EmployeeStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6330,13 +6425,15 @@ where
 }
 
 /// A super-admin lists a tenant's role templates.
-async fn admin_list_roles<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_list_roles<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<PeopleTenantQuery>,
 ) -> Response
 where
     P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6361,14 +6458,16 @@ where
 }
 
 /// A super-admin reads one role template within its tenant.
-async fn admin_get_role<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_get_role<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(role_id): Path<String>,
     Query(query): Query<PeopleTenantQuery>,
 ) -> Response
 where
     P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6404,13 +6503,15 @@ fn first_unknown_permission(permissions: &[String]) -> Option<&str> {
 
 /// A super-admin creates a role template. The permission set is validated against the catalogue.
 /// Audited `role.create` with id/name/permissions (a role name is not PII).
-async fn admin_create_role<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_create_role<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Json(request): Json<CreateRoleRequest>,
 ) -> Response
 where
     P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6499,14 +6600,23 @@ where
 }
 
 /// A super-admin updates a role template's name, permissions, and status. Audited `role.update`.
-async fn admin_update_role<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+///
+/// An archived role grants nothing, so archiving one publishes the `permissions` node at once to
+/// every store where someone holds it
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and the answer is then `200` with each store's outcome. Any other update — a
+/// rename, a changed permission set or ceiling, or restoring the role — publishes as before, and
+/// answers `204`.
+async fn admin_update_role<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(role_id): Path<String>,
     Json(request): Json<UpdateRoleRequest>,
 ) -> Response
 where
-    P: RoleTemplateStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6556,6 +6666,11 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
+    let reached =
+        match stores_archiving_reaches(&state.people, tenant_id, role_template_id, status).await {
+            Ok(reached) => reached,
+            Err(refusal) => return refusal,
+        };
     let update = RoleTemplateUpdate {
         role_template_id,
         tenant_id,
@@ -6568,7 +6683,7 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state.people.update(&update, &expected).await {
+    match RoleTemplateStore::update(&state.people, &update, &expected).await {
         Ok(UpdateOutcome::Updated(version)) => {
             let after = serde_json::json!({
                 "id": role_template_id.to_string(),
@@ -6589,7 +6704,10 @@ where
                 Some(after),
             )
             .await;
-            with_etag(StatusCode::NO_CONTENT.into_response(), &version)
+            let cause = ("role_template_id", role_template_id.to_string());
+            state
+                .answer_update(&context, tenant_id, &version, reached, cause)
+                .await
         }
         Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
         Ok(UpdateOutcome::NotFound) => not_found("role"),
@@ -6600,13 +6718,15 @@ where
 /// A super-admin lists assignments — everyone at a store (`?store_id=`) or every store a person works
 /// at (`?employee_id=`), exactly one. Behind [`ConsolePermission::ReadPeople`], the roster's gate:
 /// each row names the person it grants ([`Assignment`]).
-async fn admin_list_assignments<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+async fn admin_list_assignments<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<AssignmentListQuery>,
 ) -> Response
 where
     P: AssignmentStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6658,13 +6778,23 @@ where
 
 /// A super-admin assigns an employee to a store with a role. Audited `assignment.create` with the
 /// three ids.
-async fn admin_create_assignment<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+///
+/// Each id is checked before anything is written, because the schema declares no foreign keys
+/// under row-level security and leaves the check to this route (ADR-0070). An employee, store or
+/// role the tenant does not have is `404`, and one it has archived is `409`
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7): a grant to a retired person or store would publish nobody, and one with a retired
+/// role would grant nothing, while the console showed it as a grant. Each refusal names the field
+/// that carried the id. A new assignment publishes as before, when someone presses publish.
+async fn admin_create_assignment<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Json(request): Json<CreateAssignmentRequest>,
 ) -> Response
 where
-    P: AssignmentStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6693,6 +6823,18 @@ where
         ),
         Err(refusal) => return refusal,
     };
+    let checked = refuse_unassignable(
+        &state.people,
+        &state.registry,
+        tenant_id,
+        employee_id,
+        store_id,
+        role_template_id,
+    )
+    .await;
+    if let Err(refusal) = checked {
+        return refusal;
+    }
     let Some(assignment_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AssignmentId::new)
     else {
@@ -6736,15 +6878,21 @@ where
 }
 
 /// A super-admin removes an assignment — offboarding a person from a store. Audited `assignment.remove`
-/// when a row was actually removed; a no-op removal records nothing.
-async fn admin_remove_assignment<P, A, C>(
-    State(state): State<PeopleState<P, A, C>>,
+/// when a row was actually removed, with the ids it bound; a no-op removal records nothing.
+///
+/// The removal publishes the store's `permissions` node at once, so the person cannot sign in there
+/// a moment longer ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and answers `200` with the store's outcome.
+async fn admin_remove_assignment<P, R, Cfg, A, C>(
+    State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
     Path(assignment_id): Path<String>,
     Query(query): Query<PeopleTenantQuery>,
 ) -> Response
 where
-    P: AssignmentStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
+    R: Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6768,8 +6916,22 @@ where
         }
         Err(refusal) => return refusal,
     };
+    // Read before the removal: the row names the store that must be told, and it is gone after.
+    let assignment = match AssignmentStore::get(&state.people, tenant_id, assignment_id).await {
+        Ok(Some(assignment)) => assignment,
+        Ok(None) => return not_found("assignment"),
+        Err(error) => return people_error_response(&error),
+    };
     match state.people.remove(tenant_id, assignment_id).await {
         Ok(true) => {
+            // The ids the grant bound, so the trail says who was offboarded from where and under
+            // which role — never the name or code the read resolved beside them (ADR-0070).
+            let before = serde_json::json!({
+                "id": assignment_id.to_string(),
+                "employee_id": assignment.employee_id.to_string(),
+                "store_id": assignment.store_id.to_string(),
+                "role_template_id": assignment.role_template_id.to_string(),
+            });
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -6778,15 +6940,135 @@ where
                 "assignment.remove",
                 "assignment",
                 &assignment_id.to_string(),
-                None,
+                Some(before),
                 None,
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            state
+                .publisher()
+                .publish_each(
+                    &context,
+                    tenant_id,
+                    &BTreeSet::from([assignment.store_id]),
+                    ("assignment_id", &assignment_id.to_string()),
+                )
+                .await
         }
         Ok(false) => not_found("assignment"),
         Err(error) => people_error_response(&error),
     }
+}
+
+/// The stores a set of assignments reaches, each once and in order.
+fn stores_of(assignments: &[Assignment]) -> BTreeSet<StoreId> {
+    assignments
+        .iter()
+        .map(|assignment| assignment.store_id)
+        .collect()
+}
+
+/// Every store where someone holds the role, when an update to `status` archives it — read before
+/// the write, for the reason [`admin_update_employee`] gives — or `None` when the update does not
+/// archive it, whether it leaves the role active or finds it archived already.
+async fn stores_archiving_reaches<P>(
+    people: &P,
+    tenant_id: TenantId,
+    role_template_id: RoleTemplateId,
+    status: EntityStatus,
+) -> Result<Option<BTreeSet<StoreId>>, Response>
+where
+    P: RoleTemplateStore + AssignmentStore,
+{
+    if status != EntityStatus::Archived {
+        return Ok(None);
+    }
+    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+        Ok(Some(existing)) if existing.record.status == EntityStatus::Archived => return Ok(None),
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(not_found("role")),
+        Err(error) => return Err(people_error_response(&error)),
+    }
+    AssignmentStore::list_for_role(people, tenant_id, role_template_id)
+        .await
+        .map(|assignments| Some(stores_of(&assignments)))
+        .map_err(|error| people_error_response(&error))
+}
+
+/// Refuses an assignment to an employee, store or role the tenant does not have (`404`) or has
+/// archived (`409`), each named by the request field that carried its id — the route's half of the
+/// referential check the schema leaves to it (ADR-0070, ADR-0158 decision 7).
+async fn refuse_unassignable<P, R>(
+    people: &P,
+    registry: &R,
+    tenant_id: TenantId,
+    employee_id: EmployeeId,
+    store_id: StoreId,
+    role_template_id: RoleTemplateId,
+) -> Result<(), Response>
+where
+    P: EmployeeStore + RoleTemplateStore,
+    R: RegistryStore,
+{
+    match EmployeeStore::get(people, tenant_id, employee_id).await {
+        Ok(Some(employee)) if employee.record.status == EntityStatus::Archived => {
+            return Err(unassignable_archived(
+                "employee_id",
+                "the employee is archived; restore them before assigning them to a store",
+            ));
+        }
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(unassignable_unknown("employee_id", "employee")),
+        Err(error) => return Err(people_error_response(&error)),
+    }
+    match registry.list_stores(tenant_id).await {
+        Ok(stores) => match stores
+            .into_iter()
+            .find(|store| store.record.store_id == store_id)
+        {
+            Some(store) if store.record.status == EntityStatus::Archived => {
+                return Err(unassignable_archived(
+                    "store_id",
+                    "the store is archived; restore it before assigning anyone to it",
+                ));
+            }
+            Some(_) => {}
+            None => return Err(unassignable_unknown("store_id", "store")),
+        },
+        Err(error) => return Err(registry_error_response(&error)),
+    }
+    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+        Ok(Some(role)) if role.record.status == EntityStatus::Archived => {
+            Err(unassignable_archived(
+                "role_template_id",
+                "the role is archived; restore it before assigning it to anyone",
+            ))
+        }
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(unassignable_unknown("role_template_id", "role")),
+        Err(error) => Err(people_error_response(&error)),
+    }
+}
+
+/// The `404` an assignment earns for an id its tenant does not have, naming the request field that
+/// carried it.
+fn unassignable_unknown(field: &str, entity: &str) -> Response {
+    api_error_with_details(
+        ErrorStatus::NotFound,
+        format!("no such {entity}"),
+        &[(field, "NOT_FOUND")],
+    )
+}
+
+/// The `409` an assignment earns for an id its tenant has archived (ADR-0158 decision 7), naming
+/// the request field that carried it. A conflict with the referent's state rather than a bad field,
+/// which is the line `FAILED_PRECONDITION` draws: the request is right, and restoring the referent
+/// makes it succeed.
+fn unassignable_archived(field: &str, message: &str) -> Response {
+    api_error_with_details(
+        ErrorStatus::FailedPrecondition,
+        message,
+        &[(field, "ARCHIVED")],
+    )
 }
 
 // --- Capability catalogue (`/admin/capabilities`, ADR-0071) -------------------------------------
@@ -24575,52 +24857,147 @@ where
         Err(refusal) => return refusal,
     };
 
-    // Set the `permissions` key on the store's Store layer (index 2 in Tenant→Brand→Store→Device) and
-    // re-publish that layer, preserving any other Store-level keys (`menu`, `layout`, …).
-    let (nodes, staff_count) = match permissions_nodes(&state.people, tenant_id, store_id).await {
-        Ok(compiled) => compiled,
-        Err(refusal) => return refusal,
+    let publisher = PermissionsPublisher {
+        people: &state.people,
+        config_trees: &state.config_trees,
+        clock: &state.clock,
+        audit: &state.audit,
     };
-
-    let id = match publish_config_nodes(
-        &state.config_trees,
-        &state.clock,
-        tenant_id,
-        store_id,
-        ConfigLevel::Store,
-        nodes,
-    )
-    .await
-    {
-        Ok(id) => id,
-        Err(refusal) => return refusal,
-    };
-    {
-        // The trail records the config version and how many staff the node carries — never a name
-        // or a PIN (ADR-0070).
-        audit_action(
-            &state.audit,
-            &state.clock,
-            &context,
-            Some(tenant_id),
-            "permissions.publish",
-            "store",
-            &store_id.to_string(),
-            None,
-            Some(serde_json::json!({
-                "config_version_id": id.to_string(),
-                "staff_count": staff_count,
-            })),
-        )
-        .await;
-        (
+    match publisher.publish(&context, tenant_id, store_id, None).await {
+        Ok(id) => (
             StatusCode::OK,
             Json(PublishedConfig {
                 config_version_id: id.to_string(),
             }),
         )
+            .into_response(),
+        Err(refusal) => refusal,
+    }
+}
+
+/// The collaborators a `permissions` publish needs, borrowed from whichever route's state holds
+/// them: the people publish's, and the people routes' own, whose removals and archives publish at
+/// once ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7).
+///
+/// One publish for both is the point. A store is sent the node its people compile to, written and
+/// audited the same way, whether someone pressed publish or offboarded a person; two copies of the
+/// steps could drift until the two sent different nodes.
+struct PermissionsPublisher<'a, P, Cfg, C> {
+    people: &'a P,
+    config_trees: &'a Cfg,
+    clock: &'a C,
+    audit: &'a Arc<dyn AuditRecorder>,
+}
+
+impl<P, Cfg, C> PermissionsPublisher<'_, P, Cfg, C>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    /// Compiles one store's roster, writes it onto the store's `permissions` node and versions it
+    /// through the config tree — the same load→compile→write→version shape as
+    /// [`admin_publish_menu`], onto the `permissions` key. The PIN hash rides in the node (the edge
+    /// verifies against it, ADR-0030).
+    ///
+    /// The trail records the config version and how many staff the node carries — never a name or
+    /// a PIN (ADR-0070) — and, for a publish a write caused, the id that write was about, under its
+    /// own key: `assignment_id`, `employee_id` or `role_template_id`.
+    async fn publish(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        cause: Option<(&'static str, &str)>,
+    ) -> Result<ConfigVersionId, Response> {
+        // Set the `permissions` key on the store's Store layer (index 2 in
+        // Tenant→Brand→Store→Device) and re-publish that layer, preserving any other Store-level
+        // keys (`menu`, `layout`, …).
+        let (nodes, staff_count) = permissions_nodes(self.people, tenant_id, store_id).await?;
+        let id = publish_config_nodes(
+            self.config_trees,
+            self.clock,
+            tenant_id,
+            store_id,
+            ConfigLevel::Store,
+            nodes,
+        )
+        .await?;
+        let mut after = serde_json::json!({
+            "config_version_id": id.to_string(),
+            "staff_count": staff_count,
+        });
+        if let (Some((key, value)), Some(fields)) = (cause, after.as_object_mut()) {
+            fields.insert(key.to_owned(), serde_json::Value::from(value));
+        }
+        audit_action(
+            self.audit,
+            self.clock,
+            context,
+            Some(tenant_id),
+            "permissions.publish",
+            "store",
+            &store_id.to_string(),
+            None,
+            Some(after),
+        )
+        .await;
+        Ok(id)
+    }
+
+    /// Publishes to every store a write reached, in turn, and answers with how each went: the `200`
+    /// a write that publishes at once returns, `{"stores": [...]}`, the shape a settings write
+    /// answers with.
+    ///
+    /// One store failing does not stop the others: each answers for itself, and a failed one is
+    /// published again with `POST /admin/people/publish`. The write that caused this has already
+    /// been saved by then, so a failure here is reported rather than refused — taking the write
+    /// back would be a second change nobody asked for.
+    async fn publish_each(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        stores: &BTreeSet<StoreId>,
+        cause: (&'static str, &str),
+    ) -> Response {
+        let mut results = Vec::with_capacity(stores.len());
+        for store_id in stores {
+            let published = self
+                .publish(context, tenant_id, *store_id, Some(cause))
+                .await;
+            results.push(match published {
+                Ok(id) => PermissionsPublishResult {
+                    store_id: store_id.to_string(),
+                    outcome: "PERMISSIONS_PUBLISH_APPLIED",
+                    config_version_id: Some(id.to_string()),
+                },
+                Err(_refused) => {
+                    tracing::warn!(%store_id, "a store's permissions node could not be published");
+                    PermissionsPublishResult {
+                        store_id: store_id.to_string(),
+                        outcome: "PERMISSIONS_PUBLISH_FAILED",
+                        config_version_id: None,
+                    }
+                }
+            });
+        }
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "stores": results })),
+        )
             .into_response()
     }
+}
+
+/// How one store's `permissions` publish went, as a write that publishes at once reports it.
+#[derive(Debug, Clone, serde::Serialize)]
+struct PermissionsPublishResult {
+    store_id: String,
+    /// `PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`.
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version_id: Option<String>,
 }
 
 // --- Device activation (`/admin/activation-codes` + `/activate`) --------------------------------
