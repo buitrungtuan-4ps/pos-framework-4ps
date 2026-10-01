@@ -269,6 +269,10 @@ const MIGRATION_0070: &str = include_str!("../migrations/0070_integration_connec
 /// opens one ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
 const MIGRATION_0071: &str = include_str!("../migrations/0071_device_drawer.sql");
 
+/// The values a tenant writes for its settings, at tenant, brand, store-group or store scope
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+const MIGRATION_0072: &str = include_str!("../migrations/0072_setting_values.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -612,6 +616,10 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0071)
             .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0072)
+            .await
             .map_err(unavailable)
     }
 
@@ -860,6 +868,15 @@ impl PostgresStore {
     #[must_use]
     pub fn connections(&self) -> crate::connections::PostgresConnections {
         crate::connections::PostgresConnections::new(self.pool.clone())
+    }
+
+    /// A tenant's setting values over this pool
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `SettingsStore` seam over it.
+    #[must_use]
+    pub fn settings(&self) -> crate::settings::PostgresSettings {
+        crate::settings::PostgresSettings::new(self.pool.clone())
     }
 
     /// The reason-code authoring store over this pool

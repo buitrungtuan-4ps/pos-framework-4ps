@@ -237,6 +237,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The cloud keeps setting values per scope and resolves each store's value**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 3). A value is written at the tenant, a brand, a store group or one store. A store runs
+  the value of the most specific scope that sets one: the store, then its store groups (the value
+  written last, if two disagree), then its brand, then the tenant. A store with no value runs the
+  default.
+  - A value is checked against the settings register: the setting must exist, the scope must be
+    one the setting allows, and the value must be one it takes. A stored value that fails the
+    check reaches no store.
+  - The resolved values are composed onto the store's Tenant layer, node by node. Each node keeps
+    any field that is not a setting, so a setting on a node the console also publishes (such as
+    `qr`) survives that node's next publish.
+  - Nothing writes or publishes a value yet. The console routes that write values, and the publish
+    onto each store's tree, come in the next slice.
+  - **Upgrade note:** migration `0072_setting_values.sql` adds the `setting_values` table
+    (tenant-scoped, RLS like the other configuration tables). It is additive and rollback-safe, and
+    it starts empty, so no store changes.
+
 - **The till's everyday actions have permissions of their own**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)), so that every till
   action that changes state can be named by one. Seating a table, adding and firing a line, bumping
