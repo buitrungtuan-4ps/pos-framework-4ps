@@ -110,6 +110,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 - **Memoize permission catalogue grouping and active role options in People screen.**
   `groupedCatalogue` and `activeRoleOptions` are now memoized with `createMemo` in `dashboard/src/screens/People.tsx` to avoid $O(P)$ re-grouping of permissions and re-filtering/mapping of active roles on every input stroke / checkbox toggle when authoring roles.
 
+- **Memoize coveredLines and isPart on the Pay screen.**
+  `coveredLines` and `isPart` in `ui/src/screens/Pay.tsx` are now memoized with `createMemo` to avoid redundant $O(N \log N)$ array filtering and string sorting passes on re-renders.
+
 ### Fixed
 
 - **A counter order paid before the kitchen made it stays on the kitchen board, with its note.**
