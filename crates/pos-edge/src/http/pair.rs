@@ -13,10 +13,14 @@
 //! # Two different gates, on purpose
 //!
 //! `POST /api/pair` is **ungated** — it has to be, because the device presenting a code holds no
-//! credential yet — and `GET /api/pair/devices` and `POST /api/pair/revoke` sit behind the
-//! paired-device gate. [`mint`] is the one route here behind **both** gates: a paired device *and* a
-//! signed-in manager, because minting a credential is a managerial act and the store has a published
-//! roster to check that against. See [`codes_router`].
+//! credential yet — and `GET /api/pair/devices` sits behind the paired-device gate alone, because POS
+//! Station reads it as its "is my token still accepted" probe with nobody signed in, which the
+//! signed-in gate would answer `403`. [`mint`] and
+//! [`revoke`] sit behind **both** gates: a paired device *and* a signed-in person whose role grants
+//! `admin.device.manage`, because admitting a device and retiring one are the same managerial act and
+//! the store has a published roster to check that against
+//! ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+//! decision 8). See [`manager_routes`].
 
 use std::sync::Arc;
 
@@ -166,21 +170,30 @@ pub(crate) async fn devices(
 
 /// `POST /api/pair/revoke` — retire one device, or every device.
 ///
-/// Behind the paired-device gate: a device that is itself paired can retire another, which is the
-/// posture the pairing surface already has (whoever holds a token stands at the till). Making this
-/// an operator-only action needs an operator identity the edge does not have offline — the console
-/// is a browser on the LAN, not an authenticated admin — so it is deliberately as strong as pairing
-/// and no stronger, and it is recorded in the log.
-pub(crate) async fn revoke(
-    State(state): State<AppState>,
+/// Behind both gates, as [`mint`] is: a paired device **and** a signed-in person whose own role
+/// grants `admin.device.manage`
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 8). It used to need a paired device alone, on the reasoning that the edge had no
+/// operator identity offline; it has one now — the staff roster the cloud publishes, checked here
+/// with no network — and retiring every till in the store is too strong an act to leave to any
+/// tablet in the shop. Every retirement is still recorded in the log.
+pub(crate) async fn revoke<S>(
+    State(deps): State<Arc<ManagerDeps<S>>>,
+    Extension(actor): Extension<Actor>,
     Json(request): Json<RevokeRequest>,
-) -> Response {
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    if !may_manage_devices(&deps.edge, actor) {
+        return needs_manage_devices("retiring a device needs a manager signed in on this device");
+    }
     let outcome = match request.device_id.as_deref() {
         // Every device: the break-glass that reproduces, on purpose, what a restart used to do by
         // accident (ADR-0091).
         None => {
             tracing::warn!("revoking every paired device");
-            state.pairing.revoke_all().await
+            deps.pairing.revoke_all().await
         }
         Some(text) => {
             let Ok(ulid) = text.parse::<pos_proto::ulid::Ulid>() else {
@@ -188,7 +201,7 @@ pub(crate) async fn revoke(
             };
             let device_id = pos_proto::ids::DeviceId::new(ulid);
             tracing::warn!(%device_id, "revoking a paired device");
-            state.pairing.revoke(device_id).await
+            deps.pairing.revoke(device_id).await
         }
     };
     match outcome {
@@ -215,49 +228,52 @@ pub(crate) struct RevokeRequest {
     device_id: Option<String>,
 }
 
-/// What [`mint`] needs: the roster to check standing against, and the pairing state to mint into.
+/// What [`mint`] and [`revoke`] need: the roster to check standing against, and the pairing state
+/// to mint into or retire from.
 ///
 /// Its own sub-router state rather than [`AppState`], for the reason `counter` and `print_agent`
-/// have theirs: this route needs the *application* [`Edge`] — the published roster lives on its
+/// have theirs: these routes need the *application* [`Edge`] — the published roster lives on its
 /// session — and `Edge` is generic over the store, so it cannot ride the erased infrastructure
 /// state.
-pub(crate) struct PairCodeDeps<S> {
+pub(crate) struct ManagerDeps<S> {
     /// The application edge, read for the published roster only.
     edge: Arc<Edge<S>>,
-    /// The pairing state a code is minted into.
+    /// The pairing state a code is minted into and a device retired from.
     pairing: Arc<Pairing>,
 }
 
-impl<S> core::fmt::Debug for PairCodeDeps<S> {
+impl<S> core::fmt::Debug for ManagerDeps<S> {
     /// Names its parts and nothing about their contents; [`Pairing`]'s own `Debug` reports counts.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PairCodeDeps")
+        f.debug_struct("ManagerDeps")
             .field("pairing", &self.pairing)
             .finish_non_exhaustive()
     }
 }
 
-/// `POST /api/pair/codes` — mint the pairing code for the next device.
+/// `POST /api/pair/codes` and `POST /api/pair/revoke` — mint the pairing code for the next device,
+/// and retire one.
 ///
-/// Its own sub-router so the caller can layer the **signed-in** gate over it and merge it into the
+/// Their own sub-router so the caller can layer the **signed-in** gate over it and merge it into the
 /// domain router, which layers the **paired-device** gate over everything. Both gates matter and
 /// neither is sufficient:
 ///
-/// * paired-only would let any tablet in the shop mint a credential for another, which is the
-///   posture `POST /api/pair/revoke` has and is too weak for *issuing*;
+/// * paired-only would let any tablet in the shop issue a credential for another, or retire every
+///   till in the store at once;
 /// * signed-in-only is not reachable — the signed-in gate reads the `DeviceId` the paired gate puts
 ///   in the request extensions, so it cannot run first.
 ///
 /// Deliberately **not** placed beside `/api/pair/devices` on the infrastructure router: that router
 /// has no [`Sessions`](crate::auth::Sessions) to layer the second gate with, so a route added there
 /// would silently carry a paired-only gate and read, in the router, exactly like one that did not.
-pub(crate) fn codes_router<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>) -> Router
+pub(crate) fn manager_routes<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>) -> Router
 where
     S: EventStore + Send + Sync + 'static,
 {
     Router::new()
         .route("/api/pair/codes", post(mint::<S>))
-        .with_state(Arc::new(PairCodeDeps { edge, pairing }))
+        .route("/api/pair/revoke", post(revoke::<S>))
+        .with_state(Arc::new(ManagerDeps { edge, pairing }))
 }
 
 /// The minted code, and when it stops working.
@@ -302,14 +318,16 @@ pub(crate) struct MintedCode {
 /// on it is written to the store's own `paired_devices` row and goes no further. Both facts are
 /// known only here, at mint time — the tablet that redeems presents six digits and nothing else.
 async fn mint<S>(
-    State(deps): State<Arc<PairCodeDeps<S>>>,
+    State(deps): State<Arc<ManagerDeps<S>>>,
     Extension(actor): Extension<Actor>,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     if !may_manage_devices(&deps.edge, actor) {
-        return needs_manage_devices();
+        return needs_manage_devices(
+            "minting a pairing code needs a manager signed in on this device",
+        );
     }
     // The [`Actor`] the signed-in gate assembled already carries both halves of the minter, and it
     // is the only place either is trustworthy: the device comes from the paired gate's extension and
@@ -357,14 +375,10 @@ fn may_manage_devices<S>(edge: &Edge<S>, actor: Actor) -> bool {
         .is_some_and(|granted| granted.contains(Permission::ManageDevices))
 }
 
-/// The refusal a signed-in person without the permission gets.
+/// The refusal a signed-in person without the permission gets, saying which act it was.
 ///
 /// `403` rather than `401`: the device is paired and somebody *is* signed in, so sending the till
 /// back to the sign-in screen would be the wrong instruction. What is missing is standing.
-fn needs_manage_devices() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        "minting a pairing code needs a manager signed in on this device",
-    )
-        .into_response()
+fn needs_manage_devices(what: &'static str) -> Response {
+    (StatusCode::FORBIDDEN, what).into_response()
 }

@@ -18,6 +18,19 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Security
 
+- **Retiring a device needs a signed-in manager**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8).
+  `POST /api/pair/revoke` needed only a paired device, so any tablet in the shop could retire
+  another, or every till in the store at once. It now sits behind the signed-in gate, as minting a
+  pairing code does, and needs a person whose own role grants `admin.device.manage`. A paired device
+  with nobody signed in, and a signed-in person without the permission, are refused `403`.
+  - `GET /api/pair/devices` stays behind the paired-device gate alone, because POS Station reads it
+    as its token probe with nobody signed in.
+  - **Upgrade note:** this applies at every store, whether or not it enforces each person's own
+    permissions. The Manager and Owner roles hold `admin.device.manage` by default; a store whose
+    roles do not grant it retires devices once the console grants it to someone. No route, event,
+    migration or protocol change.
+
 - **Staff names and codes stay out of publish previews and the audit trail without
   `console.people.read`.** #561 took them out of a store's config reads, but two other reads still
   handed them to a Viewer or an Ops user

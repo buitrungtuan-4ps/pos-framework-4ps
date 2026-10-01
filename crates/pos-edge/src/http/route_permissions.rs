@@ -142,9 +142,7 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     ),
     (
         "POST /api/pair/revoke",
-        RouteGate::NoPerson(
-            "a paired device, until ADR-0158 decision 8 puts it under admin.device.manage",
-        ),
+        RouteGate::Person(&[Permission::ManageDevices]),
     ),
     (
         "POST /api/print/agent",

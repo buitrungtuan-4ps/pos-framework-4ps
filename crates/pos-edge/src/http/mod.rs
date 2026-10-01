@@ -182,20 +182,21 @@ pub fn router(state: AppState) -> Router {
         .layer(cors.clone())
         .with_state(state.clone());
 
-    let state_for_revoke = state.clone();
+    let state_for_devices = state.clone();
     Router::new()
         .route("/healthz", get(health::healthz))
         .merge(live)
         .merge(pair)
-        // Retiring a device, and reporting how many are paired (ADR-0091). Behind the
-        // paired-device gate rather than open: a device that is itself paired can retire another,
-        // which is as strong as pairing and no stronger — the edge has no operator identity offline.
+        // Which devices are paired (ADR-0091), behind the paired-device gate alone: POS Station
+        // reads it as its "is my token still accepted" probe with nobody signed in, and behind the
+        // signed-in gate every such probe would answer `403`, so the app could no longer tell a live
+        // pairing from a lost one. Retiring a device is a manager's act, on the domain router
+        // (ADR-0158 decision 8).
         .merge(
             Router::new()
                 .route("/api/pair/devices", get(pair::devices))
-                .route("/api/pair/revoke", post(pair::revoke))
                 .layer(axum::middleware::from_fn_with_state(
-                    Arc::clone(&state_for_revoke.pairing),
+                    Arc::clone(&state_for_devices.pairing),
                     auth::require_paired_device,
                 ))
                 // Outside the paired gate: a preflight carries no `Authorization` by specification,
@@ -203,7 +204,7 @@ pub fn router(state: AppState) -> Router {
                 // reads to an operator as "pairing is broken", the worst possible mislabelling of a
                 // routing mistake.
                 .layer(cors)
-                .with_state(state_for_revoke),
+                .with_state(state_for_devices),
         )
         // Anything not matched is a UI asset; an unknown path falls back to index.html so a
         // client-routed path (the P6 single-page app) still loads.
@@ -550,11 +551,12 @@ where
     let binding = print_agent::router(agent_edge, agents.clone()).layer(
         axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
     );
-    // Minting the pairing code for the next device (ADR-0118): its own sub-router for the same
-    // reason — it reads the published roster off the application `Edge`, which is generic over the
-    // store — and behind the same two gates. A paired device *and* a signed-in manager, because
-    // issuing a credential is a stronger act than the paired-only posture `/api/pair/revoke` has.
-    let codes = pair::codes_router(codes_edge, Arc::clone(&pairing)).layer(
+    // Minting the pairing code for the next device (ADR-0118) and retiring one (ADR-0158 decision
+    // 8): their own sub-router for the same reason — they read the published roster off the
+    // application `Edge`, which is generic over the store — and behind the same two gates. A paired
+    // device *and* a signed-in manager, because issuing a credential and taking one back are both
+    // stronger acts than holding a token.
+    let codes = pair::manager_routes(codes_edge, Arc::clone(&pairing)).layer(
         axum::middleware::from_fn_with_state(sessions_for_codes, auth::require_signed_in),
     );
     // And the agent's own two routes, which carry the paired gate **and no second one**: an agent is

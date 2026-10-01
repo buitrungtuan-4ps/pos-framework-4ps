@@ -19,9 +19,10 @@ import { loadSync, state } from "../state/store";
 // in the operator's hand is marked — together enough to recognise the one that is missing without
 // reaching for the break-glass.
 //
-// Behind the paired-device gate rather than an operator login: the edge has no operator identity
-// offline (the console is a browser on the LAN), so this is as strong as pairing and no stronger,
-// and every revoke is written to the store's log.
+// Retiring needs a signed-in person whose role grants `admin.device.manage`, as minting a code does
+// (ADR-0158 decision 8): the published staff roster is the operator identity the edge checks
+// offline. The list stays behind the paired-device gate alone, because POS Station reads it as its
+// token probe with nobody signed in. Every revoke is written to the store's log.
 
 // The paired instant, in the reader's own language. A date and a time, because two tills paired on
 // the same afternoon are told apart by the clock, not the day.
@@ -155,7 +156,8 @@ export function Devices() {
   // Retire one device, or every device when `deviceId` is null. A failure is shown rather than
   // swallowed: a `503` means the durable registry could not be written, so the device may still be
   // paired after a restart — an operator told a lost tablet is locked out when it is not is worse
-  // than one told to try again.
+  // than one told to try again. A `403` means the signed-in person may not manage devices, as for
+  // minting below.
   const retire = async (deviceId: string | null) => {
     setBusy(true);
     setError(null);
