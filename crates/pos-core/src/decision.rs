@@ -70,6 +70,15 @@ pub struct DecisionCtx {
     pub actor: Actor,
     /// The permissions the actor's role grants, synced from the cloud (§9).
     pub granted: PermissionSet,
+    /// The part of [`Self::granted`] the actor holds **directly**: their role lets them act on
+    /// these alone, with nobody's PIN on the spot, even where the catalogue flags the permission
+    /// for one ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4).
+    ///
+    /// Empty until a store decides with each person's own set, so a PIN-flagged permission asks
+    /// for a PIN exactly as it always has. A permission here that is not also in `granted` grants
+    /// nothing: membership is `granted`'s alone.
+    pub granted_directly: PermissionSet,
     /// The store's capability profile (§10).
     pub capabilities: CapabilityContext,
     /// Whether the store is currently online.
@@ -81,11 +90,17 @@ pub struct DecisionCtx {
 impl DecisionCtx {
     /// Authorises a permission against what the actor is granted (§9's one gate).
     ///
+    /// The grant asks for a PIN when the catalogue flags the permission for one, unless the actor
+    /// holds it directly ([`Self::granted_directly`]).
+    ///
     /// # Errors
     ///
     /// [`DomainError::PermissionDenied`] if the actor's set does not grant it.
     pub fn require(&self, permission: Permission) -> Result<Grant, DomainError> {
-        require(permission, self.granted)
+        let grant = require(permission, self.granted)?;
+        Ok(Grant {
+            pin_required: grant.pin_required && !self.granted_directly.contains(permission),
+        })
     }
 
     /// Requires a store capability (§10's one flag read point).
@@ -769,6 +784,7 @@ mod tests {
                 device_id: DeviceId::new(Ulid::from_u128(2)),
             },
             granted,
+            granted_directly: PermissionSet::EMPTY,
             capabilities,
             connectivity: Connectivity::Online,
             currency: CurrencyCode::VND,
@@ -1082,6 +1098,43 @@ mod tests {
             decision.stock_movements.is_empty(),
             "default config does not return stock on a void-after-fire"
         );
+    }
+
+    /// A person whose role holds a PIN-flagged permission directly acts on it alone (ADR-0158
+    /// decision 4): the catalogue's flag is only where a role starts.
+    #[test]
+    fn a_permission_held_directly_needs_nobodys_pin() {
+        let mut ctx = ctx_with(
+            PermissionSet::EMPTY.with(Permission::VoidFiredLine),
+            CapabilityContext::NONE,
+        );
+        ctx.granted_directly = PermissionSet::EMPTY.with(Permission::VoidFiredLine);
+        let book = RecipeBook::new();
+        let decision = decide_line(
+            OrderLineState::Fired,
+            LineCommand::Void {
+                pin_verified: false,
+            },
+            &ctx,
+            &book,
+        )
+        .expect("a direct holder voids alone");
+        assert_eq!(decision.next_state, OrderLineState::Voided);
+        assert!(decision.effects.contains(&Effect::PrintVoidTicket));
+    }
+
+    /// Holding a permission directly is a property of a grant, not a grant: a permission listed
+    /// only as direct, and not granted, is refused.
+    #[test]
+    fn granted_directly_alone_grants_nothing() {
+        let mut ctx = ctx_with(PermissionSet::EMPTY, CapabilityContext::NONE);
+        ctx.granted_directly = PermissionSet::EMPTY.with(Permission::VoidFiredLine);
+        assert!(matches!(
+            ctx.require(Permission::VoidFiredLine),
+            Err(DomainError::PermissionDenied {
+                permission: "sales.line.void_fired"
+            })
+        ));
     }
 
     #[test]

@@ -38,10 +38,21 @@ pub struct PublishedStaffMember {
     /// The person's name, which the till shows.
     #[serde(default)]
     pub name: String,
-    /// The `pos-core` permission ids the person holds, sorted and without duplicates. An id this
-    /// release does not know grants nothing.
+    /// The `pos-core` permission ids the person holds **directly**, sorted and without duplicates:
+    /// they act on these alone. An id this release does not know grants nothing.
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// The permission ids the person may exercise only when another person, who holds the
+    /// permission directly, approves that one act with their code and PIN
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4). Sorted, without duplicates, and none of them also in
+    /// [`Self::permissions`].
+    ///
+    /// Read only where the store decides with each person's own set
+    /// ([`PublishedPermissions::enforced`]). Skipped from the wire when empty, so a node with none
+    /// reads, and is written, exactly as before the field existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions_with_approval: Vec<String>,
     /// How much the person may discount before it needs a manager, in the currency's minor unit.
     ///
     /// Absent when no ceiling is configured, which the edge reads as zero. Skipped from the wire
@@ -61,6 +72,7 @@ impl core::fmt::Debug for PublishedStaffMember {
         f.debug_struct("PublishedStaffMember")
             .field("id", &self.id)
             .field("permissions", &self.permissions)
+            .field("permissions_with_approval", &self.permissions_with_approval)
             .field("discount_ceiling_minor", &self.discount_ceiling_minor)
             .field("has_pin", &self.pin_phc.is_some())
             .finish_non_exhaustive()
@@ -74,6 +86,18 @@ pub struct PublishedPermissions {
     /// there so a node lifted out of its tree still says whose it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_id: Option<String>,
+    /// Whether the store decides every command with the signed-in person's own permissions
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 1 and Rollout).
+    ///
+    /// `false`, which a node without the field reads as, keeps the store-wide set: every
+    /// permission granted, and a PIN-flagged one asking for a holder's PIN, as before. It is a
+    /// setting (`docs/configuration.md`), resolved by the cloud and written beside the staff the
+    /// people compiler publishes, and a temporary one: once every store runs with it on, a later
+    /// change removes it. Skipped from the wire when `false`, so a node written before it existed
+    /// is byte-identical.
+    #[serde(default, skip_serializing_if = "core::ops::Not::not")]
+    pub enforced: bool,
     /// The store's staff, sorted by code so two compiles of the same state are byte-identical.
     #[serde(default)]
     pub staff: Vec<PublishedStaffMember>,
@@ -94,6 +118,7 @@ mod tests {
             code: "C01".to_owned(),
             name: "Alice".to_owned(),
             permissions: vec!["billing.discount.apply".to_owned()],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
             pin_phc: Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA".to_owned()),
         }
@@ -126,6 +151,7 @@ mod tests {
     fn a_compiled_node_round_trips_byte_for_byte() {
         let node = PublishedPermissions {
             store_id: Some("01J0000000000000000000STOR".to_owned()),
+            enforced: false,
             staff: vec![member()],
         };
         let text = serde_json::to_string(&node).expect("serialise");
@@ -150,6 +176,34 @@ mod tests {
             member.permissions.is_empty(),
             "nothing is granted by default"
         );
+    }
+
+    #[test]
+    fn approval_modes_and_the_rollout_switch_ride_the_wire_when_set() {
+        let node = PublishedPermissions {
+            store_id: None,
+            enforced: true,
+            staff: vec![PublishedStaffMember {
+                permissions_with_approval: vec!["sales.line.void_fired".to_owned()],
+                ..member()
+            }],
+        };
+        let text = serde_json::to_string(&node).expect("serialise");
+        assert!(text.contains(r#""enforced":true"#));
+        assert!(text.contains(r#""permissions_with_approval":["sales.line.void_fired"]"#));
+        let back: PublishedPermissions = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back, node);
+    }
+
+    #[test]
+    fn a_node_without_the_switch_is_not_enforced_and_grants_nothing_with_approval() {
+        let node: PublishedPermissions = serde_json::from_str(
+            r#"{ "staff": [{ "code": "C04", "permissions": ["sales.line.add"] }] }"#,
+        )
+        .expect("the node parses");
+        assert!(!node.enforced, "an absent switch keeps the store-wide set");
+        let member = node.staff.first().expect("one member");
+        assert!(member.permissions_with_approval.is_empty());
     }
 
     #[test]

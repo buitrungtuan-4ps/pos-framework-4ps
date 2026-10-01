@@ -63,6 +63,9 @@ pub fn compile_permissions(
                 code: employee.code.clone(),
                 name: employee.name.clone(),
                 permissions,
+                // Roles do not yet say which permissions they grant with approval rather than
+                // directly (ADR-0158 decision 4), so nothing is granted with approval.
+                permissions_with_approval: Vec::new(),
                 // Resolved from the role, like the permissions above it and for the same reason: the
                 // edge authorises one person at a time and should not have to hold the role table to
                 // do it. A missing role contributes no ceiling, which is the same "needs a manager"
@@ -81,6 +84,11 @@ pub fn compile_permissions(
 
     PublishedPermissions {
         store_id: Some(store_id.to_string()),
+        // Not the compiler's to say. `permissions.enforced` is a setting the cloud resolves per
+        // store and writes on the store's Tenant layer (ADR-0160), where the edge reads it merged
+        // with this Store-layer node. `false` is skipped from the wire, so this node never
+        // overrides it.
+        enforced: false,
         staff,
     }
 }

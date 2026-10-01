@@ -7366,6 +7366,9 @@ impl<S: EventStore> Edge<S> {
             business_date,
             actor,
             granted: session.granted,
+            // Nobody holds anything directly until the store decides with each person's own set
+            // (ADR-0158), so a PIN-flagged permission asks for a PIN as it always has.
+            granted_directly: PermissionSet::EMPTY,
             capabilities: session.capabilities,
             connectivity: session.connectivity,
             currency: session.currency,
