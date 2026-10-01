@@ -650,6 +650,61 @@ impl PostgresPeople {
         Ok(rows.iter().map(assignment_row).collect())
     }
 
+    /// Lists the assignments that grant a role, at every store, newest first — the stores archiving
+    /// the role must tell at once
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 7).
+    ///
+    /// No index serves `role_template_id`: the read is filtered within one tenant's grants — one
+    /// per person per store they work at — and it runs when a role is archived, not on a hot path.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_assignments_for_role(
+        &self,
+        tenant_id: &str,
+        role_template_id: &str,
+    ) -> Result<Vec<AssignmentRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.role_template_id = $2 \
+                     ORDER BY a.created_at DESC"
+                ),
+                &[&tenant_id, &role_template_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(assignment_row).collect())
+    }
+
+    /// Reads one assignment within its tenant, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_assignment(
+        &self,
+        tenant_id: &str,
+        id: &str,
+    ) -> Result<Option<AssignmentRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                &format!(
+                    "SELECT {ASSIGNMENT_COLUMNS} FROM {ASSIGNMENT_JOIN} \
+                     WHERE a.tenant_id = $1 AND a.id = $2"
+                ),
+                &[&tenant_id, &id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(assignment_row))
+    }
+
     /// Removes an assignment within its tenant. Returns whether a row was removed.
     ///
     /// # Errors

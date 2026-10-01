@@ -4001,6 +4001,30 @@ impl AssignmentStore for PostgresPeople {
         rows.iter().map(assignment_record).collect()
     }
 
+    async fn list_for_role(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .fetch_assignments_for_role(&tenant.to_string(), &role_template_id.to_string())
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
+        rows.iter().map(assignment_record).collect()
+    }
+
+    async fn get(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> Result<Option<Assignment>, AssignmentStoreError> {
+        let row = self
+            .fetch_assignment(&tenant.to_string(), &assignment_id.to_string())
+            .await
+            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
+        row.as_ref().map(assignment_record).transpose()
+    }
+
     async fn remove(
         &self,
         tenant: TenantId,

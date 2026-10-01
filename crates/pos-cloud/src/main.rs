@@ -677,8 +677,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
         // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
         // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.
+        // The registry checks an assignment's store, and the config trees take the `permissions`
+        // node that removing an assignment or archiving a person or role publishes at once
+        // (ADR-0158 decision 7).
         .merge(http::people_router(
             store.people(),
+            store.registry(),
+            store.config_trees(),
             store.admin(),
             SystemClock,
             Arc::clone(&audit),

@@ -645,6 +645,35 @@ pub trait AssignmentStore {
         employee_id: EmployeeId,
     ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
 
+    /// Lists the assignments that grant a role, at every store.
+    ///
+    /// The stores these name are the ones archiving the role reaches
+    /// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 7): each must be told at once that the role no longer grants anything.
+    ///
+    /// # Errors
+    ///
+    /// [`AssignmentStoreError`] if the read fails.
+    fn list_for_role(
+        &self,
+        tenant: TenantId,
+        role_template_id: RoleTemplateId,
+    ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
+
+    /// Reads one assignment within its tenant, or `None`.
+    ///
+    /// Read before a removal, which needs the store the grant was at: that store is told at once
+    /// (ADR-0158 decision 7), and the row will be gone by the time anyone asks.
+    ///
+    /// # Errors
+    ///
+    /// [`AssignmentStoreError`] if the read fails.
+    fn get(
+        &self,
+        tenant: TenantId,
+        assignment_id: AssignmentId,
+    ) -> impl Future<Output = Result<Option<Assignment>, AssignmentStoreError>> + Send;
+
     /// Removes an assignment (offboards the person from that store). Returns whether a row was removed.
     ///
     /// # Errors
