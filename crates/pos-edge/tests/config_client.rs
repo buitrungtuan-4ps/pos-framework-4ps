@@ -124,6 +124,35 @@ fn a_pulled_config_swaps_the_live_session_and_then_no_ops() {
 }
 
 #[test]
+fn a_pulled_config_tells_every_open_till_to_reload_and_an_up_to_date_pull_says_nothing() {
+    let edge = edge();
+    let mut till = edge.fanout().subscribe();
+    let transport = FakeConfigTransport {
+        version: version(),
+        document: menu_document(),
+    };
+    let client = ConfigClient::new(transport, edge.clone(), None);
+
+    run_ready(client.pump_once()).expect("pump");
+    let frame = till
+        .try_recv()
+        .expect("an open till is told a new configuration is live");
+    let message: serde_json::Value = serde_json::from_str(&frame).expect("a frame is JSON");
+    assert_eq!(message["type"], "config_applied");
+    assert_eq!(message["config_version_id"], version());
+    assert!(
+        message["sequence"].is_u64(),
+        "numbered like every frame, so a till that reconnects is replayed it: {message}"
+    );
+
+    run_ready(client.pump_once()).expect("second pump");
+    assert!(
+        till.try_recv().is_err(),
+        "an up-to-date store applied nothing, so it tells the tills nothing"
+    );
+}
+
+#[test]
 fn a_restarted_edge_comes_back_on_the_config_it_last_synced() {
     // One store, two `Edge`s over it: the second is the box after a restart. The cloud is present
     // for the first and gone for the second, which is the case that matters — an OTA install or a
