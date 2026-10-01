@@ -139,6 +139,9 @@ const Reports = lazy(() =>
 const Stations = lazy(() =>
   import("./screens/Stations").then((module) => ({ default: module.Stations })),
 );
+const Settings = lazy(() =>
+  import("./screens/Settings").then((module) => ({ default: module.Settings })),
+);
 const StoreSettings = lazy(() =>
   import("./screens/StoreSettings").then((module) => ({ default: module.StoreSettings })),
 );
@@ -198,6 +201,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   stations: Stations,
   people: People,
   config: Config,
+  settings: Settings,
   storeSettings: StoreSettings,
   taxRates: TaxRates,
   translations: Translations,

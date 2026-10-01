@@ -1767,3 +1767,96 @@ export interface ConnectionInput {
   readonly secrets: Record<string, string>;
   readonly clear_secrets: readonly string[];
 }
+
+/**
+ * Where a setting may be written ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+ * decision 3): every store of the tenant, every store of one brand, every store in one store group,
+ * or one store. A store runs the value of the most specific of these that sets one.
+ */
+export type SettingScope =
+  | "SETTING_SCOPE_TENANT"
+  | "SETTING_SCOPE_BRAND"
+  | "SETTING_SCOPE_STORE_GROUP"
+  | "SETTING_SCOPE_STORE";
+
+/**
+ * One setting in the register, from `GET /admin/settings/catalogue`.
+ *
+ * It carries no sentence of its own: the console labels a setting and each of its values from its
+ * own translations, keyed by `setting_key` and by the value's token, so a setting added to the
+ * register needs its translations and nothing else to appear on the settings screen.
+ */
+export interface SettingDefinition {
+  /** `node.field`, such as `shift.no_shift_selling`. */
+  readonly setting_key: string;
+  readonly node: string;
+  readonly field: string;
+  /**
+   * The shape of the value. `SETTING_KIND_CHOICE` is the only one today; a kind this console does
+   * not know is shown and not offered for editing.
+   */
+  readonly kind: string;
+  /** For a choice, every value it takes, as wire tokens. */
+  readonly values: readonly string[];
+  /** What a store runs when nothing sets a value. */
+  readonly default: string;
+  /** What a new store is given, when the owner chose something other than the default. */
+  readonly preset?: string;
+  /** Where it may be written. */
+  readonly scopes: readonly string[];
+  /** The first release that honours it, `MAJOR.MINOR.PATCH` (ADR-0160 decision 5). */
+  readonly since: string;
+}
+
+/** One value a tenant has written, from `GET /admin/settings`. */
+export interface WrittenSetting {
+  readonly setting_key: string;
+  /** A {@link SettingScope} token. */
+  readonly scope: string;
+  /** The tenant, brand, store group or store it was written for. */
+  readonly scope_id: string;
+  readonly value: Json;
+  /** When it was written, RFC 3339. */
+  readonly update_time: string;
+}
+
+/**
+ * One setting as one store runs it, from `GET /admin/settings/effective`. `scope` and `scope_id`
+ * are absent when the store runs the default.
+ */
+export interface EffectiveSetting {
+  readonly setting_key: string;
+  readonly value: Json;
+  readonly scope?: string;
+  readonly scope_id?: string;
+}
+
+/** How one store's settings publish went. Three outcomes, never two. */
+export type SettingPublishOutcome =
+  | "SETTING_PUBLISH_APPLIED"
+  | "SETTING_PUBLISH_UNCHANGED"
+  | "SETTING_PUBLISH_FAILED";
+
+/** One store's row in a settings publish. */
+export interface SettingPublishResult {
+  readonly store_id: string;
+  readonly outcome: SettingPublishOutcome;
+  /** The config version the publish produced, for `SETTING_PUBLISH_APPLIED`. */
+  readonly config_version_id?: string;
+}
+
+/**
+ * What a settings write, clear or republish did at every store it reached.
+ *
+ * A `200` is not "every store has it": a store that failed keeps the values it was last published
+ * until it is published again with `POST /admin/settings/publish`.
+ */
+export interface SettingPublishReport {
+  readonly stores: readonly SettingPublishResult[];
+}
+
+/** What `POST /admin/settings/presets` did: the settings it wrote, and the store's publish. */
+export interface SettingPresetsReport extends SettingPublishReport {
+  /** The keys of the settings written at the store's own scope. Empty when it set them all already. */
+  readonly applied: readonly string[];
+}

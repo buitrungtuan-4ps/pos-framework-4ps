@@ -53,6 +53,11 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 
 1. **Details** — name the store (e.g. *Bến Thành*) and, optionally, put it under a brand. It is created
    in the registry ([ADR-0065](../adr/0065-cloud-org-registry.md)); the ULID is assigned for you.
+   As soon as it exists, the wizard gives it the owner's **new-store values** — the *New store*
+   column of [`configuration.md`](../configuration.md), today refusing to sell while no shift is
+   open ([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+   If that fails, the store is still created and the wizard says so, with a link to **Shared
+   settings** for the store, which gives the values again or publishes the store again.
 2. **API key** — **optional**, and **Skip the key** is the usual choice. A box activated with a code
    (Step 3) syncs, relays orders and publishes events with the credential activation gives it
    ([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so it
@@ -347,6 +352,7 @@ keeping the last-known-good if a version is rejected
 | **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
 | **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
 | **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
+| **Shared settings** | each value a store may run differently ([`configuration.md`](../configuration.md)), written once for every store, a brand, a store group or this store, and published to every store it reaches as it is saved | No — a store runs each default until a value is set, and a store the wizard created already has the owner's new-store values |
 
 Author in that order. Items before Menus (a menu places items that must exist), and tax classes
 before items (an item names one). **Store groups** publishes one node to a whole set of shops at

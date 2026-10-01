@@ -88,6 +88,12 @@ import type {
   RecipeInput,
   QrGuardrails,
   VendorPolicy,
+  EffectiveSetting,
+  SettingDefinition,
+  SettingPresetsReport,
+  SettingPublishReport,
+  SettingScope,
+  WrittenSetting,
   PublishedConfig,
   RegisterWebhookResponse,
   RoleTemplate,
@@ -1618,6 +1624,65 @@ export const api = {
       "DELETE",
       `/admin/integrations/connections/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
+  // Settings (ADR-0160 decision 3): every value a store may run differently, written once at the
+  // tenant, a brand, a store group or one store. The catalogue is the register and carries no
+  // prose, so the settings screen is drawn from it and labelled from the console's translations.
+  // Reads are behind console.data.read. A write, a clear, the presets and a republish all publish
+  // to every store they reach, so they are behind console.config.publish, and each answers how
+  // every one of those stores' publish went — a `200` is not "every store has it".
+  settingsCatalogue: () =>
+    requestJson<{ settings: SettingDefinition[] }>("GET", "/admin/settings/catalogue").then(
+      (body) => body.settings,
+    ),
+  listSettingValues: (tenantId: string) =>
+    requestJson<{ values: WrittenSetting[] }>("GET", `/admin/settings?${tenantQuery(tenantId)}`).then(
+      (body) => body.values,
+    ),
+  // What one store runs, and the scope each value comes from (absent for a default).
+  effectiveSettings: (tenantId: string, storeId: string) =>
+    requestJson<{ settings: EffectiveSetting[] }>(
+      "GET",
+      `/admin/settings/effective?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+    ).then((body) => body.settings),
+  // `scopeId` is the tenant itself for `SETTING_SCOPE_TENANT`, else the brand, group or store.
+  putSetting: (
+    tenantId: string,
+    settingKey: string,
+    scope: SettingScope,
+    scopeId: string,
+    value: Json,
+  ) =>
+    requestJson<SettingPublishReport>("PUT", "/admin/settings", {
+      tenant_id: tenantId,
+      setting_key: settingKey,
+      scope,
+      scope_id: scopeId,
+      value,
+    }),
+  // A `404` here means nothing is written at that scope any more.
+  clearSetting: (tenantId: string, settingKey: string, scope: SettingScope, scopeId: string) =>
+    requestJson<SettingPublishReport>(
+      "DELETE",
+      `/admin/settings?${new URLSearchParams({
+        tenant_id: tenantId,
+        setting_key: settingKey,
+        scope,
+        scope_id: scopeId,
+      }).toString()}`,
+    ),
+  // The owner's new-store values (ADR-0160 decision 1), written at the store's own scope for each
+  // setting the store does not set itself, so calling it twice changes nothing the operator chose.
+  applySettingPresets: (tenantId: string, storeId: string) =>
+    requestJson<SettingPresetsReport>("POST", "/admin/settings/presets", {
+      tenant_id: tenantId,
+      store_id: storeId,
+    }),
+  // Republishes one store's resolved settings, or every store of the tenant without `storeId`.
+  publishSettings: (tenantId: string, storeId?: string) =>
+    requestJson<SettingPublishReport>("POST", "/admin/settings/publish", {
+      tenant_id: tenantId,
+      ...(storeId ? { store_id: storeId } : {}),
+    }),
   // Countries & locales (ADR-0074): read-only master data compiled into the cloud — the currency
   // picker and the translation grid's locale catalogue. Global reads, behind console.data.read.
   listCountries: () => requestJson<Country[]>("GET", "/admin/countries"),
