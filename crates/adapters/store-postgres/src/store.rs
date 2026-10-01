@@ -273,6 +273,11 @@ const MIGRATION_0071: &str = include_str!("../migrations/0071_device_drawer.sql"
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 const MIGRATION_0072: &str = include_str!("../migrations/0072_setting_values.sql");
 
+/// Every role that exists gains the seven till permissions ADR-0158 named, once, behind a marker in
+/// `data_migrations` so a later boot does not hand back one an owner removed
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+const MIGRATION_0073: &str = include_str!("../migrations/0073_roles_keep_every_till_action.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -619,6 +624,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0072)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0073)
             .await
             .map_err(unavailable)
     }

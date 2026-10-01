@@ -141,7 +141,7 @@ impl EventStoreHarness for StoreHarness {
                  catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
                  catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
-                 catalog_tax_rates, config_trees, device_claims, device_credentials, device_proposals, devices, \
+                 catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
                  employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
                  integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
                  reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
@@ -205,7 +205,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
              catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
-             catalog_tax_rates, config_trees, device_claims, device_credentials, device_proposals, devices, \
+             catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
              employee_store_assignments, employees, event_outbox, events, floor_areas, floor_tables, \
              integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
              reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
@@ -5708,6 +5708,92 @@ mod role_templates_and_assignments {
                 !can_delete,
                 "role_templates is never DELETEd — archived instead"
             );
+        });
+    }
+
+    /// Every role that exists gains the seven till permissions once (migration 0073, ADR-0158), and a
+    /// later boot does not hand back one an owner has since removed.
+    ///
+    /// `prepared` truncates `data_migrations`, so the boot below is the grant's first run, as it is
+    /// on a database that has never seen the file.
+    #[test]
+    fn existing_roles_keep_every_till_action_and_a_removal_sticks() {
+        const ROLE: &str = "01ROLE000000000000000000C1";
+        const TILL: [&str; 7] = [
+            "billing.bill.open",
+            "billing.bill.split",
+            "billing.payment.take",
+            "sales.line.add",
+            "sales.line.fire",
+            "sales.table.manage",
+            "sales.ticket.bump",
+        ];
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            people
+                .insert_role_template(
+                    ROLE,
+                    "tenant-a",
+                    "Server",
+                    r#"["billing.discount.apply","sales.line.add"]"#,
+                    None,
+                )
+                .await
+                .expect("a role authored before the seven had names");
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0073 first");
+            let role = people
+                .fetch_role_template("tenant-a", ROLE)
+                .await
+                .expect("fetch")
+                .expect("present");
+            let granted: Vec<String> =
+                serde_json::from_str(&role.permissions_json).expect("permissions are JSON");
+            let mut expected: Vec<String> = TILL.iter().map(|id| (*id).to_owned()).collect();
+            expected.push("billing.discount.apply".to_owned());
+            expected.sort();
+            assert_eq!(
+                granted, expected,
+                "all seven, what it had, sorted, and sales.line.add once"
+            );
+
+            // The owner takes payment off servers on purpose.
+            let without_payment: Vec<&str> = expected
+                .iter()
+                .map(String::as_str)
+                .filter(|id| *id != "billing.payment.take")
+                .collect();
+            let written = serde_json::to_string(&without_payment).expect("serialise");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    ROLE,
+                    "Server",
+                    &written,
+                    "active",
+                    None,
+                    &role.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", ROLE)
+                .await
+                .expect("fetch")
+                .expect("present");
+            let kept: Vec<String> =
+                serde_json::from_str(&after.permissions_json).expect("permissions are JSON");
+            assert!(
+                !kept.iter().any(|id| id == "billing.payment.take"),
+                "a later boot does not hand back what the owner removed"
+            );
+            assert_eq!(kept.len(), without_payment.len());
         });
     }
 
