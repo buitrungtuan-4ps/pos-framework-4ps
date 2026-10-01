@@ -162,6 +162,10 @@ export interface SessionState {
   // with a PIN. Absent from an edge too old to send it, which the sign-in screen reads as "ready",
   // because a hint that the store has no staff must never be shown on a guess.
   sign_in_ready?: boolean;
+  // How many seconds an attended till may sit untouched before it locks, from the store's
+  // `session.idle_lock_seconds` (ADR-0160); `0` never locks. Absent from an edge too old to send
+  // it, which never locks either.
+  idle_lock_seconds?: number;
   // Whether the store decides with each person's own permissions (ADR-0158 decision 6). Absent or
   // false: every control works as before, whatever the two lists below say.
   permissions_enforced?: boolean;

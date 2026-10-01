@@ -107,6 +107,16 @@ fn cash_rounding() -> bool {
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("cash-rounding"))
 }
 
+/// Whether this demo store's tills lock when left untouched — `POS_DEMO_PROFILE=idle-lock`.
+///
+/// That profile publishes `session.idle_lock_seconds` = 120, the value the console gives a new
+/// store ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+/// so the browser gate can drive the idle lock. Every other profile publishes no `session` node,
+/// which is what a store that predates the setting runs: a till that never locks on its own.
+fn idle_lock() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("idle-lock"))
+}
+
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
 ///
 /// That profile publishes no `permissions` node, which is what a store the console has not staffed
@@ -244,6 +254,11 @@ fn demo_menu() -> MenuBook {
 /// `POS_DEMO_PROFILE=unstaffed` publishes the same store with no `permissions` node: nobody can
 /// sign in, as on a store the console has not staffed yet. See [`staffed`].
 ///
+/// # The idle-lock profile
+///
+/// `POS_DEMO_PROFILE=idle-lock` publishes the same store with a `session` node whose tills lock
+/// after two minutes without a touch, as a new store's do. See [`idle_lock`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -287,6 +302,16 @@ pub fn config_document() -> Option<serde_json::Value> {
         && let Some(object) = document.as_object_mut()
     {
         object.insert("locale".to_owned(), demo_locale());
+    }
+    // Published only on its own profile, so every other flow runs on a till that never locks, as
+    // a store that predates the setting does.
+    if idle_lock()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert(
+            "session".to_owned(),
+            serde_json::json!({ "idle_lock_seconds": 120 }),
+        );
     }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.

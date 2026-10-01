@@ -348,6 +348,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A till left untouched locks, and opens again with its person's PIN**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, `docs/pos-spec.md` §16). A till stayed signed in as its person until the edge's
+  sign-in idle timeout, thirty minutes by default, so anyone passing could use it meanwhile.
+  - A new security setting on the `session` node, `idle_lock_seconds` (0 to 3600, default 0, never).
+    The console gives a new store 120, two minutes, as the owner confirmed on 2026-10-01.
+  - After that long with no touch, key, click or scroll, the till signs its person out on the
+    store server and covers the screen. Their PIN opens it again, on the screen they left, so a
+    split's taken shares are still on the pay screen. A till that has reloaded since they signed in
+    asks for their staff code as well, which it keeps in memory only. **Sign in as someone else**
+    goes to the sign-in screen.
+  - The kitchen board, the pass and the screens before sign-in never lock.
+  - `GET /api/session` gains `idle_lock_seconds`, whoever is signed in. The till rereads it when a
+    new configuration is applied.
+  - **Upgrade note:** additive. The default, `0`, is today's behaviour, so no existing store's tills
+    lock until the setting is written. A store the console creates from now on locks after two
+    minutes. An edge that predates the field omits it from the session read, and the till then
+    never locks. No event, migration, permission or protocol version changes.
+
 - **The till hides what the signed-in person cannot do, where the store enforces each person's own
   permissions** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
   decision 6). Nothing turns enforcement on yet.

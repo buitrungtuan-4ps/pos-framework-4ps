@@ -15,7 +15,7 @@
 
 import { createSignal } from "solid-js";
 
-import { api, type SessionState } from "../api/client";
+import type { SessionState } from "../api/client";
 
 /**
  * A catalogue permission a till control needs, by its id. Each is named by a route in
@@ -81,16 +81,11 @@ export function adoptSession(session: SessionState): void {
   });
 }
 
-// Reads the session again: at sign-in, and whenever the store's configuration is read again, because
-// a published `permissions` node is what changes the two lists. A failed read keeps what is held — a
-// till that hid or showed everything on a blip would be worse than one briefly out of date.
-export async function loadPermissions(): Promise<void> {
-  try {
-    adoptSession(await api.session());
-  } catch {
-    // Keep what is held; the next read tries again.
-  }
-}
+// The session is read again at sign-in, whenever the store's configuration is read again — a
+// published `permissions` node is what changes the two lists — and when a PIN opens the idle lock,
+// by `loadSession` in `./session`, the one reader, which hands each read here. A failed read keeps
+// what is held: a till that hid or showed everything on a blip would be worse than one briefly out
+// of date.
 
 // Nobody is signed in any more, so nobody holds anything: what the edge reports with nobody signed
 // in. The switch stays as the store last said, and a store that does not enforce still hides nothing.

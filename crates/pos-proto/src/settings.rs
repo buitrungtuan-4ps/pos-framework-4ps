@@ -259,6 +259,25 @@ pub fn register() -> Vec<Setting> {
         },
         Setting {
             node: PublishedSession::NODE,
+            field: "idle_lock_seconds",
+            shape: SettingShape::Int {
+                min: *session::IDLE_LOCK_SECONDS.start(),
+                max: *session::IDLE_LOCK_SECONDS.end(),
+                unit: SettingUnit::Seconds,
+                default: i64::from(unset.idle_lock_seconds()),
+                // Confirmed by the owner on 2026-10-01: a new store's till locks after two minutes
+                // without a touch. An existing store keeps a till that never locks.
+                preset: Some(120),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A security setting: how long a till may sit with no touch, key, click or \
+                      scroll before it signs its person out and locks, until their PIN opens it \
+                      again on the screen they left. `0` never locks. The kitchen board, the pass \
+                      and the screens before sign-in never lock.",
+        },
+        Setting {
+            node: PublishedSession::NODE,
             field: "sign_in_idle_timeout_minutes",
             shape: SettingShape::Int {
                 min: *session::SIGN_IN_IDLE_TIMEOUT_MINUTES.start(),
@@ -812,6 +831,7 @@ mod tests {
             PublishedSession::NODE => {
                 let session: PublishedSession = serde_json::from_value(document).ok()?;
                 match field {
+                    "idle_lock_seconds" => Some(json!(session.idle_lock_seconds())),
                     // A node that sets no window leaves the edge on its deprecated local file and
                     // then on this default, so the default is what a store with neither runs.
                     "sign_in_idle_timeout_minutes" => Some(json!(

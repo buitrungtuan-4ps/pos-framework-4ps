@@ -28558,11 +28558,19 @@ async fn a_new_store_is_given_the_owners_values_once() {
         .await
         .expect("route the presets");
     assert_eq!(applied.status(), StatusCode::OK);
-    assert_eq!(json_body(applied).await["applied"][0], NO_SHIFT_SELLING);
+    assert_eq!(
+        json_body(applied).await["applied"],
+        serde_json::json!([NO_SHIFT_SELLING, "session.idle_lock_seconds"])
+    );
     assert_eq!(
         tenant_layer_shift(&config_trees, third).await.as_deref(),
         Some("NO_SHIFT_SELLING_REFUSE"),
         "a new store refuses to sell with no shift open (the owner, 2026-09-30)"
+    );
+    assert_eq!(
+        tenant_layer_session(&config_trees, third).await,
+        Some(serde_json::json!({ "idle_lock_seconds": 120 })),
+        "a new store's till locks after two minutes without a touch (the owner, 2026-10-01)"
     );
 
     let again = router

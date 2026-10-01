@@ -1,20 +1,21 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The published `session` config node: how long a sign-in lasts on an idle device, and how many
-//! wrong PINs lock a person out
+//! The published `session` config node: when an attended till locks, how long a sign-in lasts on an
+//! idle device, and how many wrong PINs lock a person out
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2).
 //!
 //! Every field is a setting in [`crate::settings`], and every default is what the edge did before the
-//! field existed: a sign-in lapses after thirty idle minutes, and five wrong PINs in a row lock a
-//! person out for five minutes. So a document with no `session` node, or a node without a field,
-//! runs a store exactly as it ran before.
+//! field existed: a till never locks on its own, a sign-in lapses after thirty idle minutes, and five
+//! wrong PINs in a row lock a person out for five minutes. So a document with no `session` node, or a
+//! node without a field, runs a store exactly as it ran before.
 //!
 //! # Security settings
 //!
-//! These bound how long a till carried off while signed in keeps working, and how fast a PIN can be
-//! guessed ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md),
+//! These bound how long an unattended till stays usable, how long a till carried off while signed in
+//! keeps working, and how fast a PIN can be guessed
+//! ([ADR-0030](../../../docs/adr/0030-pairing-and-offline-auth.md),
 //! [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)). Each is held to bounds that keep
 //! the defence on, and none of them can switch the PIN lockout off. The cloud refuses a value outside
 //! the bounds when it is written ([`Setting::check`](crate::settings::Setting::check)). An edge that
@@ -26,6 +27,10 @@
 use core::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
+
+/// The seconds an attended till may sit with no touch before it locks, both bounds included. `0`
+/// never locks. An hour at the most, because a lock that waits longer than that is no lock.
+pub const IDLE_LOCK_SECONDS: RangeInclusive<i64> = 0..=3600;
 
 /// The minutes a signed-in device may sit idle, both bounds included. Five at the least, because a
 /// shorter window signs a person out between two orders. Four hours at the most, because the window
@@ -39,6 +44,9 @@ pub const LOCKOUT_ATTEMPTS: RangeInclusive<i64> = 3..=10;
 /// The minutes a lockout lasts, both bounds included. One at the least, because no value may switch
 /// the lockout off. An hour at the most, because a person locked out mid-service waits it out.
 pub const LOCKOUT_MINUTES: RangeInclusive<i64> = 1..=60;
+
+/// The idle lock when nothing sets one: `0`, never, as every till ran before the setting.
+pub const DEFAULT_IDLE_LOCK_SECONDS: u32 = 0;
 
 /// The sign-in idle timeout when nothing sets one: thirty minutes, the edge's window before the
 /// setting existed ([ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md)).
@@ -59,6 +67,10 @@ pub const DEFAULT_LOCKOUT_MINUTES: u32 = 5;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedSession {
+    /// How many seconds an attended till may sit with no touch before it locks. Read it through
+    /// [`PublishedSession::idle_lock_seconds`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_lock_seconds: Option<i64>,
     /// How many minutes a signed-in device may sit idle before its sign-in lapses. Read it through
     /// [`PublishedSession::sign_in_idle_timeout_minutes`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -75,6 +87,17 @@ pub struct PublishedSession {
 impl PublishedSession {
     /// The node's key in a store's configuration document.
     pub const NODE: &'static str = "session";
+
+    /// The seconds an attended till may sit with no touch, key, click or scroll before it signs its
+    /// person out and locks: the node's number when it is within [`IDLE_LOCK_SECONDS`], and
+    /// [`DEFAULT_IDLE_LOCK_SECONDS`], never, otherwise. `0` never locks.
+    ///
+    /// The till applies it, and only where a person stands: never on the kitchen board, the pass or
+    /// a screen before anyone signs in.
+    #[must_use]
+    pub fn idle_lock_seconds(&self) -> u32 {
+        within(self.idle_lock_seconds, &IDLE_LOCK_SECONDS).unwrap_or(DEFAULT_IDLE_LOCK_SECONDS)
+    }
 
     /// The minutes a signed-in device may sit idle before its sign-in lapses, or `None` when the node
     /// sets no value within [`SIGN_IN_IDLE_TIMEOUT_MINUTES`].
@@ -126,6 +149,11 @@ mod tests {
     #[test]
     fn an_absent_field_runs_the_store_as_before() {
         for empty in [node("{}"), PublishedSession::default()] {
+            assert_eq!(
+                empty.idle_lock_seconds(),
+                0,
+                "a till never locks on its own"
+            );
             assert_eq!(empty.sign_in_idle_timeout_minutes(), None);
             assert_eq!(empty.lockout_attempts(), 5);
             assert_eq!(empty.lockout_minutes(), 5);
@@ -160,6 +188,14 @@ mod tests {
                 r#"{{ "sign_in_idle_timeout_minutes": {minutes} }}"#
             ));
             assert_eq!(set.sign_in_idle_timeout_minutes(), None, "{minutes}");
+        }
+    }
+
+    #[test]
+    fn an_idle_lock_is_read_within_its_bounds_and_otherwise_never_locks() {
+        for (published, read) in [(0, 0), (120, 120), (3600, 3600), (3601, 0), (-1, 0)] {
+            let set = node(&format!(r#"{{ "idle_lock_seconds": {published} }}"#));
+            assert_eq!(set.idle_lock_seconds(), read, "{published}");
         }
     }
 

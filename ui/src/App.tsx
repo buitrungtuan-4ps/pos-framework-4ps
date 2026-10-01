@@ -5,6 +5,7 @@ import { ApiError, api, deviceToken } from "./api/client";
 import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
 import { LiveLink } from "./api/live";
+import { IdleLock } from "./components/IdleLock";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
 import { Devices } from "./screens/Devices";
@@ -21,7 +22,7 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
-import { adoptSession } from "./state/permissions";
+import { locked, takeSession } from "./state/session";
 import { fold, loadConfiguration, loadLiveOrders, loadStore, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
@@ -87,15 +88,22 @@ function LeaseAhead() {
 
 // The shell every screen sits inside: the status bar, then the routed view. It is the Router's root
 // so navigation from the status bar works, while the live link runs above it for the app's lifetime.
+//
+// The idle lock sits beside it rather than inside it. While the till is locked the screen stays
+// mounted under the lock, with what it holds, and `inert`: nothing on it can be reached by a tap or a
+// key until a PIN opens the lock (`components/IdleLock.tsx`).
 function Shell(props: ParentProps) {
   return (
-    <div class="flex min-h-full flex-col">
-      <StatusBar />
-      <Superseded />
-      <LeaseAhead />
-      <VersionDrift />
-      <main class="flex-1 overflow-y-auto">{props.children}</main>
-    </div>
+    <>
+      <div class="flex min-h-full flex-col" inert={locked() ? true : undefined}>
+        <StatusBar />
+        <Superseded />
+        <LeaseAhead />
+        <VersionDrift />
+        <main class="flex-1 overflow-y-auto">{props.children}</main>
+      </div>
+      <IdleLock />
+    </>
   );
 }
 
@@ -153,9 +161,9 @@ export function App() {
           sendTo("/signin");
           return;
         }
-        // What this person may do, from the read already in hand, so the till hides what they
-        // cannot do before it draws the store (ADR-0158 decision 6).
-        adoptSession(session);
+        // What this person may do and when the till locks, from the read already in hand, so the
+        // till hides what they cannot do before it draws the store (ADR-0158 decision 6).
+        takeSession(session);
         // Signed in: draw the store's real floor, its own price book, the console's button plan and
         // its money settings (ADR-0072, ADR-0066, ADR-0105, E5). A failure or an empty node leaves
         // the never-blank fallback in place. The sign-in screen loads the same set on success,

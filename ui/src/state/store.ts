@@ -7,7 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
-import { loadPermissions } from "./permissions";
+import { loadSession } from "./session";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -1661,11 +1661,11 @@ export async function loadStore(): Promise<void> {
 }
 
 // What the till draws from the store's configuration: the floor, both price books, the console's
-// button plan, the money settings, the reason codes and what the signed-in person may do, which the
-// published `permissions` node decides (ADR-0158 decision 6). The edge says `config_applied` on the
-// live link when a new version is live (ADR-0160 item 7), and an open till reloads these then,
-// without a new sign-in; the boot gate and sign-in read them through loadStore. Forgiving like each
-// loader it calls.
+// button plan, the money settings, the reason codes, the idle lock and what the signed-in person
+// may do, which the published `permissions` node decides (ADR-0158 decision 6). The edge says
+// `config_applied` on the live link when a new version is live (ADR-0160 item 7), and an open till
+// reloads these then, without a new sign-in; the boot gate and sign-in read them through loadStore.
+// Forgiving like each loader it calls.
 export async function loadConfiguration(): Promise<void> {
   await Promise.all([
     loadFloor(),
@@ -1673,7 +1673,8 @@ export async function loadConfiguration(): Promise<void> {
     loadLayout(),
     loadLocale(),
     loadReasonCodes(),
-    loadPermissions(),
+    // One read of `GET /api/session` for the idle lock and the person's permissions both.
+    loadSession(),
   ]);
 }
 
