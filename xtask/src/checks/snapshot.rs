@@ -35,6 +35,12 @@
 //! disappear, while its tabbed `default=` may change (a default change owes an upgrade
 //! note, but is allowed).
 //!
+//! The settings snapshot (`docs/snapshots/settings.txt`) follows it too
+//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! decision 9): a bare setting key and its `kind=`, `value=` and `scope=` lines are contracts — a
+//! value stored in the cloud and an edge on an older release both rely on them — while its tabbed
+//! `default=` and `since=` may change.
+//!
 //! The route snapshot (`docs/snapshots/routes.txt`) has no mutable half at all: every
 //! line is `METHOD /path`, and every line is a contract
 //! ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)). A till
@@ -55,6 +61,7 @@ const SNAPSHOTS: &[&str] = &[
     "docs/snapshots/permissions.txt",
     "docs/snapshots/capabilities.txt",
     "docs/snapshots/routes.txt",
+    "docs/snapshots/settings.txt",
 ];
 
 /// Tab-prefixed metadata keys that may change or disappear without breaking a contract.
@@ -65,6 +72,7 @@ const MUTABLE_KEYS: &[&str] = &[
     "\tpin_required=",
     "\tdefault_role=",
     "\tdefault=",
+    "\tsince=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -78,7 +86,11 @@ fn is_mutable(line: &str) -> bool {
 /// hint is the kind a reader skips. The remedy is the same in each case — deprecate in place —
 /// but *who breaks* differs, and naming them is what makes the remedy land.
 fn hint_for(path: &str) -> &'static str {
-    if path.ends_with("routes.txt") {
+    if path.ends_with("settings.txt") {
+        "a published setting is a contract: deprecate it, but do not rename or remove it, one of \
+         its values or one of its scopes — a value stored in the cloud names it, and an edge on an \
+         older release still reads it (ADR-0160)"
+    } else if path.ends_with("routes.txt") {
         "a published edge route is a contract: deprecate it in place, but do not rename or \
          remove it — a till that has not updated still calls it, and the asset fallback answers \
          an unmatched path with 200 text/html, so the operator sees a parse error naming neither \
@@ -174,5 +186,32 @@ mod tests {
     #[test]
     fn a_capability_default_may_change() {
         assert!(is_mutable("tables_enabled\tdefault=true"));
+    }
+
+    #[test]
+    fn a_setting_its_values_and_its_scopes_are_contracts() {
+        assert!(!is_mutable("shift.no_shift_selling"));
+        assert!(!is_mutable(
+            "shift.no_shift_selling\tkind=SETTING_KIND_CHOICE"
+        ));
+        assert!(!is_mutable(
+            "shift.no_shift_selling\tvalue=NO_SHIFT_SELLING_REFUSE"
+        ));
+        assert!(!is_mutable(
+            "shift.no_shift_selling\tscope=SETTING_SCOPE_STORE"
+        ));
+    }
+
+    #[test]
+    fn a_setting_default_and_release_may_change() {
+        assert!(is_mutable(
+            "shift.no_shift_selling\tdefault=NO_SHIFT_SELLING_ALLOW"
+        ));
+        assert!(is_mutable("shift.no_shift_selling\tsince=0.14.1"));
+    }
+
+    #[test]
+    fn a_removed_setting_is_explained_as_a_setting() {
+        assert!(super::hint_for("docs/snapshots/settings.txt").contains("setting"));
     }
 }
