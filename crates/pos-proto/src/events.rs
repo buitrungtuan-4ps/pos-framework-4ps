@@ -29,10 +29,11 @@ use crate::enums::{
     StockLedgerEntryKind,
 };
 use crate::envelope::{DecodeError, EventEnvelope, EventPayload, RawPayload};
+use crate::fees::{FeeCode, FrozenFee};
 use crate::ids::{
-    BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, IngredientId, MenuItemId,
-    OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId,
-    StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
+    BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, FeeId, IngredientId,
+    MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId,
+    StationId, StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
 };
 use crate::money::{Money, Ratio};
 use crate::quantity::Quantity;
@@ -439,6 +440,18 @@ event_catalogue! {
         /// order", exactly what such a bill meant when it was written.
         #[serde(default)]
         order_line_ids: Vec<OrderLineId>,
+        /// The fee rules in force for the bill when it opened, frozen
+        /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3): active,
+        /// clear of every fault, and applying on the bill's channel. The bill is computed from
+        /// these until it settles, so a publish during the meal does not change what its pre-bill
+        /// showed.
+        ///
+        /// Each rule carries what the bill is computed from and its code, never its name: the till
+        /// prints a fee's name from the store's `fees` node by its id. Left out when empty, and
+        /// absent reads as empty: a bill opened before this field existed, or with no rule in
+        /// force, has no fees.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fee_rules: Vec<FrozenFee>,
     },
     /// A bill was split.
     ///
@@ -501,6 +514,22 @@ event_catalogue! {
         /// before this release has no such key.
         #[serde(default)]
         buyer_subject_id: Option<SubjectId>,
+        /// One line per fee the bill was charged, in the order of its rules (ADR-0159 decision 4).
+        /// `service_charge` keeps carrying their sum, so a reader of that one figure stays right
+        /// until it reads these.
+        ///
+        /// Left out when empty, and absent reads as empty: a bill settled before this field
+        /// existed, or charged no fee, has no fee lines.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fee_lines: Vec<BillFeeLine>,
+        /// The bill's tax per class, each rounded once on its class's whole base (ADR-0028), and
+        /// summing to `tax_total` (ADR-0159 decision 4, roadmap-v3 B4.1).
+        ///
+        /// Left out when empty. Absent means *not recorded*, not *no tax*: a bill settled before
+        /// this field existed has none, and a reader falls back to `tax_total`, as a reprinted
+        /// copy already does (ADR-0164).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tax_lines: Vec<BillTaxLine>,
     },
     /// A settled bill was voided, which requires a manager and a reason.
     BillingBillVoided => "billing.bill.voided", version = 1 {
@@ -896,6 +925,73 @@ event_catalogue! {
         ring: u8,
     },
 }
+
+/// One fee as a settled bill records it
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): which fee, under
+/// which code, what it charged, and the tax on it.
+///
+/// No name: the till prints a fee's name from the store's `fees` node by its id, and no event
+/// carries a translation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BillFeeLine {
+    /// The fee rule that charged it.
+    pub fee_id: FeeId,
+    /// The rule's code, what a report groups fees by.
+    pub code: FeeCode,
+    /// What it charged.
+    pub amount: Money,
+    /// The tax on it: its part of the tax of every class it is taxed at. Zero for a fee that is
+    /// not taxed.
+    pub tax: Money,
+}
+
+// The personal-data barrier for a part of a payload, field by field (`crate::pii`).
+const _: fn(&BillFeeLine) = |line| {
+    let BillFeeLine {
+        fee_id,
+        code,
+        amount,
+        tax,
+    } = line;
+    crate::pii::assert_field_no_pii(fee_id);
+    crate::pii::assert_field_no_pii(code);
+    crate::pii::assert_field_no_pii(amount);
+    crate::pii::assert_field_no_pii(tax);
+};
+
+/// One class's tax as a settled bill records it (ADR-0159 decision 4, roadmap-v3 B4.1): the base,
+/// the rate and the tax, which rounded once on that whole base (ADR-0028).
+///
+/// Without the breakdown by component that ADR-0104 prints for India: a component's name is text
+/// with no type the personal-data barrier admits ([`crate::pii`]).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BillTaxLine {
+    /// The class.
+    pub tax_class_id: TaxClassId,
+    /// The base the rate was applied to: the lines after discounts and comps, plus every charge
+    /// taxed at this class.
+    pub taxable_base: Money,
+    /// The rate in force, in basis points.
+    pub rate_basis_points: u32,
+    /// The class's tax.
+    pub tax: Money,
+}
+
+// The personal-data barrier for a part of a payload, field by field (`crate::pii`).
+const _: fn(&BillTaxLine) = |line| {
+    let BillTaxLine {
+        tax_class_id,
+        taxable_base,
+        rate_basis_points,
+        tax,
+    } = line;
+    crate::pii::assert_field_no_pii(tax_class_id);
+    crate::pii::assert_field_no_pii(taxable_base);
+    crate::pii::assert_field_no_pii(rate_basis_points);
+    crate::pii::assert_field_no_pii(tax);
+};
 
 #[cfg(test)]
 mod tests {
@@ -1295,5 +1391,137 @@ mod tests {
             SalesOrderOpened::FIELD_NAMES,
             EventType::SalesOrderOpened.field_names()
         );
+    }
+
+    fn vnd(amount: i64) -> crate::money::Money {
+        crate::money::Money::new(crate::money::CurrencyCode::VND, amount)
+    }
+
+    /// A bill settled for 115,500: 100,000 of food and a 5,000 service charge, at 10 %.
+    fn settled(
+        fee_lines: Vec<super::BillFeeLine>,
+        tax_lines: Vec<super::BillTaxLine>,
+    ) -> super::BillingBillSettled {
+        super::BillingBillSettled {
+            bill_id: crate::ids::BillId::new(Ulid::from_parts(1, 1)),
+            receipt_number: 7,
+            subtotal: vnd(100_000),
+            reduction_total: vnd(0),
+            service_charge: vnd(5_000),
+            tax_total: vnd(10_500),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(115_500),
+            buyer_subject_id: None,
+            fee_lines,
+            tax_lines,
+        }
+    }
+
+    fn opened(fee_rules: Vec<crate::fees::FrozenFee>) -> super::BillingBillOpened {
+        super::BillingBillOpened {
+            bill_id: crate::ids::BillId::new(Ulid::from_parts(1, 1)),
+            order_id: OrderId::new(Ulid::from_parts(1, 2)),
+            order_line_ids: Vec::new(),
+            fee_rules,
+        }
+    }
+
+    fn service_fee() -> crate::fees::FrozenFee {
+        crate::fees::FrozenFee {
+            fee_id: crate::ids::FeeId::new(Ulid::from_parts(1, 3)),
+            code: crate::fees::FeeCode::new("SERVICE"),
+            kind: crate::fees::FeeKind::Percent.into(),
+            rate: crate::money::Ratio::percent(5).ok(),
+            amount: None,
+            item_scope: Open::default(),
+            menu_item_ids: Vec::new(),
+            base_discounted: true,
+            base_tax_inclusive: false,
+            tax: Open::default(),
+            tax_class_id: None,
+            waivable: true,
+        }
+    }
+
+    fn records() -> (Vec<super::BillFeeLine>, Vec<super::BillTaxLine>) {
+        let fee = super::BillFeeLine {
+            fee_id: crate::ids::FeeId::new(Ulid::from_parts(1, 3)),
+            code: crate::fees::FeeCode::new("SERVICE"),
+            amount: vnd(5_000),
+            tax: vnd(500),
+        };
+        let tax = super::BillTaxLine {
+            tax_class_id: crate::ids::TaxClassId::new(Ulid::from_parts(1, 4)),
+            taxable_base: vnd(105_000),
+            rate_basis_points: 1_000,
+            tax: vnd(10_500),
+        };
+        (vec![fee], vec![tax])
+    }
+
+    #[test]
+    fn a_bill_recorded_before_fees_existed_still_reads() {
+        // ADR-0159: every bill an upgrading store replays predates the fields, so each reads as
+        // empty — no rules, no fee lines, no tax lines recorded.
+        let opened: super::BillingBillOpened = serde_json::from_str(
+            r#"{"bill_id":"01JQ0000000000000000000001","order_id":"01JQ0000000000000000000002"}"#,
+        )
+        .expect("an opened bill without fee rules reads");
+        assert!(opened.fee_rules.is_empty());
+
+        let mut old = serde_json::to_value(settled(Vec::new(), Vec::new())).expect("serialise");
+        if let Some(fields) = old.as_object_mut() {
+            fields.remove("fee_lines");
+            fields.remove("tax_lines");
+        }
+        let settled: super::BillingBillSettled =
+            serde_json::from_str(&old.to_string()).expect("a settled bill without fee lines reads");
+        assert!(settled.fee_lines.is_empty() && settled.tax_lines.is_empty());
+    }
+
+    #[test]
+    fn an_empty_record_leaves_the_event_as_it_was() {
+        // Empty is left out, so a bill with no fee and no tax lines recorded writes exactly the
+        // bytes it wrote before the fields existed.
+        let opened = serde_json::to_string(&opened(Vec::new())).expect("serialise");
+        assert!(!opened.contains("fee_rules"), "{opened}");
+        let settled = serde_json::to_string(&settled(Vec::new(), Vec::new())).expect("serialise");
+        assert!(
+            !settled.contains("fee_lines") && !settled.contains("tax_lines"),
+            "{settled}"
+        );
+    }
+
+    #[test]
+    fn a_bill_records_its_rules_its_fees_and_its_tax() {
+        let opened_bill = opened(vec![service_fee()]);
+        let text = serde_json::to_string(&opened_bill).expect("serialise");
+        let back: super::BillingBillOpened = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back, opened_bill);
+
+        let (fee_lines, tax_lines) = records();
+        let settled_bill = settled(fee_lines, tax_lines);
+        let text = serde_json::to_string(&settled_bill).expect("serialise");
+        let back: super::BillingBillSettled = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back, settled_bill);
+
+        // The name net reaches inside the parts too, which the field list cannot see.
+        let (fee_lines, tax_lines) = records();
+        let parts = [
+            serde_json::to_value(&fee_lines).expect("serialise"),
+            serde_json::to_value(&tax_lines).expect("serialise"),
+        ];
+        for part in parts
+            .iter()
+            .flat_map(|list| list.as_array().cloned().unwrap_or_default())
+        {
+            for key in part
+                .as_object()
+                .map(|fields| fields.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+            {
+                assert_eq!(check_field_name(&key), Ok(()), "{key}");
+            }
+        }
     }
 }

@@ -313,6 +313,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A bill records its fees, and each fee carries its tax**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decisions 3 and 4), in the wire types and
+  the core. The edge records none of it yet.
+  - `billing.bill.opened` gains `fee_rules`: the rules in force for the bill when it opens
+    (active, clear of every fault, and applying on its channel), frozen, so a publish during the
+    meal does not change what the pre-bill showed. A frozen rule (`pos_proto::fees::FrozenFee`)
+    carries every field the bill is computed from and its `code`, and not its name: the till
+    prints a fee's name from the `fees` node by its id. `PublishedFees::in_force` freezes the
+    rules for a channel.
+  - `billing.bill.settled` gains `fee_lines` (`fee_id`, `code`, `amount`, `tax`), one per fee
+    charged, and `tax_lines` (`tax_class_id`, `taxable_base`, `rate_basis_points`, `tax`), one per
+    tax class, summing to `tax_total`. No event carries a fee's name or a translation.
+  - Each class's tax still rounds once, on its whole base (ADR-0028). It is then shared among the
+    parts of that base in proportion, so the parts sum to it exactly: each fee's part, the service
+    charge when it is taxed there, and the lines after their reductions. Each share is rounded
+    down and the last part with a base takes what is left. The lines come last, so wherever a
+    class has lines, a fee's part takes exactly its share rounded down. `FeeClassShare` and
+    `FeeLine` gain `tax`, and a fee's tax is the sum of its parts' taxes.
+  - `pos_core::billing::assemble` computes from the frozen rules: `BillInput::fee_rules` is now a
+    list of `FrozenFee`. Freezing decides whether a rule is active and on the bill's channel, so a
+    paused rule, or one for another channel, still applies to nothing.
+  - **Upgrade note:** additive, so `PROTOCOL_VERSION` and `schema_version` are unchanged
+    (`docs/naming-and-api.md` §5 and §11). Each new field is left out when empty, so every event
+    the edge writes today is byte-identical. An event without them reads as no rules and no fee
+    lines, and as tax lines *not recorded*: a reader takes the tax from `tax_total`.
+    `docs/snapshots/events.txt` gains the three fields. No migration or permission changes.
+
 - **The core computes a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
   decision 2). The `fees` node gave a fee a shape, and nothing charged it.
   - `pos_core::billing::assemble` takes the fee rules and the bill's lines (item, quantity, net,

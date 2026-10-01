@@ -19,8 +19,10 @@
 //!
 //! This module is the wire shape, the defaults it is read with, and a check of a rule's shape. It
 //! computes nothing: `pos_core::billing::assemble` charges the rules, one fee line per rule applied
-//! and folded into the tax and the total (ADR-0159 decision 2). Nothing authors the node yet, and
-//! the edge does not install it.
+//! and folded into the tax and the total (ADR-0159 decision 2). A bill keeps the rules in force
+//! when it opened, as [`FrozenFee`]s, which is the form `billing.bill.opened` records and the form
+//! the bill is computed from (decision 3). Nothing authors the node yet, and the edge does not
+//! install it.
 //!
 //! # Defaults, and refusing to guess
 //!
@@ -97,10 +99,10 @@ wire_enum! {
 /// A short, stable, language-independent handle for a fee, such as `"SERVICE"` or `"PACKAGING"`.
 ///
 /// What a report groups fees by and a CSV export prints, so an operator reads a handle they chose
-/// rather than a ULID. Like [`crate::reason_codes::ReasonCode`], it is deliberately not in
-/// [`crate::text`], which holds the text admissible in an event payload, and no event carries it
-/// yet. ADR-0159 decision 4 has a settled bill's fee lines name their code; admitting the code to a
-/// payload is that change's decision.
+/// rather than a ULID. Unlike [`crate::reason_codes::ReasonCode`], which no event carries, it is
+/// admissible in an event payload ([`crate::pii`]): ADR-0159 has a bill record the code of every
+/// fee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It
+/// names a charge, as a [`DisplayName`] names a product, and never a person.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct FeeCode(Box<str>);
@@ -241,7 +243,7 @@ impl PublishedFee {
     /// one would be a price nobody authored, so this never guesses.
     #[must_use]
     pub fn kind(&self) -> Option<FeeKind> {
-        self.kind.require().ok()
+        self.fields().kind()
     }
 
     /// Which lines the fee counts, or `None` for a scope token this build does not know.
@@ -253,14 +255,7 @@ impl PublishedFee {
     /// [`violations`](Self::violations) reports it as [`FeeViolation::UnknownItemScope`].
     #[must_use]
     pub fn item_scope(&self) -> Option<FeeItems> {
-        if self.item_scope.is_unrecognised() {
-            return None;
-        }
-        match self.item_scope.known() {
-            FeeItems::Unspecified | FeeItems::All => Some(FeeItems::All),
-            FeeItems::Include => Some(FeeItems::Include),
-            FeeItems::Exclude => Some(FeeItems::Exclude),
-        }
+        self.fields().item_scope()
     }
 
     /// How the fee is taxed.
@@ -271,11 +266,7 @@ impl PublishedFee {
     /// ADR-0028 has a fee taxed unless configured otherwise.
     #[must_use]
     pub fn tax(&self) -> FeeTax {
-        match self.tax.known() {
-            FeeTax::Unspecified | FeeTax::FollowLines => FeeTax::FollowLines,
-            FeeTax::NotTaxable => FeeTax::NotTaxable,
-            FeeTax::TaxClass => FeeTax::TaxClass,
-        }
+        self.fields().tax()
     }
 
     /// Whether the fee applies on `channel`.
@@ -300,13 +291,7 @@ impl PublishedFee {
     /// does not know.
     #[must_use]
     pub fn counts_item(&self, menu_item_id: MenuItemId) -> bool {
-        match self.item_scope() {
-            Some(FeeItems::All) => true,
-            Some(FeeItems::Include) => self.menu_item_ids.contains(&menu_item_id),
-            Some(FeeItems::Exclude) => !self.menu_item_ids.contains(&menu_item_id),
-            // `item_scope` reads `Unspecified` as `All`, so only an unknown token arrives here.
-            Some(FeeItems::Unspecified) | None => false,
-        }
+        self.fields().counts_item(menu_item_id)
     }
 
     /// What is wrong with the rule's shape, in a fixed order; empty when nothing is.
@@ -322,6 +307,93 @@ impl PublishedFee {
     /// items are on the store's menu needs the menu, and is not checked here.
     #[must_use]
     pub fn violations(&self) -> Vec<FeeViolation> {
+        self.fields().violations()
+    }
+
+    /// The rule as a bill opening on `channel` freezes it (ADR-0159 decision 3), or `None` when it
+    /// is not in force for that bill: paused, faulted by [`violations`](Self::violations), or for
+    /// another channel ([`applies_on`](Self::applies_on)).
+    #[must_use]
+    pub fn freeze(&self, channel: SalesChannel) -> Option<FrozenFee> {
+        if !self.active || !self.violations().is_empty() || !self.applies_on(channel) {
+            return None;
+        }
+        Some(FrozenFee {
+            fee_id: self.fee_id,
+            code: self.code.clone(),
+            kind: self.kind.clone(),
+            rate: self.rate,
+            amount: self.amount,
+            item_scope: self.item_scope.clone(),
+            menu_item_ids: self.menu_item_ids.clone(),
+            base_discounted: self.base_discounted,
+            base_tax_inclusive: self.base_tax_inclusive,
+            tax: self.tax.clone(),
+            tax_class_id: self.tax_class_id,
+            waivable: self.waivable,
+        })
+    }
+
+    fn fields(&self) -> RuleFields<'_> {
+        RuleFields {
+            kind: &self.kind,
+            rate: self.rate,
+            amount: self.amount,
+            item_scope: &self.item_scope,
+            menu_item_ids: &self.menu_item_ids,
+            tax: &self.tax,
+            tax_class_id: self.tax_class_id,
+        }
+    }
+}
+
+/// The fields a rule is computed from, borrowed from either form of it, so a published rule and a
+/// frozen one are read by one implementation.
+struct RuleFields<'a> {
+    kind: &'a Open<FeeKind>,
+    rate: Option<Ratio>,
+    amount: Option<Money>,
+    item_scope: &'a Open<FeeItems>,
+    menu_item_ids: &'a [MenuItemId],
+    tax: &'a Open<FeeTax>,
+    tax_class_id: Option<TaxClassId>,
+}
+
+impl RuleFields<'_> {
+    fn kind(&self) -> Option<FeeKind> {
+        self.kind.require().ok()
+    }
+
+    fn item_scope(&self) -> Option<FeeItems> {
+        if self.item_scope.is_unrecognised() {
+            return None;
+        }
+        match self.item_scope.known() {
+            FeeItems::Unspecified | FeeItems::All => Some(FeeItems::All),
+            FeeItems::Include => Some(FeeItems::Include),
+            FeeItems::Exclude => Some(FeeItems::Exclude),
+        }
+    }
+
+    fn tax(&self) -> FeeTax {
+        match self.tax.known() {
+            FeeTax::Unspecified | FeeTax::FollowLines => FeeTax::FollowLines,
+            FeeTax::NotTaxable => FeeTax::NotTaxable,
+            FeeTax::TaxClass => FeeTax::TaxClass,
+        }
+    }
+
+    fn counts_item(&self, menu_item_id: MenuItemId) -> bool {
+        match self.item_scope() {
+            Some(FeeItems::All) => true,
+            Some(FeeItems::Include) => self.menu_item_ids.contains(&menu_item_id),
+            Some(FeeItems::Exclude) => !self.menu_item_ids.contains(&menu_item_id),
+            // `item_scope` reads `Unspecified` as `All`, so only an unknown token arrives here.
+            Some(FeeItems::Unspecified) | None => false,
+        }
+    }
+
+    fn violations(&self) -> Vec<FeeViolation> {
         let charge = match self.kind.known() {
             FeeKind::Unspecified => Some(FeeViolation::UnknownKind),
             FeeKind::Percent => match self.rate {
@@ -347,6 +419,131 @@ impl PublishedFee {
             Some(FeeItems::All | FeeItems::Unspecified) => None,
         };
         [charge, tax, items].into_iter().flatten().collect()
+    }
+}
+
+/// A fee rule as a bill holds it: frozen when the bill opens, so a publish during the meal does
+/// not change what its pre-bill showed
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3).
+/// `billing.bill.opened` records the rules in force for the bill in this form.
+///
+/// It keeps what the bill is computed from, and nothing else. Whether the rule is active and which
+/// channels it applies on were settled by freezing it ([`PublishedFee::freeze`]), and its name
+/// stays in the `fees` node: the till prints a fee's name from the node by its id, and no event
+/// carries a translation. Every field is as on [`PublishedFee`], and reads with the same defaults.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FrozenFee {
+    /// As [`PublishedFee::fee_id`].
+    pub fee_id: FeeId,
+    /// As [`PublishedFee::code`].
+    pub code: FeeCode,
+    /// As [`PublishedFee::kind`]. Read it through [`kind`](Self::kind()).
+    #[serde(default)]
+    pub kind: Open<FeeKind>,
+    /// As [`PublishedFee::rate`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<Ratio>,
+    /// As [`PublishedFee::amount`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<Money>,
+    /// As [`PublishedFee::item_scope`]. Read it through [`item_scope`](Self::item_scope()).
+    #[serde(default)]
+    pub item_scope: Open<FeeItems>,
+    /// As [`PublishedFee::menu_item_ids`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub menu_item_ids: Vec<MenuItemId>,
+    /// As [`PublishedFee::base_discounted`]: absent means `true`.
+    #[serde(default = "discounted_by_default")]
+    pub base_discounted: bool,
+    /// As [`PublishedFee::base_tax_inclusive`]: absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub base_tax_inclusive: bool,
+    /// As [`PublishedFee::tax`]. Read it through [`tax`](Self::tax()).
+    #[serde(default)]
+    pub tax: Open<FeeTax>,
+    /// As [`PublishedFee::tax_class_id`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tax_class_id: Option<TaxClassId>,
+    /// As [`PublishedFee::waivable`]: absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub waivable: bool,
+}
+
+// The personal-data barrier for a part of a payload, field by field. The destructuring names every
+// field, so a field added to `FrozenFee` fails to compile until it is admitted too (`crate::pii`).
+const _: fn(&FrozenFee) = |rule| {
+    let FrozenFee {
+        fee_id,
+        code,
+        kind,
+        rate,
+        amount,
+        item_scope,
+        menu_item_ids,
+        base_discounted,
+        base_tax_inclusive,
+        tax,
+        tax_class_id,
+        waivable,
+    } = rule;
+    crate::pii::assert_field_no_pii(fee_id);
+    crate::pii::assert_field_no_pii(code);
+    crate::pii::assert_field_no_pii(kind);
+    crate::pii::assert_field_no_pii(rate);
+    crate::pii::assert_field_no_pii(amount);
+    crate::pii::assert_field_no_pii(item_scope);
+    crate::pii::assert_field_no_pii(menu_item_ids);
+    crate::pii::assert_field_no_pii(base_discounted);
+    crate::pii::assert_field_no_pii(base_tax_inclusive);
+    crate::pii::assert_field_no_pii(tax);
+    crate::pii::assert_field_no_pii(tax_class_id);
+    crate::pii::assert_field_no_pii(waivable);
+};
+
+impl FrozenFee {
+    /// As [`PublishedFee::kind()`]: `None` for an absent or unknown kind, which applies to nothing.
+    #[must_use]
+    pub fn kind(&self) -> Option<FeeKind> {
+        self.fields().kind()
+    }
+
+    /// As [`PublishedFee::item_scope()`]: `None` for a scope token this build does not know.
+    #[must_use]
+    pub fn item_scope(&self) -> Option<FeeItems> {
+        self.fields().item_scope()
+    }
+
+    /// As [`PublishedFee::tax()`]: an absent or unknown treatment reads as
+    /// [`FeeTax::FollowLines`].
+    #[must_use]
+    pub fn tax(&self) -> FeeTax {
+        self.fields().tax()
+    }
+
+    /// As [`PublishedFee::counts_item`].
+    #[must_use]
+    pub fn counts_item(&self, menu_item_id: MenuItemId) -> bool {
+        self.fields().counts_item(menu_item_id)
+    }
+
+    /// As [`PublishedFee::violations`]. A rule passed it when it was frozen, so a fault here means
+    /// a token from a newer release that this one does not know, and the rule applies to nothing.
+    #[must_use]
+    pub fn violations(&self) -> Vec<FeeViolation> {
+        self.fields().violations()
+    }
+
+    fn fields(&self) -> RuleFields<'_> {
+        RuleFields {
+            kind: &self.kind,
+            rate: self.rate,
+            amount: self.amount,
+            item_scope: &self.item_scope,
+            menu_item_ids: &self.menu_item_ids,
+            tax: &self.tax,
+            tax_class_id: self.tax_class_id,
+        }
     }
 }
 
@@ -429,6 +626,17 @@ impl PublishedFees {
             .iter()
             .filter(|fee| fee.active && fee.kind().is_some())
     }
+
+    /// The rules in force for a bill opening on `channel`, frozen, in the node's order: what
+    /// `billing.bill.opened` records and what the bill is computed from until it settles
+    /// (ADR-0159 decision 3).
+    #[must_use]
+    pub fn in_force(&self, channel: SalesChannel) -> Vec<FrozenFee> {
+        self.fees
+            .iter()
+            .filter_map(|fee| fee.freeze(channel))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -436,7 +644,9 @@ mod tests {
     use core::num::NonZeroI64;
     use std::collections::BTreeMap;
 
-    use super::{FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, PublishedFee, PublishedFees};
+    use super::{
+        FeeCode, FeeItems, FeeKind, FeeTax, FeeViolation, FrozenFee, PublishedFee, PublishedFees,
+    };
     use crate::enums::SalesChannel;
     use crate::ids::{FeeId, MenuItemId, TaxClassId};
     use crate::money::{CurrencyCode, Money, Ratio};
@@ -1006,5 +1216,107 @@ mod tests {
             !json.contains("display_name_translations"),
             "a rule with no translations does not carry the field: {json}"
         );
+    }
+
+    /// Every field a frozen rule keeps, copied from a published one whether or not it is in force.
+    fn copy_of(fee: &PublishedFee) -> FrozenFee {
+        FrozenFee {
+            fee_id: fee.fee_id,
+            code: fee.code.clone(),
+            kind: fee.kind.clone(),
+            rate: fee.rate,
+            amount: fee.amount,
+            item_scope: fee.item_scope.clone(),
+            menu_item_ids: fee.menu_item_ids.clone(),
+            base_discounted: fee.base_discounted,
+            base_tax_inclusive: fee.base_tax_inclusive,
+            tax: fee.tax.clone(),
+            tax_class_id: fee.tax_class_id,
+            waivable: fee.waivable,
+        }
+    }
+
+    #[test]
+    fn a_bill_freezes_the_rules_in_force_on_its_channel() {
+        let service = PublishedFee {
+            active: true,
+            ..service_charge()
+        };
+        let unknown = parse(&serde_json::json!({ "kind": "FEE_KIND_TOP_UP_TO" }));
+        let node = PublishedFees {
+            fees: vec![service_charge(), service.clone(), packaging(), unknown],
+        };
+        // A paused rule, one of a kind this release does not know, and one for another channel are
+        // not in force; what is in force keeps every field the bill is computed from, in order.
+        assert_eq!(node.in_force(SalesChannel::DineIn), vec![copy_of(&service)]);
+        assert_eq!(
+            node.in_force(SalesChannel::Takeaway),
+            vec![copy_of(&packaging())]
+        );
+        assert!(node.in_force(SalesChannel::Unspecified).is_empty());
+        assert_eq!(service_charge().freeze(SalesChannel::DineIn), None);
+    }
+
+    #[test]
+    fn a_frozen_rule_reads_as_its_published_self() {
+        let rules = [
+            service_charge(),
+            packaging(),
+            parse(&serde_json::json!({ "kind": "FEE_KIND_TOP_UP_TO" })),
+            parse(&serde_json::json!({
+                "kind": "FEE_KIND_AMOUNT_PER_UNIT",
+                "item_scope": "FEE_ITEMS_CATEGORY",
+                "tax": "FEE_TAX_REDUCED",
+            })),
+            parse(&serde_json::json!({ "kind": "FEE_KIND_PERCENT", "tax": "FEE_TAX_TAX_CLASS" })),
+        ];
+        for published in &rules {
+            let frozen = copy_of(published);
+            assert_eq!(frozen.kind(), published.kind());
+            assert_eq!(frozen.item_scope(), published.item_scope());
+            assert_eq!(frozen.tax(), published.tax());
+            assert_eq!(frozen.violations(), published.violations());
+            for n in [7, 8, 9] {
+                assert_eq!(frozen.counts_item(item(n)), published.counts_item(item(n)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_frozen_rule_reads_with_the_published_defaults() {
+        let json = serde_json::json!({
+            "fee_id": FeeId::new(Ulid::from_u128(1)).to_string(),
+            "code": "SERVICE",
+            "added_next_release": true,
+        })
+        .to_string();
+        let frozen: FrozenFee = serde_json::from_str(&json).expect("a frozen rule parses");
+        assert!(frozen.base_discounted, "after discounts by default");
+        assert!(!frozen.base_tax_inclusive && !frozen.waivable);
+        assert_eq!(frozen.item_scope(), Some(FeeItems::All));
+        assert_eq!(frozen.tax(), FeeTax::FollowLines);
+        assert_eq!(frozen.violations(), [FeeViolation::UnknownKind]);
+
+        let full = copy_of(&service_charge());
+        let text = serde_json::to_string(&full).expect("serialise");
+        let back: FrozenFee = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back, full);
+    }
+
+    #[test]
+    fn no_key_of_a_frozen_rule_suggests_personal_data() {
+        let value = serde_json::to_value(copy_of(&service_charge())).expect("serialise");
+        let keys: Vec<String> = value
+            .as_object()
+            .map(|rule| rule.keys().cloned().collect())
+            .unwrap_or_default();
+        assert!(keys.len() >= 10, "{keys:?}");
+        for key in keys {
+            assert_eq!(crate::pii::check_field_name(&key), Ok(()), "{key}");
+            assert!(
+                key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{key}"
+            );
+        }
     }
 }

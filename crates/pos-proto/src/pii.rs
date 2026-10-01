@@ -39,6 +39,8 @@
 
 use crate::chain;
 use crate::enums;
+use crate::events;
+use crate::fees;
 use crate::ids;
 use crate::money::{CurrencyCode, Money, Ratio};
 use crate::quantity::Quantity;
@@ -87,6 +89,11 @@ no_pii!(
 // immutable log.
 no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
 
+// A fee's code names a charge, as a display name names a product, and a bill records it on each
+// fee it was charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decisions 3
+// and 4). Its name and translations stay in the `fees` node; no event carries them.
+no_pii!(fees::FeeCode);
+
 // The chain hash (ADR-0131), and the argument is worth stating because "a hash" is not
 // by itself an answer: a hash of personal data is still personal data under PDPD and
 // GDPR, pseudonymised rather than anonymous.
@@ -124,6 +131,7 @@ no_pii!(
     ids::DeviceId,
     ids::EmployeeId,
     ids::EventId,
+    ids::FeeId,
     ids::IngredientId,
     ids::MenuItemId,
     ids::OrderId,
@@ -160,6 +168,12 @@ no_pii!(
     enums::TableState,
 );
 
+// Parts of a payload declared outside the catalogue: a bill's frozen fee rules, its fee lines and
+// its tax lines (ADR-0159). Each is proven field by field where it is declared, with
+// `assert_field_no_pii` over a destructuring that names every field, so the marker here cannot
+// outlive the truth of it.
+no_pii!(fees::FrozenFee, events::BillFeeLine, events::BillTaxLine);
+
 impl<T: NoPii> sealed::Sealed for Option<T> {}
 impl<T: NoPii> NoPii for Option<T> {}
 
@@ -171,6 +185,11 @@ impl<T: NoPii, const N: usize> NoPii for [T; N] {}
 
 impl<E: WireEnum> sealed::Sealed for Open<E> {}
 impl<E: WireEnum> NoPii for Open<E> {}
+
+/// [`assert_no_pii`] for the type of a field, for a part of a payload declared outside the
+/// catalogue. Called with every field of a destructuring that names them all, it makes a field
+/// added to such a part fail to compile until its type is admitted too.
+pub const fn assert_field_no_pii<T: NoPii>(_field: &T) {}
 
 /// Compile-time assertion that `T` may appear in an event payload.
 ///
@@ -284,6 +303,16 @@ mod tests {
         assert_no_pii::<Option<Money>>();
         assert_no_pii::<Vec<StoreId>>();
         assert_no_pii::<Option<Vec<Money>>>();
+    }
+
+    #[test]
+    fn a_bills_fee_record_is_admissible() {
+        // ADR-0159 decisions 3 and 4: the frozen rules, the fee lines and the tax lines.
+        assert_no_pii::<Vec<crate::fees::FrozenFee>>();
+        assert_no_pii::<Vec<crate::events::BillFeeLine>>();
+        assert_no_pii::<Vec<crate::events::BillTaxLine>>();
+        assert_no_pii::<crate::fees::FeeCode>();
+        assert_no_pii::<crate::ids::FeeId>();
     }
 
     #[test]
