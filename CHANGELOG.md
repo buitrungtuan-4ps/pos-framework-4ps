@@ -49,6 +49,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   ([crates/pos-cloud/src/webhook/ssrf.rs]). Prevents SSRF bypasses using 6over4 / IPv4-compatible
   interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes.
 
+- **SSRF protection in webhook URL classification now checks RFC 6830 / RFC 9301 LISP Control Plane IPv6 range (`2001:1::/32`).**
+  `classify_v6` in `crates/pos-cloud/src/webhook/ssrf.rs` now classifies `2001:1::/32` LISP Control Plane addresses as `ForbiddenReason::Reserved`, preventing SSRF bypasses via non-globally-routable IPv6 addresses. **Upgrade note:** none.
+
 ### Changed
 
 - **The cloud's API documents are generated with utoipa 6** (#537). The `/v1` API is unchanged. In
