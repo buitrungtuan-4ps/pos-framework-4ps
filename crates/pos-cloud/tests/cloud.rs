@@ -28106,4 +28106,48 @@ async fn the_catalogue_lists_each_setting_with_its_default_and_new_store_value()
         shift.get("summary").is_none(),
         "the screen labels a setting from its own translations"
     );
+    // A choice carries its values and nothing a whole number would: the screen draws its form from
+    // which of the two it finds.
+    assert_eq!(
+        shift["values"],
+        serde_json::json!(["NO_SHIFT_SELLING_ALLOW", "NO_SHIFT_SELLING_REFUSE"])
+    );
+    for absent in ["min", "max", "unit"] {
+        assert!(
+            shift.get(absent).is_none(),
+            "a choice carries no `{absent}`"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_value_of_the_wrong_kind_is_refused_with_the_reason_the_register_gives() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    // A number and a boolean are values of other kinds of setting, not tokens of this choice: the
+    // register's one rule refuses them at the write, before anything reaches a store.
+    for value in [serde_json::json!(1), serde_json::json!(true)] {
+        let refused = router
+            .clone()
+            .oneshot(put_with_cookie(
+                "/admin/settings",
+                &serde_json::json!({
+                    "tenant_id": tenant().as_ulid().to_string(),
+                    "setting_key": NO_SHIFT_SELLING,
+                    "scope": "SETTING_SCOPE_STORE",
+                    "scope_id": first.to_string(),
+                    "value": value,
+                }),
+                &cookie,
+            ))
+            .await
+            .expect("route the write");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{value}");
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], "value");
+        assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+    }
+    assert_eq!(tenant_layer_shift(&config_trees, first).await, None);
 }

@@ -39,7 +39,8 @@
 //! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 9): a bare setting key and its `kind=`, `value=` and `scope=` lines are contracts — a
 //! value stored in the cloud and an edge on an older release both rely on them — while its tabbed
-//! `default=`, `preset=` and `since=` may change.
+//! `default=`, `preset=` and `since=` may change, and so may a whole number's `min=`, `max=` and
+//! `unit=` (the comment on `MUTABLE_KEYS` says why).
 //!
 //! The route snapshot (`docs/snapshots/routes.txt`) has no mutable half at all: every
 //! line is `METHOD /path`, and every line is a contract
@@ -74,6 +75,16 @@ const MUTABLE_KEYS: &[&str] = &[
     "\tdefault=",
     "\tsince=",
     "\tpreset=",
+    // A whole-number setting's bounds and unit. Not contracts, because nothing outside the cloud
+    // holds a value against them: the cloud checks every value against the register when it is
+    // written, and again when it resolves what reaches a store, so a stored value outside new
+    // bounds is passed over, and the store runs what a less specific scope sets, or its default.
+    // The unit only tells the console how to name the number; what the number means is fixed by
+    // the field and its reader at the edge. Moving a bound is then a decision about a policy, owed
+    // an upgrade note, as a default is.
+    "\tmin=",
+    "\tmax=",
+    "\tunit=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -211,6 +222,19 @@ mod tests {
         assert!(is_mutable("shift.no_shift_selling\tsince=0.14.1"));
         assert!(is_mutable(
             "shift.no_shift_selling\tpreset=NO_SHIFT_SELLING_REFUSE"
+        ));
+    }
+
+    #[test]
+    fn a_whole_numbers_bounds_and_unit_may_change() {
+        assert!(is_mutable("session.lockout_attempts\tmin=1"));
+        assert!(is_mutable("session.lockout_attempts\tmax=20"));
+        assert!(is_mutable(
+            "session.lockout_attempts\tunit=SETTING_UNIT_COUNT"
+        ));
+        // The kind stays a contract: a stored number is not a token.
+        assert!(!is_mutable(
+            "session.lockout_attempts\tkind=SETTING_KIND_INT"
         ));
     }
 

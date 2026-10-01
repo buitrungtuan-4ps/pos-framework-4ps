@@ -352,6 +352,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     before, self-approval included. The session read's three fields are new; older tills ignore
     them. No event, migration, permission or protocol change.
 
+- **A setting can be a whole number or a switch, as well as a choice**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 9). The register held only choices of tokens, and most of what ADR-0160 moves out of
+  the code is a number, such as an idle lock in seconds or a lockout count, or is on or off.
+  - `pos_proto::settings` gains `SETTING_KIND_INT` and `SETTING_KIND_BOOL`. An `INT` is a whole
+    number from `min` to `max`, both included, counting `SETTING_UNIT_SECONDS`, `_MINUTES` or
+    `_COUNT`. A `BOOL` is `true` or `false`.
+  - `Setting::check` is the one rule for which values a setting takes. It refuses a number outside
+    its bounds, a value that is not a whole number (`120.0`, `"120"`), and anything but `true` or
+    `false` for a switch. The cloud applies it when a value is written and again when it resolves a
+    store's values.
+  - `PUT /admin/settings` refuses such a value with `400` and a reason in `details`: `OUT_OF_RANGE`
+    for a number outside its bounds, `INVALID_VALUE` for a value of the wrong kind, and
+    `INVALID_ENUM_VALUE`, as before, for a choice.
+  - `GET /admin/settings/catalogue` gives a whole number its `min`, `max` and `unit`, and gives every
+    `default` and `preset` as the node carries it: a token, a number or a boolean. A choice carries
+    its `values`, as before.
+  - Shared settings draws a whole number as a number field bounded by its range and named in its
+    unit, and a switch as an on/off switch. With nothing written, the switch shows the default (or,
+    for one store, what it runs) and says so.
+  - `docs/snapshots/settings.txt` lists a whole number's `min=`, `max=` and `unit=`. These may change
+    as a default may, because the cloud checks every value when it is written. A switch lists
+    `value=false` and `value=true`.
+  - No setting of either kind exists yet; the `session` settings are the first.
+  - **Upgrade note:** additive. `values` is absent from the catalogue for a setting that is not a
+    choice, and `default` and `preset` are typed JSON rather than always a string. The console this
+    cloud serves reads both, and the one existing setting's entry is unchanged. No route, event,
+    migration or permission changes.
+
 - **A role can grant a permission directly or with approval, and a store can switch on each
   person's own set** ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
   decisions 1 and 4), in the wire types and the core. Nothing sets them yet.
