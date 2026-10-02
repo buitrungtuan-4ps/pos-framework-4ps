@@ -16,6 +16,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Changed
+
+- **Optimize client-side sorting in DataTable.** Pre-extract sort keys in an $O(N)$ pass and reuse a single `Intl.Collator` instance during table column sorting in `dashboard/src/components/kit.tsx`.
+
 ### Security
 
 - **Retiring a device needs a signed-in manager**
