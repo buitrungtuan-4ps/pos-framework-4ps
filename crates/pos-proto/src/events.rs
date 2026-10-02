@@ -10,7 +10,7 @@
 //!
 //! # Why there are more than the specification lists
 //!
-//! `docs/pos-spec.md` §18 declares thirty-eight types. Eleven more are declared here,
+//! `docs/pos-spec.md` §18 declares thirty-eight types. Sixteen more are declared here,
 //! each because a stated requirement had no event able to carry it — most sharply
 //! `security.permission.overridden`, since a manager-PIN override above a discount
 //! ceiling is a fraud control and had no auditable record at all.
@@ -581,6 +581,23 @@ event_catalogue! {
         /// The value forgone, which is recorded as cost rather than lost revenue.
         amount: Money,
         /// Why.
+        reason_code_id: ReasonCodeId,
+    },
+    /// A fee was waived on one bill before it settled
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// Declared beyond the specification's list: a waive is an act, not an edit of the rule, so
+    /// the fee stays published and every other bill is charged it, and a fee left off one bill with
+    /// no event would be money forgiven that nothing records. The bill charges nothing for the fee
+    /// from then on and taxes nothing for it, and every part of a split of it and every merge it
+    /// joins keeps it waived. Ids only: what the fee came to is the bill's to compute, and who
+    /// waived it and who approved it are the envelope's and `security.permission.overridden`'s.
+    BillingFeeWaived => "billing.fee.waived", version = 1 {
+        /// The bill.
+        bill_id: BillId,
+        /// The fee waived, a rule the bill froze when it opened.
+        fee_id: FeeId,
+        /// Why, from the managed list.
         reason_code_id: ReasonCodeId,
     },
     /// A payment was taken.

@@ -390,6 +390,20 @@ permissions! {
         default_roles: [Cashier, Server, Supervisor, Manager, Owner],
         description: "Take a payment and settle a bill",
     },
+    /// Waive a waivable fee on one bill, citing a reason
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// Money forgiven, as a discount above the ceiling is, so it is PIN-flagged and goes by default
+    /// to the roles that may exceed the ceiling; any other role can be granted it with approval
+    /// (ADR-0158 decision 4).
+    WaiveFee {
+        id: "billing.fee.waive",
+        group: Billing,
+        risk: High,
+        pin: true,
+        default_roles: [Manager, Owner],
+        description: "Waive a waivable fee on one bill; requires a reason",
+    },
 
     // ---- Cash and shifts ----
     /// Open the cash drawer outside a sale.
@@ -797,6 +811,7 @@ mod tests {
             Permission::IssueRefund,
             Permission::OpenDrawerNoSale,
             Permission::OverridePrice,
+            Permission::WaiveFee,
         ] {
             assert!(
                 permission.meta().pin_required,
@@ -804,6 +819,18 @@ mod tests {
                 permission.meta().id
             );
         }
+    }
+
+    #[test]
+    fn a_fee_is_waived_by_default_by_whoever_may_exceed_the_discount_ceiling() {
+        // ADR-0159 decision 5: waiving a fee forgives money as a discount above the ceiling does,
+        // so the same roles hold it directly out of the box, and migration 0076 gave it to the
+        // roles that existed on the same terms.
+        assert_eq!(
+            Permission::WaiveFee.meta().default_roles,
+            Permission::OverrideDiscountCeiling.meta().default_roles
+        );
+        assert_eq!(Permission::WaiveFee.meta().id, "billing.fee.waive");
     }
 
     #[test]

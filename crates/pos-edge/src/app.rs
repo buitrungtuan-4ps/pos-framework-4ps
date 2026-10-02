@@ -1975,6 +1975,8 @@ impl BillRecord {
         MergingBill {
             fee_rules: &self.fee_rules,
             fee_wholes: &self.fee_wholes,
+            // The till cannot waive a fee yet (ADR-0159 decision 5), so no bill has one waived.
+            waived_fee_ids: &[],
         }
     }
 
@@ -2216,6 +2218,8 @@ impl SettledReceipt {
             amount: recorded.amount,
             class_shares: Vec::new(),
             tax: recorded.tax,
+            // A settled bill owes nothing more to waive.
+            waivable: false,
         }
     }
 
@@ -7555,6 +7559,8 @@ impl<S: EventStore> Edge<S> {
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: session.prices_include_tax,
             fee_rules,
+            // The till cannot waive a fee yet (ADR-0159 decision 5).
+            waived_fee_ids: &[],
             lines: &order.bill_lines,
         }
     }
@@ -10353,6 +10359,7 @@ mod tests {
             amount: vnd(minor),
             class_shares: Vec::new(),
             tax: vnd(0),
+            waivable: false,
         };
         // The first rule is still published and translated; the second is no longer published.
         let totals = BillTotals {

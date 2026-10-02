@@ -1574,6 +1574,7 @@
   "reasonCodes.action.stockWaste": "Ghi nhận hàng hỏng",
   "reasonCodes.action.voidBill": "Huỷ hoá đơn",
   "reasonCodes.action.voidLine": "Huỷ món",
+  "reasonCodes.action.waiveFee": "Miễn một khoản phí",
   "reasonCodes.actionRequired": "Chọn ít nhất một hành động cho lý do này",
   "reasonCodes.active": "Đang dùng",
   "reasonCodes.activeHint": "Bỏ chọn để ngưng dùng: lý do biến khỏi mọi danh sách chọn nhưng vẫn hiện tên trong dữ liệu cũ.",

@@ -732,24 +732,52 @@ mod tests {
     use super::{is_pin_flagged_permission, permission_catalogue};
     use pos_core::permission::Permission;
 
-    /// Migration 0074 gives every role that exists each PIN-flagged permission it does not grant
-    /// directly, with approval, from a literal list in its SQL. That list is the catalogue's
-    /// PIN-flagged permissions, in byte order and once each — the `pin_required=true` lines of
-    /// `docs/snapshots/permissions.txt` — so the two cannot drift.
+    /// Migration 0074 gave every role that existed each PIN-flagged permission it did not grant
+    /// directly, with approval, from a literal list in its SQL: the catalogue's PIN-flagged
+    /// permissions as they were then, in byte order and once each. A PIN-flagged permission added
+    /// since is granted by a migration of its own, which names it — 0076 for `billing.fee.waive`
+    /// (ADR-0159 decision 5). Together they are the `pin_required=true` lines of
+    /// `docs/snapshots/permissions.txt`, each granted once, so the backfills and the catalogue
+    /// cannot drift.
     #[test]
-    fn the_with_approval_backfill_lists_exactly_the_pin_flagged_permissions() {
-        const MIGRATION: &str = include_str!(
+    fn the_with_approval_backfills_list_exactly_the_pin_flagged_permissions() {
+        const MIGRATION_0074: &str = include_str!(
             "../../adapters/store-postgres/migrations/0074_role_permissions_with_approval.sql"
         );
-        let open = MIGRATION
+        const MIGRATION_0076: &str =
+            include_str!("../../adapters/store-postgres/migrations/0076_roles_can_waive_a_fee.sql");
+        let open = MIGRATION_0074
             .find("ARRAY[")
             .expect("the backfill's literal list")
             + "ARRAY[".len();
-        let close = open + MIGRATION[open..].find(']').expect("the list is closed");
-        let literal: Vec<&str> = MIGRATION[open..close]
+        let close = open
+            + MIGRATION_0074[open..]
+                .find(']')
+                .expect("the list is closed");
+        let literal: Vec<&str> = MIGRATION_0074[open..close]
             .split(',')
             .map(|item| item.trim().trim_matches('\''))
             .collect();
+        let mut sorted = literal.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(literal, sorted, "0074's list is in byte order, once each");
+
+        // Each permission granted by a later migration of its own, and that migration.
+        let later = [("billing.fee.waive", MIGRATION_0076)];
+        for (id, migration) in later {
+            assert!(
+                migration.contains(&format!("'{id}'")),
+                "the migration that grants {id} names it"
+            );
+            assert!(!literal.contains(&id), "{id} is granted once");
+        }
+        let mut granted: Vec<&str> = literal
+            .iter()
+            .copied()
+            .chain(later.iter().map(|(id, _)| *id))
+            .collect();
+        granted.sort_unstable();
         let mut flagged: Vec<&str> = Permission::ALL
             .iter()
             .map(|permission| permission.meta())
@@ -757,7 +785,7 @@ mod tests {
             .map(|meta| meta.id)
             .collect();
         flagged.sort_unstable();
-        assert_eq!(literal, flagged);
+        assert_eq!(granted, flagged);
     }
 
     /// The route's check and the console's catalogue read the same flag.

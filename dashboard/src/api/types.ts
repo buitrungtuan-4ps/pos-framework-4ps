@@ -618,9 +618,9 @@ export const UNITS: readonly UnitOfMeasure[] = [
  * An action a reason must be cited for (`ReasonAction`); wire tokens are prefixed `REASON_ACTION_`
  * (ADR-0115).
  *
- * Eleven, one per event field in the catalogue that declares a `reason_code_id` — `docs/pos-spec.md`
- * §11 item 2 names six and the events demand five more, so an operator can author a reason for a
- * cash paid-in or a stock correction rather than leaving that field unfillable.
+ * Twelve, one per event field in the catalogue that declares a `reason_code_id` — `docs/pos-spec.md`
+ * §11 item 2 names six and the events demand six more, so an operator can author a reason for a
+ * cash paid-in, a stock correction or a waived fee rather than leaving that field unfillable.
  */
 export type ReasonAction =
   | "REASON_ACTION_VOID_LINE"
@@ -633,7 +633,8 @@ export type ReasonAction =
   | "REASON_ACTION_CASH_PAID_IN"
   | "REASON_ACTION_CASH_PAID_OUT"
   | "REASON_ACTION_STOCK_ADJUSTMENT"
-  | "REASON_ACTION_STOCK_WASTE";
+  | "REASON_ACTION_STOCK_WASTE"
+  | "REASON_ACTION_WAIVE_FEE";
 
 /** Every action a reason can be tagged for, in the order the picker lists them. */
 export const REASON_ACTIONS: readonly ReasonAction[] = [
@@ -648,6 +649,7 @@ export const REASON_ACTIONS: readonly ReasonAction[] = [
   "REASON_ACTION_CASH_PAID_OUT",
   "REASON_ACTION_STOCK_ADJUSTMENT",
   "REASON_ACTION_STOCK_WASTE",
+  "REASON_ACTION_WAIVE_FEE",
 ];
 
 /**

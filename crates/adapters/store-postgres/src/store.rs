@@ -287,6 +287,11 @@ const MIGRATION_0074: &str = include_str!("../migrations/0074_role_permissions_w
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
 const MIGRATION_0075: &str = include_str!("../migrations/0075_fee_rules.sql");
 
+/// Every role that exists is given, once, `billing.fee.waive` on the terms it grants
+/// `billing.discount.override_ceiling`: directly where it grants that directly, and with approval
+/// otherwise ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+const MIGRATION_0076: &str = include_str!("../migrations/0076_roles_can_waive_a_fee.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -645,6 +650,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0075)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0076)
             .await
             .map_err(unavailable)
     }

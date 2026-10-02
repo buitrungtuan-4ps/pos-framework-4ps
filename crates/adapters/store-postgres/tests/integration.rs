@@ -5833,8 +5833,8 @@ mod role_templates_and_assignments {
     /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
     /// since taken away.
     ///
-    /// The 0073 marker is written before the boot, so the boot runs 0074 alone against the roles as
-    /// they were authored.
+    /// The 0073 and 0076 markers are written before the boot, so the boot runs 0074 alone against
+    /// the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -5858,11 +5858,11 @@ mod role_templates_and_assignments {
             admin
                 .execute(
                     "INSERT INTO data_migrations (name) \
-                     VALUES ('0073_roles_keep_every_till_action')",
+                     VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee')",
                     &[],
                 )
                 .await
-                .expect("0073 has already run");
+                .expect("0073 and 0076 have already run");
             let people = store.people();
             // A manager who voids directly, and so approves voids for others, listed out of order
             // as a console may have written it.
@@ -5996,6 +5996,196 @@ mod role_templates_and_assignments {
             assert_eq!(
                 kept, without_drawer,
                 "a later boot does not hand back an approval the owner took away"
+            );
+        });
+    }
+
+    /// Every role that exists is given, once, `billing.fee.waive` on the terms it grants
+    /// `billing.discount.override_ceiling` (migration 0076, ADR-0159 decision 5): directly where it
+    /// grants the override directly, and with approval otherwise. Nothing else in either list
+    /// changes, and a later boot does not hand back a waive an owner has since taken away.
+    ///
+    /// The 0073 and 0074 markers are written before the boot, so the boot runs 0076 alone against
+    /// the roles as they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over four roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_roles_waive_a_fee_on_the_terms_they_exceed_the_ceiling_once() {
+        const MANAGER: &str = "01ROLE000000000000000000M2";
+        const SUPERVISOR: &str = "01ROLE000000000000000000V2";
+        const SERVER: &str = "01ROLE000000000000000000S2";
+        const RETIRED: &str = "01ROLE000000000000000000R2";
+        const WAIVE: &str = "billing.fee.waive";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), \
+                            ('0074_role_permissions_with_approval')",
+                    &[],
+                )
+                .await
+                .expect("0073 and 0074 have already run");
+            let people = store.people();
+            // A manager who exceeds the ceiling directly, and so approves it for others.
+            people
+                .insert_role_template(
+                    MANAGER,
+                    "tenant-a",
+                    "Manager",
+                    r#"["billing.bill.void","billing.discount.apply","billing.discount.override_ceiling"]"#,
+                    r#"["billing.comp.apply"]"#,
+                    Some(500_000),
+                )
+                .await
+                .expect("a manager");
+            // A supervisor who exceeds it only with somebody's approval.
+            people
+                .insert_role_template(
+                    SUPERVISOR,
+                    "tenant-a",
+                    "Supervisor",
+                    r#"["billing.discount.apply"]"#,
+                    r#"["billing.bill.void","billing.discount.override_ceiling"]"#,
+                    None,
+                )
+                .await
+                .expect("a supervisor");
+            // A server who cannot exceed it at all, listed out of order as a console may have
+            // written it.
+            people
+                .insert_role_template(
+                    SERVER,
+                    "tenant-a",
+                    "Server",
+                    r#"["sales.line.add","billing.discount.apply"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a server");
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let before = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let direct_before = |id: &str| -> String {
+                before
+                    .iter()
+                    .find(|role| role.id == id)
+                    .map(|role| role.permissions_json.clone())
+                    .expect("the role is listed")
+            };
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0076 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let role = |id: &str| {
+                roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed")
+            };
+            let list = |json: &str| -> Vec<String> {
+                serde_json::from_str(json).expect("a permission list is JSON")
+            };
+
+            assert_eq!(
+                list(&role(MANAGER).permissions_json),
+                [
+                    "billing.bill.void",
+                    "billing.discount.apply",
+                    "billing.discount.override_ceiling",
+                    WAIVE,
+                ],
+                "directly, beside the override, in byte order"
+            );
+            assert_eq!(
+                list(&role(MANAGER).permissions_with_approval_json),
+                ["billing.comp.apply"],
+                "not with approval as well"
+            );
+            for (id, approved) in [
+                (
+                    SUPERVISOR,
+                    vec![
+                        "billing.bill.void",
+                        "billing.discount.override_ceiling",
+                        WAIVE,
+                    ],
+                ),
+                (SERVER, vec![WAIVE]),
+                (RETIRED, vec![WAIVE]),
+            ] {
+                assert_eq!(
+                    role(id).permissions_json,
+                    direct_before(id),
+                    "{id}: what it grants directly is byte-identical"
+                );
+                assert_eq!(
+                    list(&role(id).permissions_with_approval_json),
+                    approved,
+                    "{id}: with approval, in byte order"
+                );
+            }
+
+            // The owner takes the waive off servers altogether.
+            let server = role(SERVER);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SERVER,
+                    "Server",
+                    &server.permissions_json,
+                    "[]",
+                    "active",
+                    None,
+                    &server.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SERVER)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert_eq!(
+                list(&after.permissions_with_approval_json),
+                Vec::<String>::new(),
+                "a later boot does not hand back a waive the owner took away"
             );
         });
     }

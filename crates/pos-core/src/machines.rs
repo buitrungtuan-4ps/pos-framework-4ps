@@ -299,7 +299,7 @@ triggers! {
         Settle => "settle",
         /// Void the bill before settlement.
         Void => "void",
-        /// Reduce what the bill owes — a discount, or a comp.
+        /// Reduce what the bill owes — a discount, a comp, or a fee waived (ADR-0159 decision 5).
         ///
         /// A self-transition, for the reason [`LineTrigger::Amend`] is one: the bill is the same
         /// bill, and it is still open for payment. What the row buys is the refusal on the other

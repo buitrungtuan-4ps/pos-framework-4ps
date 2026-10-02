@@ -241,6 +241,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         "refunds are not built yet (ADR-0028)",
     ),
     (
+        Permission::WaiveFee,
+        "the till cannot waive a fee yet (ADR-0159 decision 5)",
+    ),
+    (
         Permission::PerformStocktake,
         "stocktakes are not built at the store yet",
     ),

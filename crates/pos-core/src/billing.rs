@@ -38,6 +38,10 @@
 //! once per class (ADR-0028); each part then carries its share of that class's tax.
 //! [`BillTotals::service_charge`] carries the sum of every fee, so the readers of that one figure
 //! stay right (ADR-0159 decision 4).
+//!
+//! A fee waived on a bill (ADR-0159 decision 5) is left out of it: [`assemble`] charges and taxes
+//! the bill as though the rule were not there, and the rule's `fee_id` is what keeps it waived on
+//! every part of a split and every merge the bill joins ([`MergedFees::waived_fee_ids`]).
 
 use pos_proto::fees::{FeeCode, FeeKind, FeeTax, FrozenFee};
 use pos_proto::locale::{TaxComponent, TaxRateTable};
@@ -180,6 +184,9 @@ pub struct FeeLine {
     pub class_shares: Vec<FeeClassShare>,
     /// The tax on the fee: the sum of its parts' taxes. Zero for a fee that is not taxed.
     pub tax: Money,
+    /// Whether the rule lets staff waive the fee on one bill, as the bill froze it (ADR-0159
+    /// decision 5), so a till can offer the act only where it is allowed.
+    pub waivable: bool,
 }
 
 /// Everything needed to assemble a bill's totals.
@@ -227,8 +234,13 @@ pub struct BillInput<'a> {
     /// currency. So does a percentage whose base is in the other tax posture from
     /// [`Self::prices_include_tax`]: this release does not convert between the two (ADR-0104).
     pub fee_rules: &'a [FrozenFee],
-    /// The bill's sold lines, which the rules match. Read only when [`Self::fee_rules`] is not
-    /// empty, and then each class's lines must sum to its [`ClassBase`].
+    /// The fees waived on this bill (`billing.fee.waived`, ADR-0159 decision 5), by id. A rule
+    /// listed here is left out: it charges nothing and taxes nothing, and every other figure is
+    /// what it would be with the rule not frozen on the bill at all. Empty, as for every bill not
+    /// yet opened, waives nothing.
+    pub waived_fee_ids: &'a [FeeId],
+    /// The bill's sold lines, which the rules match. Read only when a rule is left to charge, and
+    /// then each class's lines must sum to its [`ClassBase`].
     pub lines: &'a [BillLine],
 }
 
@@ -385,20 +397,28 @@ struct Fees {
 
 /// Charges the bill's fee rules (ADR-0159 decision 2). A percentage is taken of lines, never of
 /// another fee, so the fees do not compound and their order decides only the order of their lines.
+///
+/// A waived rule is left out before anything else is read, so a bill whose every fee is waived is
+/// assembled exactly as one that froze none.
 fn charge_fees(input: &BillInput<'_>, subtotal: Money) -> Result<Fees, DomainError> {
     let mut fees = Fees {
         lines: Vec::new(),
         class_shares: Vec::new(),
         total: Money::zero(input.currency_code),
     };
-    if input.fee_rules.is_empty() {
+    let rules: Vec<&FrozenFee> = input
+        .fee_rules
+        .iter()
+        .filter(|rule| !input.waived_fee_ids.contains(&rule.fee_id))
+        .collect();
+    if rules.is_empty() {
         return Ok(fees);
     }
     if !lines_match_bases(input.lines, input.class_bases)? {
         return Err(DomainError::LinesDoNotMatchBases);
     }
     let reductions = input.bill_discount.checked_add(input.comps)?;
-    for rule in input.fee_rules {
+    for rule in rules {
         if let Some(line) = fee_line(rule, input, subtotal, reductions)? {
             fees.total = fees.total.checked_add(line.amount)?;
             for share in &line.class_shares {
@@ -484,6 +504,7 @@ fn fee_line(
         amount,
         class_shares,
         tax: Money::zero(amount.currency_code),
+        waivable: rule.waivable,
     }))
 }
 
@@ -954,6 +975,11 @@ pub fn settle(total_due: Money, payments: &[Payment]) -> Result<Settlement, Doma
 /// A rule that [`FrozenFee::violations`] faults is kept by every part as it is: it applies to
 /// nothing on the whole bill, and to nothing on a part.
 ///
+/// A fee waived on the bill stays waived on every part (ADR-0159 decision 5): a waive follows the
+/// fee's `fee_id`, not the rule's amount, so each part keeps the bill's
+/// [`BillInput::waived_fee_ids`] as they are, and whatever share of a waived fee per bill it keeps
+/// charges nothing.
+///
 /// # Errors
 ///
 /// [`DomainError::Money`] if the nets a rule counts overflow.
@@ -1047,6 +1073,8 @@ pub struct MergingBill<'a> {
     pub fee_rules: &'a [FrozenFee],
     /// The wholes of its fees per bill ([`fee_wholes`] for a bill split from no other).
     pub fee_wholes: &'a [FeeWhole],
+    /// The fees waived on it (ADR-0159 decision 5).
+    pub waived_fee_ids: &'a [FeeId],
 }
 
 /// What a merged bill holds: its fee rules, and the wholes its fees per bill are shares of.
@@ -1056,6 +1084,10 @@ pub struct MergedFees {
     pub fee_rules: Vec<FrozenFee>,
     /// The wholes it keeps, so a later split or merge puts the shares together again.
     pub fee_wholes: Vec<FeeWhole>,
+    /// The fees waived on the merged bill: every fee waived on any bill merged, the holder's
+    /// first, each once (ADR-0159 decision 5). A waive follows the fee, so a fee waived on one
+    /// part of a split stays waived once the parts are put back together.
+    pub waived_fee_ids: Vec<FeeId>,
 }
 
 /// The fee rules a bill holds once `absorbed` are merged into it, the `holder` being the bill the
@@ -1074,6 +1106,10 @@ pub struct MergedFees {
 /// Where bills split from different bills hold different wholes, after a publish between their
 /// openings, the cap is the largest of them. The merged bill keeps every whole any of them held,
 /// at the largest, for the next split or merge.
+///
+/// A fee waived on any of the bills stays waived on the merged bill
+/// ([`MergedFees::waived_fee_ids`]): a waive is not undone by putting bills together, so the
+/// merged bill charges it nothing, on every line it now owes.
 ///
 /// # Errors
 ///
@@ -1137,10 +1173,45 @@ pub fn merge_fee_rules(
         };
         rule.amount = Some(capped);
     }
+    let mut waived_fee_ids: Vec<FeeId> = Vec::new();
+    for fee_id in bills.iter().flat_map(|bill| bill.waived_fee_ids) {
+        if !waived_fee_ids.contains(fee_id) {
+            waived_fee_ids.push(*fee_id);
+        }
+    }
     Ok(MergedFees {
         fee_rules,
         fee_wholes,
+        waived_fee_ids,
     })
+}
+
+/// The rule for `fee_id` as one bill may waive it
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5): one of the rules
+/// the bill froze, `rules`, not already among its `waived` fees, and published as waivable.
+///
+/// Asked before anybody is asked to approve the waive, so a fee that could never be waived costs
+/// nobody a PIN.
+///
+/// # Errors
+///
+/// [`DomainError::FeeNotOnBill`] if the bill froze no rule under `fee_id`, or has waived it
+/// already; [`DomainError::FeeNotWaivable`] if the rule does not let staff waive it.
+pub fn waivable_fee<'a>(
+    rules: &'a [FrozenFee],
+    waived: &[FeeId],
+    fee_id: FeeId,
+) -> Result<&'a FrozenFee, DomainError> {
+    let rule = rules
+        .iter()
+        .find(|rule| rule.fee_id == fee_id)
+        .filter(|_| !waived.contains(&fee_id))
+        .ok_or(DomainError::FeeNotOnBill)?;
+    if rule.waivable {
+        Ok(rule)
+    } else {
+        Err(DomainError::FeeNotWaivable)
+    }
 }
 
 /// Splits a total into `parts` amounts summing **exactly** to it (`pos-spec.md` §14.3).
@@ -1171,7 +1242,7 @@ mod tests {
     use super::{
         BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, FeeWhole, MergedFees,
         MergingBill, Payment, assemble, fee_wholes, merge_fee_rules, settle, split_by_weights,
-        split_evenly, split_fee_rules,
+        split_evenly, split_fee_rules, waivable_fee,
     };
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
@@ -1221,6 +1292,7 @@ mod tests {
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: false,
             fee_rules: &[],
+            waived_fee_ids: &[],
             lines: &[],
         }
     }
@@ -1737,9 +1809,21 @@ mod tests {
         rates: &TaxRateTable,
         adjust: impl FnOnce(&mut BillInput<'_>),
     ) -> Result<BillTotals, DomainError> {
+        assemble_waiving(lines, rules, &[], rates, adjust)
+    }
+
+    /// [`assemble_with`], with the fees `waived` waived on the bill.
+    fn assemble_waiving(
+        lines: &[BillLine],
+        rules: &[FrozenFee],
+        waived: &[FeeId],
+        rates: &TaxRateTable,
+        adjust: impl FnOnce(&mut BillInput<'_>),
+    ) -> Result<BillTotals, DomainError> {
         let bases = bases_of(lines);
         let mut input = base_input(&bases, rates);
         input.fee_rules = rules;
+        input.waived_fee_ids = waived;
         input.lines = lines;
         adjust(&mut input);
         assemble(&input)
@@ -1763,6 +1847,7 @@ mod tests {
             amount: vnd(27_000),
             class_shares: vec![share(food(), 18_000, 1_800), share(alcohol(), 9_000, 1_350)],
             tax: vnd(1_800 + 1_350),
+            waivable: false,
         };
         assert_eq!(totals.fee_lines.first(), Some(&ten));
         assert_eq!(
@@ -2120,6 +2205,7 @@ mod tests {
         let mut merging = bills.iter().map(|fee_rules| MergingBill {
             fee_rules,
             fee_wholes: wholes,
+            waived_fee_ids: &[],
         });
         let holder = merging.next().expect("a holder");
         let absorbed: Vec<MergingBill<'_>> = merging.collect();
@@ -2188,6 +2274,85 @@ mod tests {
             .map(|rule| rule.fee_id.as_ulid().to_u128())
             .collect();
         assert_eq!(order, [2, 1]);
+    }
+
+    #[test]
+    fn a_waived_fee_charges_and_taxes_nothing_and_leaves_the_rest_as_they_were() {
+        // ADR-0159 decision 5. Waiving the service charge leaves the cover as it was, and the bill
+        // is the bill that never froze a service charge at all.
+        let rates = rates();
+        let service = altered(fee(1, FeeKind::Percent, 1_000), |rule| rule.waivable = true);
+        let cover = fee(2, FeeKind::AmountPerBill, 10_000);
+        let rules = [service.clone(), cover.clone()];
+        let without = assemble_waiving(&dinner(), &rules, &[service.fee_id], &rates, |_| {})
+            .expect("assembles");
+        let cover_alone = assemble_with(&dinner(), &[cover], &rates, |_| {}).expect("assembles");
+        assert_eq!(without, cover_alone);
+        assert_reconciles(&without);
+
+        // Charged, the service charge says it may be waived, and the cover that it may not.
+        let charged = assemble_with(&dinner(), &rules, &rates, |_| {}).expect("assembles");
+        let waivable: Vec<bool> = charged.fee_lines.iter().map(|fee| fee.waivable).collect();
+        assert_eq!(waivable, [true, false]);
+
+        // Every fee waived is a bill that froze none.
+        let every = [service.fee_id, FeeId::new(Ulid::from_u128(2))];
+        let bare = assemble_waiving(&dinner(), &rules, &every, &rates, |_| {}).expect("assembles");
+        assert!(bare.fee_lines.is_empty());
+        assert_eq!(
+            bare,
+            assemble_with(&dinner(), &[], &rates, |_| {}).expect("assembles")
+        );
+    }
+
+    #[test]
+    fn only_a_waivable_fee_the_bill_charges_is_waived() {
+        let service = altered(fee(1, FeeKind::Percent, 1_000), |rule| rule.waivable = true);
+        let cover = fee(2, FeeKind::AmountPerBill, 10_000);
+        let rules = [service.clone(), cover.clone()];
+        assert_eq!(waivable_fee(&rules, &[], service.fee_id), Ok(&service));
+        assert_eq!(
+            waivable_fee(&rules, &[], cover.fee_id),
+            Err(DomainError::FeeNotWaivable)
+        );
+        assert_eq!(
+            waivable_fee(&rules, &[service.fee_id], service.fee_id),
+            Err(DomainError::FeeNotOnBill),
+            "waived already"
+        );
+        assert_eq!(
+            waivable_fee(&rules, &[], FeeId::new(Ulid::from_u128(9))),
+            Err(DomainError::FeeNotOnBill),
+            "a rule the bill never froze"
+        );
+    }
+
+    #[test]
+    fn a_fee_waived_on_any_merged_bill_stays_waived_on_the_merge() {
+        // ADR-0159 decision 5: a waive follows the fee's id through a merge, the holder's first.
+        let rules = [
+            fee(1, FeeKind::Percent, 1_000),
+            fee(2, FeeKind::AmountPerBill, 10_000),
+        ];
+        let wholes = fee_wholes(&rules);
+        let service = [FeeId::new(Ulid::from_u128(1))];
+        let cover = [FeeId::new(Ulid::from_u128(2))];
+        let bill = |waived_fee_ids| MergingBill {
+            fee_rules: &rules,
+            fee_wholes: &wholes,
+            waived_fee_ids,
+        };
+        let merged = merge_fee_rules(bill(&cover), &[bill(&[]), bill(&service), bill(&cover)])
+            .expect("merges");
+        assert_eq!(
+            merged.waived_fee_ids,
+            [
+                FeeId::new(Ulid::from_u128(2)),
+                FeeId::new(Ulid::from_u128(1))
+            ]
+        );
+        let none = merge_fee_rules(bill(&[]), &[bill(&[])]).expect("merges");
+        assert!(none.waived_fee_ids.is_empty());
     }
 
     /// A rule from a property test's choices of kind, tax treatment, item scope and value.
@@ -2344,6 +2509,56 @@ mod tests {
                 }
             }
             prop_assert_eq!(placed, i128::from(taxed), "every fee part is in its class's base");
+        }
+
+        /// ADR-0159 decision 5: a waived fee is the rule left off the bill, whatever the rules, the
+        /// lines and the reductions, so it charges nothing, taxes nothing and moves no other fee.
+        #[test]
+        fn waiving_a_fee_is_assembling_the_bill_without_it(
+            sold in prop::collection::vec(
+                (0_u128..3, 1_i64..=4, 1_i64..=5_000_000, any::<bool>()),
+                1..=6,
+            ),
+            discount_percent in 0_i64..=50,
+            choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
+            waiving in prop::collection::vec(any::<bool>(), 4),
+        ) {
+            let class = |is_food: bool| if is_food { food() } else { alcohol() };
+            let lines: Vec<BillLine> = sold
+                .iter()
+                .map(|(n, units, net, is_food)| line(*n, *units, *net, class(*is_food)))
+                .collect();
+            let rules: Vec<FrozenFee> = (1..)
+                .zip(&choices)
+                .map(|(id, (kind, tax, scope, value))| chosen(id, *kind, *tax, *scope, *value))
+                .collect();
+            let waived: Vec<FeeId> = rules
+                .iter()
+                .zip(&waiving)
+                .filter(|(_, waive)| **waive)
+                .map(|(rule, _)| rule.fee_id)
+                .collect();
+            let kept: Vec<FrozenFee> = rules
+                .iter()
+                .filter(|rule| !waived.contains(&rule.fee_id))
+                .cloned()
+                .collect();
+            let sold_total: i64 = lines.iter().map(|line| line.net.amount_minor).sum();
+            let discount = vnd(sold_total * discount_percent / 100);
+            let rates = rates().with(service(), SalesChannel::DineIn, TaxRate::from_percent(8));
+            let with_waives = assemble_waiving(&lines, &rules, &waived, &rates, |input| {
+                input.bill_discount = discount;
+            })
+            .expect("assembles");
+            let without_rules = assemble_with(&lines, &kept, &rates, |input| {
+                input.bill_discount = discount;
+            })
+            .expect("assembles");
+            prop_assert_eq!(&with_waives, &without_rules);
+            prop_assert!(
+                with_waives.fee_lines.iter().all(|fee| !waived.contains(&fee.fee_id)),
+                "a waived fee charges nothing"
+            );
         }
 
         /// ADR-0159 decision 6: the parts of a split bill charge a fee per bill together exactly as

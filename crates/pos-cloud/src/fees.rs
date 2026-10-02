@@ -717,6 +717,8 @@ pub fn sample_bill(
         rounding_mode: Rounding::HalfUp,
         prices_include_tax: facts.prices_include_tax,
         fee_rules: &fee_rules,
+        // A sample bill is charged every fee: a waive is an act on one real bill.
+        waived_fee_ids: &[],
         lines: &bill_lines,
     })
     .map_err(SampleBillError::Assemble)?;

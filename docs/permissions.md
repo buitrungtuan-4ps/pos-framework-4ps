@@ -23,6 +23,7 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `billing.bill.open` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `billing.bill.split` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `billing.payment.take` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
+| `billing.fee.waive` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `cash.drawer.open_no_sale` | CASH_AND_SHIFTS | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
 | `cash.shift.open` | CASH_AND_SHIFTS | LOW | · | ✓ | ✓ | ✓ | ✓ | · | · |
 | `cash.shift.close` | CASH_AND_SHIFTS | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |
