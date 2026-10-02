@@ -3669,6 +3669,91 @@
         }
       }
     },
+    "/admin/stores/{store_id}/permissions/readiness": {
+      "get": {
+        "tags": [
+          "people"
+        ],
+        "summary": "`GET /admin/stores/{store_id}/permissions/readiness` — what each role held at a store does not\ngrant, read before the store enforces each person's own permissions.",
+        "description": "The roles are those the store's `permissions` node is compiled from: every assignment that\nreaches the store, whatever its scope, held by an active person, with an active role. Each is\ncompared with the permission catalogue and nothing else; what anybody did at the till is not\nread (ADR-0070).",
+        "operationId": "admin_permissions_readiness",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The store's tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`store_id`; `enforced`, what the store runs for `permissions.enforced`, with `enforced_scope` and `enforced_scope_id` naming the value's level, both absent for the default; `roles`, one per active role an active person holds at the store through any assignment that reaches it, by name, each with `role_template_id`, `name`, `people` (how many hold it, each once) and `missing` — every permission a store decides that the role grants neither directly nor with approval, as `id`, `group` and `risk`, low risk first and catalogue order within a level; and `people_without_role`, how many people at the store hold no active role there. No person is named"
+          },
+          "400": {
+            "description": "store_id or tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.people.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The people store, the settings store, the registry or the store groups is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/stores/{store_id}/region-acknowledgement": {
       "post": {
         "tags": [
@@ -4073,6 +4158,10 @@
     {
       "name": "settings",
       "description": "Every value a store may run differently (ADR-0160, `docs/configuration.md`). A value is written once, at the tenant, a brand, a store group or one store; each store runs the most specific value that reaches it, and every store a write reaches is republished in the same request. Documented because a fork's own console draws its settings screen from the catalogue here."
+    },
+    {
+      "name": "people",
+      "description": "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and assignment routes are still coverage debt; the readiness read is documented because it is new to this surface, and because a fork's own console needs it before a store enforces each person's own permissions. It names roles and counts people, and names no person."
     },
     {
       "name": "fees",

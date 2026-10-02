@@ -21549,6 +21549,197 @@ async fn an_assignment_to_a_group_needs_one_of_its_tenants_own_open_groups() {
     );
 }
 
+// --- ADR-0158 Rollout: what each role at a store lacks before the store enforces -----------------
+
+/// The readiness read over the people and settings fakes, with the one store these tests read
+/// seeded active.
+fn readiness_app(admin: FakeAdmin, people: &FakePeople, settings: FakeSettings) -> axum::Router {
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let app = app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    );
+    http::router(app).merge(http::permissions_readiness_router(
+        people.clone(),
+        settings,
+        registry,
+        people.groups(),
+        admin,
+        clock(),
+    ))
+}
+
+/// The readiness read's address for `store`.
+fn readiness_url(store: StoreId) -> String {
+    format!(
+        "/admin/stores/{}/permissions/readiness?tenant_id={}",
+        store.as_ulid(),
+        tenant().as_ulid()
+    )
+}
+
+/// Seeds the three people the readiness test reads: Alice as a Cashier at the store, Bao with a
+/// tenant-wide role granting everything a store decides, and Cam with only a role since archived.
+async fn seed_readiness(people: &FakePeople) {
+    let (_alice, _cashier) = seed_a_cashier(people, store_id()).await;
+    let everything: Vec<String> = pos_core::permission::Permission::ALL
+        .iter()
+        .map(|permission| permission.meta())
+        .filter(|meta| meta.group != pos_core::permission::PermissionGroup::CloudAdministration)
+        .map(|meta| meta.id.to_owned())
+        .collect();
+    let (lead, old) = (
+        RoleTemplateId::new(Ulid::from_u128(0x1EAD)),
+        RoleTemplateId::new(Ulid::from_u128(0x01D)),
+    );
+    for (role_template_id, name, permissions) in [(lead, "Lead", everything), (old, "Old", vec![])]
+    {
+        let new = NewRoleTemplate {
+            role_template_id,
+            tenant_id: tenant(),
+            name: name.to_owned(),
+            permissions,
+            permissions_with_approval: Vec::new(),
+            discount_ceiling_minor: None,
+        };
+        RoleTemplateStore::create(people, &new)
+            .await
+            .expect("create role");
+    }
+    people
+        .roles
+        .rows
+        .lock()
+        .expect("lock")
+        .iter_mut()
+        .for_each(|row| {
+            if row.record.role_template_id == old {
+                row.record.status = EntityStatus::Archived;
+            }
+        });
+    let bao = seed_person(people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(people, 0xCA3, "C03", "Cam").await;
+    seed_assignment(people, 2, bao, AssignmentScope::Tenant, lead).await;
+    seed_assignment(people, 3, cam, AssignmentScope::Store(store_id()), old).await;
+}
+
+/// Before a store enforces each person's own permissions, the console reads what each role held
+/// there does not grant (ADR-0158, Rollout). It needs `console.people.read`, as every read of the
+/// store's staff does; it names roles and counts people, and names nobody.
+#[tokio::test]
+async fn the_readiness_read_lists_each_roles_gaps_and_names_nobody() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    seed_readiness(&people).await;
+    let settings = FakeSettings::default();
+    let router = readiness_app(admin.clone(), &people, settings.clone());
+
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-ready"),
+        (AdminRole::Ops, "ops-ready"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&readiness_url(store_id()), &cookie))
+            .await
+            .expect("route the read");
+        assert_eq!(
+            refused.status(),
+            StatusCode::FORBIDDEN,
+            "{role:?} lacks console.people.read"
+        );
+    }
+
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-ready").await;
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(&readiness_url(store_id()), &owner))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    let body = json_body(read).await;
+    assert_eq!(body["store_id"], store_id().as_ulid().to_string());
+    assert_eq!(body["enforced"], false, "the default");
+    assert!(body.get("enforced_scope").is_none() && body.get("enforced_scope_id").is_none());
+    assert_eq!(
+        body["people_without_role"], 1,
+        "Cam holds only an archived role"
+    );
+    let roles = body["roles"].as_array().expect("roles");
+    let names: Vec<&str> = roles
+        .iter()
+        .filter_map(|role| role["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Cashier", "Lead"],
+        "the archived role is not listed"
+    );
+    assert_eq!(roles[0]["people"], 1);
+    assert_eq!(
+        roles[0]["missing"][0],
+        serde_json::json!({ "id": "sales.item.mark_unavailable", "group": "SALES", "risk": "LOW" }),
+        "an everyday permission first, the catalogue's first"
+    );
+    assert!(
+        !roles[0]["missing"]
+            .as_array()
+            .expect("missing")
+            .iter()
+            .any(|permission| permission["id"] == "billing.discount.apply"),
+        "what the role grants is not missing"
+    );
+    assert_eq!(roles[1]["people"], 1, "reached through the tenant");
+    assert_eq!(roles[1]["missing"], serde_json::json!([]));
+    let text = body.to_string();
+    for person in ["Alice", "Bao", "Cam", "C01", "C02", "C03"] {
+        assert!(!text.contains(person), "no person is named: {text}");
+    }
+
+    // The store's own value, and where it comes from.
+    pos_cloud::settings::SettingsStore::put(
+        &settings,
+        tenant(),
+        &pos_cloud::settings::SettingValue {
+            setting_key: "permissions.enforced".to_owned(),
+            scope: Open::from_known(pos_proto::settings::SettingScope::Store),
+            scope_id: store_id().to_string(),
+            value: serde_json::json!(true),
+            update_time: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+        },
+    )
+    .await
+    .expect("write the value");
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(&readiness_url(store_id()), &owner))
+        .await
+        .expect("route the read");
+    let body = json_body(read).await;
+    assert_eq!(body["enforced"], true);
+    assert_eq!(body["enforced_scope"], "SETTING_SCOPE_STORE");
+    assert_eq!(body["enforced_scope_id"], store_id().to_string());
+
+    let elsewhere = router
+        .oneshot(get_with_cookie(
+            &readiness_url(StoreId::new(Ulid::from_u128(0xDEAD))),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+    assert_eq!(
+        elsewhere.status(),
+        StatusCode::NOT_FOUND,
+        "a store the tenant does not have"
+    );
+}
+
 // --- Remote device retirement (`POST /admin/stores/{id}/devices/revoke`, ADR-0118 §6) -----------
 
 /// The main app merged with the device-revoke router, sharing one config-tree fake so the test can

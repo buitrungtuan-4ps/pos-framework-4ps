@@ -397,6 +397,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Before a store enforces each person's own permissions, the console says what each role lacks**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
+  - `GET /admin/stores/{store_id}/permissions/readiness` lists each active role an active person
+    holds at the store, through an assignment of any scope that reaches it. For each it gives the
+    role's id and name, how many people hold it, each once, and `missing`: every permission a store
+    decides that the role grants neither directly nor with approval, with its id, group and risk.
+    Low risk comes first, then medium, then high, in catalogue order within a level. The cloud
+    administration permissions are left out, because no till asks for them. The answer also counts
+    `people_without_role`, the people at the store who hold no active role, and says what the store
+    runs for `permissions.enforced`, with `enforced_scope` and `enforced_scope_id` naming the level
+    that sets it.
+  - It needs `console.people.read`. It names roles and counts people, and names no person. It
+    compares roles with the permission catalogue and nothing else: what anybody did at the till is
+    not read.
+  - **Settings** shows it for one store under **Each person's own permissions**, whichever way the
+    switch is set, as **Before you turn this on**. Each role shows its name, how many people hold
+    it, and what it does not grant, everyday permissions first and each in words, with **Edit**,
+    which opens the role's editor on **People**. The panel says plainly when no role misses an
+    everyday permission, and counts the people who hold no role. Ops and Viewer are told that an
+    owner or an admin can see it. People opens a role's editor from a link that names it
+    (`?role=`).
+  - **Upgrade note:** no migration, event, permission or protocol change. The new route is in
+    `docs/openapi-admin.json`.
+
 - **An assignment reaches one store, a store group or every store**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3). A
   person can be given a role at every store of a store group

@@ -93,6 +93,7 @@ pub mod ota;
 pub mod paging;
 pub mod people;
 pub mod people_compiler;
+pub mod people_readiness;
 mod persistence;
 pub mod providers;
 pub mod qr;

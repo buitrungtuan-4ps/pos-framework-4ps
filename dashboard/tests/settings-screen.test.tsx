@@ -138,6 +138,7 @@ const clearSetting = vi.fn();
 const publishSettings = vi.fn();
 const applySettingPresets = vi.fn();
 const listFleet = vi.fn();
+const permissionsReadiness = vi.fn();
 
 vi.mock("../src/api/client", () => ({
   api: {
@@ -152,6 +153,7 @@ vi.mock("../src/api/client", () => ({
     listBrands: () => Promise.resolve([BRAND]),
     listStoreGroups: () => Promise.resolve([GROUP]),
     listFleet: () => listFleet(),
+    permissionsReadiness: (...args: unknown[]) => permissionsReadiness(...args),
   },
   ApiError: class ApiError extends Error {
     readonly status: number;
@@ -531,6 +533,44 @@ describe("shared settings", () => {
     expect(
       screen.getByText("Not set for this store itself: the switch shows what it runs."),
     ).toBeTruthy();
+  });
+
+  it("lists what each role lacks under one store's enforcement switch, for a role that reads staff", async () => {
+    const enforced = {
+      setting_key: "permissions.enforced",
+      node: "permissions",
+      field: "enforced",
+      kind: "SETTING_KIND_BOOL",
+      default: false,
+      preset: true,
+      scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+      since: "0.14.1",
+    };
+    settingsCatalogue.mockResolvedValue([enforced]);
+    effectiveSettings.mockResolvedValue([]);
+    permissionsReadiness.mockResolvedValue({
+      store_id: CURRENT.store_id,
+      enforced: false,
+      roles: [{ role_template_id: "01ROLEAAAAAAAAAAAAAAAAAAAA", name: "Cashier", people: 2, missing: [] }],
+      people_without_role: 0,
+    });
+    selectStore(CURRENT.store_id, CURRENT.name);
+    await mount();
+    expect(await screen.findByText("Before you turn this on")).toBeTruthy();
+    expect(await screen.findByText("Cashier")).toBeTruthy();
+    expect(permissionsReadiness).toHaveBeenCalledWith(TENANT.id, CURRENT.store_id);
+
+    // Ops reads settings and not staff: it is told who can see the panel, and nothing is read.
+    cleanup();
+    permissionsReadiness.mockClear();
+    signInAs("ops");
+    await mount();
+    expect(
+      await screen.findByText(
+        "An owner or an admin can see here what each role at this store does not grant.",
+      ),
+    ).toBeTruthy();
+    expect(permissionsReadiness).not.toHaveBeenCalled();
   });
 
   it("offers a role that cannot publish nothing to write with", async () => {
