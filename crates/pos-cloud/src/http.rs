@@ -18078,13 +18078,19 @@ where
         }
     };
     let mut results = Vec::with_capacity(stores.len());
+    // Stores left with the permissions switch and no people node beside it, counted and never
+    // named ([`crate::settings::switch_without_people`]).
+    let mut switch_only = 0_usize;
     for store_id in stores {
         let resolved = layout
             .placement(*store_id)
             .map(|placement| crate::settings::resolve_for_store(&values, &placement))
             .unwrap_or_default();
-        let outcome = publish_settings_to_store(state, tenant_id, *store_id, &resolved).await;
-        results.push(match outcome {
+        let published = publish_settings_to_store(state, tenant_id, *store_id, &resolved).await;
+        if published.switch_without_people {
+            switch_only = switch_only.saturating_add(1);
+        }
+        results.push(match published.version {
             Ok(Some(version)) => SettingPublishResult {
                 store_id: store_id.to_string(),
                 outcome: "SETTING_PUBLISH_APPLIED",
@@ -18102,7 +18108,24 @@ where
             },
         });
     }
+    if switch_only > 0 {
+        tracing::warn!(
+            stores = switch_only,
+            "the permissions switch reached stores with no people node beside it: an edge from \
+             0.14.1 on keeps its roster there, and an older one empties it until the store's \
+             people are published (ADR-0158, ADR-0160)"
+        );
+    }
     results
+}
+
+/// What one store's settings publish did.
+struct StorePublish {
+    /// The new version, `None` when the layer already held the store's settings, or `Err` when the
+    /// store could not be read or refused the write.
+    version: Result<Option<ConfigVersionId>, ()>,
+    /// Whether the store is left with the permissions switch and no people node beside it.
+    switch_without_people: bool,
 }
 
 /// Writes one store's resolved settings onto its Tenant layer: the new version, or `None` when the
@@ -18117,7 +18140,7 @@ async fn publish_settings_to_store<St, Rg, Grp, Cfg, A, C>(
     tenant_id: TenantId,
     store_id: StoreId,
     resolved: &[crate::settings::ResolvedSetting],
-) -> Result<Option<ConfigVersionId>, ()>
+) -> StorePublish
 where
     Cfg: ConfigTreeStore,
     C: ClockSource,
@@ -18129,17 +18152,32 @@ where
     };
     let Ok(loaded) = load_tree_for_write(&state.config_trees, tenant_id, store_id).await else {
         tracing::error!(%store_id, "a store's configuration could not be read for a settings publish");
-        return Err(());
+        return StorePublish {
+            version: Err(()),
+            switch_without_people: false,
+        };
     };
     let layer = tenant_layer(loaded.state.as_ref());
     let nodes = crate::settings::tenant_layer_nodes(&layer, resolved);
+    let switch_without_people = crate::settings::switch_without_people(
+        &nodes,
+        loaded
+            .state
+            .as_ref()
+            .map_or(&serde_json::Value::Null, |tree| {
+                tree.layer(ConfigLevel::Store)
+            }),
+    );
     if nodes
         .iter()
         .all(|(node, value)| layer.get(node) == Some(value))
     {
-        return Ok(None);
+        return StorePublish {
+            version: Ok(None),
+            switch_without_people,
+        };
     }
-    match publish_config_nodes_with(
+    let version = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
         tenant_id,
@@ -18159,6 +18197,10 @@ where
             tracing::warn!(%store_id, "a store's configuration refused a settings publish");
             Err(())
         }
+    };
+    StorePublish {
+        version,
+        switch_without_people,
     }
 }
 
@@ -33335,8 +33377,8 @@ mod settings_catalogue_tests {
     //!
     //! The console draws its form from these fields and nothing else, so each kind is pinned: a
     //! choice carries its values; a whole number its bounds and unit and no values; a switch
-    //! neither. The register has no whole number or switch yet, so two are built here, as the
-    //! register's own tests build them.
+    //! neither. A whole number and a switch are built here, as the register's own tests build
+    //! them, so these tests do not move when a register entry does.
 
     use pos_proto::settings::{Setting, SettingScope, SettingShape, SettingUnit, register};
     use serde_json::json;

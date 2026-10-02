@@ -57,7 +57,7 @@ use pos_proto::locale::{NumberFormat, TaxRateTable};
 use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
-use pos_proto::people::PublishedPermissions;
+use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
 use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
@@ -155,6 +155,51 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
         .collect()
 }
 
+/// The staff roster a published `staff` list makes, the one the edge authorises sign-ins against
+/// (ADR-0070), with each discount ceiling in the store's `currency`.
+fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> StaffRoster {
+    let mut roster = StaffRoster::new();
+    for member in staff {
+        let permissions = permission_set_from_ids(&member.permissions);
+        // Held directly wins: a permission listed both ways is one the person acts on alone, so the
+        // with-approval set never overlaps it.
+        let listed_with_approval = permission_set_from_ids(&member.permissions_with_approval);
+        let with_approval: PermissionSet = Permission::ALL
+            .iter()
+            .copied()
+            .filter(|permission| {
+                listed_with_approval.contains(*permission) && !permissions.contains(*permission)
+            })
+            .collect();
+        roster.insert(
+            member.code,
+            StaffAuth {
+                // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
+                // malformed id leaves it `None`, and the roster then refuses to sign that code in
+                // rather than acting as a fabricated identity.
+                employee_id: member
+                    .id
+                    .as_deref()
+                    .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
+                permissions,
+                permissions_with_approval: with_approval,
+                // Given the store's own currency here rather than carried as one: a role is a
+                // tenant's and has no currency, a store has exactly one (its `locale` node), and the
+                // only thing this figure is ever compared against is a bill in that currency. A
+                // negative figure is refused at the cloud's route and by the column, so it cannot
+                // arrive; if one somehow did, dropping it is the safe reading — the ceiling goes back
+                // to being absent, which needs a manager.
+                discount_ceiling: member
+                    .discount_ceiling_minor
+                    .filter(|minor| *minor >= 0)
+                    .map(|minor| Money::new(currency, minor)),
+                pin_phc: member.pin_phc,
+            },
+        );
+    }
+    roster
+}
+
 /// `book` with every channel's names resolved to `language` (ADR-0074), as
 /// [`MenuCatalog::localized`](pos_proto::menu::MenuCatalog::localized) resolves one catalogue's.
 fn localized_book(book: &MenuBook, language: &str) -> MenuBook {
@@ -223,55 +268,23 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     // apply step to be resolved in, so the read needs the language itself (ADR-0074).
     session.display_language.clone_from(&display_language);
     // The `permissions` node the people publish writes (ADR-0070) becomes the staff roster the edge
-    // authorises sign-ins against, replacing any local roster.
-    if let Some(published) = document
-        .get(PublishedPermissions::NODE)
+    // authorises sign-ins against, replacing any local roster, when it carries a `staff` list.
+    let permissions_node = document.get(PublishedPermissions::NODE);
+    if let Some(published) = permissions_node
         .and_then(|value| serde_json::to_string(value).ok())
         .and_then(|text| serde_json::from_str::<PublishedPermissions>(&text).ok())
     {
-        let mut roster = StaffRoster::new();
         // The rollout switch rides the node (ADR-0158): the cloud writes it on the Tenant layer and
         // the merge puts it beside the staff. A node without it keeps the store-wide set.
         session.permissions_enforced = published.enforced;
-        for member in published.staff {
-            let permissions = permission_set_from_ids(&member.permissions);
-            // Held directly wins: a permission listed both ways is one the person acts on alone,
-            // so the with-approval set never overlaps it.
-            let listed_with_approval = permission_set_from_ids(&member.permissions_with_approval);
-            let with_approval: PermissionSet = Permission::ALL
-                .iter()
-                .copied()
-                .filter(|permission| {
-                    listed_with_approval.contains(*permission) && !permissions.contains(*permission)
-                })
-                .collect();
-            roster.insert(
-                member.code,
-                StaffAuth {
-                    // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
-                    // malformed id leaves it `None`, and the roster then refuses to sign that code in
-                    // rather than acting as a fabricated identity.
-                    employee_id: member
-                        .id
-                        .as_deref()
-                        .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok()),
-                    permissions,
-                    permissions_with_approval: with_approval,
-                    // Given the store's own currency here rather than carried as one: a role is a
-                    // tenant's and has no currency, a store has exactly one (its `locale` node), and
-                    // the only thing this figure is ever compared against is a bill in that
-                    // currency. A negative figure is refused at the cloud's route and by the column,
-                    // so it cannot arrive; if one somehow did, dropping it is the safe reading —
-                    // the ceiling goes back to being absent, which needs a manager.
-                    discount_ceiling: member
-                        .discount_ceiling_minor
-                        .filter(|minor| *minor >= 0)
-                        .map(|minor| Money::new(session.currency, minor)),
-                    pin_phc: member.pin_phc,
-                },
-            );
+        // A node with no `staff` list at all is the switch alone: the Tenant layer's setting with no
+        // people node beside it, which is a store the people publish has not reached, or one whose
+        // people node a rollback took away. It sets the switch and keeps the roster, because an
+        // absent list says nothing about who works here. A `staff` list that is present but empty
+        // is a people publish that assigned nobody, and it still empties the roster.
+        if permissions_node.is_some_and(|node| node.get("staff").is_some()) {
+            session.staff = roster_from(published.staff, session.currency);
         }
-        session.staff = roster;
     }
     // The capability flags the config document carries (ADR-0071): top-level booleans keyed by each
     // capability's key (`tables_enabled`, `pay_first_enabled`, …), read the same way the cloud
@@ -1485,6 +1498,43 @@ mod tests {
         // A node without the switch turns it back off: the switch is the node's to say.
         let without = serde_json::json!({ "permissions": { "staff": [] } });
         assert!(!session_from_config(&rebuilt, &without).permissions_enforced);
+    }
+
+    /// A `permissions` node with no `staff` key is the Tenant layer's switch with no people node
+    /// merged beside it (ADR-0160): it sets the switch and keeps the roster, rather than replacing a
+    /// real roster with nobody.
+    #[test]
+    fn a_permissions_node_without_a_staff_list_sets_the_switch_and_keeps_the_roster() {
+        let staffed = session_from_config(&EdgeSession::bootstrap(), &document_with_permissions());
+        assert_eq!(staffed.staff.len(), 2);
+        assert!(!staffed.permissions_enforced);
+
+        let switched = session_from_config(
+            &staffed,
+            &serde_json::json!({ "permissions": { "enforced": true } }),
+        );
+        assert!(switched.permissions_enforced, "the switch applies");
+        assert_eq!(switched.staff.len(), 2, "and the roster is kept");
+        assert!(switched.authorise_staff("C01", "2468").is_some());
+
+        // A node that carries neither still says the switch is off, and still keeps the roster.
+        let cleared = session_from_config(&switched, &serde_json::json!({ "permissions": {} }));
+        assert!(!cleared.permissions_enforced);
+        assert_eq!(cleared.staff.len(), 2);
+    }
+
+    /// A `staff` list that is present and empty is a people publish that assigned nobody to the
+    /// store, so it empties the roster, as it always has.
+    #[test]
+    fn a_permissions_node_with_an_empty_staff_list_still_empties_the_roster() {
+        let staffed = session_from_config(&EdgeSession::bootstrap(), &document_with_permissions());
+        let emptied = session_from_config(
+            &staffed,
+            &serde_json::json!({ "permissions": { "enforced": true, "staff": [] } }),
+        );
+        assert!(emptied.permissions_enforced);
+        assert!(emptied.staff.is_empty(), "nobody is assigned here any more");
+        assert!(emptied.authorise_staff("C01", "2468").is_none());
     }
 
     #[test]

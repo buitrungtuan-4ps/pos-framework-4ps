@@ -388,6 +388,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     required `display_name`; no event has carried either yet. No migration, permission or
     protocol version change.
 
+- **A store can be set to decide with each person's own permissions**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) Rollout,
+  [ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+  The edge has read the `enforced` switch on the `permissions` node since #572, and nothing wrote
+  it.
+  - `permissions.enforced` is a security setting in Shared settings, a switch at any scope:
+    `false` by default, and `true` for a store the console creates. The console's help text warns
+    that turning it on refuses whatever a person's roles do not grant.
+  - The cloud writes it on each store's Tenant layer, and the merge puts it beside the staff the
+    people compiler writes on the Store layer.
+  - A `permissions` node with no `staff` key, which is what a store with no people node receives,
+    now sets the switch and keeps the roster the edge holds. A `staff` list that is present, even
+    empty, still replaces it. An edge from before this release empties its roster for such a
+    node, so a settings publish logs how many stores it left with the switch and no people node,
+    as a count.
+  - **Upgrade note:** every store that exists stays off, because the default is `false`, until
+    someone turns the setting on. A store the console creates after this release enforces each
+    person's own permissions from its first day, so set up its roles, with the permissions each
+    person needs, before it opens. A store whose people the console has not published receives the
+    switch alone. An edge from this release keeps its roster then, and an older one empties it
+    until the people are published. No route, event, migration, permission or protocol version
+    changes.
+
 - **A till left untouched locks, and opens again with its person's PIN**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2, `docs/pos-spec.md` §16). A till stayed signed in as its person until the edge's
@@ -538,7 +561,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `docs/snapshots/settings.txt` lists a whole number's `min=`, `max=` and `unit=`. These may change
     as a default may, because the cloud checks every value when it is written. A switch lists
     `value=false` and `value=true`.
-  - The `session` settings are the first whole numbers. No switch exists yet.
+  - The `session` settings are the first whole numbers, and `permissions.enforced` is the first
+    switch.
   - **Upgrade note:** additive. `values` is absent from the catalogue for a setting that is not a
     choice, and `default` and `preset` are typed JSON rather than always a string. The console this
     cloud serves reads both, and the one existing setting's entry is unchanged. No route, event,

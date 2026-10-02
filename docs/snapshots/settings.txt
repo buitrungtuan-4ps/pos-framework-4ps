@@ -4,6 +4,17 @@
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
 # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+permissions.enforced
+permissions.enforced	default=false
+permissions.enforced	kind=SETTING_KIND_BOOL
+permissions.enforced	preset=true
+permissions.enforced	scope=SETTING_SCOPE_BRAND
+permissions.enforced	scope=SETTING_SCOPE_STORE
+permissions.enforced	scope=SETTING_SCOPE_STORE_GROUP
+permissions.enforced	scope=SETTING_SCOPE_TENANT
+permissions.enforced	since=0.14.1
+permissions.enforced	value=false
+permissions.enforced	value=true
 session.idle_lock_seconds
 session.idle_lock_seconds	default=0
 session.idle_lock_seconds	kind=SETTING_KIND_INT
