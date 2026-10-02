@@ -42,6 +42,7 @@ use store_postgres::{
 use store_postgres::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
+use store_postgres::{FeeRuleRow, FeeRuleSlot as FeeRuleRowSlot, FeeRuleWrite, PostgresFeeRules};
 use store_postgres::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 use store_postgres::{PostgresSettings, SettingSlot};
 use store_postgres::{PostgresStoreGroups, StoreGroupRow};
@@ -65,6 +66,7 @@ use pos_proto::devices::DeviceConnection;
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+use pos_proto::fees::PublishedFee;
 use pos_proto::ids::{
     AreaId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EventId, IngredientId, MenuItemId, ReasonCodeId, StationId, StoreId,
@@ -113,6 +115,7 @@ use crate::devices::{
 use pos_core::lease::LeaseGeneration;
 
 use crate::connections::{Connection, ConnectionStore, ConnectionStoreError};
+use crate::fees::{FeeRule, FeeRuleSlot, FeeRuleStore, FeeRuleStoreError, FeeScope};
 use crate::fleet::{FleetRow, FleetStore, FleetStoreError, OtaReportStore, PrintAgentStanding};
 use crate::floorplan::{
     Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
@@ -2865,6 +2868,89 @@ impl SettingsStore for PostgresSettings {
             .await
             .map_err(|error| SettingsStoreError::new(error.to_string()))
     }
+}
+
+impl FeeRuleStore for PostgresFeeRules {
+    async fn list(&self, tenant_id: TenantId) -> Result<Vec<FeeRule>, FeeRuleStoreError> {
+        let rows = self
+            .fetch(&tenant_id.to_string())
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))?;
+        rows.iter().map(fee_rule_from_row).collect()
+    }
+
+    async fn put(&self, tenant_id: TenantId, rule: &FeeRule) -> Result<(), FeeRuleStoreError> {
+        rule.check_storable()?;
+        let doc_json = serde_json::to_string(&rule.rule).map_err(|error| {
+            FeeRuleStoreError::new(format!("could not serialize a fee rule: {error}"))
+        })?;
+        let fee_id = rule.rule.fee_id.to_string();
+        let slot = FeeRuleRowSlot {
+            scope: rule.scope.as_wire(),
+            scope_id: &rule.scope_id,
+            fee_id: &fee_id,
+        };
+        let write = FeeRuleWrite {
+            doc_json: &doc_json,
+            update_time_ms: rule.update_time.as_milliseconds_since_epoch(),
+            updated_by: &rule.updated_by,
+        };
+        self.upsert(&tenant_id.to_string(), slot, write)
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        slot: FeeRuleSlot<'_>,
+    ) -> Result<bool, FeeRuleStoreError> {
+        let fee_id = slot.fee_id.to_string();
+        let row_slot = FeeRuleRowSlot {
+            scope: slot.scope.as_wire(),
+            scope_id: slot.scope_id,
+            fee_id: &fee_id,
+        };
+        PostgresFeeRules::delete(self, &tenant_id.to_string(), row_slot)
+            .await
+            .map_err(|error| FeeRuleStoreError::new(error.to_string()))
+    }
+}
+
+/// One stored fee rule, read back into the cloud's shape. The rule is parsed from the row's JSON
+/// text (a [`pos_proto::money::Money`] reads only from text), and a row whose scope, rule or time
+/// does not read back, or whose rule names another fee than the row's key, is an error rather than
+/// a rule quietly dropped from a store's list.
+fn fee_rule_from_row(row: &FeeRuleRow) -> Result<FeeRule, FeeRuleStoreError> {
+    let scope = FeeScope::from_wire(&row.scope)
+        .filter(|scope| FeeScope::WRITABLE.contains(scope))
+        .ok_or_else(|| {
+            FeeRuleStoreError::new(format!(
+                "a stored fee rule has an unknown scope `{}`",
+                row.scope
+            ))
+        })?;
+    let rule: PublishedFee = serde_json::from_str(&row.doc_json).map_err(|error| {
+        FeeRuleStoreError::new(format!("a stored fee rule could not be decoded: {error}"))
+    })?;
+    if rule.fee_id.to_string() != row.fee_id {
+        return Err(FeeRuleStoreError::new(
+            "a stored fee rule's id is not the id it is kept under",
+        ));
+    }
+    let update_time =
+        Timestamp::from_milliseconds_since_epoch(row.update_time_ms).map_err(|error| {
+            FeeRuleStoreError::new(format!(
+                "a stored fee rule has an invalid update time: {error}"
+            ))
+        })?;
+    Ok(FeeRule {
+        scope,
+        scope_id: row.scope_id.clone(),
+        rule,
+        update_time,
+        updated_by: row.updated_by.clone(),
+    })
 }
 
 impl InventoryStore for PostgresInventory {
