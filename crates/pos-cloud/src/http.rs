@@ -10987,9 +10987,14 @@ struct CreateStationRequest {
     backup_station_id: Option<String>,
     #[serde(default)]
     is_default: bool,
+    /// When the station's tickets are late, in seconds; absent or `null` for the default. Read as
+    /// any integer so that one out of bounds is refused naming the field, as one too large is.
+    #[serde(default)]
+    late_after_seconds: Option<i64>,
 }
 
-/// Update a station's name, backup, default flag, and status.
+/// Update a station's name, backup, default flag, late threshold, and status. Every field is the
+/// station's whole new state, so an absent threshold is the default again.
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateStationRequest {
     tenant_id: String,
@@ -10998,7 +11003,37 @@ struct UpdateStationRequest {
     backup_station_id: Option<String>,
     #[serde(default)]
     is_default: bool,
+    #[serde(default)]
+    late_after_seconds: Option<i64>,
     status: String,
+}
+
+/// A station's late threshold as a request names it: `None` for the default, or a number of seconds
+/// within [`LATE_AFTER_SECONDS`](pos_proto::floor::LATE_AFTER_SECONDS).
+///
+/// # Errors
+///
+/// A `400` naming `late_after_seconds` for a threshold outside the bounds, which the edge would read
+/// as ten minutes rather than as what the operator typed.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn station_late_after(seconds: Option<i64>) -> Result<Option<u32>, Response> {
+    let Some(seconds) = seconds else {
+        return Ok(None);
+    };
+    u32::try_from(seconds)
+        .ok()
+        .filter(|seconds| pos_proto::floor::LATE_AFTER_SECONDS.contains(seconds))
+        .map(Some)
+        .ok_or_else(|| {
+            api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "late_after_seconds must be from 60 to 3600",
+                &[("late_after_seconds", "OUT_OF_RANGE")],
+            )
+        })
 }
 
 /// Create an item→station routing rule.
@@ -11716,6 +11751,10 @@ where
     else {
         return ulid_refusal(&["backup_station_id"]);
     };
+    let late_after_seconds = match station_late_after(request.late_after_seconds) {
+        Ok(seconds) => seconds,
+        Err(refusal) => return refusal,
+    };
     let Some(station_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StationId::new)
     else {
@@ -11728,6 +11767,7 @@ where
         name: request.name.clone(),
         backup_station_id,
         is_default: request.is_default,
+        late_after_seconds,
     };
     match StationStore::create(&state.floor, &new_station).await {
         Ok(version) => {
@@ -11735,6 +11775,7 @@ where
                 "id": station_id.to_string(),
                 "name": request.name,
                 "is_default": request.is_default,
+                "late_after_seconds": late_after_seconds,
                 "status": EntityStatus::Active.as_str(),
             });
             audit_action(
@@ -11807,12 +11848,17 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    let late_after_seconds = match station_late_after(request.late_after_seconds) {
+        Ok(seconds) => seconds,
+        Err(refusal) => return refusal,
+    };
     let update = StationUpdate {
         station_id,
         tenant_id,
         name: request.name.clone(),
         backup_station_id,
         is_default: request.is_default,
+        late_after_seconds,
         status,
     };
     let expected = match if_match(&headers) {
@@ -11825,6 +11871,7 @@ where
                 "id": station_id.to_string(),
                 "name": request.name,
                 "is_default": request.is_default,
+                "late_after_seconds": late_after_seconds,
                 "status": status.as_str(),
             });
             audit_action(

@@ -82,7 +82,15 @@ export interface OrderLine {
 export interface Station {
   id: string;
   name: string;
+  // How long a ticket at this station waits, in seconds, before the board marks it late.
+  lateAfterSeconds: number;
 }
+
+// How long a ticket waits before the board marks it late when nothing says otherwise: a ticket whose
+// station the store did not publish, or an edge too old to send each station's own threshold. Ten
+// minutes, what every board used before a station could say (ADR-0160 decision 2).
+export const DEFAULT_LATE_AFTER_SECONDS = 600;
+
 
 export interface TableCard {
   id: string;
@@ -409,12 +417,22 @@ export async function loadFloor(): Promise<void> {
       draft.stations = (response.stations.stations ?? []).map((station) => ({
         id: station.station_id,
         name: station.name,
+        lateAfterSeconds: station.late_after_seconds ?? DEFAULT_LATE_AFTER_SECONDS,
       }));
     }),
   );
 }
 
 // ---- reading ----------------------------------------------------------------
+
+// The threshold the board marks a ticket at `stationId` late after: its station's, as the edge sent
+// it, or the default for a station the store did not publish.
+export function lateAfterSeconds(stationId: string | undefined): number {
+  return (
+    state.stations.find((station) => station.id === stationId)?.lateAfterSeconds ??
+    DEFAULT_LATE_AFTER_SECONDS
+  );
+}
 
 export function tableState(tableId: string): string {
   return state.tableState[tableId] ?? "TABLE_STATE_FREE";

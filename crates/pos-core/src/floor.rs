@@ -207,11 +207,13 @@ mod tests {
                 station_id: station(1),
                 name: DisplayName::new("Oven"),
                 backup_station_id: Some(station(2)),
+                late_after_seconds: None,
             })
             .with_station(KitchenStation {
                 station_id: station(2),
                 name: DisplayName::new("Bar"),
                 backup_station_id: None,
+                late_after_seconds: None,
             })
     }
 
@@ -237,6 +239,7 @@ mod tests {
             station_id: station(1),
             name: DisplayName::new("Oven"),
             backup_station_id: Some(station(9)),
+            late_after_seconds: None,
         });
         assert_eq!(station_violations(&plan).len(), 1);
     }
@@ -247,6 +250,7 @@ mod tests {
             station_id: station(1),
             name: DisplayName::new("Oven"),
             backup_station_id: Some(station(1)),
+            late_after_seconds: None,
         });
         assert_eq!(station_violations(&plan).len(), 1);
     }

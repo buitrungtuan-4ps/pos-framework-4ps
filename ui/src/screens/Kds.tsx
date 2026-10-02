@@ -13,6 +13,7 @@ import { can } from "../state/permissions";
 import {
   bump,
   kitchenTickets,
+  lateAfterSeconds,
   loadLiveOrders,
   modifierNames,
   noteLost,
@@ -38,14 +39,6 @@ import {
 // and a full second on a cheap tablet (finding F3) — and a cook's tap could land on a card in the
 // middle of being replaced. Cards are keyed by the ticket's stable key now, and each one reads its
 // lines out of the store, so a change updates the card it touches and nothing else.
-
-/// How long a ticket may wait before the board says so, in seconds.
-///
-/// A default, and the wrong *kind* of value to hold here: how long is too long is a fact about a
-/// kitchen, not about this screen, so it belongs in the store's configuration pack with the rest of
-/// what a store sets (`AGENTS.md` §1). It is a constant until that field exists, rather than a
-/// number buried in a class list.
-const LATE_AFTER_SECONDS = 600;
 
 /// The board's clock, ticking once a second.
 ///
@@ -407,9 +400,12 @@ export function Kds() {
           {(key) => {
             const ticket = () => byKey().get(key);
             const waited = () => waitedSeconds(ticket()?.firedTime, now());
+            // How long is too long is a fact about the kitchen, not about this screen: each station
+            // publishes its own threshold (ADR-0160 decision 2), so a ticket is late by its own
+            // station's, whichever station's board or "all stations" shows it.
             const late = () => {
               const seconds = waited();
-              return seconds !== null && seconds >= LATE_AFTER_SECONDS;
+              return seconds !== null && seconds >= lateAfterSeconds(ticket()?.stationId);
             };
             return (
               <Show when={ticket()}>

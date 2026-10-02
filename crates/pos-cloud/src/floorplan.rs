@@ -238,6 +238,9 @@ pub struct Station {
     pub backup_station_id: Option<StationId>,
     /// Whether this is the store's catch-all station (a fired line with no matching rule).
     pub is_default: bool,
+    /// How long a ticket at this station waits, in seconds, before the kitchen display marks it
+    /// late, or `None` for the default the edge reads (ADR-0160 decision 2).
+    pub late_after_seconds: Option<u32>,
     /// Active or archived.
     pub status: EntityStatus,
 }
@@ -257,9 +260,11 @@ pub struct NewStation {
     pub backup_station_id: Option<StationId>,
     /// Whether it is the catch-all.
     pub is_default: bool,
+    /// When its tickets are late, in seconds, or `None` for the default.
+    pub late_after_seconds: Option<u32>,
 }
 
-/// An update to a station's name, backup, default flag, and/or status.
+/// An update to a station's name, backup, default flag, late threshold, and/or status.
 #[derive(Debug, Clone)]
 pub struct StationUpdate {
     /// The station to change.
@@ -272,6 +277,8 @@ pub struct StationUpdate {
     pub backup_station_id: Option<StationId>,
     /// Whether it is now the catch-all.
     pub is_default: bool,
+    /// When its tickets are now late, in seconds, or `None` for the default.
+    pub late_after_seconds: Option<u32>,
     /// The new status (archiving retires the station without deleting it).
     pub status: EntityStatus,
 }
@@ -375,7 +382,8 @@ pub trait StationStore {
         station_id: StationId,
     ) -> impl Future<Output = Result<Option<Versioned<Station>>, FloorStoreError>> + Send;
 
-    /// Updates a station's name, backup, default flag, and status. Applies only at `expected`.
+    /// Updates a station's name, backup, default flag, late threshold, and status. Applies only at
+    /// `expected`.
     ///
     /// # Errors
     ///

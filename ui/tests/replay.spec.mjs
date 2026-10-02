@@ -922,6 +922,60 @@ test("the kitchen board counts how long a ticket has waited, and marks it late",
   }
 });
 
+// Each kitchen station says when its tickets are late (ADR-0160 decision 2).
+//
+// The `kitchen-stations` store publishes a kitchen whose tickets are late after two minutes and a
+// bar that sets nothing, so is late after the ten every board used before. The iced tea goes to the
+// bar and the salad to the kitchen, so one order puts a ticket on each, and each must turn late at
+// its own station's threshold: on the board for every station, where both are drawn side by side,
+// and on each station's own board.
+test("each kitchen ticket turns late at its own station's threshold", async ({ page }) => {
+  const edge = await startEdge("kitchen-stations");
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendOrder(page);
+    await navigateTo(page, "/kds");
+
+    // On the board for every station, each ticket names its station.
+    const at = (name) => page.locator('[data-step="onBump"]', { hasText: ` · ${name}` });
+    await expect(at("Kitchen")).toHaveAttribute("data-outcome", "ticket-waiting");
+    await expect(at("Bar")).toHaveAttribute("data-outcome", "ticket-waiting");
+
+    // Ninety seconds in, both are on time.
+    await page.clock.fastForward(90_000);
+    await expect(at("Kitchen")).toHaveAttribute("data-outcome", "ticket-waiting");
+    await expect(at("Bar")).toHaveAttribute("data-outcome", "ticket-waiting");
+
+    // Past the kitchen's two minutes: its ticket is late, and the bar's is not.
+    await page.clock.fastForward(60_000);
+    await expect(at("Kitchen")).toHaveAttribute("data-outcome", "ticket-late");
+    await expect(at("Bar")).toHaveAttribute("data-outcome", "ticket-waiting");
+
+    // The same on each station's own board, where a ticket no longer names its station.
+    const only = page.locator('[data-step="onBump"]');
+    await page.getByRole("tab", { name: "Kitchen" }).click();
+    await expect(only).toHaveCount(1);
+    await expect(only).toHaveAttribute("data-outcome", "ticket-late");
+    await page.getByRole("tab", { name: "Bar" }).click();
+    await expect(only).toHaveCount(1);
+    await expect(only).toHaveAttribute("data-outcome", "ticket-waiting");
+
+    // Past ten minutes, the bar's ticket is late too, on its own board and on everybody's.
+    await page.clock.fastForward(8 * 60 * 1000);
+    await expect(only).toHaveAttribute("data-outcome", "ticket-late");
+    await page.getByRole("tab", { name: "All stations" }).click();
+    await expect(at("Bar")).toHaveAttribute("data-outcome", "ticket-late");
+    await expect(at("Kitchen")).toHaveAttribute("data-outcome", "ticket-late");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The kitchen board rings when new food reaches it, once a cook has turned its sound on — and not
 // for what was already on the board when it came on.
 //

@@ -1119,7 +1119,12 @@ export const api = {
   createStation: (
     tenantId: string,
     storeId: string,
-    fields: { name: string; backupStationId: string | null; isDefault: boolean },
+    fields: {
+      name: string;
+      backupStationId: string | null;
+      isDefault: boolean;
+      lateAfterSeconds: number | null;
+    },
   ) =>
     requestJson<CreatedId>("POST", "/admin/kitchen/stations", {
       tenant_id: tenantId,
@@ -1127,7 +1132,10 @@ export const api = {
       name: fields.name,
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
+      late_after_seconds: fields.lateAfterSeconds,
     }),
+  // The station's whole new state: a field left out is cleared, so archiving or restoring a station
+  // sends back what it has.
   updateStation: (
     stationId: string,
     tenantId: string,
@@ -1135,6 +1143,7 @@ export const api = {
       name: string;
       backupStationId: string | null;
       isDefault: boolean;
+      lateAfterSeconds: number | null;
       status: EntityStatus;
     },
     etag: ETag,
@@ -1144,6 +1153,7 @@ export const api = {
       name: fields.name,
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
+      late_after_seconds: fields.lateAfterSeconds,
       status: fields.status,
     }),
   listRoutingRules: (tenantId: string, storeId: string) =>

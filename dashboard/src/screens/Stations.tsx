@@ -1,6 +1,7 @@
 // Kitchen stations & routing (ADR-0072, Track M2), on the F2 CRUD kit. The operator's place to define
-// a store's kitchen stations — each with an optional backup (printer failover) and a catch-all default
-// flag — and the rules that route a fired line to a station by item. All by name, no ULID typed.
+// a store's kitchen stations — each with an optional backup (printer failover), a catch-all default
+// flag and when its tickets are late (ADR-0160 decision 2) — and the rules that route a fired line to
+// a station by item. All by name, no ULID typed.
 // Stations and routing are per-store, so this screen needs a store chosen in the top bar; items come
 // from the tenant's catalog. None of this is PII.
 //
@@ -43,6 +44,20 @@ import {
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
 
+/**
+ * The seconds a station's "Late after" field asks for: `null` for an empty field, which leaves the
+ * station on the store's ten minutes, or a whole number of minutes from 1 to 60 as seconds. Anything
+ * else is `undefined`, a value the form refuses rather than sends (ADR-0160 decision 2).
+ */
+export function lateAfterSecondsFrom(minutes: string): number | null | undefined {
+  const text = minutes.trim();
+  if (text === "") {
+    return null;
+  }
+  const whole = Number(text);
+  return Number.isInteger(whole) && whole >= 1 && whole <= 60 ? whole * 60 : undefined;
+}
+
 export function Stations() {
   // The three reads in one state: stations, the rules that name them, and the items the rules point
   // at. Useless apart — a rules table with raw ULIDs where station and item names belong is worse
@@ -83,6 +98,8 @@ export function Stations() {
   const [stationName, setStationName] = createSignal("");
   const [stationBackup, setStationBackup] = createSignal("");
   const [stationDefault, setStationDefault] = createSignal(false);
+  // Minutes as the operator types them; seconds are what the station stores.
+  const [stationLateAfter, setStationLateAfter] = createSignal("");
   const [pendingStationArchive, setPendingStationArchive] = createSignal<Station | null>(null);
 
   // New routing rule (station + item + sort) and the pending remove.
@@ -119,6 +136,7 @@ export function Stations() {
     setStationName("");
     setStationBackup("");
     setStationDefault(false);
+    setStationLateAfter("");
     setStationOpen(true);
   };
   const openEditStation = (station: Station) => {
@@ -127,6 +145,9 @@ export function Stations() {
     setStationName(station.name);
     setStationBackup(station.backup_station_id ?? "");
     setStationDefault(station.is_default);
+    setStationLateAfter(
+      station.late_after_seconds === null ? "" : String(station.late_after_seconds / 60),
+    );
     setStationOpen(true);
   };
 
@@ -134,6 +155,11 @@ export function Stations() {
     const name = stationName().trim();
     if (!name) {
       setError(t("stations.nameRequired"));
+      return;
+    }
+    const lateAfterSeconds = lateAfterSecondsFrom(stationLateAfter());
+    if (lateAfterSeconds === undefined) {
+      setError(t("stations.lateAfterInvalid"));
       return;
     }
     setError("");
@@ -147,6 +173,7 @@ export function Stations() {
             name,
             backupStationId: stationBackup() || null,
             isDefault: stationDefault(),
+            lateAfterSeconds,
             status: "active",
           },
           stationDraftEtag(),
@@ -157,6 +184,7 @@ export function Stations() {
           name,
           backupStationId: stationBackup() || null,
           isDefault: stationDefault(),
+          lateAfterSeconds,
         });
         toast.ok(t("stations.stationCreated"));
       }
@@ -184,6 +212,7 @@ export function Stations() {
           name: station.name,
           backupStationId: station.backup_station_id,
           isDefault: station.is_default,
+          lateAfterSeconds: station.late_after_seconds,
           status,
         },
         station.etag,
@@ -286,6 +315,17 @@ export function Stations() {
       cell: (row) => (
         <span class="text-ink-muted">
           {row.backup_station_id ? stationName_(row.backup_station_id) : t("stations.noBackup")}
+        </span>
+      ),
+    },
+    {
+      key: "lateAfter",
+      header: t("stations.lateAfterColumn"),
+      cell: (row) => (
+        <span class="text-ink-muted">
+          {row.late_after_seconds === null
+            ? t("stations.lateAfterDefault")
+            : t("stations.lateAfterMinutes", { count: row.late_after_seconds / 60 })}
         </span>
       ),
     },
@@ -529,6 +569,13 @@ export function Stations() {
                 .map((station) => ({ value: station.station_id, label: station.name }))}
               onChange={setStationBackup}
               placeholder={t("stations.noBackup")}
+            />
+            <TextField
+              label={t("stations.lateAfter")}
+              type="number"
+              value={stationLateAfter()}
+              onInput={setStationLateAfter}
+              hint={t("stations.lateAfterHint")}
             />
             <CheckboxField
               label={t("stations.default")}
