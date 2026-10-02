@@ -1,13 +1,14 @@
 // Reports & analytics for the store in context (ADR-0081, Track O4). A windowed view over the
 // materialised rollups: activity counts (everyone), and — for Owner/Admin, because prices are T2 —
-// revenue, product mix, an X/Z report, and a cross-store comparison. Charts are hand-rolled inline
-// SVG (no chart library, so nothing to load past the CSP). The operator sets the tenant/store in the
-// top bar; the date-range window defaults to the server's most recent 90 trading days.
+// revenue, its fees by code, product mix, an X/Z report, and a cross-store comparison. Charts are
+// hand-rolled inline SVG (no chart library, so nothing to load past the CSP). The operator sets the
+// tenant/store in the top bar; the date-range window defaults to the server's most recent 90
+// trading days.
 
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { DailyRevenue, DailyRollup, Store, XzReport } from "../api/types";
+import type { DailyRevenue, DailyRollup, FeeTotal, Store, XzReport } from "../api/types";
 import { t } from "../i18n";
 import { formatCount } from "../lib/format";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -174,6 +175,25 @@ export function Reports() {
       }
     }
     return [...totals.values()].sort((a, b) => b.value - a.value).slice(0, 10);
+  });
+
+  // Each fee over the window, by code (ADR-0159): the days' totals summed, under the latest day's
+  // name, and in code order as the export lists them.
+  const feeTotals = createMemo(() => {
+    const totals = new Map<string, FeeTotal & { code: string }>();
+    for (const day of revenue()) {
+      for (const [code, fee] of Object.entries(day.by_fee)) {
+        const held = totals.get(code);
+        totals.set(code, {
+          code,
+          name: fee.name || (held?.name ?? ""),
+          bills: (held?.bills ?? 0) + fee.bills,
+          amount: (held?.amount ?? 0) + fee.amount,
+          tax: (held?.tax ?? 0) + fee.tax,
+        });
+      }
+    }
+    return [...totals.values()].sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
   });
 
   const revenueCurrency = () => revenue().find((day) => day.currency_code)?.currency_code ?? "";
@@ -367,6 +387,55 @@ export function Reports() {
                   </table>
                 </div>
               </Show>
+            </Card>
+
+            {/* Fees by code (ADR-0159) */}
+            <Card
+              title={t("reports.feesTitle")}
+              actions={
+                <Button
+                  variant="secondary"
+                  disabled={busy()}
+                  onClick={() => void api.exportRevenueFeesCsv(tenantId(), storeId(), win())}
+                >
+                  {t("reports.exportCsv")}
+                </Button>
+              }
+            >
+              <Show
+                when={feeTotals().length > 0}
+                fallback={<p class="text-sm text-ink-muted">{t("reports.feesEmpty")}</p>}
+              >
+                <div class="overflow-x-auto">
+                  <table class="w-full text-left text-sm">
+                    <thead>
+                      <tr class="border-b border-line text-ink-muted">
+                        <th class="py-2 pr-4 font-medium">{t("reports.feeName")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("reports.feeCode")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("reports.bills")}</th>
+                        <th class="py-2 pr-4 font-medium">{t("reports.feeAmount")}</th>
+                        <th class="py-2 font-medium">{t("reports.tax")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <For each={feeTotals()}>
+                        {(fee) => (
+                          <tr class="border-b border-line text-ink">
+                            <td class="py-2 pr-4">{fee.name}</td>
+                            <td class="py-2 pr-4 font-mono">{fee.code}</td>
+                            <td class="py-2 pr-4">{formatCount(fee.bills)}</td>
+                            <td class="py-2 pr-4 font-medium">
+                              {money(fee.amount, revenueCurrency())}
+                            </td>
+                            <td class="py-2">{money(fee.tax, revenueCurrency())}</td>
+                          </tr>
+                        )}
+                      </For>
+                    </tbody>
+                  </table>
+                </div>
+              </Show>
+              <p class="mt-2 text-sm text-ink-muted">{t("reports.feesHint")}</p>
             </Card>
 
             {/* Product mix */}

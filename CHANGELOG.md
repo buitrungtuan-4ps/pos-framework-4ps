@@ -382,6 +382,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Reports show each fee under its code** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decision 4).
+  - The revenue rollup folds each settled bill's `fee_lines` into the day's `by_fee`: per fee
+    code, the name the latest bill recorded, the bills that charged it, what it charged and the
+    tax on it. A line that charged nothing counts no bill. `service_charge` is unchanged, and is
+    still the sum of every fee. A bill settled by an edge from before fee lines adds to
+    `service_charge` and to no code, and no bucket stands in for the difference.
+  - `GET /admin/stores/{store_id}/revenue/fees/export` downloads `revenue-fees.csv`, one row per
+    trading day per fee code: `business_date,currency_code,fee_code,fee_name,bills,amount,tax`.
+    It takes the revenue export's window and permission, `console.reports.revenue`, and is
+    audited as `reports.export_revenue_fees` with its row count. `revenue.csv` is unchanged,
+    header included.
+  - The console's Reports screen has a **Fees** card under Revenue, for owners and admins: each
+    fee summed over the date range, with **Export CSV**.
+  - What a waive forgave is not reported: `billing.fee.waived` carries no amount.
+  - **Upgrade note:** a store's stored rollup gains `by_fee` from its cursor forward, so a day
+    folded before the upgrade shows no fees, and the day of the upgrade only those folded after
+    it. To backfill, reset the store's rollup (ADR-0036's reset-cursor-and-replay: **Rebuild from
+    the log** on the Reconcile screen, or `POST /admin/stores/{store_id}/rollups/reset`), and the
+    next projector pass re-folds the whole log. Every `DailyRevenue` the cloud serves, the X/Z
+    report's included, gains `by_fee`, additively. The new route is in `docs/openapi-admin.json`.
+    No event, migration, permission, default or protocol change.
+
 - **The till waives a fee on one bill** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
   decision 5).
   - `POST /api/bills/{id}/fees/{fee_id}/waive` takes the reason, and an approver's code and PIN

@@ -3786,6 +3786,110 @@ async fn the_roster_read_refuses_an_identifier_that_is_not_a_ulid() {
     }
 }
 
+// --- Fees by code (`GET /admin/stores/{id}/revenue/fees/export`, ADR-0159 decision 4) -----------
+
+#[tokio::test]
+async fn the_fees_export_is_a_row_per_day_per_code_and_needs_the_revenue_permission() {
+    // Seeded directly, in the stored blob's own shape, as the roster's read is: what is under test
+    // is the route. The fold that fills `by_fee` has its own tests, and so has its
+    // materialised-equals-a-re-scan property.
+    let day = |date: &str, by_fee: serde_json::Value| {
+        serde_json::json!({
+            "business_date": date, "currency_code": "VND", "bills": 4, "gross": 400_000,
+            "reductions": 0, "service_charge": 20_000, "tax": 32_000, "net": 452_000,
+            "by_item": {}, "by_fee": by_fee,
+        })
+    };
+    let seeded: StoredRollups =
+        serde_json::from_value(serde_json::json!({ "days": {}, "revenue": {
+            "2026-03-15": day("2026-03-15", serde_json::json!({
+                "SVC": { "name": "Service charge", "bills": 3, "amount": 15_000, "tax": 1_200 },
+                "PACK": { "name": "Packaging", "bills": 1, "amount": 5_000, "tax": 0 },
+            })),
+            "2026-03-16": day("2026-03-16", serde_json::json!({})),
+            "2026-03-17": day("2026-03-17", serde_json::json!({
+                "SVC": { "name": "Phí phục vụ", "bills": 2, "amount": 10_000, "tax": 800 },
+            })),
+        }}))
+        .expect("a stored rollup");
+    let rollups = FakeRollups::default();
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the revenue");
+    let audit = FakeAudit::default();
+    let admin = provisioned_admin();
+    let app = app_with_admin(
+        Cloud::new(FakeStore::new()),
+        rollups,
+        FakeKeys::default(),
+        admin.clone(),
+    );
+    let router = http::router(app.with_audit(Arc::new(AuditSink::new(audit.clone()))));
+    let uri = format!(
+        "/admin/stores/{}/revenue/fees/export?tenant_id={}&from=2026-03-15&to=2026-03-17",
+        store_id().as_ulid(),
+        tenant().as_ulid()
+    );
+
+    // A fee's takings are prices, so T2: a role that may read the console but not revenue is
+    // refused, as the revenue export refuses it.
+    for (role, token) in [
+        (AdminRole::Viewer, "viewer-fees"),
+        (AdminRole::Ops, "ops-fees"),
+    ] {
+        let cookie = role_session_cookie(&admin, role, token).await;
+        let refused = router
+            .clone()
+            .oneshot(get_with_cookie(&uri, &cookie))
+            .await
+            .expect("route the export");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{role:?}");
+    }
+
+    let cookie = role_session_cookie(&admin, AdminRole::Admin, "admin-fees").await;
+    let exported = router
+        .oneshot(get_with_cookie(&uri, &cookie))
+        .await
+        .expect("route the export");
+    assert_eq!(exported.status(), StatusCode::OK);
+    let headers = exported.headers();
+    assert_eq!(
+        [&headers["content-type"], &headers["content-disposition"]],
+        [
+            "text/csv; charset=utf-8",
+            "attachment; filename=\"revenue-fees.csv\""
+        ]
+    );
+    // One row per day per code, oldest day first and then by code; the day with no fee has none.
+    assert_eq!(
+        text_body(exported).await,
+        "business_date,currency_code,fee_code,fee_name,bills,amount,tax\n\
+         2026-03-15,VND,PACK,Packaging,1,5000,0\n\
+         2026-03-15,VND,SVC,Service charge,3,15000,1200\n\
+         2026-03-17,VND,SVC,Phí phục vụ,2,10000,800\n"
+    );
+
+    // Audited by the rows it exported, never their contents.
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let entry = recorded
+        .iter()
+        .find(|entry| entry.action == "reports.export_revenue_fees")
+        .expect("the export was recorded");
+    assert_eq!(
+        (
+            entry.tenant_id,
+            entry.entity_id.clone(),
+            entry.after.clone()
+        ),
+        (
+            Some(tenant()),
+            store_id().to_string(),
+            Some(serde_json::json!({ "domain": "revenue_fees", "rows": 3 }))
+        )
+    );
+}
+
 // --- The `/internal` shared secret (ADR-0097) ---------------------------------------------------
 
 /// A `POST` to an `/internal` route with a wrong key, or none at all.

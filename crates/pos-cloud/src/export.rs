@@ -127,10 +127,11 @@ pub fn rollups_csv(days: &[DailyRollup]) -> Result<Vec<u8>, csv::Error> {
     finish(writer)
 }
 
-/// Serialises a store's daily revenue rollups to CSV: one row per trading day with the settled totals
-/// (ADR-0081, Track O4). Amounts are the store's currency's minor units. Revenue is **T2**, so the
-/// route gates this on `console.reports.revenue` and audits only the row count. The product mix
-/// (`by_item`) is two-dimensional and not flattened here — the daily totals are the export.
+/// Serialises a store's daily revenue rollups to CSV: one row per trading day with the settled
+/// totals (ADR-0081, Track O4). Amounts are the store's currency's minor units. Revenue is **T2**,
+/// so the route gates this on `console.reports.revenue` and audits only the row count. The product
+/// mix (`by_item`) is two-dimensional and not flattened here — the daily totals are the export —
+/// and the fees by code (`by_fee`) are an export of their own, [`revenue_fees_csv`].
 ///
 /// # Errors
 ///
@@ -162,12 +163,53 @@ pub fn revenue_csv(days: &[DailyRevenue]) -> Result<Vec<u8>, csv::Error> {
     finish(writer)
 }
 
+/// Serialises a store's daily fees by code to CSV, long-format: one row per trading day per fee
+/// code the day's settled bills charged, with the fee's name, how many bills charged it, what it
+/// charged and the tax on it ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision
+/// 4). Days oldest-first as `days` holds them, and codes in order within a day; a day that charged
+/// no fee has no row. Amounts are the store's currency's minor units, and T2 like [`revenue_csv`],
+/// whose header this leaves as it is.
+///
+/// A bill settled by an edge from before fee lines is in `revenue.csv`'s `service_charge` and in
+/// no row here ([`DailyRevenue::by_fee`]).
+///
+/// # Errors
+///
+/// A `csv::Error` if serialisation fails.
+pub fn revenue_fees_csv(days: &[DailyRevenue]) -> Result<Vec<u8>, csv::Error> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer.write_record([
+        "business_date",
+        "currency_code",
+        "fee_code",
+        "fee_name",
+        "bills",
+        "amount",
+        "tax",
+    ])?;
+    for day in days {
+        for (code, fee) in &day.by_fee {
+            writer.write_record([
+                day.business_date.clone(),
+                day.currency_code.clone(),
+                code.clone(),
+                fee.name.clone(),
+                fee.bills.to_string(),
+                fee.amount.to_string(),
+                fee.tax.to_string(),
+            ])?;
+        }
+    }
+    finish(writer)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{items_csv, revenue_csv, rollups_csv, translations_csv};
+    use super::{items_csv, revenue_csv, revenue_fees_csv, rollups_csv, translations_csv};
     use crate::catalog::{CatalogItem, ItemCategoryId};
+    use crate::cloud::{DailyRevenue, FeeTotal};
     use crate::registry::EntityStatus;
     use crate::translations::TranslationGrid;
     use pos_proto::ids::{MenuItemId, TaxClassId, TenantId};
@@ -264,10 +306,10 @@ mod tests {
         assert_eq!(lines.next().unwrap(), "2026-03-15,42");
     }
 
-    #[test]
-    fn revenue_csv_carries_the_daily_totals() {
-        let day = crate::cloud::DailyRevenue {
-            business_date: "2026-03-15".to_owned(),
+    /// A day of three settled bills that charged `fees`, each as (code, name, bills, amount, tax).
+    fn revenue_day(date: &str, fees: &[(&str, &str, u64, i64, i64)]) -> DailyRevenue {
+        DailyRevenue {
+            business_date: date.to_owned(),
             currency_code: "VND".to_owned(),
             bills: 3,
             gross: 300_000,
@@ -276,7 +318,28 @@ mod tests {
             tax: 24_000,
             net: 319_000,
             by_item: BTreeMap::new(),
-        };
+            by_fee: fees
+                .iter()
+                .map(|&(code, name, bills, amount, tax)| {
+                    let name = name.to_owned();
+                    (
+                        code.to_owned(),
+                        FeeTotal {
+                            name,
+                            bills,
+                            amount,
+                            tax,
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn revenue_csv_carries_the_daily_totals() {
+        // A day with fees still exports the same eight columns: they are their own export.
+        let day = revenue_day("2026-03-15", &[("SVC", "Service charge", 3, 15_000, 1_200)]);
         let csv = as_string(revenue_csv(&[day]).expect("serialise"));
         let mut lines = csv.lines();
         assert_eq!(
@@ -286,6 +349,44 @@ mod tests {
         assert_eq!(
             lines.next().unwrap(),
             "2026-03-15,VND,3,300000,20000,15000,24000,319000"
+        );
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn revenue_fees_csv_has_a_row_per_day_per_fee_code() {
+        let days = [
+            revenue_day(
+                "2026-03-15",
+                &[
+                    ("SVC", "Service charge", 3, 12_000, 960),
+                    ("PACK", "Packaging, per box", 1, 3_000, 0),
+                ],
+            ),
+            // A day that charged no fee has no row.
+            revenue_day("2026-03-16", &[]),
+            revenue_day("2026-03-17", &[("SVC", "Phí phục vụ", 2, 8_000, 640)]),
+        ];
+        let csv = as_string(revenue_fees_csv(&days).expect("serialise"));
+        assert_eq!(
+            csv.lines().collect::<Vec<_>>(),
+            [
+                "business_date,currency_code,fee_code,fee_name,bills,amount,tax",
+                // Oldest day first, then by code; a name with a comma is quoted.
+                "2026-03-15,VND,PACK,\"Packaging, per box\",1,3000,0",
+                "2026-03-15,VND,SVC,Service charge,3,12000,960",
+                "2026-03-17,VND,SVC,Phí phục vụ,2,8000,640",
+            ]
+        );
+    }
+
+    #[test]
+    fn revenue_fees_csv_of_a_window_with_no_fees_is_its_header() {
+        let csv =
+            as_string(revenue_fees_csv(&[revenue_day("2026-03-15", &[])]).expect("serialise"));
+        assert_eq!(
+            csv,
+            "business_date,currency_code,fee_code,fee_name,bills,amount,tax\n"
         );
     }
 }
