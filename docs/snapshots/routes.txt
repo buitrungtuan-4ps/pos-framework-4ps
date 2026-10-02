@@ -28,6 +28,7 @@ GET /api/tables/{id}/check
 POST /api/activate
 POST /api/bills/{id}/check/print
 POST /api/bills/{id}/discount
+POST /api/bills/{id}/fees/{fee_id}/waive
 POST /api/bills/{id}/merge
 POST /api/bills/{id}/receipt/reprint
 POST /api/bills/{id}/settle

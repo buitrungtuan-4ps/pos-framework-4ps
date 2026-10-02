@@ -370,8 +370,9 @@ fn a_permission_held_with_approval_is_refused_on_an_act_that_asks_for_no_approve
         let edge = edge_over(FakeStore::default(), true);
 
         // Only the acts that ask for an approver today take one: voiding a fired line or a bill, a
-        // discount above the ceiling, and opening the drawer without a sale. Seating a table is
-        // not one of them, so holding it with approval cannot be used, and a role holds it directly.
+        // discount above the ceiling, waiving a fee, and opening the drawer without a sale. Seating
+        // a table is not one of them, so holding it with approval cannot be used, and a role holds
+        // it directly.
         refused_for(
             edge.seat_table(host(), table(), None).await,
             Permission::ManageTables,

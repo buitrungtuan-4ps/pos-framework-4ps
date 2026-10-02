@@ -53,6 +53,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         ]),
     ),
     (
+        "POST /api/bills/{id}/fees/{fee_id}/waive",
+        RouteGate::Person(&[Permission::WaiveFee]),
+    ),
+    (
         "POST /api/bills/{id}/merge",
         RouteGate::Person(&[Permission::SplitBill]),
     ),
@@ -239,10 +243,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::IssueRefund,
         "refunds are not built yet (ADR-0028)",
-    ),
-    (
-        Permission::WaiveFee,
-        "the till cannot waive a fee yet (ADR-0159 decision 5)",
     ),
     (
         Permission::PerformStocktake,

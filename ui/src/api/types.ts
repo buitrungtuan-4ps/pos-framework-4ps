@@ -261,6 +261,9 @@ export interface FeeLine {
   display_name: string;
   amount: Money;
   tax: Money;
+  // Whether the fee's rule lets staff waive it on one bill (ADR-0159 decision 5). Absent from an
+  // edge older than the waive, which offers none.
+  waivable?: boolean;
 }
 
 // What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the
@@ -412,6 +415,10 @@ export interface ApproverRequest {
 // act needs one, and the edge decides which — an unfired line is an ordinary cancel, a fired one
 // and every bill need a manager.
 export type VoidRequest = { reason_code_id: string } & Partial<ApproverRequest>;
+
+// A fee waived on one bill, as the till asks for it (ADR-0159 decision 5): the reason, and an
+// approver where the person needs one. The edge answers with the bill as it now stands.
+export type WaiveFeeRequest = { reason_code_id: string } & Partial<ApproverRequest>;
 
 // The state a voided bill came to rest in, so the screen can say so without re-reading.
 export interface VoidBillResponse {

@@ -30,6 +30,7 @@ export type PermissionId =
   | "billing.bill.void"
   | "billing.discount.apply"
   | "billing.discount.override_ceiling"
+  | "billing.fee.waive"
   | "billing.payment.take"
   | "billing.receipt.reprint"
   | "cash.drawer.open_no_sale"
@@ -46,13 +47,14 @@ export type PermissionId =
   | "sales.ticket.bump";
 
 // The acts that take another person's approval today: voiding a fired line or a bill, a discount
-// above the ceiling, and opening the drawer without a sale (`docs/pos-spec.md` §9). Any other
-// permission the edge accepts only when held directly, so holding one of those with approval lets
-// the person do nothing at this till.
+// above the ceiling, waiving a fee, and opening the drawer without a sale (`docs/pos-spec.md` §9).
+// Any other permission the edge accepts only when held directly, so holding one of those with
+// approval lets the person do nothing at this till.
 const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
   "sales.line.void_fired",
   "billing.bill.void",
   "billing.discount.override_ceiling",
+  "billing.fee.waive",
   "cash.drawer.open_no_sale",
 ]);
 

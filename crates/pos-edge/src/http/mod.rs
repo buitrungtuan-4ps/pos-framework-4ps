@@ -493,6 +493,12 @@ where
         .route("/api/lines/{id}/void", post(lines::void::<S>))
         .route("/api/bills/{id}/void", post(bills::void::<S>))
         .route("/api/bills/{id}/discount", post(bills::discount::<S>))
+        // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
+        // so the approver rides with the request as it does for a void.
+        .route(
+            "/api/bills/{id}/fees/{fee_id}/waive",
+            post(bills::waive_fee::<S>),
+        )
         // Split and merge (ADR-0128). Both need `billing.bill.split` (ADR-0158) and neither asks
         // for a PIN: both move amounts that are already captured, and a prompt here would be paid
         // for on every table.
@@ -623,6 +629,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             // The edge reads a bill's lines and its class bases from one snapshot, so this is a
             // broken invariant rather than a refusal, and answers as a server error.
             DomainError::LinesDoNotMatchBases => "LINES_DO_NOT_MATCH_BASES",
+            // A waive the bill cannot take (ADR-0159 decision 5).
+            DomainError::FeeNotOnBill => "FEE_NOT_ON_BILL",
+            DomainError::FeeNotWaivable => "FEE_NOT_WAIVABLE",
             DomainError::Empty { .. } => "EMPTY",
             DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
             DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",

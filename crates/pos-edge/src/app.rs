@@ -49,14 +49,14 @@ use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
     BillFeeLine, BillTaxLine, BillingBillMerged, BillingBillOpened, BillingBillSettled,
-    BillingBillSplit, BillingBillVoided, BillingDiscountApplied, BillingPaymentCaptured,
-    BillingReceiptReprinted, CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut,
-    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted,
-    DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType, InventoryItemRestored,
-    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
-    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
-    SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
+    BillingBillSplit, BillingBillVoided, BillingDiscountApplied, BillingFeeWaived,
+    BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened, CashDrawerPaidIn,
+    CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
+    DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
+    InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
+    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
@@ -1967,16 +1967,20 @@ struct BillRecord {
     /// bill. Folded from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
     /// so a restart rebuilds them, and what lets a merge put a split's shares back together.
     fee_wholes: Vec<FeeWhole>,
+    /// The fees waived on this bill (ADR-0159 decision 5), in the order they were waived: folded
+    /// from `billing.fee.waived`, a part of a split's taken from its source, and a merged bill's
+    /// from every bill merged. The bill is computed as though their rules were not there.
+    waived_fee_ids: Vec<FeeId>,
 }
 
 impl BillRecord {
-    /// This bill's side of a merge: the fee rules it holds and the wholes of its fees per bill.
+    /// This bill's side of a merge: the fee rules it holds, the wholes of its fees per bill, and
+    /// the fees waived on it.
     fn merging(&self) -> MergingBill<'_> {
         MergingBill {
             fee_rules: &self.fee_rules,
             fee_wholes: &self.fee_wholes,
-            // The till cannot waive a fee yet (ADR-0159 decision 5), so no bill has one waived.
-            waived_fee_ids: &[],
+            waived_fee_ids: &self.waived_fee_ids,
         }
     }
 
@@ -3078,16 +3082,32 @@ impl Projection {
         Ok(())
     }
 
-    /// Gives each part of a split its source's wholes (ADR-0159 decision 6), after each part's own
-    /// `billing.bill.opened`, so merging the parts back puts their shares together again.
-    fn inherit_fee_wholes(&mut self, source: BillId, parts: &[BillId]) {
-        let Some(wholes) = self.bills.get(&source).map(|bill| bill.fee_wholes.clone()) else {
+    /// Gives each part of a split its source's wholes and waived fees (ADR-0159 decisions 5 and
+    /// 6), after each part's own `billing.bill.opened`: merging the parts back puts their shares
+    /// together again, and a fee waived on the bill stays waived on every part.
+    fn inherit_fees(&mut self, source: BillId, parts: &[BillId]) {
+        let Some((wholes, waived)) = self
+            .bills
+            .get(&source)
+            .map(|bill| (bill.fee_wholes.clone(), bill.waived_fee_ids.clone()))
+        else {
             return;
         };
         for part in parts {
             if let Some(record) = self.bills.get_mut(part) {
                 record.fee_wholes.clone_from(&wholes);
+                record.waived_fee_ids.clone_from(&waived);
             }
+        }
+    }
+
+    /// Records a fee waived on a bill (ADR-0159 decision 5), once: a second waive of the same fee
+    /// is refused before it is written, and a replay that meets one anyway changes nothing.
+    fn waive_fee_record(&mut self, bill_id: BillId, fee_id: FeeId) {
+        if let Some(record) = self.bills.get_mut(&bill_id)
+            && !record.waived_fee_ids.contains(&fee_id)
+        {
+            record.waived_fee_ids.push(fee_id);
         }
     }
 
@@ -3114,6 +3134,7 @@ impl Projection {
         if let Some(record) = self.bills.get_mut(&bill_id) {
             record.fee_rules = fees.fee_rules;
             record.fee_wholes = fees.fee_wholes;
+            record.waived_fee_ids = fees.waived_fee_ids;
         }
     }
 
@@ -4394,8 +4415,86 @@ impl<S: EventStore> Edge<S> {
             &session,
             &order,
             &bill.fee_rules,
+            &bill.waived_fee_ids,
             (discount, comp),
         ))?)
+    }
+
+    /// Waives one of a bill's fees, citing a reason from the store's managed list
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+    ///
+    /// An act, not an edit: the rule stays published and every other bill is charged it, while
+    /// this one is charged nothing and taxed nothing for it from now on, through every split and
+    /// merge, because the waive follows the fee's id. Only a rule published `waivable` is waived,
+    /// and only on a bill still open. [`Permission::WaiveFee`] is PIN-flagged, so where the store
+    /// does not enforce each person's own set a holder's code and PIN come with every waive, and
+    /// where it does, a person who holds it with approval brings somebody else who holds it
+    /// directly ([`Self::resolve_step_up`]), and one who holds it directly waives alone.
+    ///
+    /// Everything that could never be waived is refused before anybody is asked to approve it: a
+    /// bill that owes nothing any more, a fee the bill does not charge, and a rule that says no.
+    ///
+    /// Answers with the bill as it now stands, so the till redraws it from the edge's arithmetic.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownBill`]; [`AppError::ReasonCodeNotValid`] if the reason is not one the
+    /// store publishes for waiving a fee; [`AppError::Domain`] with a transition refusal for a bill
+    /// that is not open, [`DomainError::FeeNotOnBill`] or [`DomainError::FeeNotWaivable`], or a
+    /// refusal of the permission; [`AppError::ApprovalRequired`], [`AppError::ApprovalRefused`] or
+    /// [`AppError::ApproverLockedOut`] from the step-up; [`AppError::Port`] if the store cannot be
+    /// written.
+    pub async fn waive_fee(
+        &self,
+        actor: Actor,
+        bill_id: BillId,
+        fee_id: FeeId,
+        reason_code_id: ReasonCodeId,
+        approval: Option<&Approval>,
+    ) -> Result<BillTotals, AppError> {
+        let mut ctx = self.decision_ctx(actor)?;
+        let session = self.session();
+        let bill = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?;
+        if !session
+            .reason_codes
+            .accepts(reason_code_id, ReasonAction::WaiveFee)
+        {
+            return Err(AppError::ReasonCodeNotValid);
+        }
+        Bill::step(bill.state, BillTrigger::Reduce).map_err(DomainError::from)?;
+        billing::waivable_fee(&bill.fee_rules, &bill.waived_fee_ids, fee_id)?;
+        let approver = self.resolve_step_up(&mut ctx, Permission::WaiveFee, approval)?;
+        let _decided = decide_bill(
+            bill.state,
+            BillCommand::WaiveFee {
+                pin_verified: approver.is_some(),
+            },
+            &ctx,
+        )?;
+
+        let waived = BillingFeeWaived {
+            bill_id,
+            fee_id,
+            reason_code_id,
+        };
+        let (envelope, message) = self.prepare(&ctx, &waived)?;
+        let mut envelopes = vec![envelope];
+        let mut messages = vec![message];
+        // One transaction for the waive and the approval that let it through: a log holding the
+        // waive without it would show money forgiven by nobody who could forgive it.
+        if let Some(approver) = approver {
+            let record = Self::override_record(Permission::WaiveFee, approver, None);
+            let (envelope, message) = self.prepare(&ctx, &record)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection().waive_fee_record(bill_id, fee_id);
+        self.bill_totals(bill_id)
     }
 
     /// Partitions a bill's lines into two or more new bills
@@ -4502,11 +4601,12 @@ impl<S: EventStore> Edge<S> {
                         comp: None,
                         fee_wholes: billing::fee_wholes(&fee_rules),
                         fee_rules,
+                        waived_fee_ids: Vec::new(),
                     },
                 );
             }
-            // As a replay folds the split after the parts' openings (ADR-0159 decision 6).
-            projection.inherit_fee_wholes(bill_id, &part_ids);
+            // As a replay folds the split after the parts' openings (ADR-0159 decisions 5 and 6).
+            projection.inherit_fees(bill_id, &part_ids);
             projection.set_bill_state(bill_id, decided.next_state);
         }
         Ok(part_ids)
@@ -5605,6 +5705,7 @@ impl<S: EventStore> Edge<S> {
             &session,
             &order,
             &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))?)
     }
@@ -6084,6 +6185,8 @@ impl<S: EventStore> Edge<S> {
             &session,
             &order,
             &in_force,
+            // No bill, so nothing waived.
+            &[],
             nothing_off,
         ))?)
     }
@@ -6243,6 +6346,7 @@ impl<S: EventStore> Edge<S> {
                     comp: None,
                     fee_wholes: billing::fee_wholes(&fee_rules),
                     fee_rules,
+                    waived_fee_ids: Vec::new(),
                 },
             );
             if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
@@ -6322,6 +6426,7 @@ impl<S: EventStore> Edge<S> {
             &session,
             &order,
             &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))?;
 
@@ -6524,6 +6629,7 @@ impl<S: EventStore> Edge<S> {
             &session,
             &order,
             &bill.fee_rules,
+            &bill.waived_fee_ids,
             bill.reductions(session.currency),
         ))
         .ok();
@@ -7087,6 +7193,11 @@ impl<S: EventStore> Edge<S> {
                     .add_reduction(event.bill_id, event.kind.known(), event.amount)
                     .map_err(AppError::Domain)?;
             }
+            EventType::BillingFeeWaived => {
+                let event: BillingFeeWaived = envelope.data.decode().map_err(AppError::Encode)?;
+                // So a restart charges what the till showed: the fee stays off the bill.
+                projection.waive_fee_record(event.bill_id, event.fee_id);
+            }
             EventType::BillingBillOpened => {
                 let event: BillingBillOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 // The bill is recorded whether or not a table is found. A bill event names its
@@ -7110,6 +7221,8 @@ impl<S: EventStore> Edge<S> {
                         // is what it charged when it was opened.
                         fee_wholes: billing::fee_wholes(&event.fee_rules),
                         fee_rules: event.fee_rules,
+                        // A waive is its own event, folded after this one.
+                        waived_fee_ids: Vec::new(),
                     },
                 );
                 if let Some(table_id) = table_id {
@@ -7155,8 +7268,8 @@ impl<S: EventStore> Edge<S> {
         if known == EventType::BillingBillSplit {
             let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
             // Each part's own `billing.bill.opened`, in the same transaction, folded its lines and
-            // its share of each fee; it takes its source's wholes here.
-            projection.inherit_fee_wholes(event.source_bill_id, &event.resulting_bill_ids);
+            // its share of each fee; it takes its source's wholes and waived fees here.
+            projection.inherit_fees(event.source_bill_id, &event.resulting_bill_ids);
             projection.set_bill_state(event.source_bill_id, BillState::Split);
             return Ok(());
         }
@@ -7294,7 +7407,8 @@ impl<S: EventStore> Edge<S> {
             | EventType::BillingPaymentCaptured
             | EventType::BillingBillSettled
             | EventType::BillingReceiptReprinted
-            | EventType::BillingDiscountApplied => {
+            | EventType::BillingDiscountApplied
+            | EventType::BillingFeeWaived => {
                 Self::fold_billing(projection, envelope, known)?;
             }
             // A split's source and a merge's absorbed bills are terminal, and a store that replayed
@@ -7538,6 +7652,7 @@ impl<S: EventStore> Edge<S> {
         session: &'a EdgeSession,
         order: &'a OrderSnapshot,
         fee_rules: &'a [FrozenFee],
+        waived_fee_ids: &'a [FeeId],
         reductions: (Money, Money),
     ) -> BillInput<'a> {
         let currency = session.currency;
@@ -7559,8 +7674,7 @@ impl<S: EventStore> Edge<S> {
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: session.prices_include_tax,
             fee_rules,
-            // The till cannot waive a fee yet (ADR-0159 decision 5).
-            waived_fee_ids: &[],
+            waived_fee_ids,
             lines: &order.bill_lines,
         }
     }
