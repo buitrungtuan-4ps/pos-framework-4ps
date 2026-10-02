@@ -45,14 +45,15 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillFeeLine, BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit,
-    BillingBillVoided, BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted,
-    CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
-    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
+    BillFeeLine, BillTaxLine, BillingBillMerged, BillingBillOpened, BillingBillSettled,
+    BillingBillSplit, BillingBillVoided, BillingDiscountApplied, BillingPaymentCaptured,
+    BillingReceiptReprinted, CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut,
+    CashShiftClosed, CashShiftCounted, CashShiftOpened, DeviceActivationCompleted,
+    DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType, InventoryItemRestored,
+    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableOpened,
+    SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
 use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
@@ -1828,6 +1829,21 @@ pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
             code: line.code.clone(),
             display_name: line.display_name.clone(),
             amount: line.amount,
+            tax: line.tax,
+        })
+        .collect()
+}
+
+/// A bill's tax per class as the settle records it (ADR-0159 decision 4, roadmap-v3 B4.1): each
+/// class's base, rate and tax, rounded once on that whole base and summing to the bill's tax.
+fn tax_records(totals: &BillTotals) -> Vec<BillTaxLine> {
+    totals
+        .tax_lines
+        .iter()
+        .map(|line| BillTaxLine {
+            tax_class_id: line.tax_class_id,
+            taxable_base: line.taxable_base,
+            rate_basis_points: line.rate_basis_points,
             tax: line.tax,
         })
         .collect()
@@ -6181,10 +6197,10 @@ impl<S: EventStore> Edge<S> {
             rounding_adjustment: totals.rounding_adjustment,
             total_due: totals.total_due,
             buyer_subject_id,
-            // Not recorded yet (ADR-0159 decision 4): the bill charges no fee, and a reader takes
-            // the tax from `tax_total`.
-            fee_lines: Vec::new(),
-            tax_lines: Vec::new(),
+            // Each fee charged and the tax per class (ADR-0159 decision 4), from the same totals
+            // as every figure above, so the lines add up to `service_charge` and `tax_total`.
+            fee_lines: fee_records(&totals),
+            tax_lines: tax_records(&totals),
         };
         let (settled_envelope, settled_message) = self.prepare(&ctx, &settled)?;
         envelopes.push(settled_envelope);
