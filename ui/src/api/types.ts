@@ -761,6 +761,18 @@ export interface SettledBill {
   copies: number;
 }
 
+/**
+ * What the store has taken today, for the Today screen's tile (ADR-0160 decision 2): the bills
+ * settled in the current business day, at what their guests paid, and how many. The store's figure
+ * and nothing finer, never anyone's own. Served only to a person whose role grants
+ * `reports.takings.view`.
+ */
+export interface TakingsResponse {
+  business_date: string;
+  takings_amount: Money;
+  bill_count: number;
+}
+
 /** What a copy's press reports (ADR-0164): which copy it was, and what came of the printing. */
 export interface ReprintResponse {
   bill_id: string;

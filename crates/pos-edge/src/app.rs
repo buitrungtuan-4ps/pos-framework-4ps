@@ -223,6 +223,20 @@ impl StaffRoster {
         self.member(employee_id).map(|auth| auth.permissions)
     }
 
+    /// Whether the person's own roles grant `permission` directly, whatever the store's
+    /// enforcement switch says.
+    ///
+    /// For the acts a store decides from the person's own role in every store: managing devices
+    /// (ADR-0118, ADR-0112) and seeing the day's takings (ADR-0160). Read from the roster the cloud
+    /// published, never from anything a request carried: the store authorises against the set the
+    /// console published and invents nothing (ADR-0070). `false` for an identity the roster does not
+    /// know.
+    #[must_use]
+    pub fn grants(&self, employee_id: EmployeeId, permission: Permission) -> bool {
+        self.permissions_for(employee_id)
+            .is_some_and(|granted| granted.contains(permission))
+    }
+
     /// What a signed-in person may do only with another person's approval
     /// ([`StaffAuth::permissions_with_approval`]). Empty for an id no published member holds, which
     /// grants nothing either way.
@@ -1529,6 +1543,23 @@ pub struct SettledBillView {
     pub settle_time: Timestamp,
     /// How many copies have been printed.
     pub copies: u32,
+}
+
+/// What this store has taken in one business day: the sum of its settled bills and how many there
+/// were, for the Today screen's tile
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+///
+/// The store's figure and nothing finer: no person, no till and no shift, because takings per person
+/// would be monitoring staff, which needs a legal basis this read does not have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Takings {
+    /// The business day the figure is for.
+    pub business_date: BusinessDate,
+    /// What the day's settled bills came to, each at its `total_due`: what its guests paid.
+    pub takings_amount: Money,
+    /// How many bills settled that day.
+    pub bill_count: u32,
 }
 
 /// A copy of a settled bill's receipt, counted and ready to print (ADR-0164).
@@ -3025,6 +3056,31 @@ impl Projection {
         if let Some(receipt) = self.settled.get_mut(&bill_id) {
             receipt.copies = receipt.copies.max(copy_number);
         }
+    }
+
+    /// What the bills settled on `business_date` came to and how many there were, in `currency`.
+    /// A bill the projection no longer holds as settled took nothing, so it is not counted.
+    ///
+    /// Every bill the day settled, and not the most recent [`MAX_SETTLED_LISTED`]: this fold keeps
+    /// each settle the log holds, and a busy day settles more bills than the till lists.
+    fn takings_on(
+        &self,
+        business_date: BusinessDate,
+        currency: CurrencyCode,
+    ) -> Result<(Money, u32), DomainError> {
+        let mut taken = Money::zero(currency);
+        let mut count: u32 = 0;
+        for (bill_id, receipt) in &self.settled {
+            let still_settled = self
+                .bills
+                .get(bill_id)
+                .is_some_and(|bill| bill.state == BillState::Settled);
+            if receipt.business_date == business_date && still_settled {
+                taken = taken.checked_add(receipt.total_due)?;
+                count = count.saturating_add(1);
+            }
+        }
+        Ok((taken, count))
     }
 
     /// The receipts settled on `business_date`, newest first, at most `limit` of them.
@@ -6830,6 +6886,29 @@ impl<S: EventStore> Edge<S> {
                 })
             })
             .collect())
+    }
+
+    /// What this store has taken in the current business day ([`Takings`]): every bill settled
+    /// today, each at what its guests paid, and how many. A bill the store no longer holds as
+    /// settled is not in it, as it is not in [`Self::settled_bills`].
+    ///
+    /// Who may read it is the route's to decide, from the person's own role (ADR-0160 decision 2).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Clock`] if the business date cannot be derived, or [`AppError::Domain`] if the
+    /// bills cannot be added up.
+    pub fn takings_today(&self) -> Result<Takings, AppError> {
+        let session = self.session();
+        let today = derive_business_date(self.clock.now(), &session.timezone, session.cutoff)
+            .map_err(|_ignored| AppError::Clock)?;
+        let (takings_amount, bill_count) =
+            self.lock_projection().takings_on(today, session.currency)?;
+        Ok(Takings {
+            business_date: today,
+            takings_amount,
+            bill_count,
+        })
     }
 
     /// Counts a copy of a settled bill's receipt (`billing.receipt.reprinted`) and hands back what
@@ -10897,6 +10976,28 @@ mod tests {
         for totals in [&unchanged, &moved, &regrouped, &alone] {
             assert!(adds_up(totals), "{totals:?} does not add up");
         }
+    }
+
+    /// Today's takings are every bill the day settled, at what its guests paid, and none of another
+    /// day's (ADR-0160 decision 2).
+    #[test]
+    fn today_s_takings_are_every_bill_settled_today_and_none_of_another_day() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let earlier = a_settled_pizza(&edge, TableId::new(Ulid::from_u128(341)), None).await;
+            a_settled_pizza(&edge, TableId::new(Ulid::from_u128(342)), None).await;
+            let taken = edge.takings_today().expect("today's takings");
+            assert_eq!((taken.takings_amount, taken.bill_count), (vnd(330_000), 2));
+
+            // One of them settled on another day, as a log folded after the cutoff holds it.
+            edge.lock_projection()
+                .settled
+                .get_mut(&earlier)
+                .expect("recorded")
+                .business_date = BusinessDate::from_ymd(2000, 1, 1).expect("a real date");
+            let taken = edge.takings_today().expect("today's takings");
+            assert_eq!((taken.takings_amount, taken.bill_count), (vnd(165_000), 1));
+        });
     }
 
     /// Today's list is bounded and newest first, with no other day's receipt in it (ADR-0164). Two

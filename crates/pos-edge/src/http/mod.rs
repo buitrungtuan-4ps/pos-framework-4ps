@@ -34,6 +34,7 @@ mod print_jobs;
 mod printers;
 pub mod qr;
 pub mod reason_codes;
+mod reports;
 pub mod route_permissions;
 pub mod shifts;
 mod sync;
@@ -518,6 +519,9 @@ where
         // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
         // normally" and how many events are waiting.
         .route("/api/sync", get(sync::read::<S>))
+        // What the store has taken today, for the Today screen's tile (ADR-0160 decision 2), to a
+        // person whose own role grants `reports.takings.view`, checked in the handler.
+        .route("/api/reports/takings", get(reports::takings::<S>))
         // The published printers, and a manager's test page on one — how a new store learns a
         // printer is wired before a guest's receipt tells it.
         // The vendor connections the cloud published to this store (ADR-0153): which e-invoice

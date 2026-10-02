@@ -1596,6 +1596,7 @@
   "permission.inventory.stocktake.perform": "Count stock",
   "permission.inventory.waste.record": "Record waste",
   "permission.menu.item.edit": "Edit menu items and prices",
+  "permission.reports.takings.view": "See what the store has taken today",
   "permission.sales.item.mark_unavailable": "Mark an item sold out, or available again",
   "permission.sales.item.open": "Add an open item with its own name and price",
   "permission.sales.line.add": "Add items to an order",

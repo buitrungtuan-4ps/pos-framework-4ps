@@ -5835,8 +5835,8 @@ mod role_templates_and_assignments {
     /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
     /// since taken away.
     ///
-    /// The 0073 and 0076 markers are written before the boot, so the boot runs 0074 alone against
-    /// the roles as they were authored.
+    /// The 0073, 0076 and 0079 markers are written before the boot, so the boot runs 0074 alone
+    /// against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -5860,11 +5860,12 @@ mod role_templates_and_assignments {
             admin
                 .execute(
                     "INSERT INTO data_migrations (name) \
-                     VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee')",
+                     VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee'), \
+                            ('0079_approvers_who_close_a_shift_see_takings')",
                     &[],
                 )
                 .await
-                .expect("0073 and 0076 have already run");
+                .expect("0073, 0076 and 0079 have already run");
             let people = store.people();
             // A manager who voids directly, and so approves voids for others, listed out of order
             // as a console may have written it.
@@ -6007,8 +6008,8 @@ mod role_templates_and_assignments {
     /// grants the override directly, and with approval otherwise. Nothing else in either list
     /// changes, and a later boot does not hand back a waive an owner has since taken away.
     ///
-    /// The 0073 and 0074 markers are written before the boot, so the boot runs 0076 alone against
-    /// the roles as they were authored.
+    /// The 0073, 0074 and 0079 markers are written before the boot, so the boot runs 0076 alone
+    /// against the roles as they were authored.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -6026,11 +6027,12 @@ mod role_templates_and_assignments {
                 .execute(
                     "INSERT INTO data_migrations (name) \
                      VALUES ('0073_roles_keep_every_till_action'), \
-                            ('0074_role_permissions_with_approval')",
+                            ('0074_role_permissions_with_approval'), \
+                            ('0079_approvers_who_close_a_shift_see_takings')",
                     &[],
                 )
                 .await
-                .expect("0073 and 0074 have already run");
+                .expect("0073, 0074 and 0079 have already run");
             let people = store.people();
             // A manager who exceeds the ceiling directly, and so approves it for others.
             people
@@ -6188,6 +6190,204 @@ mod role_templates_and_assignments {
                 list(&after.permissions_with_approval_json),
                 Vec::<String>::new(),
                 "a later boot does not hand back a waive the owner took away"
+            );
+        });
+    }
+
+    /// Every role that exists, grants `cash.shift.close` directly and grants at least one PIN-flagged
+    /// permission directly is given, once, `reports.takings.view` directly (migration 0079, ADR-0160
+    /// decision 2): an approver who closes shifts, as a new tenant's supervisor, manager and owner
+    /// are. No other role is, each case on a role of its own: one that closes but approves nothing
+    /// directly, as a cashier's does after 0074; an approver who closes no shift; and one that closes
+    /// only with approval. No with-approval list changes, an archived approver is included, and a
+    /// later boot does not hand back takings an owner has since taken away.
+    ///
+    /// The 0073, 0074 and 0076 markers are written before the boot, so the boot runs 0079 alone
+    /// against the roles as they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over five roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_approvers_who_close_a_shift_see_takings_once_and_no_other_role_does() {
+        const SUPERVISOR: &str = "01ROLE000000000000000000V3";
+        const CASHIER: &str = "01ROLE000000000000000000C3";
+        const BOOKKEEPER: &str = "01ROLE000000000000000000B3";
+        const TRAINEE: &str = "01ROLE000000000000000000T3";
+        const RETIRED: &str = "01ROLE000000000000000000R3";
+        const TAKINGS: &str = "reports.takings.view";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action'), \
+                            ('0074_role_permissions_with_approval'), \
+                            ('0076_roles_can_waive_a_fee')",
+                    &[],
+                )
+                .await
+                .expect("0073, 0074 and 0076 have already run");
+            let people = store.people();
+            // (role, name, direct, with approval), each the one case it is named for.
+            let authored = [
+                // Closes a shift and voids a bill directly: an approver who closes shifts. Listed
+                // out of order, as a console may have written it.
+                (
+                    SUPERVISOR,
+                    "Supervisor",
+                    r#"["cash.shift.open","cash.shift.close","billing.bill.void"]"#,
+                    r#"["billing.comp.apply"]"#,
+                ),
+                // Closes a shift directly, and holds every PIN-flagged act only with approval, as a
+                // cashier's role does once 0074 has run.
+                (
+                    CASHIER,
+                    "Cashier",
+                    r#"["billing.payment.take","cash.shift.close","cash.shift.open"]"#,
+                    r#"["billing.bill.void","cash.drawer.open_no_sale"]"#,
+                ),
+                // Approves a refund directly and closes no shift.
+                (
+                    BOOKKEEPER,
+                    "Bookkeeper",
+                    r#"["billing.refund.issue"]"#,
+                    "[]",
+                ),
+                // Approves a void directly and closes a shift only with approval, which the console
+                // refuses to write but a row may still hold.
+                (
+                    TRAINEE,
+                    "Trainee",
+                    r#"["billing.bill.void","cash.shift.open"]"#,
+                    r#"["cash.shift.close"]"#,
+                ),
+            ];
+            for (id, name, direct, approval) in authored {
+                people
+                    .insert_role_template(id, "tenant-a", name, direct, approval, None)
+                    .await
+                    .expect("a role");
+            }
+            // An approver who closes shifts, since retired.
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Night manager",
+                    r#"["cash.drawer.open_no_sale","cash.shift.close"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Night manager",
+                    r#"["cash.drawer.open_no_sale","cash.shift.close"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let before = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let as_authored = |id: &str| {
+                before
+                    .iter()
+                    .find(|role| role.id == id)
+                    .map(|role| {
+                        (
+                            role.permissions_json.clone(),
+                            role.permissions_with_approval_json.clone(),
+                        )
+                    })
+                    .expect("the role is listed")
+            };
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0079 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let role = |id: &str| {
+                roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed")
+            };
+            let list = |json: &str| -> Vec<String> {
+                serde_json::from_str(json).expect("a permission list is JSON")
+            };
+
+            assert_eq!(
+                list(&role(SUPERVISOR).permissions_json),
+                [
+                    "billing.bill.void",
+                    "cash.shift.close",
+                    "cash.shift.open",
+                    TAKINGS
+                ],
+                "an approver who closes shifts sees takings, directly, in byte order"
+            );
+            assert_eq!(
+                list(&role(RETIRED).permissions_json),
+                ["cash.drawer.open_no_sale", "cash.shift.close", TAKINGS],
+                "an archived approver too, so restoring it restores what it had"
+            );
+            for (id, why) in [
+                (CASHIER, "closes, but approves nothing directly"),
+                (BOOKKEEPER, "approves, but closes no shift"),
+                (TRAINEE, "closes only with approval"),
+            ] {
+                assert_eq!(
+                    role(id).permissions_json,
+                    as_authored(id).0,
+                    "{id} {why}, so it is not touched"
+                );
+            }
+            for id in [SUPERVISOR, CASHIER, BOOKKEEPER, TRAINEE, RETIRED] {
+                assert_eq!(
+                    role(id).permissions_with_approval_json,
+                    as_authored(id).1,
+                    "{id}: what it grants with approval is byte-identical"
+                );
+            }
+
+            // The owner takes the takings off supervisors.
+            let supervisor = role(SUPERVISOR);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SUPERVISOR,
+                    "Supervisor",
+                    r#"["billing.bill.void","cash.shift.close","cash.shift.open"]"#,
+                    &supervisor.permissions_with_approval_json,
+                    "active",
+                    None,
+                    &supervisor.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SUPERVISOR)
+                .await
+                .expect("fetch")
+                .expect("present");
+            assert!(
+                !list(&after.permissions_json).iter().any(|id| id == TAKINGS),
+                "a later boot does not hand back takings the owner took away"
             );
         });
     }

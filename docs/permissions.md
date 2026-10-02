@@ -28,6 +28,7 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `cash.shift.open` | CASH_AND_SHIFTS | LOW | · | ✓ | ✓ | ✓ | ✓ | · | · |
 | `cash.shift.close` | CASH_AND_SHIFTS | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |
 | `cash.movement.record` | CASH_AND_SHIFTS | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |
+| `reports.takings.view` | REPORTS | MEDIUM | · | ✓ | ✓ | ✓ | · | · | · |
 | `inventory.stocktake.perform` | MENU_AND_INVENTORY | MEDIUM | · | ✓ | ✓ | ✓ | · | · | · |
 | `inventory.receipt.record` | MENU_AND_INVENTORY | LOW | · | ✓ | ✓ | ✓ | · | · | · |
 | `inventory.waste.record` | MENU_AND_INVENTORY | LOW | · | ✓ | ✓ | ✓ | · | · | ✓ |

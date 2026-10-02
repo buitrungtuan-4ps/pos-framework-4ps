@@ -456,6 +456,33 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Who sees the day's takings is a permission, `reports.takings.view`**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2, [ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+  - The till's Today screen gains a **Takings today** tile: what the bills settled in the current
+    business day came to, at what their guests paid, and how many there were. It is the store's
+    figure only, with no person, till or shift, because takings per person would be monitoring
+    staff.
+  - The tile reads `GET /api/reports/takings` (new). It answers `403 PERMISSION_DENIED` unless the
+    signed-in person's own role grants `reports.takings.view`, whether or not the store enforces
+    each person's own permissions: takings are confidential, and no till showed them before. The
+    route is the first read in `ROUTE_PERMISSIONS`.
+  - `reports.takings.view` is in a new group, `REPORTS`. It is medium risk, asks no PIN, and goes by
+    default to the owner, manager and supervisor roles, so a new tenant's starting roles get it
+    there. Owners can widen it to any role in the console's People screen, which names it in
+    English and Vietnamese.
+  - **Upgrade note:** a new permission id (`docs/snapshots/permissions.txt`, `docs/permissions.md`)
+    and a new edge route (`docs/snapshots/routes.txt`). Migration
+    `0079_approvers_who_close_a_shift_see_takings.sql` grants it once, directly, to every role that
+    exists and grants both `cash.shift.close` and at least one PIN-flagged permission directly: an
+    approver who closes shifts. Applied to a new tenant's starting roles, that rule picks exactly
+    the supervisor, manager and owner, so existing and new tenants agree. A role that holds its
+    PIN-flagged permissions only with approval, as 0074 left a cashier's, does not get it, nor does
+    any other role: cashiers see takings only where an owner grants it. A later boot does not give
+    it back to a role an owner takes it from. Publish each store's People once after the migration,
+    as after 0076, so its till receives the permission: until then nobody at the store sees the
+    tile. Nothing else changes. No event or protocol change.
+
 - **A store sets its opening float and whether the count is blind**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). The Shift screen opened on an empty float field, and every count was blind.

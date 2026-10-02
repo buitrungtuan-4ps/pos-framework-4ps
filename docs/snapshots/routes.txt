@@ -21,6 +21,7 @@ GET /api/pair/this_device
 GET /api/print/jobs
 GET /api/printers
 GET /api/reason-codes
+GET /api/reports/takings
 GET /api/session
 GET /api/shifts/current
 GET /api/sync
