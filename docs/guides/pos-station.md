@@ -69,24 +69,30 @@ If the credential store refuses the token, the pairing still succeeds for this r
 single-use and already spent — and the status page says it will not survive a restart. That is the
 till's own rule: a device that cannot persist its token pairs again next session.
 
-Every round also asks `GET /api/pair/devices`, which sits behind the paired-device gate only, and
-stays there while the app reads it this way: behind the signed-in gate it would answer `403` whenever
-nobody is signed in. (Retiring a device, `POST /api/pair/revoke`, does need a signed-in manager —
-[ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8.) A `401`
-there means the edge no longer knows the token (revoked, or an edge whose registry did not survive a
-restart): the app forgets it, stops the print agent, closes the till and reopens **connect** with a
-notice.
+Every round also asks `GET /api/pair/this_device`, which sits behind the paired-device gate only:
+behind the signed-in gate it would answer `403` whenever nobody is signed in. It answers for this
+device's token alone and names no other device. An edge older than the route cannot answer it: it
+serves the till's page with a `200`, or answers `404` when it was built without the till, so the app
+counts a `200` only when it carries the route's own JSON. Otherwise it asks `GET /api/pair/devices`,
+behind the same gate, as it did before the route existed. That list stays behind the paired-device
+gate alone while a Station older than the route still reads it. (Retiring a device,
+`POST /api/pair/revoke`, does need a signed-in manager —
+[ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8.) A `401` from
+either means the edge no longer knows the token (revoked, or an edge whose registry did not survive
+a restart): the app forgets it, stops the print agent, closes the till and reopens **connect** with
+a notice.
 
 ### What the tray knows, and what it cannot
 
 Every fifteen seconds the monitor asks `/healthz` (up or down, and the version) and
-`/api/pair/devices` (still paired). `/api/sync` (cloud link, outbox depth and level) and
-`/api/printers` sit behind the **signed-in** gate as well, and every answer resets the signed-in
-person's thirty-minute idle window ([ADR-0091](../adr/0091-durable-edge-auth-state.md)). So the
-monitor asks them **only while a till window is open** — the till's own status bar already polls
-`/api/sync` every fifteen seconds then, so the tray adds nothing — and with the till closed the tray
-says *Open the till to see the cloud link* rather than keep somebody signed in. With nobody signed
-in, the edge answers `403` and the tray says so.
+`/api/pair/this_device` (still paired; `/api/pair/devices` on an older edge). `/api/sync` (cloud
+link, outbox depth and level) and `/api/printers` sit behind the **signed-in** gate as well, and
+every answer resets the signed-in person's thirty-minute idle window
+([ADR-0091](../adr/0091-durable-edge-auth-state.md)). So the monitor asks them **only while a till
+window is open** — the till's own status bar already polls `/api/sync` every fifteen seconds then,
+so the tray adds nothing — and with the till closed the tray says *Open the till to see the cloud
+link* rather than keep somebody signed in. With nobody signed in, the edge answers `403` and the
+tray says so.
 
 Notifications (Station mode): the store server stops or starts answering; the pairing is lost; the
 cloud link goes from online to offline and back; the outbox rises past half, four fifths or all of the
@@ -277,13 +283,13 @@ The app has no over-the-air update of its own yet, so there is no minisign step 
 | `tauri` 2 (`tray-icon`, `image-png`), `tauri-build` 2 | the shell, the tray, and decoding the tray's PNG |
 | `tauri-plugin-notification` 2 | desktop notifications (D-Bus on Linux, toast on Windows) |
 | `serde`, `serde_json` | command payloads, `station.json`, the edge's JSON |
-| `ureq` 3 (`rustls`, `json`) | the five edge calls. Synchronous, on the app's own threads, so no async task blocks; ring and the bundled Mozilla roots, as in the workspace's own client |
+| `ureq` 3 (`rustls`, `json`) | the six edge calls. Synchronous, on the app's own threads, so no async task blocks; ring and the bundled Mozilla roots, as in the workspace's own client |
 | `keyring` 3 | the credential store, with `key-vault-keyring`'s backends |
 | `log` | the facade Tauri already logs through; `logging.rs` is a small stderr sink |
 
 Deliberately not taken: `tauri-plugin-shell` (the sidecar is spawned with `std::process`, and the
 plugin's JavaScript API is exactly what the pages must not have), `reqwest` (its async stack buys
-nothing for five calls on dedicated threads), `tokio` as a direct dependency (waits are channel
+nothing for six calls on dedicated threads), `tokio` as a direct dependency (waits are channel
 timeouts), `tauri-plugin-single-instance` (`File::try_lock`), `tauri-plugin-autostart` (the
 installers own autostart) and `tauri-plugin-log`.
 

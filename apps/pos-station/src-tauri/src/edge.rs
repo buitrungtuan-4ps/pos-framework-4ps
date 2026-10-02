@@ -1,13 +1,14 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The five edge routes the app calls, and nothing else.
+//! The six edge routes the app calls, and nothing else.
 //!
 //! | Route | Gate | Used for |
 //! |---|---|---|
 //! | `GET /healthz` | none | Station-mode detection, "is the edge up", its version |
 //! | `POST /api/pair` | none | redeeming the six-digit code for a device token |
-//! | `GET /api/pair/devices` | paired device | "is this token still accepted" — touches no sign-in |
+//! | `GET /api/pair/this_device` | paired device | "is this token still accepted" — touches no sign-in |
+//! | `GET /api/pair/devices` | paired device | the same question, only of an edge older than `this_device` |
 //! | `GET /api/sync` | paired + signed in | cloud link and outbox, only while a till is open |
 //! | `GET /api/printers` | paired + signed in | the published printers, only while a till is open |
 //!
@@ -30,6 +31,12 @@ const TIMEOUT: Duration = Duration::from_secs(8);
 
 /// How long connecting may take — short, because "nothing on 127.0.0.1:8787" decides the mode.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The token probe: the edge answers for the calling token alone.
+const THIS_DEVICE: &str = "/api/pair/this_device";
+
+/// The device list, which answered the probe's question before the probe existed.
+const DEVICES: &str = "/api/pair/devices";
 
 /// A call that did not produce an answer this build can use.
 #[derive(Debug)]
@@ -110,6 +117,22 @@ struct PairAccepted {
     device_token: String,
 }
 
+/// `GET /api/pair/this_device`, the one field the app reads. The edge also names the device and when
+/// it paired; the app needs neither.
+#[derive(Deserialize)]
+struct ThisDevice {
+    accepted: bool,
+}
+
+/// What `GET /api/pair/this_device` settled.
+#[derive(Debug, PartialEq, Eq)]
+enum Probe {
+    /// The edge has the route, and said whether the token is accepted.
+    Answered(bool),
+    /// The edge is older than the route, so the device list has to answer.
+    NoSuchRoute,
+}
+
 /// A client for one or more edges.
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeClient {
@@ -188,14 +211,42 @@ impl EdgeClient {
         }
     }
 
-    /// `GET /api/pair/devices`: `true` if the token is accepted, `false` if refused.
+    /// `GET /api/pair/this_device`: `true` if the token is accepted, `false` if refused.
     ///
     /// Behind the paired-device gate only, so it answers without anyone signed in and resets nobody's
-    /// idle window. The body — every paired device's id — is not read.
+    /// idle window, and it answers for this token alone. An edge older than the route cannot answer
+    /// it, and then the device list is asked instead ([`Self::listed`]), as before the route existed.
+    /// That costs an edge not yet updated a second request each round, and nothing once it is.
     pub(crate) fn still_paired(&self, origin: &EdgeOrigin, token: &str) -> Result<bool, EdgeError> {
+        let mut response = self
+            .agent
+            .get(&origin.url(THIS_DEVICE))
+            .header("Authorization", &format!("Bearer {token}"))
+            .call()
+            .map_err(|error| no_answer(&error))?;
+        let status = response.status().as_u16();
+        // Only a `200` has a body worth reading. One that cannot be read is no answer either, and
+        // the list decides.
+        let body = if status == 200 {
+            response.body_mut().read_to_string().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        match probe_answer(status, &body)? {
+            Probe::Answered(accepted) => Ok(accepted),
+            Probe::NoSuchRoute => self.listed(origin, token),
+        }
+    }
+
+    /// `GET /api/pair/devices`, for an edge older than `GET /api/pair/this_device`: `true` if the
+    /// token is accepted, `false` if refused.
+    ///
+    /// Behind the paired-device gate only, as the probe is. The body — every paired device's id — is
+    /// not read.
+    fn listed(&self, origin: &EdgeOrigin, token: &str) -> Result<bool, EdgeError> {
         let response = self
             .agent
-            .get(&origin.url("/api/pair/devices"))
+            .get(&origin.url(DEVICES))
             .header("Authorization", &format!("Bearer {token}"))
             .call()
             .map_err(|error| no_answer(&error))?;
@@ -203,7 +254,7 @@ impl EdgeClient {
             200 => Ok(true),
             401 => Ok(false),
             status => Err(EdgeError::Unexpected(format!(
-                "/api/pair/devices answered {status}"
+                "{DEVICES} answered {status}"
             ))),
         }
     }
@@ -259,6 +310,27 @@ pub(crate) fn plausible_token(token: &str) -> bool {
     !token.is_empty() && token.len() <= 256 && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
+/// Reads `GET /api/pair/this_device`'s answer from its status and, for a `200`, its body.
+///
+/// An edge older than the route seldom answers `404`. For a path it does not know it serves the
+/// till's `index.html` with a `200`, and only an edge built without the till answers `404`. So a
+/// `200` is an answer only when its body is the probe's own JSON. Read as "accepted", that
+/// `index.html` would tell a Station whose token was retired that it is still paired, for as long as
+/// its edge is not updated.
+fn probe_answer(status: u16, body: &str) -> Result<Probe, EdgeError> {
+    match status {
+        200 => match serde_json::from_str::<ThisDevice>(body) {
+            Ok(answer) => Ok(Probe::Answered(answer.accepted)),
+            Err(_) => Ok(Probe::NoSuchRoute),
+        },
+        404 => Ok(Probe::NoSuchRoute),
+        401 => Ok(Probe::Answered(false)),
+        status => Err(EdgeError::Unexpected(format!(
+            "{THIS_DEVICE} answered {status}"
+        ))),
+    }
+}
+
 fn no_answer(error: &ureq::Error) -> EdgeError {
     EdgeError::Unreachable(error.to_string())
 }
@@ -269,7 +341,7 @@ fn bad_answer(error: &ureq::Error) -> EdgeError {
 
 #[cfg(test)]
 mod tests {
-    use super::plausible_token;
+    use super::{Probe, plausible_token, probe_answer};
 
     #[test]
     fn a_token_is_printable_ascii_without_spaces() {
@@ -278,5 +350,29 @@ mod tests {
         assert!(!plausible_token("abc def"));
         assert!(!plausible_token("abc\"\n"));
         assert!(!plausible_token(&"a".repeat(257)));
+    }
+
+    #[test]
+    fn the_probe_is_accepted_refused_or_absent() {
+        let accepted = r#"{"accepted":true,"device_id":"01K6H0000000000000000000AA","pair_time":"2026-10-02T03:00:00Z"}"#;
+        assert_eq!(
+            probe_answer(200, accepted).ok(),
+            Some(Probe::Answered(true))
+        );
+        let refused = "pair this device to reach the edge";
+        assert_eq!(
+            probe_answer(401, refused).ok(),
+            Some(Probe::Answered(false))
+        );
+        // An edge older than the route: `404` built without the till, and the till's page with a
+        // `200` built with it. Either way the list decides; that page never reads as "accepted".
+        let no_ui = "no UI is embedded in this build";
+        assert_eq!(probe_answer(404, no_ui).ok(), Some(Probe::NoSuchRoute));
+        let index_html = "<!doctype html><html><body><div id=\"root\"></div></body></html>";
+        assert_eq!(probe_answer(200, index_html).ok(), Some(Probe::NoSuchRoute));
+        assert_eq!(probe_answer(200, "").ok(), Some(Probe::NoSuchRoute));
+        // Anything else is unexpected, and the app keeps the token rather than guess.
+        assert!(probe_answer(403, "sign in to act on this device").is_err());
+        assert!(probe_answer(500, "").is_err());
     }
 }

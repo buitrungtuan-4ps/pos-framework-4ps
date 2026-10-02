@@ -397,6 +397,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **POS Station asks whether its token is still accepted on a route of its own**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8, step 1).
+  The Station checked its pairing with `GET /api/pair/devices`, which hands every paired device the
+  id of every other, so that list could not be gated without breaking every Station in the field.
+  - `GET /api/pair/this_device` answers for the calling token alone: `accepted`, the caller's own
+    `device_id` and its `pair_time`, and nothing about any other device. It sits behind the
+    paired-device gate alone, so it answers with nobody signed in, and it signs nobody in and resets
+    nobody's idle window. An unknown or retired token is refused `401`.
+  - POS Station asks it first. An edge older than this release has no such route: it answers `404`,
+    or `200` with the till's `index.html` when the till is built in, so the Station counts a `200`
+    only when it carries the route's JSON. Otherwise it asks `GET /api/pair/devices` as before, so a
+    new Station keeps working with an older edge.
+  - **Upgrade note:** one route is added (`docs/snapshots/routes.txt`). No event, migration,
+    permission or protocol change. `GET /api/pair/devices` is unchanged and still needs only a
+    paired device, because every POS Station older than this release still reads it as its probe.
+    Step 2, gating the list behind `admin.device.manage`, waits until no Station older than this
+    release remains in the fleet. Deciding when that is belongs to the owner and the fleet, not to
+    this release.
+
 - **Before a store enforces each person's own permissions, the console says what each role lacks**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout).
   - `GET /admin/stores/{store_id}/permissions/readiness` lists each active role an active person
