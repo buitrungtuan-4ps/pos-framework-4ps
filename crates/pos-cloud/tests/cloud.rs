@@ -28560,7 +28560,11 @@ async fn a_new_store_is_given_the_owners_values_once() {
     assert_eq!(applied.status(), StatusCode::OK);
     assert_eq!(
         json_body(applied).await["applied"],
-        serde_json::json!([NO_SHIFT_SELLING, "session.idle_lock_seconds"])
+        serde_json::json!([
+            NO_SHIFT_SELLING,
+            "session.idle_lock_seconds",
+            "permissions.enforced"
+        ])
     );
     assert_eq!(
         tenant_layer_shift(&config_trees, third).await.as_deref(),
@@ -28571,6 +28575,11 @@ async fn a_new_store_is_given_the_owners_values_once() {
         tenant_layer_session(&config_trees, third).await,
         Some(serde_json::json!({ "idle_lock_seconds": 120 })),
         "a new store's till locks after two minutes without a touch (the owner, 2026-10-01)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "permissions").await,
+        Some(serde_json::json!({ "enforced": true })),
+        "a new store decides with each person's own permissions from its first day (ADR-0158)"
     );
 
     let again = router
@@ -28802,8 +28811,27 @@ async fn tenant_layer_session(
     config_trees: &FakeConfigTrees,
     store_id: StoreId,
 ) -> Option<serde_json::Value> {
+    tenant_layer_node(config_trees, store_id, "session").await
+}
+
+/// What a store is sent: its four layers merged, as the sync path composes them (ADR-0033).
+fn sent_to(tree: &ConfigTreeState) -> serde_json::Value {
+    pos_cloud::config_tree::merge::merge_layers(&[
+        &tree.layers[0],
+        &tree.layers[1],
+        &tree.layers[2],
+        &tree.layers[3],
+    ])
+}
+
+/// The `node` a store's Tenant layer carries, if any.
+async fn tenant_layer_node(
+    config_trees: &FakeConfigTrees,
+    store_id: StoreId,
+    node: &str,
+) -> Option<serde_json::Value> {
     let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
-    tree.record.layers[0].get("session").cloned()
+    tree.record.layers[0].get(node).cloned()
 }
 
 #[tokio::test]
@@ -28886,6 +28914,82 @@ async fn a_whole_number_setting_is_published_to_every_store_as_a_number() {
     assert_eq!(attempts["default"], 5);
     assert!(attempts.get("preset").is_none(), "a new store keeps five");
     assert!(attempts.get("values").is_none(), "a number has no list");
+}
+
+/// The enforcement switch (ADR-0158 Rollout) is written on each store's Tenant layer, and the
+/// merge puts it beside the staff the people compiler wrote on the Store layer. A store with no
+/// people node receives the switch alone, with no `staff` key, which the edge reads as the switch
+/// and nothing about its roster.
+#[tokio::test]
+async fn the_permissions_switch_reaches_each_store_beside_its_people() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, second, _] = settings_stores();
+    let people = serde_json::json!({
+        "store_id": first.to_string(),
+        "staff": [{
+            "id": Ulid::from_u128(0xE1).to_string(),
+            "code": "C01",
+            "name": "Staff one",
+            "permissions": ["sales.line.add"],
+            "pin_phc": null
+        }]
+    });
+    config_trees.seed_store_layer(
+        tenant(),
+        first,
+        serde_json::json!({ "permissions": people.clone() }),
+    );
+
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "permissions.enforced",
+                "scope": "SETTING_SCOPE_TENANT",
+                "scope_id": tenant().as_ulid().to_string(),
+                "value": true,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert!(
+        outcomes(&json_body(written).await)
+            .iter()
+            .all(|(_, outcome)| outcome == "SETTING_PUBLISH_APPLIED")
+    );
+
+    // The staffed store: the switch on the Tenant layer, the people untouched on the Store layer,
+    // and the two together in what the store is sent.
+    let staffed = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        staffed.record.layers[0]["permissions"],
+        serde_json::json!({ "enforced": true })
+    );
+    assert_eq!(staffed.record.layers[2]["permissions"], people);
+    let sent = sent_to(&staffed.record);
+    assert_eq!(sent["permissions"]["enforced"], true);
+    assert_eq!(sent["permissions"]["staff"], people["staff"]);
+
+    // A store with no people node is sent the switch alone. With no `staff` key the edge keeps
+    // the roster it holds rather than reading the store as staffed by nobody.
+    let unstaffed = config_trees
+        .load(tenant(), second)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        sent_to(&unstaffed.record)["permissions"],
+        serde_json::json!({ "enforced": true })
+    );
 }
 
 #[tokio::test]

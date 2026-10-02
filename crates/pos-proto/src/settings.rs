@@ -22,6 +22,7 @@
 //! A test reads every value of every setting back through its node's own type, so the register
 //! cannot offer a value or claim a default that the edge does not have.
 
+use crate::people::PublishedPermissions;
 use crate::session::{self, PublishedSession};
 use crate::shift::{NoShiftSelling, PublishedShift};
 use crate::wire_enum;
@@ -326,6 +327,23 @@ pub fn register() -> Vec<Setting> {
                       PINs. A lockout already running keeps the end it was given. No value \
                       switches the lockout off.",
         },
+        Setting {
+            node: PublishedPermissions::NODE,
+            field: "enforced",
+            shape: SettingShape::Bool {
+                default: PublishedPermissions::default().enforced,
+                // ADR-0158 Rollout, confirmed by the owner on 2026-10-01: on for a store created
+                // after this lands, off for the stores that exist until someone turns it on.
+                preset: Some(true),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A security setting: whether the till decides every act with the signed-in \
+                      person's own permissions. What they hold directly they do alone, what they \
+                      hold with approval needs the PIN of someone who holds it directly, and \
+                      anything else is refused. Off, every act works as before. Set each role up \
+                      before turning it on.",
+        },
     ]
 }
 
@@ -518,6 +536,7 @@ mod tests {
         ValueRefusal, register, render_markdown, render_markdown_of, render_snapshot,
         render_snapshot_of,
     };
+    use crate::people::PublishedPermissions;
     use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
     use crate::wire_enum::WireEnum;
@@ -546,7 +565,8 @@ mod tests {
         );
     }
 
-    /// A whole-number setting the register does not have yet, to pin the shape before one does.
+    /// A whole-number setting built here rather than taken from the register, so these tests pin the
+    /// shape and do not move when a register entry does.
     fn seconds() -> Setting {
         Setting {
             node: "example",
@@ -564,7 +584,7 @@ mod tests {
         }
     }
 
-    /// An on-or-off setting the register does not have yet.
+    /// An on-or-off setting built here, for the same reason.
     fn switch() -> Setting {
         Setting {
             node: "example",
@@ -786,7 +806,7 @@ mod tests {
         for setting in register() {
             assert_well_formed(&setting);
         }
-        // And the two shapes the register does not use yet hold to the same rules.
+        // And the two built here hold to the same rules.
         assert_well_formed(&seconds());
         assert_well_formed(&switch());
     }
@@ -841,6 +861,13 @@ mod tests {
                     )),
                     "lockout_attempts" => Some(json!(session.lockout_attempts())),
                     "lockout_minutes" => Some(json!(session.lockout_minutes())),
+                    _ => None,
+                }
+            }
+            PublishedPermissions::NODE => {
+                let permissions: PublishedPermissions = serde_json::from_value(document).ok()?;
+                match field {
+                    "enforced" => Some(json!(permissions.enforced)),
                     _ => None,
                 }
             }

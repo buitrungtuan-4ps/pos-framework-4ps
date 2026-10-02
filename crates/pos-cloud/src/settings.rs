@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use pos_proto::ids::TenantId;
+use pos_proto::people::PublishedPermissions;
 use pos_proto::settings::{Setting, SettingScope, ValueRefusal, register};
 use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
@@ -241,6 +242,24 @@ pub fn tenant_layer_nodes(
     out
 }
 
+/// Whether writing `nodes` onto a store's Tenant layer leaves the store a `permissions` node with no
+/// people node on its Store layer: `permissions.enforced` alone, which the merge delivers with no
+/// `staff` key.
+///
+/// An edge from 0.14.1 on reads such a node as the switch alone and keeps its roster. An older edge
+/// reads the missing list as nobody and empties its roster, so a publish counts these stores, and
+/// says how many, never which.
+#[must_use]
+pub fn switch_without_people(
+    nodes: &[(String, serde_json::Value)],
+    store_layer: &serde_json::Value,
+) -> bool {
+    nodes
+        .iter()
+        .any(|(node, _)| node == PublishedPermissions::NODE)
+        && store_layer.get(PublishedPermissions::NODE).is_none()
+}
+
 /// Persists and reads a tenant's setting values.
 ///
 /// Every method is tenant-scoped; the `store-postgres` impl is RLS-isolated by tenant like every
@@ -298,7 +317,7 @@ mod tests {
 
     use super::{
         SettingRefusal, SettingValue, SettingsStore, SettingsStoreError, StorePlacement,
-        resolve_for_store, tenant_layer_nodes, validate,
+        resolve_for_store, switch_without_people, tenant_layer_nodes, validate,
     };
 
     const KEY: &str = "shift.no_shift_selling";
@@ -454,6 +473,24 @@ mod tests {
             )],
             "only the settings nodes are written; `menu` is not touched"
         );
+    }
+
+    #[test]
+    fn the_permissions_switch_is_counted_where_no_people_node_sits_beside_it() {
+        let switch = vec![("permissions".to_owned(), json!({ "enforced": true }))];
+        let people = json!({ "permissions": { "staff": [] } });
+        assert!(switch_without_people(&switch, &json!({})));
+        assert!(switch_without_people(&switch, &serde_json::Value::Null));
+        assert!(
+            !switch_without_people(&switch, &people),
+            "a people node is beside it"
+        );
+        // A switch somebody cleared still leaves the node, empty, so it still counts.
+        let cleared = vec![("permissions".to_owned(), json!({}))];
+        assert!(switch_without_people(&cleared, &json!({})));
+        // A publish that writes no permissions node leaves nothing to count.
+        let shift = vec![("shift".to_owned(), json!({ "no_shift_selling": REFUSE }))];
+        assert!(!switch_without_people(&shift, &json!({})));
     }
 
     #[test]
