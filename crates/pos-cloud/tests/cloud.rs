@@ -31030,6 +31030,12 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     let on_settle = listed("printing.receipt_printed_on_settle");
     assert_eq!(on_settle["kind"], "SETTING_KIND_BOOL");
     assert_eq!(on_settle["default"], true);
+    // A bilingual receipt is a choice each store makes, so a new store is given none (the owner,
+    // 2026-10-01).
+    let second = listed("printing.receipt_second_language");
+    assert_eq!(second["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(second["default"], "RECEIPT_SECOND_LANGUAGE_NONE");
+    assert!(second["preset"].is_null(), "{second}");
 
     // A store that turns the switch off has it on its `printing` node.
     let written = router

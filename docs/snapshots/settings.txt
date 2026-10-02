@@ -38,6 +38,17 @@ printing.receipt_printed_on_settle	scope=SETTING_SCOPE_TENANT
 printing.receipt_printed_on_settle	since=0.14.1
 printing.receipt_printed_on_settle	value=false
 printing.receipt_printed_on_settle	value=true
+printing.receipt_second_language
+printing.receipt_second_language	default=RECEIPT_SECOND_LANGUAGE_NONE
+printing.receipt_second_language	kind=SETTING_KIND_CHOICE
+printing.receipt_second_language	scope=SETTING_SCOPE_BRAND
+printing.receipt_second_language	scope=SETTING_SCOPE_STORE
+printing.receipt_second_language	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_second_language	scope=SETTING_SCOPE_TENANT
+printing.receipt_second_language	since=0.14.1
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_EN
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_NONE
+printing.receipt_second_language	value=RECEIPT_SECOND_LANGUAGE_VI
 qr.table_order
 qr.table_order	default=TABLE_ORDER_SEPARATE
 qr.table_order	kind=SETTING_KIND_CHOICE
