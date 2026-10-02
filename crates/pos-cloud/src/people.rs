@@ -22,14 +22,15 @@
 //!   of the **`pos-core` permission catalogue** (§9). The console never invents a permission string; it
 //!   offers [`permission_catalogue`] and stores a subset [`is_known_permission`] accepts. Templates are
 //!   archived, never deleted, like employees.
-//! - **[`AssignmentStore`]** — the join binding a person to one of their tenant's stores with a role.
-//!   Removing an assignment offboards the person from that store without touching the person, so —
-//!   unlike employees and roles — an assignment is a plain grant that is *removed*, not archived.
+//! - **[`AssignmentStore`]** — the join binding a person with a role to one of their tenant's stores,
+//!   a store group, or every store ([`AssignmentScope`]). Removing an assignment offboards the person
+//!   from where it reached without touching the person, so — unlike employees and roles — an
+//!   assignment is a plain grant that is *removed*, not archived.
 //!
 //! None of this is PII beyond the employee row itself: a role template is names + permission ids, an
-//! assignment is three ids. Tenant isolation is the explicit `tenant_id` column + RLS every cloud table
-//! carries; both sides of an assignment are the same tenant by that isolation plus the route-layer
-//! referential checks (ADR-0070).
+//! assignment is ids and a scope. Tenant isolation is the explicit `tenant_id` column + RLS every
+//! cloud table carries; both sides of an assignment are the same tenant by that isolation plus the
+//! route-layer referential checks (ADR-0070).
 
 use core::fmt;
 use core::future::Future;
@@ -39,9 +40,11 @@ use serde::Serialize;
 use pos_core::permission::Permission;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::WireEnum;
 
 use crate::paging::{Page, PageRequest};
 use crate::registry::EntityStatus;
+use crate::store_groups::StoreGroupId;
 use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// An employee's identifier — a ULID minted at creation. Defined here beside the seam, like
@@ -584,8 +587,91 @@ impl fmt::Display for AssignmentId {
     }
 }
 
-/// A person's assignment to a store with a role. All three ids are the same tenant (the `tenant_id`
-/// column + RLS isolate them; the route layer checks referential validity before writing).
+pos_proto::wire_enum! {
+    /// Which stores an assignment reaches
+    /// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 3): one, every store of a group, or every store of the tenant. The wire's
+    /// `scope_kind`. `ASSIGNMENT_SCOPE_UNSPECIFIED` is the zero value every wire enum has
+    /// (`docs/naming-and-api.md` §3.3), and no assignment is held at it.
+    AssignmentScopeKind, prefix = "ASSIGNMENT_SCOPE";
+    /// One store, named by `store_id`.
+    Store = "STORE",
+    /// Every store a group holds, named by `store_group_id`.
+    StoreGroup = "STORE_GROUP",
+    /// Every store of the tenant.
+    Tenant = "TENANT",
+}
+
+/// Where an assignment grants its role: its [`AssignmentScopeKind`] with the id that names it.
+///
+/// A group assignment reaches the stores the group holds when it is read, so a store that joins
+/// the group is reached and one that leaves is not
+/// ([ADR-0122](../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)). A tenant-wide one
+/// reaches every store of the tenant, a store opened after it included.
+///
+/// On the wire it is `scope_kind` with the id beside it: `store_id` for one store, where it always
+/// was, so a reader that predates the scopes reads a one-store assignment unchanged;
+/// `store_group_id` for a group; and neither for the tenant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AssignmentScope {
+    /// One store.
+    Store(StoreId),
+    /// Every store the group holds.
+    StoreGroup(StoreGroupId),
+    /// Every store of the tenant.
+    Tenant,
+}
+
+impl AssignmentScope {
+    /// The kind, as `scope_kind` carries it.
+    #[must_use]
+    pub const fn kind(self) -> AssignmentScopeKind {
+        match self {
+            Self::Store(_) => AssignmentScopeKind::Store,
+            Self::StoreGroup(_) => AssignmentScopeKind::StoreGroup,
+            Self::Tenant => AssignmentScopeKind::Tenant,
+        }
+    }
+
+    /// The store a one-store assignment names, and `None` for a wider one.
+    #[must_use]
+    pub const fn store_id(self) -> Option<StoreId> {
+        match self {
+            Self::Store(store_id) => Some(store_id),
+            Self::StoreGroup(_) | Self::Tenant => None,
+        }
+    }
+
+    /// The group a group assignment names, and `None` otherwise.
+    #[must_use]
+    pub const fn store_group_id(self) -> Option<StoreGroupId> {
+        match self {
+            Self::StoreGroup(store_group_id) => Some(store_group_id),
+            Self::Store(_) | Self::Tenant => None,
+        }
+    }
+}
+
+impl Serialize for AssignmentScope {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let mut fields = serializer.serialize_struct("AssignmentScope", 2)?;
+        fields.serialize_field("scope_kind", self.kind().as_wire())?;
+        match self {
+            Self::Store(store_id) => fields.serialize_field("store_id", store_id)?,
+            Self::StoreGroup(store_group_id) => {
+                fields.serialize_field("store_group_id", store_group_id)?;
+            }
+            Self::Tenant => {}
+        }
+        fields.end()
+    }
+}
+
+/// A person's assignment with a role, at one store, a store group or every store of the tenant
+/// ([`AssignmentScope`]). Every id is the same tenant (the `tenant_id` column + RLS isolate them;
+/// the route layer checks referential validity before writing).
 ///
 /// # Who the assignment is for
 ///
@@ -611,9 +697,10 @@ pub struct Assignment {
     pub tenant_id: TenantId,
     /// The assigned employee.
     pub employee_id: EmployeeId,
-    /// The store they work at.
-    pub store_id: StoreId,
-    /// The role that store grants them.
+    /// Where it grants the role: `scope_kind`, and `store_id` or `store_group_id` beside it.
+    #[serde(flatten)]
+    pub scope: AssignmentScope,
+    /// The role it grants wherever it reaches.
     pub role_template_id: RoleTemplateId,
     /// The assigned person's name, or `None` if no employee row matches `employee_id`.
     pub employee_name: Option<String>,
@@ -630,27 +717,33 @@ pub struct NewAssignment {
     pub tenant_id: TenantId,
     /// The employee to assign.
     pub employee_id: EmployeeId,
-    /// The store.
-    pub store_id: StoreId,
-    /// The role that store grants.
+    /// Where the role is granted.
+    pub scope: AssignmentScope,
+    /// The role it grants.
     pub role_template_id: RoleTemplateId,
 }
 
-/// Persists and reads per-store assignments. Unlike employees and roles, an assignment is a grant that
-/// is **removed** (offboarding from a store), not archived.
+/// Persists and reads assignments. Unlike employees and roles, an assignment is a grant that is
+/// **removed** (offboarding), not archived.
+///
+/// A person holds at most one assignment per store, one per group and one tenant-wide; the scopes
+/// do not exclude each other, so a person may hold a store's assignment and a tenant-wide one at
+/// the same store, and the compiler gives them the union.
 pub trait AssignmentStore {
-    /// Assigns an employee to a store with a role.
+    /// Assigns an employee with a role, at the assignment's scope.
     ///
     /// # Errors
     ///
-    /// [`AssignmentStoreError`] if the write fails (including a duplicate employee-at-store within the
-    /// tenant).
+    /// [`AssignmentStoreError`] if the write fails (including a second assignment of the same
+    /// employee at the same store or group, or tenant-wide twice).
     fn assign(
         &self,
         assignment: &NewAssignment,
     ) -> impl Future<Output = Result<(), AssignmentStoreError>> + Send;
 
-    /// Lists the assignments at a store.
+    /// Lists every assignment that reaches a store: the store's own, those naming a group the
+    /// store is a member of, and the tenant-wide ones — everyone who works there, which is what the
+    /// store's `permissions` node is compiled from.
     ///
     /// # Errors
     ///
@@ -661,7 +754,28 @@ pub trait AssignmentStore {
         store_id: StoreId,
     ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
 
-    /// Lists the stores a person is assigned to.
+    /// Lists the assignments that name a store group — the ones a change to its membership moves.
+    ///
+    /// # Errors
+    ///
+    /// [`AssignmentStoreError`] if the read fails.
+    fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
+
+    /// Lists the tenant-wide assignments.
+    ///
+    /// # Errors
+    ///
+    /// [`AssignmentStoreError`] if the read fails.
+    fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
+
+    /// Lists a person's assignments, of every scope.
     ///
     /// # Errors
     ///
@@ -672,9 +786,9 @@ pub trait AssignmentStore {
         employee_id: EmployeeId,
     ) -> impl Future<Output = Result<Vec<Assignment>, AssignmentStoreError>> + Send;
 
-    /// Lists the assignments that grant a role, at every store.
+    /// Lists the assignments that grant a role, of every scope.
     ///
-    /// The stores these name are the ones archiving the role reaches
+    /// The stores these reach are the ones archiving the role reaches
     /// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
     /// decision 7): each must be told at once that the role no longer grants anything.
     ///
@@ -689,8 +803,8 @@ pub trait AssignmentStore {
 
     /// Reads one assignment within its tenant, or `None`.
     ///
-    /// Read before a removal, which needs the store the grant was at: that store is told at once
-    /// (ADR-0158 decision 7), and the row will be gone by the time anyone asks.
+    /// Read before a removal, which needs the scope the grant was at: every store it reaches is
+    /// told at once (ADR-0158 decision 7), and the row will be gone by the time anyone asks.
     ///
     /// # Errors
     ///
@@ -701,7 +815,8 @@ pub trait AssignmentStore {
         assignment_id: AssignmentId,
     ) -> impl Future<Output = Result<Option<Assignment>, AssignmentStoreError>> + Send;
 
-    /// Removes an assignment (offboards the person from that store). Returns whether a row was removed.
+    /// Removes an assignment (offboards the person from where it reached). Returns whether a row was
+    /// removed.
     ///
     /// # Errors
     ///
@@ -714,7 +829,7 @@ pub trait AssignmentStore {
 }
 
 /// A failure of the assignment store — the database is unreachable or a write violated a constraint
-/// (e.g. the same employee assigned to the same store twice).
+/// (e.g. the same employee assigned to the same store, or the same group, twice).
 #[derive(Debug, thiserror::Error)]
 #[error("the assignment store failed: {0}")]
 pub struct AssignmentStoreError(String);
@@ -729,8 +844,58 @@ impl AssignmentStoreError {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_pin_flagged_permission, permission_catalogue};
+    use super::{
+        Assignment, AssignmentId, AssignmentScope, EmployeeId, RoleTemplateId,
+        is_pin_flagged_permission, permission_catalogue,
+    };
+    use crate::store_groups::StoreGroupId;
     use pos_core::permission::Permission;
+    use pos_proto::ids::{StoreId, TenantId};
+    use pos_proto::ulid::Ulid;
+
+    /// A one-store assignment reads as it did, with `scope_kind` added before the `store_id` it
+    /// always carried; a group's names its group instead, and a tenant-wide one names neither
+    /// (ADR-0158 decision 3).
+    #[test]
+    fn an_assignment_carries_its_scope_beside_the_id_it_names() {
+        let at = |scope| Assignment {
+            assignment_id: AssignmentId::new(Ulid::from_u128(1)),
+            tenant_id: TenantId::new(Ulid::from_u128(2)),
+            employee_id: EmployeeId::new(Ulid::from_u128(3)),
+            scope,
+            role_template_id: RoleTemplateId::new(Ulid::from_u128(4)),
+            employee_name: None,
+            employee_code: None,
+        };
+        let id = |n: u128| Ulid::from_u128(n).to_string();
+        let store = AssignmentScope::Store(StoreId::new(Ulid::from_u128(5)));
+        assert_eq!(
+            serde_json::to_string(&at(store)).expect("serialise"),
+            format!(
+                "{{\"assignment_id\":\"{}\",\"tenant_id\":\"{}\",\"employee_id\":\"{}\",\
+                 \"scope_kind\":\"ASSIGNMENT_SCOPE_STORE\",\"store_id\":\"{}\",\
+                 \"role_template_id\":\"{}\",\"employee_name\":null,\"employee_code\":null}}",
+                id(1),
+                id(2),
+                id(3),
+                id(5),
+                id(4)
+            )
+        );
+
+        let group = serde_json::to_value(at(AssignmentScope::StoreGroup(StoreGroupId::new(
+            Ulid::from_u128(6),
+        ))))
+        .expect("serialise");
+        assert_eq!(group["scope_kind"], "ASSIGNMENT_SCOPE_STORE_GROUP");
+        assert_eq!(group["store_group_id"], id(6));
+        assert!(group.get("store_id").is_none());
+
+        let everywhere = serde_json::to_value(at(AssignmentScope::Tenant)).expect("serialise");
+        assert_eq!(everywhere["scope_kind"], "ASSIGNMENT_SCOPE_TENANT");
+        assert!(everywhere.get("store_id").is_none());
+        assert!(everywhere.get("store_group_id").is_none());
+    }
 
     /// Migration 0074 gave every role that existed each PIN-flagged permission it did not grant
     /// directly, with approval, from a literal list in its SQL: the catalogue's PIN-flagged

@@ -44,9 +44,12 @@ struct Held<'a> {
 /// Each person appears once, however many assignments they have at the store, holding the **union**
 /// of their roles' permissions and the **highest** of their roles' discount ceilings
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
-/// The schema allows one assignment per person and store today, and assignments that reach a store
-/// group or every store will give one person several at once; a node listing the same code twice
-/// would leave the till to pick one of them.
+/// A person holds at most one assignment per store, one per store group and one tenant-wide, so a
+/// store their own assignment, a group's and the tenant's all reach gives them several at once; a
+/// node listing the same code twice would leave the till to pick one of them. The scope is not read
+/// here: the caller hands in every assignment that reaches the store
+/// ([`AssignmentStore::list_for_store`](crate::people::AssignmentStore::list_for_store)), whatever
+/// it names.
 ///
 /// A role grants each permission directly or with approval (decision 4), and a person holds a
 /// permission with approval when one of their roles grants it so and **none grants it directly**:
@@ -159,9 +162,11 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use crate::people::{
-        Assignment, AssignmentId, Employee, EmployeeId, RoleTemplate, RoleTemplateId,
+        Assignment, AssignmentId, AssignmentScope, Employee, EmployeeId, RoleTemplate,
+        RoleTemplateId,
     };
     use crate::registry::EntityStatus;
+    use crate::store_groups::StoreGroupId;
 
     fn employee(id: u128, code: &str, name: &str, status: EntityStatus) -> Employee {
         Employee {
@@ -212,7 +217,7 @@ mod tests {
             assignment_id: AssignmentId::new(Ulid::from_u128(id)),
             tenant_id: TenantId::new(Ulid::from_u128(0x7E)),
             employee_id: EmployeeId::new(Ulid::from_u128(employee)),
-            store_id: StoreId::new(Ulid::from_u128(store)),
+            scope: AssignmentScope::Store(StoreId::new(Ulid::from_u128(store))),
             role_template_id: RoleTemplateId::new(Ulid::from_u128(role)),
             // The compiler pairs an assignment with its employee by id, out of the whole roster it
             // is handed — the resolved name is for the console's paged read, and this path has no
@@ -389,7 +394,9 @@ mod tests {
         assert_eq!(bao.discount_ceiling_minor, Some(20_000));
     }
 
-    /// ADR-0158 decision 3: a person with several roles at one store holds all of them at once.
+    /// ADR-0158 decision 3: a person with several roles at one store holds all of them at once,
+    /// whatever reaches the store with each — the store's own assignment, a group's or the
+    /// tenant's.
     #[test]
     fn several_assignments_at_one_store_give_the_union_and_the_highest_ceiling() {
         let store = StoreId::new(Ulid::from_u128(0x5703B));
@@ -412,8 +419,14 @@ mod tests {
         ];
         let assignments = vec![
             assignment(20, 1, 0x5703B, 10),
-            assignment(21, 1, 0x5703B, 11),
-            assignment(22, 1, 0x5703B, 12),
+            Assignment {
+                scope: AssignmentScope::StoreGroup(StoreGroupId::new(Ulid::from_u128(0x6A))),
+                ..assignment(21, 1, 0x5703B, 11)
+            },
+            Assignment {
+                scope: AssignmentScope::Tenant,
+                ..assignment(22, 1, 0x5703B, 12)
+            },
         ];
 
         let document =

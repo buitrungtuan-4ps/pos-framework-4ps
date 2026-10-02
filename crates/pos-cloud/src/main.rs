@@ -616,6 +616,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         // already hold, which is what makes the batch the same code path rather than a second one:
         // it calls each node's own compiler and the shared config-tree write, so a document a batch
         // produces is byte-for-byte the document that route would have produced.
+        //
+        // The people store is here because an assignment can name a group (ADR-0158): a store that
+        // joins or leaves such a group gains or loses its people, and is published at once.
         .merge(http::store_group_router(
             store.store_groups(),
             store.registry(),
@@ -629,6 +632,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 store.people(),
                 store.floor(),
             ),
+            store.people(),
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
@@ -679,14 +683,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
         ))
         // People & access (ADR-0070): employees, role templates over the pos-core catalogue, and
-        // per-store assignments, with PIN set/reset. Every write is audited (id/code/role, never the
-        // name or PIN). `store.people()` is the employee, role-template, and assignment seam at once.
-        // The registry checks an assignment's store, and the config trees take the `permissions`
-        // node that removing an assignment or archiving a person or role publishes at once
-        // (ADR-0158 decision 7).
+        // assignments to a store, a store group or every store, with PIN set/reset. Every write is
+        // audited (id/code/role, never the name or PIN). `store.people()` is the employee,
+        // role-template, and assignment seam at once. The registry checks an assignment's store and
+        // the store groups its group, both say which stores a wider one reaches, and the config
+        // trees take the `permissions` node that removing an assignment, archiving a person or role,
+        // or assigning someone to a group or every store publishes at once (ADR-0158 decisions 3
+        // and 7).
         .merge(http::people_router(
             store.people(),
             store.registry(),
+            store.store_groups(),
             store.config_trees(),
             store.admin(),
             SystemClock,

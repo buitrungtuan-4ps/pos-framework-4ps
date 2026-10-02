@@ -142,9 +142,10 @@ impl EventStoreHarness for StoreHarness {
                  catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
                  catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
-                 employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
+                 employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
                  integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-                 reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
+                 reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
+                 store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
                  subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
@@ -206,9 +207,10 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
              catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
-             employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
+             employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
              integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, reconcile_runs, \
-             reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, store_lease, \
+             reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
+                 store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
              subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
@@ -6418,7 +6420,8 @@ mod role_templates_and_assignments {
                 .expect("by id")
                 .expect("the assignment exists");
             assert_eq!(
-                one.store_id, "01STORE000000000000000000T",
+                (one.scope_kind.as_str(), one.store_id.as_deref()),
+                ("STORE", Some("01STORE000000000000000000T")),
                 "the store a removal must tell"
             );
             assert_eq!(one.employee_name.as_deref(), Some("Lan"));
@@ -6443,7 +6446,7 @@ mod role_templates_and_assignments {
                 .await
                 .expect("by role")
                 .into_iter()
-                .map(|row| row.store_id)
+                .filter_map(|row| row.store_id)
                 .collect();
             stores.sort();
             assert_eq!(
@@ -6461,6 +6464,307 @@ mod role_templates_and_assignments {
             );
 
             drop(admin);
+        });
+    }
+
+    /// The ids of a read's rows, sorted, so a test can compare reads whatever order they return in.
+    fn ids_of(rows: Vec<store_postgres::AssignmentRow>) -> Vec<String> {
+        let mut ids: Vec<String> = rows.into_iter().map(|row| row.id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// The wider scopes of migration 0077
+    /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 3). An assignment to a store group or to every store is a row of
+    /// `employee_scope_assignments`, and every assignment read lists it beside the one-store rows. A
+    /// store's read lists every row that reaches it — its own, its groups' through
+    /// `store_group_members` in the same statement, and its tenant's — so a membership change moves
+    /// a group's rows from the next read on. The checks hold each scope to exactly its id, the
+    /// partial unique indexes allow one row per person and group and one per person tenant-wide, a
+    /// removal finds a row in either table by its id, and re-running the schema, as every boot does,
+    /// changes none of it.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one table's rules, each step reading the rows the one before wrote"
+    )]
+    fn a_wider_assignment_reaches_through_its_group_and_its_tenant() {
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            let people = store.people();
+            let groups = store.store_groups();
+            let (north, south, east) = (
+                "01STORE00000000000000000N1",
+                "01STORE00000000000000000S1",
+                "01STORE00000000000000000E1",
+            );
+            let airport = "01GROUP0000000000000000AP1";
+            let (cashier, lead) = ("01ROLE000000000000000000A1", "01ROLE000000000000000000B2");
+            let (alice, bao, cam) = (
+                "01EMP0000000000000000000A1",
+                "01EMP0000000000000000000B2",
+                "01EMP0000000000000000000C3",
+            );
+            let created = groups
+                .insert_group("tenant-a", airport, "Airport", "active")
+                .await
+                .expect("insert the group")
+                .expect("a free id");
+            let members = [north.to_owned(), south.to_owned()];
+            let Ok(RowUpdate::Updated(version)) = groups
+                .set_members_at("tenant-a", airport, &members, &created)
+                .await
+            else {
+                panic!("the membership applies at the group's version");
+            };
+
+            people
+                .insert_assignment(
+                    "01ASSIGN0000000000000WIDE1",
+                    "tenant-a",
+                    alice,
+                    north,
+                    cashier,
+                )
+                .await
+                .expect("one store");
+            people
+                .insert_scope_assignment(
+                    "01ASSIGN0000000000000WIDE2",
+                    "tenant-a",
+                    bao,
+                    "STORE_GROUP",
+                    Some(airport),
+                    cashier,
+                )
+                .await
+                .expect("a group");
+            for (id, tenant) in [
+                ("01ASSIGN0000000000000WIDE3", "tenant-a"),
+                ("01ASSIGN0000000000000WIDE4", "tenant-b"),
+            ] {
+                people
+                    .insert_scope_assignment(id, tenant, cam, "TENANT", None, lead)
+                    .await
+                    .expect("every store");
+            }
+
+            // Each scope holds exactly its id, and one row per person and group or tenant-wide.
+            for (id, employee, kind, group, why) in [
+                (
+                    "01ASSIGN000000000000BAD01",
+                    alice,
+                    "STORE_GROUP",
+                    None,
+                    "a group's row names its group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD02",
+                    alice,
+                    "TENANT",
+                    Some(airport),
+                    "a tenant-wide row names no group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD03",
+                    alice,
+                    "STORE",
+                    None,
+                    "a one-store row is not this table's",
+                ),
+                (
+                    "01ASSIGN000000000000BAD04",
+                    bao,
+                    "STORE_GROUP",
+                    Some(airport),
+                    "one per person and group",
+                ),
+                (
+                    "01ASSIGN000000000000BAD05",
+                    cam,
+                    "TENANT",
+                    None,
+                    "one per person tenant-wide",
+                ),
+            ] {
+                assert!(
+                    people
+                        .insert_scope_assignment(id, "tenant-a", employee, kind, group, lead)
+                        .await
+                        .is_err(),
+                    "{why}"
+                );
+            }
+            people
+                .insert_scope_assignment(
+                    "01ASSIGN0000000000000WIDE5",
+                    "tenant-a",
+                    alice,
+                    "TENANT",
+                    None,
+                    lead,
+                )
+                .await
+                .expect("a one-store row and a tenant-wide one, for the same person");
+
+            // A store's read reaches through its groups and its tenant, and no further.
+            let at =
+                |store_id: &'static str| people.fetch_assignments_for_store("tenant-a", store_id);
+            assert_eq!(
+                ids_of(at(north).await.expect("by store")),
+                vec![
+                    "01ASSIGN0000000000000WIDE1",
+                    "01ASSIGN0000000000000WIDE2",
+                    "01ASSIGN0000000000000WIDE3",
+                    "01ASSIGN0000000000000WIDE5",
+                ]
+            );
+            assert_eq!(
+                ids_of(at(east).await.expect("by store")),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"],
+                "not in the group, and none of tenant B's"
+            );
+            let row = at(south)
+                .await
+                .expect("by store")
+                .into_iter()
+                .find(|row| row.id == "01ASSIGN0000000000000WIDE2")
+                .expect("the group's row reaches a member");
+            assert_eq!(
+                (row.scope_kind.as_str(), row.store_id, row.store_group_id),
+                ("STORE_GROUP", None, Some(airport.to_owned()))
+            );
+
+            // A membership change moves the group's rows from the next read on.
+            let moved = [south.to_owned(), east.to_owned()];
+            assert!(matches!(
+                groups
+                    .set_members_at("tenant-a", airport, &moved, &version)
+                    .await
+                    .expect("move the membership"),
+                RowUpdate::Updated(_)
+            ));
+            assert!(
+                !ids_of(at(north).await.expect("by store"))
+                    .contains(&"01ASSIGN0000000000000WIDE2".to_owned()),
+                "the store that left"
+            );
+            assert!(
+                ids_of(at(east).await.expect("by store"))
+                    .contains(&"01ASSIGN0000000000000WIDE2".to_owned()),
+                "the store that joined"
+            );
+
+            // The wider rows read by what they name, by person and by role, and by id.
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_group("tenant-a", airport)
+                        .await
+                        .expect("by group")
+                ),
+                vec!["01ASSIGN0000000000000WIDE2"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_tenant_wide_assignments("tenant-a")
+                        .await
+                        .expect("tenant-wide")
+                ),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_employee("tenant-a", alice)
+                        .await
+                        .expect("by employee")
+                ),
+                vec!["01ASSIGN0000000000000WIDE1", "01ASSIGN0000000000000WIDE5"]
+            );
+            assert_eq!(
+                ids_of(
+                    people
+                        .fetch_assignments_for_role("tenant-a", lead)
+                        .await
+                        .expect("by role")
+                ),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
+            let wide = people
+                .fetch_assignment("tenant-a", "01ASSIGN0000000000000WIDE3")
+                .await
+                .expect("by id")
+                .expect("the row exists");
+            assert_eq!(
+                (wide.scope_kind.as_str(), wide.store_id, wide.store_group_id),
+                ("TENANT", None, None)
+            );
+
+            // A removal finds the row in either table, within its tenant.
+            assert!(
+                !people
+                    .delete_assignment("tenant-b", "01ASSIGN0000000000000WIDE2")
+                    .await
+                    .expect("cross-tenant remove")
+            );
+            for id in ["01ASSIGN0000000000000WIDE2", "01ASSIGN0000000000000WIDE1"] {
+                assert!(
+                    people
+                        .delete_assignment("tenant-a", id)
+                        .await
+                        .expect("remove")
+                );
+                assert!(
+                    !people
+                        .delete_assignment("tenant-a", id)
+                        .await
+                        .expect("again")
+                );
+            }
+
+            // The query role sees its own tenant's rows only, and may delete them.
+            admin
+                .batch_execute("SET ROLE app_tenant")
+                .await
+                .expect("assume the app_tenant role");
+            admin
+                .execute(
+                    "SELECT set_config('app.tenant_id', $1, false)",
+                    &[&"tenant-b"],
+                )
+                .await
+                .expect("scope the session to tenant B");
+            let visible: Vec<String> = admin
+                .query("SELECT assignment_id FROM employee_scope_assignments", &[])
+                .await
+                .expect("readable")
+                .iter()
+                .map(|row| row.get(0))
+                .collect();
+            let can_delete: bool = admin
+                .query_one(
+                    "SELECT has_table_privilege('app_tenant', 'employee_scope_assignments', 'DELETE')",
+                    &[],
+                )
+                .await
+                .expect("privilege check")
+                .get(0);
+            admin
+                .batch_execute("RESET ROLE")
+                .await
+                .expect("reset the role");
+            assert_eq!(visible, vec!["01ASSIGN0000000000000WIDE4".to_owned()]);
+            assert!(can_delete, "an assignment is removed, not archived");
+
+            // The schema again, as the next boot applies it: nothing written is lost.
+            store.migrate().await.expect("migrate again");
+            assert_eq!(
+                ids_of(at(east).await.expect("by store")),
+                vec!["01ASSIGN0000000000000WIDE3", "01ASSIGN0000000000000WIDE5"]
+            );
         });
     }
 }

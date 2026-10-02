@@ -292,6 +292,10 @@ const MIGRATION_0075: &str = include_str!("../migrations/0075_fee_rules.sql");
 /// otherwise ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
 const MIGRATION_0076: &str = include_str!("../migrations/0076_roles_can_waive_a_fee.sql");
 
+/// An assignment reaches a store group or every store of the tenant, beside the one-store rows
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
+const MIGRATION_0077: &str = include_str!("../migrations/0077_employee_scope_assignments.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -654,6 +658,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0076)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0077)
             .await
             .map_err(unavailable)
     }

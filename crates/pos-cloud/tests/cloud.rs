@@ -8,6 +8,8 @@
 //! proven without a database, while the store-specific behaviour (RLS, partitioning, the rollup and
 //! API-key tables) is proven by `store-postgres`'s own integration suite.
 
+mod assignment_contract;
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -75,10 +77,11 @@ use pos_cloud::media::{
 use pos_cloud::orders::{StoreDirectory, orders_router};
 use pos_cloud::paging::{Page, PageRequest};
 use pos_cloud::people::{
-    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
-    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
-    RoleTemplateStoreError, RoleTemplateUpdate, is_known_permission, permission_catalogue,
+    Assignment, AssignmentId, AssignmentScope, AssignmentStore, AssignmentStoreError, Employee,
+    EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId,
+    RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate, is_known_permission,
+    permission_catalogue,
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
@@ -17738,28 +17741,48 @@ impl RoleTemplateStore for FakeRoleTemplates {
 
 /// The assignment store as an in-memory list — the same seam the binary implements. An assignment is
 /// removed (offboarding), not archived.
+///
+/// A group assignment reaches the stores `groups` holds when it is read, as the adapter's join on
+/// `store_group_members` does, so a test that hands the same [`FakeStoreGroups`] to the group routes
+/// ([`FakePeople::over`]) sees a membership change move who works where.
 #[derive(Clone, Default)]
 struct FakeAssignments {
     rows: Arc<Mutex<Vec<Assignment>>>,
+    groups: FakeStoreGroups,
+}
+
+impl FakeAssignments {
+    /// The rows of `tenant` that `keep` selects, in the order they were written.
+    fn select(&self, tenant: TenantId, keep: impl Fn(&Assignment) -> bool) -> Vec<Assignment> {
+        self.rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|row| row.tenant_id == tenant && keep(row))
+            .cloned()
+            .collect()
+    }
 }
 
 impl AssignmentStore for FakeAssignments {
     async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
         let mut rows = self.rows.lock().expect("lock");
+        // One per person and store, per person and group, and tenant-wide: the adapter's unique
+        // indexes, one per scope.
         if rows.iter().any(|row| {
             row.tenant_id == assignment.tenant_id
                 && row.employee_id == assignment.employee_id
-                && row.store_id == assignment.store_id
+                && row.scope == assignment.scope
         }) {
             return Err(AssignmentStoreError::new(
-                "the employee is already assigned to that store",
+                "the employee is already assigned there",
             ));
         }
         rows.push(Assignment {
             assignment_id: assignment.assignment_id,
             tenant_id: assignment.tenant_id,
             employee_id: assignment.employee_id,
-            store_id: assignment.store_id,
+            scope: assignment.scope,
             role_template_id: assignment.role_template_id,
             // Stored unresolved: this fake holds only assignments, so it has no roster to join
             // against — exactly the state the adapter's `LEFT JOIN` reports when no employee row
@@ -17775,14 +17798,37 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
+        let member_of: Vec<StoreGroupId> = self
+            .groups
+            .members
             .lock()
             .expect("lock")
             .iter()
-            .filter(|row| row.tenant_id == tenant && row.store_id == store_id)
-            .cloned()
-            .collect())
+            .filter(|((owner, _), stores)| *owner == tenant && stores.contains(&store_id))
+            .map(|((_, group_id), _)| *group_id)
+            .collect();
+        Ok(self.select(tenant, |row| match row.scope {
+            AssignmentScope::Store(at) => at == store_id,
+            AssignmentScope::StoreGroup(group_id) => member_of.contains(&group_id),
+            AssignmentScope::Tenant => true,
+        }))
+    }
+
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self.select(tenant, |row| {
+            row.scope == AssignmentScope::StoreGroup(store_group_id)
+        }))
+    }
+
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        Ok(self.select(tenant, |row| row.scope == AssignmentScope::Tenant))
     }
 
     async fn list_for_employee(
@@ -17790,14 +17836,7 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         employee_id: EmployeeId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|row| row.tenant_id == tenant && row.employee_id == employee_id)
-            .cloned()
-            .collect())
+        Ok(self.select(tenant, |row| row.employee_id == employee_id))
     }
 
     async fn list_for_role(
@@ -17805,14 +17844,7 @@ impl AssignmentStore for FakeAssignments {
         tenant: TenantId,
         role_template_id: RoleTemplateId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|row| row.tenant_id == tenant && row.role_template_id == role_template_id)
-            .cloned()
-            .collect())
+        Ok(self.select(tenant, |row| row.role_template_id == role_template_id))
     }
 
     async fn get(
@@ -17821,12 +17853,9 @@ impl AssignmentStore for FakeAssignments {
         assignment_id: AssignmentId,
     ) -> Result<Option<Assignment>, AssignmentStoreError> {
         Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .find(|row| row.tenant_id == tenant && row.assignment_id == assignment_id)
-            .cloned())
+            .select(tenant, |row| row.assignment_id == assignment_id)
+            .into_iter()
+            .next())
     }
 
     async fn remove(
@@ -17934,83 +17963,17 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
     assert_eq!(view.record.status, EntityStatus::Archived);
 }
 
+/// The in-memory assignment store holds the seam's contract, the one `PostgresPeople` is held to in
+/// `tests/assignment_store_postgres.rs`: every scope, reach through a group's membership as it
+/// changes, one assignment per person and place, and nothing across a tenant.
 #[tokio::test]
-async fn assignment_store_binds_person_to_store_and_removes_scoped_by_tenant() {
-    let store = FakeAssignments::default();
-    let mine = tenant();
-    let other = TenantId::new(Ulid::from_u128(0xB0B));
-    let where_they_work = store_id();
-    let alice = EmployeeId::new(Ulid::from_u128(1));
-    let cashier = RoleTemplateId::new(Ulid::from_u128(10));
-    let assignment = AssignmentId::new(Ulid::from_u128(20));
-
-    store
-        .assign(&NewAssignment {
-            assignment_id: assignment,
-            tenant_id: mine,
-            employee_id: alice,
-            store_id: where_they_work,
-            role_template_id: cashier,
-        })
-        .await
-        .expect("assign alice");
-    // The same person at the same store twice is refused.
-    assert!(
-        store
-            .assign(&NewAssignment {
-                assignment_id: AssignmentId::new(Ulid::from_u128(21)),
-                tenant_id: mine,
-                employee_id: alice,
-                store_id: where_they_work,
-                role_template_id: cashier,
-            })
-            .await
-            .is_err(),
-        "a person is assigned to a store at most once"
-    );
-
-    // Readable both ways, and tenant-scoped.
-    assert_eq!(
-        store
-            .list_for_store(mine, where_they_work)
-            .await
-            .expect("by store")
-            .len(),
-        1
-    );
-    assert_eq!(
-        store
-            .list_for_employee(mine, alice)
-            .await
-            .expect("by employee")
-            .len(),
-        1
-    );
-    assert!(
-        store
-            .list_for_store(other, where_they_work)
-            .await
-            .expect("other tenant")
-            .is_empty(),
-        "another tenant sees none of these assignments"
-    );
-
-    // Removing across a tenant boundary matches nothing; removing within the tenant offboards.
-    assert!(
-        !store
-            .remove(other, assignment)
-            .await
-            .expect("remove across tenant")
-    );
-    assert!(store.remove(mine, assignment).await.expect("remove"));
-    assert!(
-        store
-            .list_for_employee(mine, alice)
-            .await
-            .expect("after remove")
-            .is_empty(),
-        "the assignment is gone"
-    );
+async fn the_in_memory_assignment_store_holds_the_contract() {
+    let groups = FakeStoreGroups::default();
+    let assignments = FakeAssignments {
+        groups: groups.clone(),
+        ..FakeAssignments::default()
+    };
+    assignment_contract::holds(&assignments, &groups, 0).await;
 }
 
 /// The three people seams as one type — what a router that carries a single `people` state needs (the
@@ -18095,6 +18058,23 @@ impl RoleTemplateStore for FakePeople {
 }
 
 impl FakePeople {
+    /// A roster whose group assignments reach the stores `groups` holds — the store-group fake the
+    /// same test's group routes write, so a membership change there moves who works where.
+    fn over(groups: &FakeStoreGroups) -> Self {
+        Self {
+            assignments: FakeAssignments {
+                groups: groups.clone(),
+                ..FakeAssignments::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// The store groups this roster's group assignments reach through.
+    fn groups(&self) -> FakeStoreGroups {
+        self.assignments.groups.clone()
+    }
+
     /// Fills in each assignment's `employee_name`/`employee_code` from the roster this fake also
     /// holds — the in-memory stand-in for the adapter's `LEFT JOIN`.
     ///
@@ -18138,6 +18118,24 @@ impl AssignmentStore for FakePeople {
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
         let rows = self.assignments.list_for_store(tenant, store_id).await?;
+        self.resolved(tenant, rows).await
+    }
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self
+            .assignments
+            .list_for_group(tenant, store_group_id)
+            .await?;
+        self.resolved(tenant, rows).await
+    }
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        let rows = self.assignments.list_tenant_wide(tenant).await?;
         self.resolved(tenant, rows).await
     }
     async fn list_for_employee(
@@ -18218,6 +18216,7 @@ fn people_app(
         .merge(http::people_router(
             people.clone(),
             registry,
+            people.groups(),
             config.clone(),
             admin.clone(),
             clock(),
@@ -18272,7 +18271,7 @@ async fn seed_a_cashier(people: &FakePeople, store: StoreId) -> (EmployeeId, Rol
             assignment_id: AssignmentId::new(Ulid::from_u128(1)),
             tenant_id: mine,
             employee_id: alice,
-            store_id: store,
+            scope: AssignmentScope::Store(store),
             role_template_id: cashier,
         },
     )
@@ -20150,6 +20149,7 @@ async fn removing_an_assignment_takes_the_person_off_the_stores_node_at_once() {
         Some(serde_json::json!({
             "id": grant.to_string(),
             "employee_id": alice.to_string(),
+            "scope_kind": "ASSIGNMENT_SCOPE_STORE",
             "store_id": store_id().to_string(),
             "role_template_id": cashier.to_string(),
         })),
@@ -20192,7 +20192,7 @@ async fn archiving_a_person_tells_every_store_they_work_at_and_a_rename_tells_no
             assignment_id: AssignmentId::new(Ulid::from_u128(2)),
             tenant_id: tenant(),
             employee_id: alice,
-            store_id: second,
+            scope: AssignmentScope::Store(second),
             role_template_id: cashier,
         },
     )
@@ -20305,7 +20305,7 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
             assignment_id: AssignmentId::new(Ulid::from_u128(2)),
             tenant_id: tenant(),
             employee_id: alice,
-            store_id: elsewhere,
+            scope: AssignmentScope::Store(elsewhere),
             role_template_id: cook,
         },
     )
@@ -20376,13 +20376,11 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
     );
 }
 
-/// A person with several roles at one store holds the union of their permissions and the highest of
-/// their ceilings (ADR-0158 decision 3). The schema keeps one assignment per person and store
-/// today, so the second grant is written beside the first directly, as an assignment that reaches a
-/// store group or every store will one day write it.
+/// A person with a store's role and a tenant-wide one holds, at that store, the union of their
+/// permissions and the highest of their ceilings (ADR-0158 decision 3). The tenant-wide grant is
+/// made through the route, which publishes it to the store at once.
 #[tokio::test]
-async fn a_person_with_two_roles_at_a_store_holds_both() {
-    let admin = provisioned_admin();
+async fn a_person_with_a_stores_role_and_a_tenant_wide_role_holds_both_there() {
     let people = FakePeople::default();
     let config = FakeConfigTrees::default();
     let (alice, _cashier) = seed_a_cashier(&people, store_id()).await;
@@ -20403,29 +20401,21 @@ async fn a_person_with_two_roles_at_a_store_holds_both() {
     )
     .await
     .expect("create role");
-    people
-        .assignments
-        .rows
-        .lock()
-        .expect("lock")
-        .push(Assignment {
-            assignment_id: AssignmentId::new(Ulid::from_u128(2)),
-            tenant_id: tenant(),
-            employee_id: alice,
-            store_id: store_id(),
-            role_template_id: lead,
-            employee_name: None,
-            employee_code: None,
-        });
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
     let router = people_app(
-        admin,
+        provisioned_admin(),
         people,
-        FakeRegistry::default(),
+        registry,
         config.clone(),
         Arc::new(NoopAuditRecorder),
     );
     let owner = admin_cookie(&router).await;
-    publish_people(&router, &owner, store_id()).await;
+    let everywhere = [("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned())];
+    let created =
+        post_assignment(&router, &owner, &assignment_body(alice, lead, &everywhere)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(publish_report(created).await, vec![applied(store_id())]);
 
     let staff = staff_at(&config, store_id()).await;
     assert_eq!(staff.len(), 1, "one person, listed once");
@@ -20842,6 +20832,721 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
         .collect();
     assert!(rule_ids.contains(&"pay_first.excludes.tables"));
     assert!(rule_ids.contains(&"seats.requires.tables"));
+}
+
+// --- ADR-0158 decision 3: an assignment reaches a store, a store group or every store -----------
+
+/// A store these tests assign people through, numbered so the reports' store order is the order
+/// the tests list them in.
+fn shop(n: u128) -> StoreId {
+    StoreId::new(Ulid::from_u128(0x4000 + n))
+}
+
+/// Seeds a person through the seam and returns their id.
+async fn seed_person(people: &FakePeople, n: u128, code: &str, name: &str) -> EmployeeId {
+    let employee_id = EmployeeId::new(Ulid::from_u128(n));
+    EmployeeStore::create(
+        people,
+        &NewEmployee {
+            employee_id,
+            tenant_id: tenant(),
+            code: code.to_owned(),
+            name: name.to_owned(),
+        },
+    )
+    .await
+    .expect("create employee");
+    employee_id
+}
+
+/// Seeds an active store group holding `members`, in the groups the roster's group assignments
+/// reach through, and returns its id.
+fn seed_group(people: &FakePeople, n: u128, members: &[StoreId]) -> StoreGroupId {
+    let group_id = StoreGroupId::new(Ulid::from_u128(n));
+    people.groups().seed(
+        StoreGroup {
+            group_id,
+            tenant_id: tenant(),
+            name: format!("Group {n}"),
+            status: EntityStatus::Active,
+        },
+        members,
+    );
+    group_id
+}
+
+/// Seeds an assignment through the seam, as one written earlier.
+async fn seed_assignment(
+    people: &FakePeople,
+    n: u128,
+    employee_id: EmployeeId,
+    scope: AssignmentScope,
+    role_template_id: RoleTemplateId,
+) -> AssignmentId {
+    let assignment_id = AssignmentId::new(Ulid::from_u128(n));
+    AssignmentStore::assign(
+        people,
+        &NewAssignment {
+            assignment_id,
+            tenant_id: tenant(),
+            employee_id,
+            scope,
+            role_template_id,
+        },
+    )
+    .await
+    .expect("assign");
+    assignment_id
+}
+
+/// The staff codes a store's node lists now.
+async fn codes_at(config: &FakeConfigTrees, store: StoreId) -> Vec<String> {
+    staff_at(config, store)
+        .await
+        .iter()
+        .map(|member| member["code"].as_str().expect("a code").to_owned())
+        .collect()
+}
+
+/// A `POST /admin/assignments` body for `employee` with `role`, at the target `fields` name.
+fn assignment_body(
+    employee: EmployeeId,
+    role: RoleTemplateId,
+    fields: &[(&str, String)],
+) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "employee_id": employee.as_ulid().to_string(),
+        "role_template_id": role.as_ulid().to_string(),
+    });
+    for (field, value) in fields {
+        body[*field] = serde_json::json!(value);
+    }
+    body
+}
+
+/// Assigns through the route, as the console does.
+async fn post_assignment(
+    router: &axum::Router,
+    cookie: &str,
+    body: &serde_json::Value,
+) -> axum::response::Response {
+    router
+        .clone()
+        .oneshot(post_with_cookie("/admin/assignments", body, cookie))
+        .await
+        .expect("route the assignment")
+}
+
+/// The assignments a listing returns, read through the route.
+async fn listed(router: &axum::Router, cookie: &str, query: &str) -> Vec<serde_json::Value> {
+    let response = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/assignments?tenant_id={}&{query}",
+                tenant().as_ulid()
+            ),
+            cookie,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(response.status(), StatusCode::OK, "{query}");
+    json_body(response)
+        .await
+        .as_array()
+        .expect("an array")
+        .clone()
+}
+
+/// The people routes and the store-group routes over one roster and one set of groups, as
+/// `main.rs` wires them: a membership change reaches the people the group's assignments name.
+fn people_and_groups_app(
+    admin: FakeAdmin,
+    people: FakePeople,
+    registry: FakeRegistry,
+    config: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
+    people_app(
+        admin.clone(),
+        people.clone(),
+        registry.clone(),
+        config.clone(),
+        Arc::clone(&audit),
+    )
+    .merge(http::store_group_router(
+        people.groups(),
+        registry,
+        config,
+        Vec::new(),
+        people,
+        admin,
+        clock(),
+        audit,
+    ))
+}
+
+/// An assignment to every store publishes at once to each open store of the tenant, and not to an
+/// archived one; a store opened afterwards lists the person from its first publish (ADR-0158
+/// decision 3).
+#[tokio::test]
+async fn an_assignment_to_every_store_reaches_each_open_store_and_one_opened_later() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    seed_store(&registry, tenant(), shop(1), true);
+    seed_store(&registry, tenant(), shop(2), false);
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry.clone(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+
+    let everywhere = [("scope_kind", "ASSIGNMENT_SCOPE_TENANT".to_owned())];
+    let created =
+        post_assignment(&router, &owner, &assignment_body(bao, cashier, &everywhere)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        publish_report(created).await,
+        vec![applied(store_id()), applied(shop(1))],
+        "published at once to each open store, and not to the archived one"
+    );
+    assert_eq!(codes_at(&config, store_id()).await, vec!["C01", "C02"]);
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C02"]);
+    assert_eq!(versions_at(&config, shop(2)).await, 0);
+
+    // A store the tenant opens afterwards: nobody names it, and its first publish lists Bao.
+    seed_store(&registry, tenant(), shop(3), true);
+    publish_people(&router, &owner, shop(3)).await;
+    assert_eq!(codes_at(&config, shop(3)).await, vec!["C02"]);
+    let rows = listed(&router, &owner, "scope_kind=ASSIGNMENT_SCOPE_TENANT").await;
+    assert_eq!(rows.len(), 1, "the tenant's rows, listed by their kind");
+    assert_eq!(rows[0]["scope_kind"], "ASSIGNMENT_SCOPE_TENANT");
+    assert!(rows[0].get("store_id").is_none() && rows[0].get("store_group_id").is_none());
+}
+
+/// An assignment to a store group publishes at once to exactly the stores the group holds, and
+/// each listing shows the scope it is at (ADR-0158 decision 3).
+#[tokio::test]
+async fn an_assignment_to_a_group_reaches_exactly_its_members() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [shop(1), shop(2), shop(3)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1), shop(2)]);
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+
+    let through = [("store_group_id", airport.as_ulid().to_string())];
+    let created = post_assignment(&router, &owner, &assignment_body(bao, cashier, &through)).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        publish_report(created).await,
+        vec![applied(shop(1)), applied(shop(2))],
+        "each member, and nobody else"
+    );
+    for member in [shop(1), shop(2)] {
+        assert_eq!(codes_at(&config, member).await, vec!["C02"]);
+    }
+    assert_eq!(versions_at(&config, shop(3)).await, 0, "not a member");
+    assert_eq!(
+        versions_at(&config, store_id()).await,
+        0,
+        "nor a store outside the group"
+    );
+
+    let by_group = listed(
+        &router,
+        &owner,
+        &format!("store_group_id={}", airport.as_ulid()),
+    )
+    .await;
+    assert_eq!(by_group.len(), 1);
+    assert_eq!(by_group[0]["scope_kind"], "ASSIGNMENT_SCOPE_STORE_GROUP");
+    assert_eq!(by_group[0]["store_group_id"], airport.as_ulid().to_string());
+    assert_eq!(by_group[0]["employee_name"], "Bao");
+    let at_member = listed(&router, &owner, &format!("store_id={}", shop(1).as_ulid())).await;
+    assert_eq!(
+        at_member, by_group,
+        "a member's listing shows who works there through it"
+    );
+    assert!(
+        listed(&router, &owner, &format!("store_id={}", shop(3).as_ulid()))
+            .await
+            .is_empty()
+    );
+    let refused = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/assignments?tenant_id={}&scope_kind=ASSIGNMENT_SCOPE_STORE",
+                tenant().as_ulid()
+            ),
+            &owner,
+        ))
+        .await
+        .expect("route the listing");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(refused).await;
+    assert_eq!(body["error"]["details"][0]["field"], "scope_kind");
+    assert_eq!(body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE");
+}
+
+/// A store that joins or leaves a group some assignment names gains or loses those people, and is
+/// told at once; a group nothing names changes nobody's node (ADR-0158 decisions 3 and 7).
+#[tokio::test]
+async fn a_store_that_joins_or_leaves_a_named_group_is_told_at_once() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    for store in [shop(1), shop(2), shop(3)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    let quiet = seed_group(&people, 0x6A2, &[shop(1)]);
+    seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    let router = people_and_groups_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    publish_people(&router, &owner, shop(1)).await;
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C02"]);
+
+    let move_members = |group: StoreGroupId, members: Vec<StoreId>| {
+        let router = router.clone();
+        let owner = owner.clone();
+        let groups = people.groups();
+        async move {
+            let etag = StoreGroupStore::list_groups(&groups, tenant())
+                .await
+                .expect("list groups")
+                .into_iter()
+                .find(|row| row.record.group_id == group)
+                .expect("the group")
+                .etag;
+            let ids: Vec<String> = members.iter().map(|id| id.as_ulid().to_string()).collect();
+            router
+                .oneshot(put_with_etag(
+                    &format!("/admin/store-groups/{}/members", group.as_ulid()),
+                    &serde_json::json!({ "tenant_id": tenant().as_ulid().to_string(), "store_ids": ids }),
+                    &owner,
+                    etag.as_str(),
+                ))
+                .await
+                .expect("route the membership")
+        }
+    };
+
+    let moved = move_members(airport, vec![shop(2)]).await;
+    assert_eq!(moved.status(), StatusCode::OK);
+    assert_eq!(
+        publish_report(moved).await,
+        vec![applied(shop(1)), applied(shop(2))],
+        "the store that left and the store that joined"
+    );
+    assert!(
+        codes_at(&config, shop(1)).await.is_empty(),
+        "off the store that left"
+    );
+    assert_eq!(
+        codes_at(&config, shop(2)).await,
+        vec!["C02"],
+        "on the one that joined"
+    );
+    assert_eq!(
+        versions_at(&config, shop(3)).await,
+        0,
+        "untouched by the change"
+    );
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    assert!(
+        recorded
+            .iter()
+            .any(|entry| entry.action == "permissions.publish"
+                && entry.after.as_ref().is_some_and(|after| {
+                    after["store_group_id"] == serde_json::json!(airport.to_string())
+                })),
+        "the publish names the group that caused it"
+    );
+
+    let unnamed = move_members(quiet, vec![shop(3)]).await;
+    assert_eq!(unnamed.status(), StatusCode::OK);
+    assert!(
+        publish_report(unnamed).await.is_empty(),
+        "no assignment names it"
+    );
+    assert_eq!(versions_at(&config, shop(3)).await, 0);
+}
+
+/// Removing an assignment to a group or to every store publishes at once to every store it
+/// reached, and the trail records its scope (ADR-0158 decision 7).
+#[tokio::test]
+async fn removing_a_wider_assignment_tells_every_store_it_reached() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let audit = FakeAudit::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(&people, 0xCA3, "C03", "Cam").await;
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1), shop(2)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1), shop(2)]);
+    let grouped = seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    let everywhere = seed_assignment(&people, 3, cam, AssignmentScope::Tenant, cashier).await;
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    for store in [store_id(), shop(1), shop(2)] {
+        publish_people(&router, &owner, store).await;
+    }
+    let remove = |assignment: AssignmentId| {
+        router.clone().oneshot(delete_with_cookie(
+            &format!(
+                "/admin/assignments/{}?tenant_id={}",
+                assignment.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &owner,
+        ))
+    };
+
+    let removed = remove(grouped).await.expect("route the removal");
+    assert_eq!(removed.status(), StatusCode::OK);
+    assert_eq!(
+        publish_report(removed).await,
+        vec![applied(shop(1)), applied(shop(2))]
+    );
+    assert_eq!(codes_at(&config, shop(1)).await, vec!["C03"], "Bao is off");
+    assert_eq!(
+        versions_at(&config, store_id()).await,
+        1,
+        "not a member: untouched"
+    );
+
+    let removed = remove(everywhere).await.expect("route the removal");
+    assert_eq!(
+        publish_report(removed).await,
+        vec![applied(store_id()), applied(shop(1)), applied(shop(2))]
+    );
+    assert_eq!(
+        codes_at(&config, store_id()).await,
+        vec!["C01"],
+        "Cam is off every store"
+    );
+    assert!(codes_at(&config, shop(2)).await.is_empty());
+
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let removal = recorded
+        .iter()
+        .find(|entry| entry.action == "assignment.remove" && entry.entity_id == grouped.to_string())
+        .expect("the removal is recorded");
+    assert_eq!(
+        removal.before,
+        Some(serde_json::json!({
+            "id": grouped.to_string(),
+            "employee_id": bao.to_string(),
+            "scope_kind": "ASSIGNMENT_SCOPE_STORE_GROUP",
+            "store_group_id": airport.to_string(),
+            "role_template_id": cashier.to_string(),
+        })),
+        "the ids and the scope, and no name or code"
+    );
+}
+
+/// Archiving a person, or a role, publishes at once to every store their assignments reach through
+/// a group or the tenant, not only those named one by one (ADR-0158 decision 7).
+#[tokio::test]
+async fn an_archive_reaches_the_stores_a_group_or_the_tenant_reaches() {
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let cam = seed_person(&people, 0xCA3, "C03", "Cam").await;
+    let lead = RoleTemplateId::new(Ulid::from_u128(0x1EAD));
+    RoleTemplateStore::create(
+        &people,
+        &NewRoleTemplate {
+            role_template_id: lead,
+            tenant_id: tenant(),
+            name: "Shift lead".to_owned(),
+            permissions: vec!["cash.shift.open".to_owned()],
+            permissions_with_approval: Vec::new(),
+            discount_ceiling_minor: None,
+        },
+    )
+    .await
+    .expect("create role");
+    let registry = FakeRegistry::default();
+    for store in [store_id(), shop(1), shop(2)] {
+        seed_store(&registry, tenant(), store, true);
+    }
+    let airport = seed_group(&people, 0x6A1, &[shop(1)]);
+    seed_assignment(
+        &people,
+        2,
+        bao,
+        AssignmentScope::StoreGroup(airport),
+        cashier,
+    )
+    .await;
+    seed_assignment(&people, 3, cam, AssignmentScope::Tenant, lead).await;
+    let router = people_app(
+        provisioned_admin(),
+        people,
+        registry,
+        config,
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let archive = |url: String, body: serde_json::Value| {
+        let router = router.clone();
+        let owner = owner.clone();
+        let tenant_ulid = tenant_ulid.clone();
+        async move {
+            let read = router
+                .clone()
+                .oneshot(get_with_cookie(
+                    &format!("{url}?tenant_id={tenant_ulid}"),
+                    &owner,
+                ))
+                .await
+                .expect("route the read");
+            let archived = router
+                .oneshot(patch_with_etag(&url, &body, &owner, &etag_of(&read)))
+                .await
+                .expect("route the archive");
+            assert_eq!(archived.status(), StatusCode::OK, "{url}");
+            publish_report(archived).await
+        }
+    };
+
+    let person = archive(
+        format!("/admin/employees/{}", bao.as_ulid()),
+        serde_json::json!({ "tenant_id": tenant_ulid, "name": "Bao", "status": "archived" }),
+    )
+    .await;
+    assert_eq!(person, vec![applied(shop(1))], "the group's member");
+    let role = archive(
+        format!("/admin/roles/{}", lead.as_ulid()),
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Shift lead",
+            "permissions": ["cash.shift.open"],
+            "status": "archived",
+        }),
+    )
+    .await;
+    assert_eq!(
+        role,
+        vec![applied(store_id()), applied(shop(1)), applied(shop(2))],
+        "every open store, through the tenant-wide assignment"
+    );
+}
+
+/// A refused assignment's status and the `(field, reason)` pairs its refusal names, in order.
+async fn refusal_of(
+    router: &axum::Router,
+    cookie: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, Vec<(String, String)>) {
+    let refused = post_assignment(router, cookie, body).await;
+    let status = refused.status();
+    let named = json_body(refused).await["error"]["details"]
+        .as_array()
+        .expect("details")
+        .iter()
+        .map(|detail| {
+            (
+                detail["field"].as_str().expect("a field").to_owned(),
+                detail["reason"].as_str().expect("a reason").to_owned(),
+            )
+        })
+        .collect();
+    (status, named)
+}
+
+/// `(field, reason)` pairs, owned, as [`refusal_of`] returns them.
+fn named(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs
+        .iter()
+        .map(|(field, reason)| ((*field).to_owned(), (*reason).to_owned()))
+        .collect()
+}
+
+/// An assignment names exactly one target: its scope's own id, and no other. Anything else is a
+/// `400` naming each field at fault, and writes nothing; with no `scope_kind`, or
+/// `ASSIGNMENT_SCOPE_UNSPECIFIED`, the id sent names the scope (ADR-0158 decision 3).
+#[tokio::test]
+async fn an_assignment_names_exactly_its_scopes_own_id() {
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant(), store_id(), true);
+    let airport = seed_group(&people, 0x6A1, &[store_id()]);
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        registry,
+        FakeConfigTrees::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let store = ("store_id", store_id().as_ulid().to_string());
+    let group = ("store_group_id", airport.as_ulid().to_string());
+    let kind = |token: &str| ("scope_kind", token.to_owned());
+    for (fields, expected) in [
+        (
+            vec![store.clone(), group.clone()],
+            named(&[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "MUTUALLY_EXCLUSIVE"),
+            ]),
+        ),
+        (vec![], named(&[("store_id", "REQUIRED")])),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_TENANT"), store.clone()],
+            named(&[("store_id", "MUTUALLY_EXCLUSIVE")]),
+        ),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_STORE_GROUP"), store.clone()],
+            named(&[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "REQUIRED"),
+            ]),
+        ),
+        (
+            vec![kind("ASSIGNMENT_SCOPE_BRAND"), store.clone()],
+            named(&[("scope_kind", "INVALID_ENUM_VALUE")]),
+        ),
+    ] {
+        let body = assignment_body(bao, cashier, &fields);
+        assert_eq!(
+            refusal_of(&router, &owner, &body).await,
+            (StatusCode::BAD_REQUEST, expected),
+            "{fields:?}"
+        );
+    }
+    assert!(
+        AssignmentStore::list_for_employee(&people, tenant(), bao)
+            .await
+            .expect("list")
+            .is_empty(),
+        "no refusal wrote anything"
+    );
+
+    // `ASSIGNMENT_SCOPE_UNSPECIFIED` is no scope of its own: the id sent says which, and a store's
+    // assignment publishes as before, when someone presses publish.
+    let body = assignment_body(bao, cashier, &[kind("ASSIGNMENT_SCOPE_UNSPECIFIED"), store]);
+    let created = post_assignment(&router, &owner, &body).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert!(body.get("stores").is_none(), "nothing published: {body}");
+}
+
+/// An assignment to a group the tenant does not have — another tenant's included — is `404`, and
+/// to one it has archived `409`, naming `store_group_id` (ADR-0158 decision 7).
+#[tokio::test]
+async fn an_assignment_to_a_group_needs_one_of_its_tenants_own_open_groups() {
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let bao = seed_person(&people, 0xB40, "C02", "Bao").await;
+    let closed = StoreGroupId::new(Ulid::from_u128(0x6A2));
+    let foreign = StoreGroupId::new(Ulid::from_u128(0x6A3));
+    for (group_id, tenant_id, status) in [
+        (closed, tenant(), EntityStatus::Archived),
+        (
+            foreign,
+            TenantId::new(Ulid::from_u128(0xB0B)),
+            EntityStatus::Active,
+        ),
+    ] {
+        let group = StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Elsewhere".to_owned(),
+            status,
+        };
+        people.groups().seed(group, &[store_id()]);
+    }
+    let router = people_app(
+        provisioned_admin(),
+        people.clone(),
+        FakeRegistry::default(),
+        FakeConfigTrees::default(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    for (group_id, status, reason) in [
+        (
+            StoreGroupId::new(Ulid::from_u128(0xDEAD)),
+            StatusCode::NOT_FOUND,
+            "NOT_FOUND",
+        ),
+        (foreign, StatusCode::NOT_FOUND, "NOT_FOUND"),
+        (closed, StatusCode::CONFLICT, "ARCHIVED"),
+    ] {
+        let fields = [("store_group_id", group_id.as_ulid().to_string())];
+        let body = assignment_body(bao, cashier, &fields);
+        assert_eq!(
+            refusal_of(&router, &owner, &body).await,
+            (status, named(&[("store_group_id", reason)])),
+            "{group_id}"
+        );
+    }
+    assert!(
+        AssignmentStore::list_for_employee(&people, tenant(), bao)
+            .await
+            .expect("list")
+            .is_empty(),
+        "no refusal wrote anything"
+    );
 }
 
 // --- Remote device retirement (`POST /admin/stores/{id}/devices/revoke`, ADR-0118 §6) -----------
@@ -21721,12 +22426,13 @@ async fn an_authorisation_refusal_names_no_field() {
     );
 }
 
-/// A mutual-exclusion refusal names **both** fields — the one case where that is right.
+/// A mutual-exclusion refusal names **every** field of the set — the one case where that is right.
 ///
 /// Every other multi-field refusal in Q3b was narrowed to name only what was wrong. This one is the
 /// deliberate exception, and the distinction is worth a test because it looks like the same bug:
-/// `/admin/assignments` wants exactly one of `store_id` or `employee_id`, so when the caller sends
-/// neither or both, *the pair* is the mistake and neither field alone is at fault.
+/// `/admin/assignments` wants exactly one of `store_id`, `employee_id`, `store_group_id` or
+/// `scope_kind`, so when the caller sends none or several, *the set* is the mistake and no field
+/// alone is at fault.
 #[tokio::test]
 async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mistake() {
     let router = people_app_with_audit(
@@ -21748,12 +22454,15 @@ async fn a_mutual_exclusion_refusal_names_both_fields_because_the_pair_is_the_mi
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
     let body = json_body(refused).await;
     assert_eq!(
-        body["error"]["message"], "name exactly one of store_id or employee_id",
+        body["error"]["message"],
+        "name exactly one of store_id, employee_id, store_group_id or scope_kind",
         "got {body}"
     );
     assert_eq!(body["error"]["details"][0]["field"], "store_id");
     assert_eq!(body["error"]["details"][0]["reason"], "MUTUALLY_EXCLUSIVE");
     assert_eq!(body["error"]["details"][1]["field"], "employee_id");
+    assert_eq!(body["error"]["details"][2]["field"], "store_group_id");
+    assert_eq!(body["error"]["details"][3]["field"], "scope_kind");
 }
 
 // --- Inventory authoring admin routes (ADR-0079, ADR-0095) --------------------------------------
@@ -25206,6 +25915,7 @@ fn store_group_app(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
+    let people = FakePeople::over(&groups);
     http::router(app)
         .merge(http::catalog_router(
             catalog.clone(),
@@ -25223,9 +25933,10 @@ fn store_group_app(
                 FakeCampaigns,
                 FakeInventory::default(),
                 FakeReasonCodes::default(),
-                FakePeople::default(),
+                people.clone(),
                 FakeFloor::default(),
             ),
+            people,
             admin.clone(),
             clock(),
             Arc::new(NoopAuditRecorder),

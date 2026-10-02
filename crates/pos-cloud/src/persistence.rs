@@ -135,10 +135,10 @@ use crate::ota::{
 };
 use crate::paging::{Page, PageRequest};
 use crate::people::{
-    Assignment, AssignmentId, AssignmentStore, AssignmentStoreError, Employee, EmployeeId,
-    EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError, EmployeeUpdate,
-    NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId, RoleTemplateStore,
-    RoleTemplateStoreError, RoleTemplateUpdate,
+    Assignment, AssignmentId, AssignmentScope, AssignmentStore, AssignmentStoreError, Employee,
+    EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore, EmployeeStoreError,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, RoleTemplate, RoleTemplateId,
+    RoleTemplateStore, RoleTemplateStoreError, RoleTemplateUpdate,
 };
 use crate::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use crate::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
@@ -4021,65 +4021,103 @@ impl RoleTemplateStore for PostgresPeople {
     }
 }
 
-/// Converts a stored assignment row into the domain [`Assignment`], parsing the four ids.
+/// Parses one stored assignment id, naming the field in the error for the server log.
+fn parse_assignment_ulid(text: &str, what: &str) -> Result<Ulid, AssignmentStoreError> {
+    text.parse::<Ulid>().map_err(|error| {
+        AssignmentStoreError::new(format!("stored {what} id is not a ULID: {error}"))
+    })
+}
+
+/// The scope a stored row names: `STORE` with its store, `STORE_GROUP` with its group, or `TENANT`
+/// with neither (`employee_scope_assignments`, migration 0077).
+fn stored_scope(row: &AssignmentRow) -> Result<AssignmentScope, AssignmentStoreError> {
+    match (
+        row.scope_kind.as_str(),
+        row.store_id.as_deref(),
+        row.store_group_id.as_deref(),
+    ) {
+        ("STORE", Some(store_id), None) => Ok(AssignmentScope::Store(StoreId::new(
+            parse_assignment_ulid(store_id, "store")?,
+        ))),
+        ("STORE_GROUP", None, Some(store_group_id)) => Ok(AssignmentScope::StoreGroup(
+            StoreGroupId::new(parse_assignment_ulid(store_group_id, "store-group")?),
+        )),
+        ("TENANT", None, None) => Ok(AssignmentScope::Tenant),
+        (kind, _, _) => Err(AssignmentStoreError::new(format!(
+            "stored assignment scope {kind} does not carry the id it needs"
+        ))),
+    }
+}
+
+/// Converts a stored assignment row into the domain [`Assignment`], parsing its ids and scope.
 fn assignment_record(row: &AssignmentRow) -> Result<Assignment, AssignmentStoreError> {
-    let assignment_id = row
-        .id
-        .parse::<Ulid>()
-        .map(AssignmentId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored assignment id is not a ULID: {error}"))
-        })?;
-    let tenant_id = row
-        .tenant_id
-        .parse::<Ulid>()
-        .map(TenantId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored tenant id is not a ULID: {error}"))
-        })?;
-    let employee_id = row
-        .employee_id
-        .parse::<Ulid>()
-        .map(EmployeeId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored employee id is not a ULID: {error}"))
-        })?;
-    let store_id = row
-        .store_id
-        .parse::<Ulid>()
-        .map(StoreId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored store id is not a ULID: {error}"))
-        })?;
-    let role_template_id = row
-        .role_template_id
-        .parse::<Ulid>()
-        .map(RoleTemplateId::new)
-        .map_err(|error| {
-            AssignmentStoreError::new(format!("stored role-template id is not a ULID: {error}"))
-        })?;
     Ok(Assignment {
-        assignment_id,
-        tenant_id,
-        employee_id,
-        store_id,
-        role_template_id,
+        assignment_id: AssignmentId::new(parse_assignment_ulid(&row.id, "assignment")?),
+        tenant_id: TenantId::new(parse_assignment_ulid(&row.tenant_id, "tenant")?),
+        employee_id: EmployeeId::new(parse_assignment_ulid(&row.employee_id, "employee")?),
+        scope: stored_scope(row)?,
+        role_template_id: RoleTemplateId::new(parse_assignment_ulid(
+            &row.role_template_id,
+            "role-template",
+        )?),
         employee_name: row.employee_name.clone(),
         employee_code: row.employee_code.clone(),
     })
 }
 
+/// Converts a list of stored assignment rows, failing on the first that does not parse.
+fn assignment_records(
+    rows: Result<Vec<AssignmentRow>, PortError>,
+) -> Result<Vec<Assignment>, AssignmentStoreError> {
+    rows.map_err(|error| AssignmentStoreError::new(error.to_string()))?
+        .iter()
+        .map(assignment_record)
+        .collect()
+}
+
 impl AssignmentStore for PostgresPeople {
     async fn assign(&self, assignment: &NewAssignment) -> Result<(), AssignmentStoreError> {
-        self.insert_assignment(
-            &assignment.assignment_id.to_string(),
-            &assignment.tenant_id.to_string(),
-            &assignment.employee_id.to_string(),
-            &assignment.store_id.to_string(),
-            &assignment.role_template_id.to_string(),
-        )
-        .await
-        .map_err(|error| AssignmentStoreError::new(error.to_string()))
+        let assignment_id = assignment.assignment_id.to_string();
+        let tenant_id = assignment.tenant_id.to_string();
+        let employee_id = assignment.employee_id.to_string();
+        let role_template_id = assignment.role_template_id.to_string();
+        // A one-store grant is a row of the table it always was, so a release without the wider
+        // scopes still reads it; a wider one is a row of its own table (migration 0077).
+        let written = match assignment.scope {
+            AssignmentScope::Store(store_id) => {
+                self.insert_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    &store_id.to_string(),
+                    &role_template_id,
+                )
+                .await
+            }
+            AssignmentScope::StoreGroup(store_group_id) => {
+                self.insert_scope_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    "STORE_GROUP",
+                    Some(&store_group_id.to_string()),
+                    &role_template_id,
+                )
+                .await
+            }
+            AssignmentScope::Tenant => {
+                self.insert_scope_assignment(
+                    &assignment_id,
+                    &tenant_id,
+                    &employee_id,
+                    "TENANT",
+                    None,
+                    &role_template_id,
+                )
+                .await
+            }
+        };
+        written.map_err(|error| AssignmentStoreError::new(error.to_string()))
     }
 
     async fn list_for_store(
@@ -4087,11 +4125,31 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         store_id: StoreId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_store(&tenant.to_string(), &store_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_store(&tenant.to_string(), &store_id.to_string())
+                .await,
+        )
+    }
+
+    async fn list_for_group(
+        &self,
+        tenant: TenantId,
+        store_group_id: StoreGroupId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        assignment_records(
+            self.fetch_assignments_for_group(&tenant.to_string(), &store_group_id.to_string())
+                .await,
+        )
+    }
+
+    async fn list_tenant_wide(
+        &self,
+        tenant: TenantId,
+    ) -> Result<Vec<Assignment>, AssignmentStoreError> {
+        assignment_records(
+            self.fetch_tenant_wide_assignments(&tenant.to_string())
+                .await,
+        )
     }
 
     async fn list_for_employee(
@@ -4099,11 +4157,10 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         employee_id: EmployeeId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_employee(&tenant.to_string(), &employee_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_employee(&tenant.to_string(), &employee_id.to_string())
+                .await,
+        )
     }
 
     async fn list_for_role(
@@ -4111,11 +4168,10 @@ impl AssignmentStore for PostgresPeople {
         tenant: TenantId,
         role_template_id: RoleTemplateId,
     ) -> Result<Vec<Assignment>, AssignmentStoreError> {
-        let rows = self
-            .fetch_assignments_for_role(&tenant.to_string(), &role_template_id.to_string())
-            .await
-            .map_err(|error| AssignmentStoreError::new(error.to_string()))?;
-        rows.iter().map(assignment_record).collect()
+        assignment_records(
+            self.fetch_assignments_for_role(&tenant.to_string(), &role_template_id.to_string())
+                .await,
+        )
     }
 
     async fn get(
