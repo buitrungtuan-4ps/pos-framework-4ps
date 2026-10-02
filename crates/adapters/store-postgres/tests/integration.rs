@@ -5597,10 +5597,16 @@ mod role_templates_and_assignments {
     use super::{block_on, prepared};
     use store_postgres::RowUpdate;
 
-    /// Role templates insert with a jsonb permission set that round-trips as its JSON text, read back
-    /// tenant-scoped and newest-first, and update name/permissions/status. The grant is
-    /// SELECT/INSERT/UPDATE only — no DELETE (a role is archived, never removed) ([ADR-0070]).
+    /// Role templates insert with two jsonb permission sets — what the role grants directly and what
+    /// it grants with approval — that round-trip as their JSON text, read back tenant-scoped and
+    /// newest-first, and update name/permissions/status. The grant is SELECT/INSERT/UPDATE only — no
+    /// DELETE (a role is archived, never removed) ([ADR-0070]).
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one round trip over both permission lists, the ceiling, the update and the grant, \
+                  checked against the same rows"
+    )]
     fn role_templates_round_trip_permissions_and_grant() {
         block_on(async {
             let (store, admin) = prepared().await.expect("prepare the database");
@@ -5612,6 +5618,8 @@ mod role_templates_and_assignments {
                     "tenant-a",
                     "Cashier",
                     r#"["billing.discount.apply","sales.item.open"]"#,
+                    // Voids a bill with somebody else's code and PIN (ADR-0158 decision 4).
+                    r#"["billing.bill.void"]"#,
                     // A cashier who may discount up to 30,000 without a manager — the column this
                     // row exists to round-trip.
                     Some(30_000),
@@ -5623,6 +5631,7 @@ mod role_templates_and_assignments {
                     "01ROLE000000000000000000B1",
                     "tenant-b",
                     "Cashier",
+                    "[]",
                     "[]",
                     None,
                 )
@@ -5637,6 +5646,7 @@ mod role_templates_and_assignments {
                         "tenant-a",
                         "Cashier",
                         "[]",
+                        "[]",
                         None
                     )
                     .await
@@ -5644,7 +5654,7 @@ mod role_templates_and_assignments {
                 "role names are unique within a tenant"
             );
 
-            // Tenant-scoped read; the jsonb permission set round-trips as its JSON text.
+            // Tenant-scoped read; each jsonb permission set round-trips as its JSON text.
             let scoped = people
                 .fetch_role_templates("tenant-a")
                 .await
@@ -5660,13 +5670,21 @@ mod role_templates_and_assignments {
                     "sales.item.open".to_owned()
                 ]
             );
+            let with_approval: Vec<String> =
+                serde_json::from_str(&cashier.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON");
+            assert_eq!(
+                with_approval,
+                vec!["billing.bill.void".to_owned()],
+                "what the role grants with approval is its own column, apart from the direct list"
+            );
             assert_eq!(
                 cashier.discount_ceiling_minor,
                 Some(30_000),
                 "the ceiling round-trips through the column"
             );
 
-            // Update the permission set + archive, at the version the read handed out (ADR-0094).
+            // Update the permission sets + archive, at the version the read handed out (ADR-0094).
             assert!(
                 matches!(
                     people
@@ -5675,6 +5693,7 @@ mod role_templates_and_assignments {
                             "01ROLE000000000000000000A1",
                             "Cashier",
                             r#"["sales.item.open"]"#,
+                            r#"["billing.bill.void","sales.line.void_fired"]"#,
                             "archived",
                             None,
                             &cashier.version,
@@ -5694,6 +5713,16 @@ mod role_templates_and_assignments {
             let updated_permissions: Vec<String> =
                 serde_json::from_str(&updated.permissions_json).expect("permissions are JSON");
             assert_eq!(updated_permissions, vec!["sales.item.open".to_owned()]);
+            let updated_with_approval: Vec<String> =
+                serde_json::from_str(&updated.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON");
+            assert_eq!(
+                updated_with_approval,
+                vec![
+                    "billing.bill.void".to_owned(),
+                    "sales.line.void_fired".to_owned()
+                ]
+            );
 
             // Roles are archived, never deleted: no DELETE grant.
             let can_delete: bool = admin
@@ -5737,6 +5766,7 @@ mod role_templates_and_assignments {
                     "tenant-a",
                     "Server",
                     r#"["billing.discount.apply","sales.line.add"]"#,
+                    "[]",
                     None,
                 )
                 .await
@@ -5774,6 +5804,7 @@ mod role_templates_and_assignments {
                     ROLE,
                     "Server",
                     &written,
+                    &role.permissions_with_approval_json,
                     "active",
                     None,
                     &role.version,
@@ -5794,6 +5825,178 @@ mod role_templates_and_assignments {
                 "a later boot does not hand back what the owner removed"
             );
             assert_eq!(kept.len(), without_payment.len());
+        });
+    }
+
+    /// Every role that exists is given, once, each PIN-flagged permission it does not grant
+    /// directly, with approval (migration 0074, ADR-0158 decision 4). What it grants directly is
+    /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
+    /// since taken away.
+    ///
+    /// The 0073 marker is written before the boot, so the boot runs 0074 alone against the roles as
+    /// they were authored.
+    #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one boot over three roles and the boot after it, checked against the same rows"
+    )]
+    fn existing_roles_grant_each_pin_flagged_permission_with_approval_once() {
+        const FLAGGED: [&str; 7] = [
+            "billing.bill.void",
+            "billing.comp.apply",
+            "billing.discount.override_ceiling",
+            "billing.price.override",
+            "billing.refund.issue",
+            "cash.drawer.open_no_sale",
+            "sales.line.void_fired",
+        ];
+        const MANAGER: &str = "01ROLE000000000000000000M1";
+        const SERVER: &str = "01ROLE000000000000000000S1";
+        const RETIRED: &str = "01ROLE000000000000000000R1";
+        block_on(async {
+            let (store, admin) = prepared().await.expect("prepare the database");
+            admin
+                .execute(
+                    "INSERT INTO data_migrations (name) \
+                     VALUES ('0073_roles_keep_every_till_action')",
+                    &[],
+                )
+                .await
+                .expect("0073 has already run");
+            let people = store.people();
+            // A manager who voids directly, and so approves voids for others, listed out of order
+            // as a console may have written it.
+            people
+                .insert_role_template(
+                    MANAGER,
+                    "tenant-a",
+                    "Manager",
+                    r#"["sales.line.void_fired","billing.bill.void","billing.discount.apply"]"#,
+                    "[]",
+                    Some(500_000),
+                )
+                .await
+                .expect("a manager");
+            people
+                .insert_role_template(
+                    SERVER,
+                    "tenant-a",
+                    "Server",
+                    r#"["billing.discount.apply","sales.line.add"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a server");
+            let retired = people
+                .insert_role_template(
+                    RETIRED,
+                    "tenant-a",
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    None,
+                )
+                .await
+                .expect("a role since retired");
+            people
+                .set_role_template(
+                    "tenant-a",
+                    RETIRED,
+                    "Runner",
+                    r#"["sales.ticket.bump"]"#,
+                    "[]",
+                    "archived",
+                    None,
+                    &retired,
+                )
+                .await
+                .expect("archive it");
+            let mut direct_before: Vec<(String, String)> = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch")
+                .into_iter()
+                .map(|role| (role.id, role.permissions_json))
+                .collect();
+            direct_before.sort();
+
+            store
+                .migrate()
+                .await
+                .expect("the boot that runs 0074 first");
+            let roles = people
+                .fetch_role_templates("tenant-a")
+                .await
+                .expect("fetch");
+            let mut direct_after: Vec<(String, String)> = roles
+                .iter()
+                .map(|role| (role.id.clone(), role.permissions_json.clone()))
+                .collect();
+            direct_after.sort();
+            assert_eq!(
+                direct_after, direct_before,
+                "what each role grants directly is byte-identical"
+            );
+            let with_approval = |id: &str| -> Vec<String> {
+                let role = roles
+                    .iter()
+                    .find(|role| role.id == id)
+                    .expect("the role is listed");
+                serde_json::from_str(&role.permissions_with_approval_json)
+                    .expect("permissions with approval are JSON")
+            };
+            let flagged_except = |held: &[&str]| -> Vec<String> {
+                FLAGGED
+                    .iter()
+                    .filter(|id| !held.contains(id))
+                    .map(|id| (*id).to_owned())
+                    .collect()
+            };
+            assert_eq!(
+                with_approval(MANAGER),
+                flagged_except(&["billing.bill.void", "sales.line.void_fired"]),
+                "the five it does not grant directly, sorted; the two it does stay direct"
+            );
+            assert_eq!(with_approval(SERVER), flagged_except(&[]), "all seven");
+            assert_eq!(
+                with_approval(RETIRED),
+                flagged_except(&[]),
+                "an archived role too, so restoring it restores what it had"
+            );
+
+            // The owner takes the drawer without a sale off servers altogether.
+            let server = roles
+                .iter()
+                .find(|role| role.id == SERVER)
+                .expect("the server");
+            let without_drawer = flagged_except(&["cash.drawer.open_no_sale"]);
+            people
+                .set_role_template(
+                    "tenant-a",
+                    SERVER,
+                    "Server",
+                    &server.permissions_json,
+                    &serde_json::to_string(&without_drawer).expect("serialise"),
+                    "active",
+                    None,
+                    &server.version,
+                )
+                .await
+                .expect("the owner edits the role");
+
+            store.migrate().await.expect("the next boot");
+            let after = people
+                .fetch_role_template("tenant-a", SERVER)
+                .await
+                .expect("fetch")
+                .expect("present");
+            let kept: Vec<String> = serde_json::from_str(&after.permissions_with_approval_json)
+                .expect("permissions with approval are JSON");
+            assert_eq!(
+                kept, without_drawer,
+                "a later boot does not hand back an approval the owner took away"
+            );
         });
     }
 
@@ -7486,7 +7689,14 @@ mod conditional_writes {
             let role = "00000000000000000ROLEXMINA";
 
             let first = people
-                .insert_role_template(role, tenant, "Cashier", "[\"sales.item.open\"]", None)
+                .insert_role_template(
+                    role,
+                    tenant,
+                    "Cashier",
+                    "[\"sales.item.open\"]",
+                    "[\"billing.bill.void\"]",
+                    None,
+                )
                 .await
                 .expect("insert the role template");
 
@@ -7500,6 +7710,10 @@ mod conditional_writes {
                 "the column order survived the addition"
             );
             assert_eq!(row.permissions_json, "[\"sales.item.open\"]");
+            assert_eq!(
+                row.permissions_with_approval_json,
+                "[\"billing.bill.void\"]"
+            );
             assert_eq!(row.version, first);
 
             assert_eq!(
@@ -7508,6 +7722,7 @@ mod conditional_writes {
                         tenant,
                         role,
                         "Nope",
+                        "[]",
                         "[]",
                         "active",
                         None,
@@ -7518,7 +7733,9 @@ mod conditional_writes {
                 RowUpdate::VersionMismatch
             );
             let second = match people
-                .set_role_template(tenant, role, "Cashier", "[]", "archived", None, &first)
+                .set_role_template(
+                    tenant, role, "Cashier", "[]", "[]", "archived", None, &first,
+                )
                 .await
                 .expect("the update")
             {

@@ -367,8 +367,9 @@ fn employee_row(row: &tokio_postgres::Row) -> EmployeeRow {
     }
 }
 
-/// A role template as listed — identity, name, its permission-id set (as the JSON text stored in the
-/// `jsonb` column), and status ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
+/// A role template as listed — identity, name, its two permission-id sets (each as the JSON text
+/// stored in its `jsonb` column), and status
+/// ([ADR-0070](../../../docs/adr/0070-people-and-access.md)).
 #[derive(Clone, Debug)]
 pub struct RoleTemplateRow {
     /// The role-template id (a ULID string).
@@ -377,8 +378,14 @@ pub struct RoleTemplateRow {
     pub tenant_id: String,
     /// The role name, unique within the tenant.
     pub name: String,
-    /// The granted permission ids, as the JSON array text stored in the `jsonb` column.
+    /// The permission ids the role grants directly, as the JSON array text stored in the `jsonb`
+    /// column.
     pub permissions_json: String,
+    /// The permission ids the role grants only with another person's approval, as the JSON array
+    /// text stored in the `jsonb` column — never one also in [`Self::permissions_json`]
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4, migration 0074).
+    pub permissions_with_approval_json: String,
     /// `active` or `archived`.
     pub status: String,
     /// How much this role may discount without a manager, in the currency's minor unit, or `None`
@@ -392,9 +399,9 @@ pub struct RoleTemplateRow {
     pub version: String,
 }
 
-/// The role-template columns a read returns; `permissions` is read as its `jsonb` text.
-const ROLE_TEMPLATE_COLUMNS: &str =
-    "id, tenant_id, name, permissions::text, status, discount_ceiling_minor, xmin::text";
+/// The role-template columns a read returns; both permission lists are read as their `jsonb` text.
+const ROLE_TEMPLATE_COLUMNS: &str = "id, tenant_id, name, permissions::text, \
+     permissions_with_approval::text, status, discount_ceiling_minor, xmin::text";
 
 /// An assignment as listed — identity plus the three ids it binds.
 #[derive(Clone, Debug)]
@@ -448,8 +455,8 @@ const ASSIGNMENT_JOIN: &str = "employee_store_assignments a \
      LEFT JOIN employees e ON e.id = a.employee_id AND e.tenant_id = a.tenant_id";
 
 impl PostgresPeople {
-    /// Inserts a role template, its permission set given as JSON array text cast into the `jsonb`
-    /// column.
+    /// Inserts a role template, each of its permission sets given as JSON array text cast into its
+    /// `jsonb` column.
     ///
     /// # Errors
     ///
@@ -461,15 +468,24 @@ impl PostgresPeople {
         tenant_id: &str,
         name: &str,
         permissions_json: &str,
+        permissions_with_approval_json: &str,
         discount_ceiling_minor: Option<i64>,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_one(
-                "INSERT INTO role_templates (id, tenant_id, name, permissions, discount_ceiling_minor) \
-                 VALUES ($1, $2, $3, $4::text::jsonb, $5) \
+                "INSERT INTO role_templates (id, tenant_id, name, permissions, \
+                     permissions_with_approval, discount_ceiling_minor) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5::text::jsonb, $6) \
                  RETURNING xmin::text",
-                &[&id, &tenant_id, &name, &permissions_json, &discount_ceiling_minor],
+                &[
+                    &id,
+                    &tenant_id,
+                    &name,
+                    &permissions_json,
+                    &permissions_with_approval_json,
+                    &discount_ceiling_minor,
+                ],
             )
             .await
             .map_err(unavailable)?;
@@ -523,17 +539,24 @@ impl PostgresPeople {
         Ok(row.as_ref().map(role_template_row))
     }
 
-    /// Updates a role template's name, permission set, and status. Applies only if the row is still at `expected`.
+    /// Updates a role template's name, both permission sets, ceiling and status. Applies only if
+    /// the row is still at `expected`.
     ///
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a role row is a flat record of primitive columns plus the version it is written \
+                  at; a params struct would only re-list them"
+    )]
     pub async fn set_role_template(
         &self,
         tenant_id: &str,
         id: &str,
         name: &str,
         permissions_json: &str,
+        permissions_with_approval_json: &str,
         status: &str,
         discount_ceiling_minor: Option<i64>,
         expected: &str,
@@ -542,15 +565,17 @@ impl PostgresPeople {
         let updated = connection
             .query_opt(
                 "UPDATE role_templates \
-                 SET name = $3, permissions = $4::text::jsonb, status = $5, \
-                     discount_ceiling_minor = $6, updated_at = now() \
+                 SET name = $3, permissions = $4::text::jsonb, \
+                     permissions_with_approval = $5::text::jsonb, status = $6, \
+                     discount_ceiling_minor = $7, updated_at = now() \
                  WHERE tenant_id = $1 AND id = $2 \
-                 AND xmin::text = $7 RETURNING xmin::text",
+                 AND xmin::text = $8 RETURNING xmin::text",
                 &[
                     &tenant_id,
                     &id,
                     &name,
                     &permissions_json,
+                    &permissions_with_approval_json,
                     &status,
                     &discount_ceiling_minor,
                     &expected,
@@ -730,9 +755,10 @@ fn role_template_row(row: &tokio_postgres::Row) -> RoleTemplateRow {
         tenant_id: row.get(1),
         name: row.get(2),
         permissions_json: row.get(3),
-        status: row.get(4),
-        discount_ceiling_minor: row.get(5),
-        version: row.get(6),
+        permissions_with_approval_json: row.get(4),
+        status: row.get(5),
+        discount_ceiling_minor: row.get(6),
+        version: row.get(7),
     }
 }
 

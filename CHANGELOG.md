@@ -107,6 +107,40 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **A role says which permissions it grants with approval**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4). A role
+  grants each permission either directly, which its holder acts on alone, or with approval, where
+  another person who holds it directly enters their code and PIN for each act. Only a PIN-flagged
+  permission can be granted with approval.
+  - **The role editor** shows, for every PIN-flagged permission a role grants, a choice of **With
+    approval** or **Directly**. A permission newly ticked starts with approval, the catalogue's
+    default, and the editor always sends both lists. The roles list counts what each role grants
+    with approval. When removing an assignment or archiving a person or a role fails to publish to a
+    store, People says how many stores and offers **Publish again to the stores that failed**.
+  - **`POST /admin/roles` and `PATCH /admin/roles/{role_id}` take `permissions_with_approval`**
+    beside `permissions`, which stays the list granted directly, and a role read carries both. An
+    id there that is unknown (`INVALID_ENUM_VALUE`), not PIN-flagged (`INVALID_VALUE`) or also in
+    `permissions` (`MUTUALLY_EXCLUSIVE`, naming both fields) is refused `400`.
+  - **A request that leaves the field out works as before.** A create grants every permission in
+    `permissions` directly and reads back as it was sent; an update keeps what the role grants with
+    approval, less anything `permissions` now grants directly. `role.create` and `role.update`
+    record both lists as stored.
+  - **The `permissions` node lists both for each person**: the union of their active roles'
+    with-approval grants, less everything they hold directly. An archived role contributes neither.
+  - **Upgrade note:** migration `0074_role_permissions_with_approval.sql` adds
+    `role_templates.permissions_with_approval` (`jsonb`, default `[]`) and, once, behind a
+    `data_migrations` marker as `0073` does, gives every existing role, archived ones included, each
+    PIN-flagged permission it does not grant directly, with approval. What a role grants directly is
+    unchanged byte for byte, so a store that does not enforce each person's own set decides exactly
+    as before; its next `permissions` publish adds each person's `permissions_with_approval`, which
+    such a store only reports in `GET /api/session`. A request without `permissions_with_approval`
+    grants every permission it lists directly, as before; the role editor starts a newly ticked
+    PIN-flagged permission with approval. The holders of a permission granted with approval cannot
+    approve it, at any store, so a role whose holders approve an act for others grants it
+    **Directly**. A console tab holding a role open across the upgrade gets a version conflict on
+    its next save and reloads. No event, permission or protocol change: the node field is the one
+    the edge already reads.
+
 - **What the console authors is what the store enforces**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3 and 7).
   - **An archived role grants nothing.** It went on contributing every permission and its ceiling
@@ -129,8 +163,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     `config_version_id` — where it answered `204`, and `PATCH /admin/employees/{employee_id}` and
     `PATCH /admin/roles/{role_id}` answer the same, with their `ETag`, when the update archives; any
     other update still answers `204`. A failed store keeps its old node until it is published again.
-    The `assignment.remove` audit entry now records the ids it removed. The console treats every
-    success alike, so its screens are unchanged.
+    The `assignment.remove` audit entry now records the ids it removed. People reads the answer to
+    offer a failed store's publish again (the entry above).
 
 - **Every role that exists keeps every till action it has**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). The seven

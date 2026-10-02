@@ -278,6 +278,11 @@ const MIGRATION_0072: &str = include_str!("../migrations/0072_setting_values.sql
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
 const MIGRATION_0073: &str = include_str!("../migrations/0073_roles_keep_every_till_action.sql");
 
+/// A role grants each permission directly or with approval, and every role that exists is given,
+/// once, each PIN-flagged permission it does not grant directly, with approval
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4).
+const MIGRATION_0074: &str = include_str!("../migrations/0074_role_permissions_with_approval.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -628,6 +633,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0073)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0074)
             .await
             .map_err(unavailable)
     }

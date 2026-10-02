@@ -17360,6 +17360,7 @@ impl RoleTemplateStore for FakeRoleTemplates {
                 tenant_id: template.tenant_id,
                 name: template.name.clone(),
                 permissions: template.permissions.clone(),
+                permissions_with_approval: template.permissions_with_approval.clone(),
                 discount_ceiling_minor: template.discount_ceiling_minor,
                 status: EntityStatus::Active,
             },
@@ -17418,6 +17419,9 @@ impl RoleTemplateStore for FakeRoleTemplates {
         }
         row.record.name.clone_from(&template.name);
         row.record.permissions.clone_from(&template.permissions);
+        row.record
+            .permissions_with_approval
+            .clone_from(&template.permissions_with_approval);
         row.record.discount_ceiling_minor = template.discount_ceiling_minor;
         row.record.status = template.status;
         row.etag = version.clone();
@@ -17559,6 +17563,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 "billing.discount.apply".to_owned(),
                 "sales.item.open".to_owned(),
             ],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         })
         .await
@@ -17570,6 +17575,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
             tenant_id: other,
             name: "Cashier".to_owned(),
             permissions: vec![],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         })
         .await
@@ -17581,6 +17587,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                 tenant_id: mine,
                 name: "Cashier".to_owned(),
                 permissions: vec![],
+                permissions_with_approval: Vec::new(),
                 discount_ceiling_minor: None,
             })
             .await
@@ -17601,6 +17608,7 @@ async fn role_template_store_creates_lists_updates_scoped_by_tenant() {
                     tenant_id: mine,
                     name: "Cashier".to_owned(),
                     permissions: vec!["sales.item.open".to_owned()],
+                    permissions_with_approval: Vec::new(),
                     discount_ceiling_minor: None,
                     status: EntityStatus::Archived,
                 },
@@ -17945,6 +17953,7 @@ async fn seed_a_cashier(people: &FakePeople, store: StoreId) -> (EmployeeId, Rol
             tenant_id: mine,
             name: "Cashier".to_owned(),
             permissions: vec!["billing.discount.apply".to_owned()],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -19680,6 +19689,7 @@ async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, Role
             tenant_id: tenant(),
             name: "Old".to_owned(),
             permissions: Vec::new(),
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -19690,6 +19700,7 @@ async fn seed_archived_person_and_role(people: &FakePeople) -> (EmployeeId, Role
         tenant_id: tenant(),
         name: "Old".to_owned(),
         permissions: Vec::new(),
+        permissions_with_approval: Vec::new(),
         discount_ceiling_minor: None,
         status: EntityStatus::Archived,
     };
@@ -19975,6 +19986,7 @@ async fn archiving_a_role_takes_what_it_granted_off_every_store_that_held_it() {
             tenant_id: tenant(),
             name: "Cook".to_owned(),
             permissions: vec!["sales.ticket.bump".to_owned()],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
         },
     )
@@ -20078,6 +20090,7 @@ async fn a_person_with_two_roles_at_a_store_holds_both() {
                 "cash.shift.open".to_owned(),
                 "billing.discount.apply".to_owned(),
             ],
+            permissions_with_approval: Vec::new(),
             discount_ceiling_minor: Some(50_000),
         },
     )
@@ -20118,6 +20131,282 @@ async fn a_person_with_two_roles_at_a_store_holds_both() {
         staff[0]["discount_ceiling_minor"], 50_000,
         "the higher ceiling"
     );
+}
+
+/// A role grants each permission directly or with approval
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 4), and a create says which in two lists. One that leaves `permissions_with_approval`
+/// out grants every permission it lists directly, as before the list existed, and reads back as
+/// it was sent, PIN-flagged ids included: only a direct holder approves, so a script or an old
+/// console tab must not create roles whose holders can no longer approve. The console's role
+/// editor, which always sends both lists, is where a PIN-flagged permission starts with approval.
+/// The audit entry records both lists apart.
+#[tokio::test]
+async fn a_new_role_grants_with_approval_only_what_it_says() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = people_app_with_audit(
+        admin,
+        FakePeople::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    for (body, directly, with_approval) in [
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Shift lead",
+                "permissions": ["billing.bill.void", "sales.line.add", "cash.drawer.open_no_sale"],
+            }),
+            serde_json::json!([
+                "billing.bill.void",
+                "sales.line.add",
+                "cash.drawer.open_no_sale"
+            ]),
+            serde_json::json!([]),
+        ),
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Manager",
+                "permissions": ["billing.bill.void", "sales.line.add"],
+                "permissions_with_approval": [],
+            }),
+            serde_json::json!(["billing.bill.void", "sales.line.add"]),
+            serde_json::json!([]),
+        ),
+        (
+            serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Server",
+                "permissions": ["sales.line.add"],
+                "permissions_with_approval": ["sales.line.void_fired"],
+            }),
+            serde_json::json!(["sales.line.add"]),
+            serde_json::json!(["sales.line.void_fired"]),
+        ),
+    ] {
+        let created = router
+            .clone()
+            .oneshot(post_with_cookie("/admin/roles", &body, &owner))
+            .await
+            .expect("route the create");
+        assert_eq!(created.status(), StatusCode::CREATED, "{body}");
+        let id = json_body(created).await["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let read = router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/roles/{id}?tenant_id={tenant_ulid}"),
+                &owner,
+            ))
+            .await
+            .expect("route the read");
+        let role = json_body(read).await;
+        assert_eq!(role["permissions"], directly, "granted directly: {body}");
+        assert_eq!(
+            role["permissions_with_approval"], with_approval,
+            "granted with approval: {body}"
+        );
+    }
+
+    let recorded = audit.list(None, 50).await.expect("list audit");
+    let after = recorded
+        .iter()
+        .filter(|entry| entry.action == "role.create")
+        .filter_map(|entry| entry.after.as_ref())
+        .find(|after| after["name"] == "Server")
+        .expect("the create is audited");
+    assert_eq!(after["permissions"], serde_json::json!(["sales.line.add"]));
+    assert_eq!(
+        after["permissions_with_approval"],
+        serde_json::json!(["sales.line.void_fired"])
+    );
+}
+
+/// What a role grants with approval must be catalogue permissions, each PIN-flagged and none also
+/// granted directly (ADR-0158 decision 4). A create or an update that lists otherwise is refused
+/// `400`, naming the field and why.
+#[tokio::test]
+async fn a_role_write_refuses_an_approval_that_is_unknown_unflagged_or_also_direct() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    let router = people_app_with_audit(admin, people, Arc::new(NoopAuditRecorder));
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/roles/{}", cashier.as_ulid());
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("{url}?tenant_id={tenant_ulid}"),
+            &owner,
+        ))
+        .await
+        .expect("route the read");
+    let etag = etag_of(&read);
+
+    for (directly, with_approval, refused_fields, reason) in [
+        (
+            serde_json::json!([]),
+            serde_json::json!(["not.a.real.permission"]),
+            vec!["permissions_with_approval"],
+            "INVALID_ENUM_VALUE",
+        ),
+        (
+            serde_json::json!([]),
+            serde_json::json!(["sales.line.add"]),
+            vec!["permissions_with_approval"],
+            "INVALID_VALUE",
+        ),
+        (
+            serde_json::json!(["billing.bill.void"]),
+            serde_json::json!(["billing.bill.void"]),
+            vec!["permissions", "permissions_with_approval"],
+            "MUTUALLY_EXCLUSIVE",
+        ),
+    ] {
+        let body = serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Cashier",
+            "permissions": directly,
+            "permissions_with_approval": with_approval,
+            "status": "active",
+        });
+        for request in [
+            post_with_cookie("/admin/roles", &body, &owner),
+            patch_with_etag(&url, &body, &owner, &etag),
+        ] {
+            let refused = router
+                .clone()
+                .oneshot(request)
+                .await
+                .expect("route the write");
+            assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{body}");
+            let error = json_body(refused).await;
+            let named: Vec<(&str, &str)> = error["error"]["details"]
+                .as_array()
+                .expect("details")
+                .iter()
+                .map(|detail| {
+                    (
+                        detail["field"].as_str().expect("a field"),
+                        detail["reason"].as_str().expect("a reason"),
+                    )
+                })
+                .collect();
+            let expected: Vec<(&str, &str)> = refused_fields
+                .iter()
+                .map(|field| (*field, reason))
+                .collect();
+            assert_eq!(named, expected, "{error}");
+        }
+    }
+}
+
+/// An update written before roles said what they grant with approval keeps working (ADR-0158
+/// decision 4). Leaving `permissions_with_approval` out keeps what the role grants with approval,
+/// less anything the update now grants directly, and the store's node lists each person's two
+/// lists apart.
+#[tokio::test]
+async fn an_update_that_leaves_approval_out_keeps_it_less_what_it_now_grants_directly() {
+    let admin = provisioned_admin();
+    let people = FakePeople::default();
+    let config = FakeConfigTrees::default();
+    let (_alice, cashier) = seed_a_cashier(&people, store_id()).await;
+    // The Cashier as migration 0074 leaves one: the direct list as it was, and two acts with approval.
+    people.roles.rows.lock().expect("lock")[0]
+        .record
+        .permissions_with_approval = vec![
+        "billing.bill.void".to_owned(),
+        "sales.line.void_fired".to_owned(),
+    ];
+    let router = people_app(
+        admin,
+        people,
+        FakeRegistry::default(),
+        config.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let owner = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let url = format!("/admin/roles/{}", cashier.as_ulid());
+    let read_url = format!("{url}?tenant_id={tenant_ulid}");
+
+    // A console from before the list: the void is now granted directly, and nothing else is said.
+    let before = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let updated = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Cashier",
+                "permissions": ["billing.discount.apply", "sales.line.void_fired"],
+                "status": "active",
+            }),
+            &owner,
+            &etag_of(&before),
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(updated.status(), StatusCode::NO_CONTENT);
+    let after = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let after_etag = etag_of(&after);
+    let role = json_body(after).await;
+    assert_eq!(
+        role["permissions_with_approval"],
+        serde_json::json!(["billing.bill.void"]),
+        "kept, less the void it now grants directly: {role}"
+    );
+    publish_people(&router, &owner, store_id()).await;
+    let staff = staff_at(&config, store_id()).await;
+    assert_eq!(
+        staff[0]["permissions"],
+        serde_json::json!(["billing.discount.apply", "sales.line.void_fired"])
+    );
+    assert_eq!(
+        staff[0]["permissions_with_approval"],
+        serde_json::json!(["billing.bill.void"])
+    );
+
+    // Saying `[]` is saying something: nothing with approval.
+    let cleared = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &url,
+            &serde_json::json!({
+                "tenant_id": tenant_ulid,
+                "name": "Cashier",
+                "permissions": ["billing.discount.apply"],
+                "permissions_with_approval": [],
+                "status": "active",
+            }),
+            &owner,
+            &after_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(cleared.status(), StatusCode::NO_CONTENT);
+    let cleared = router
+        .clone()
+        .oneshot(get_with_cookie(&read_url, &owner))
+        .await
+        .expect("route the read");
+    let role = json_body(cleared).await;
+    assert_eq!(role["permissions_with_approval"], serde_json::json!([]));
 }
 
 /// The main app merged with the provider-catalogue router (ADR-0153).

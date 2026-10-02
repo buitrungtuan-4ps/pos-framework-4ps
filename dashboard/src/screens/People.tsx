@@ -13,9 +13,24 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Assignment, Employee, Page, PermissionInfo, RoleTemplate } from "../api/types";
+import type {
+  Assignment,
+  Employee,
+  Page,
+  PermissionInfo,
+  PermissionsPublishReport,
+  RoleTemplate,
+} from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
+import {
+  grantLists,
+  grantsOf,
+  NO_GRANTS,
+  type RoleGrants,
+  setApproval,
+  toggleGrant,
+} from "../lib/role-grants";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
@@ -92,7 +107,8 @@ export function People() {
   // The version the role drawer opened on (ADR-0094). Empty for a new role, which has none yet.
   const [roleDraftEtag, setRoleDraftEtag] = createSignal("");
   const [roleName, setRoleName] = createSignal("");
-  const [rolePermissions, setRolePermissions] = createSignal<string[]>([]);
+  // Every permission the role grants, and which of them only with approval (ADR-0158 decision 4).
+  const [roleGrants, setRoleGrants] = createSignal<RoleGrants>(NO_GRANTS);
   // Held as the typed text, not a number, so an empty box and a typed `0` stay apart: the first is
   // "no ceiling configured" and the second is "this role discounts nothing". Both mean a manager is
   // needed today, and they are different things to have said.
@@ -110,6 +126,8 @@ export function People() {
   let assignSearchTimer: ReturnType<typeof setTimeout> | undefined;
   let assignSearchSeq = 0;
   const [pendingRemove, setPendingRemove] = createSignal<Assignment | null>(null);
+  // Stores an immediate publish failed at, until they are published again (ADR-0158 decision 7).
+  const [unpublished, setUnpublished] = createSignal<readonly string[]>([]);
 
   // A `412` means somebody else saved this person or role while the form was open (ADR-0094). The
   // screen reloads rather than offering a retry: retrying would re-apply the overwrite the refusal
@@ -125,6 +143,36 @@ export function People() {
     const message = apiMessage(caught);
     setError(message);
     toast.error(message);
+  };
+
+  // Removing an assignment and archiving a person or a role publish to every store they reach at
+  // once (ADR-0158 decision 7). The change is saved whatever the stores answered, but a store whose
+  // publish failed keeps its old roster until it is published again, so the operator is told and
+  // offered the publish.
+  const reportFailedStores = (report: PermissionsPublishReport | null) => {
+    const failed = (report?.stores ?? [])
+      .filter((row) => row.outcome === "PERMISSIONS_PUBLISH_FAILED")
+      .map((row) => row.store_id);
+    if (failed.length > 0) {
+      setUnpublished((current) => [...new Set([...current, ...failed])]);
+      toast.error(t("people.publishFailedStores", { count: failed.length }));
+    }
+  };
+
+  /** Publishes again to each store an immediate publish failed at, one at a time. */
+  const publishAgain = async () => {
+    setBusy(true);
+    try {
+      for (const store of unpublished()) {
+        await api.publishPermissions(tenantId(), store);
+        setUnpublished((current) => current.filter((id) => id !== store));
+      }
+      toast.ok(t("people.republished"));
+    } catch (caught) {
+      await fail(caught);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /** How many employees the table shows at once. The pager reads `total` for the rest. */
@@ -184,8 +232,12 @@ export function People() {
     setAssignments(await api.listAssignmentsByStore(tenantId(), storeId()));
   };
 
-  // Load on open and whenever the tenant changes — never with an empty context (F0).
-  onScopedContext("tenant", () => void load());
+  // Load on open and whenever the tenant changes — never with an empty context (F0). Another
+  // tenant's stores are not this one's to publish again.
+  onScopedContext("tenant", () => {
+    setUnpublished([]);
+    void load();
+  });
   // Reload just the assignments when the store selection changes.
   onScopedContext("store", () => void loadAssignments().catch(fail));
 
@@ -246,7 +298,7 @@ export function People() {
   ) => {
     setBusy(true);
     try {
-      await api.updateEmployee(
+      const report = await api.updateEmployee(
         employee.employee_id,
         tenantId(),
         { name: employee.name, status },
@@ -254,6 +306,7 @@ export function People() {
       );
       setPendingArchive(null);
       toast.ok(doneMessage);
+      reportFailedStores(report);
       // Archiving changes a status, not membership: the row stays on the page it was on.
       await loadRoster();
     } catch (caught) {
@@ -267,7 +320,7 @@ export function People() {
     setRoleDraftId("");
     setRoleDraftEtag("");
     setRoleName("");
-    setRolePermissions([]);
+    setRoleGrants(NO_GRANTS);
     setRoleCeiling("");
     setRoleOpen(true);
   };
@@ -275,7 +328,7 @@ export function People() {
     setRoleDraftId(role.role_template_id);
     setRoleDraftEtag(role.etag);
     setRoleName(role.name);
-    setRolePermissions([...role.permissions]);
+    setRoleGrants(grantsOf(role));
     setRoleCeiling(
       role.discount_ceiling_minor === undefined || role.discount_ceiling_minor === null
         ? ""
@@ -283,10 +336,8 @@ export function People() {
     );
     setRoleOpen(true);
   };
-  const togglePermission = (id: string, on: boolean) => {
-    setRolePermissions((current) =>
-      on ? [...current, id] : current.filter((existing) => existing !== id),
-    );
+  const togglePermission = (info: PermissionInfo, on: boolean) => {
+    setRoleGrants((current) => toggleGrant(current, info, on));
   };
 
   /**
@@ -320,6 +371,7 @@ export function People() {
       setError(t(ceiling.error));
       return;
     }
+    const lists = grantLists(roleGrants());
     setBusy(true);
     try {
       if (roleDraftId()) {
@@ -328,7 +380,7 @@ export function People() {
           tenantId(),
           {
             name,
-            permissions: rolePermissions(),
+            ...lists,
             discountCeilingMinor: ceiling.value,
             status: "active",
           },
@@ -336,7 +388,7 @@ export function People() {
         );
         toast.ok(t("people.roleUpdated"));
       } else {
-        await api.createRole(tenantId(), name, rolePermissions(), ceiling.value);
+        await api.createRole(tenantId(), name, lists, ceiling.value);
         toast.ok(t("people.roleCreated"));
       }
       setRoleOpen(false);
@@ -351,20 +403,21 @@ export function People() {
   const archiveRole = async (role: RoleTemplate) => {
     setBusy(true);
     try {
-      await api.updateRole(
+      const report = await api.updateRole(
         role.role_template_id,
         tenantId(),
         {
           name: role.name,
-          permissions: [...role.permissions],
-          // Carried through unchanged: archiving is a status change, and a PATCH that left this out
-          // would quietly wipe a ceiling somebody configured.
+          // Carried through unchanged: archiving is a status change. Both lists go as they stand,
+          // and a PATCH that left the ceiling out would quietly wipe one somebody configured.
+          ...grantLists(grantsOf(role)),
           discountCeilingMinor: role.discount_ceiling_minor ?? null,
           status: role.status === "archived" ? "active" : "archived",
         },
         role.etag,
       );
       toast.ok(t("people.roleUpdated"));
+      reportFailedStores(report);
       await load();
     } catch (caught) {
       await fail(caught);
@@ -461,9 +514,10 @@ export function People() {
     }
     setBusy(true);
     try {
-      await api.removeAssignment(tenantId(), assignment.assignment_id);
+      const report = await api.removeAssignment(tenantId(), assignment.assignment_id);
       setPendingRemove(null);
       toast.ok(t("people.unassigned"));
+      reportFailedStores(report);
       await loadAssignments();
     } catch (caught) {
       await fail(caught);
@@ -551,8 +605,18 @@ export function People() {
     {
       key: "permissions",
       header: t("people.permissionCount"),
-      sortValue: (row) => row.permissions.length,
-      cell: (row) => <span class="text-ink-muted">{row.permissions.length}</span>,
+      sortValue: (row) => grantsOf(row).granted.length,
+      cell: (row) => (
+        <span class="text-ink-muted">
+          {grantsOf(row).granted.length}
+          <Show when={grantsOf(row).withApproval.length > 0}>
+            {" · "}
+            {t("people.permissionCountWithApproval", {
+              count: grantsOf(row).withApproval.length,
+            })}
+          </Show>
+        </span>
+      ),
     },
     {
       key: "status",
@@ -581,6 +645,19 @@ export function People() {
       <RequireContext need="tenant">
         <div class="flex flex-col gap-6">
           <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+          <Show when={unpublished().length > 0}>
+            <div class="flex flex-col gap-2">
+              <Banner
+                tone="danger"
+                message={t("people.unpublishedStores", { count: unpublished().length })}
+              />
+              <div>
+                <Button variant="secondary" disabled={busy()} onClick={() => void publishAgain()}>
+                  {t("people.publishAgain")}
+                </Button>
+              </div>
+            </div>
+          </Show>
 
           <Card
             title={t("people.employees")}
@@ -935,19 +1012,52 @@ export function People() {
                       <div class="flex flex-col gap-1">
                         <For each={bucket.items}>
                           {(info) => (
-                            <CheckboxField
-                              label={info.id}
-                              checked={rolePermissions().includes(info.id)}
-                              onChange={(on) => togglePermission(info.id, on)}
-                              caption={
-                                <span>
-                                  <span class="text-sm font-medium text-ink">{info.id}</span>
-                                  <span class="block text-xs text-ink-muted">
-                                    {info.description}
+                            <div>
+                              <CheckboxField
+                                label={info.id}
+                                checked={roleGrants().granted.includes(info.id)}
+                                onChange={(on) => togglePermission(info, on)}
+                                caption={
+                                  <span>
+                                    <span class="text-sm font-medium text-ink">{info.id}</span>
+                                    <span class="block text-xs text-ink-muted">
+                                      {info.description}
+                                    </span>
                                   </span>
-                                </span>
-                              }
-                            />
+                                }
+                              />
+                              {/* A PIN-flagged permission the role grants is granted one of two
+                                  ways (ADR-0158 decision 4); any other is only ever direct, and
+                                  one stored with approval anyway keeps the choice, so it can be
+                                  set back. */}
+                              <Show
+                                when={
+                                  roleGrants().granted.includes(info.id) &&
+                                  (info.pin_required || roleGrants().withApproval.includes(info.id))
+                                }
+                              >
+                                <div class="mb-2 ml-7">
+                                  <SelectField
+                                    label={t("people.grantHow", { permission: info.id })}
+                                    value={
+                                      roleGrants().withApproval.includes(info.id)
+                                        ? "approval"
+                                        : "direct"
+                                    }
+                                    options={[
+                                      { value: "approval", label: t("people.grantWithApproval") },
+                                      { value: "direct", label: t("people.grantDirectly") },
+                                    ]}
+                                    onChange={(value) =>
+                                      setRoleGrants((current) =>
+                                        setApproval(current, info.id, value === "approval"),
+                                      )
+                                    }
+                                    hint={t("people.grantWithApprovalHint")}
+                                  />
+                                </div>
+                              </Show>
+                            </div>
                           )}
                         </For>
                       </div>

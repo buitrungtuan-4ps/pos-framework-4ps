@@ -364,6 +364,19 @@ pub fn is_known_permission(id: &str) -> bool {
         .any(|permission| permission.meta().id == id)
 }
 
+/// Whether `id` is a `pos-core` permission whose catalogue entry is PIN-flagged.
+///
+/// Only such a permission may be granted **with approval**
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 4). The flag is also where the console's role editor starts a newly ticked permission,
+/// and nothing more: the route stores what it is sent. An unknown id is not PIN-flagged.
+#[must_use]
+pub fn is_pin_flagged_permission(id: &str) -> bool {
+    Permission::ALL
+        .iter()
+        .any(|permission| permission.meta().id == id && permission.meta().pin_required)
+}
+
 /// A role template's identifier — a ULID minted at creation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct RoleTemplateId(Ulid);
@@ -399,8 +412,15 @@ pub struct RoleTemplate {
     pub tenant_id: TenantId,
     /// The human role name (e.g. *Cashier*), unique within the tenant.
     pub name: String,
-    /// The granted permission ids, each a `pos-core` catalogue id.
+    /// The permission ids the role grants **directly**, each a `pos-core` catalogue id: its holder
+    /// acts on them alone.
     pub permissions: Vec<String>,
+    /// The permission ids the role grants only **with approval**: another person who holds one
+    /// directly enters their code and PIN for each act
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+    /// decision 4). Each is a PIN-flagged catalogue id, and none is also in [`Self::permissions`].
+    /// Always on the wire, empty for a role that grants everything directly.
+    pub permissions_with_approval: Vec<String>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     ///
     /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
@@ -427,8 +447,11 @@ pub struct NewRoleTemplate {
     pub tenant_id: TenantId,
     /// The role name.
     pub name: String,
-    /// The granted permission ids (validated against the catalogue by the caller).
+    /// The permission ids granted directly (validated against the catalogue by the caller).
     pub permissions: Vec<String>,
+    /// The permission ids granted only with approval (ADR-0158 decision 4): PIN-flagged, none also
+    /// in [`Self::permissions`] — both checked by the caller.
+    pub permissions_with_approval: Vec<String>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     ///
     /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
@@ -444,7 +467,7 @@ pub struct NewRoleTemplate {
     pub discount_ceiling_minor: Option<i64>,
 }
 
-/// An update to a role template's name, permission set, and/or status.
+/// An update to a role template's name, permission sets, ceiling and/or status.
 #[derive(Debug, Clone)]
 pub struct RoleTemplateUpdate {
     /// The template to change.
@@ -453,8 +476,11 @@ pub struct RoleTemplateUpdate {
     pub tenant_id: TenantId,
     /// The new name.
     pub name: String,
-    /// The new permission set.
+    /// The new set granted directly.
     pub permissions: Vec<String>,
+    /// The new set granted only with approval (ADR-0158 decision 4): PIN-flagged, none also in
+    /// [`Self::permissions`] — both checked by the caller.
+    pub permissions_with_approval: Vec<String>,
     /// How much this role may discount before it needs a manager, in the currency's minor unit.
     ///
     /// `billing.discount.apply` is granted to a **server** and is not PIN-flagged; its own
@@ -505,7 +531,8 @@ pub trait RoleTemplateStore {
         role_template_id: RoleTemplateId,
     ) -> impl Future<Output = Result<Option<Versioned<RoleTemplate>>, RoleTemplateStoreError>> + Send;
 
-    /// Updates a role template's name, permissions, and status. Applies only at `expected`.
+    /// Updates a role template's name, both permission sets, ceiling and status. Applies only at
+    /// `expected`.
     ///
     /// # Errors
     ///
@@ -697,5 +724,53 @@ impl AssignmentStoreError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self(message.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_pin_flagged_permission, permission_catalogue};
+    use pos_core::permission::Permission;
+
+    /// Migration 0074 gives every role that exists each PIN-flagged permission it does not grant
+    /// directly, with approval, from a literal list in its SQL. That list is the catalogue's
+    /// PIN-flagged permissions, in byte order and once each — the `pin_required=true` lines of
+    /// `docs/snapshots/permissions.txt` — so the two cannot drift.
+    #[test]
+    fn the_with_approval_backfill_lists_exactly_the_pin_flagged_permissions() {
+        const MIGRATION: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0074_role_permissions_with_approval.sql"
+        );
+        let open = MIGRATION
+            .find("ARRAY[")
+            .expect("the backfill's literal list")
+            + "ARRAY[".len();
+        let close = open + MIGRATION[open..].find(']').expect("the list is closed");
+        let literal: Vec<&str> = MIGRATION[open..close]
+            .split(',')
+            .map(|item| item.trim().trim_matches('\''))
+            .collect();
+        let mut flagged: Vec<&str> = Permission::ALL
+            .iter()
+            .map(|permission| permission.meta())
+            .filter(|meta| meta.pin_required)
+            .map(|meta| meta.id)
+            .collect();
+        flagged.sort_unstable();
+        assert_eq!(literal, flagged);
+    }
+
+    /// The route's check and the console's catalogue read the same flag.
+    #[test]
+    fn a_permission_is_pin_flagged_exactly_when_the_catalogue_says_so() {
+        for info in permission_catalogue() {
+            assert_eq!(
+                is_pin_flagged_permission(info.id),
+                info.pin_required,
+                "{}",
+                info.id
+            );
+        }
+        assert!(!is_pin_flagged_permission("not.a.real.permission"));
     }
 }
