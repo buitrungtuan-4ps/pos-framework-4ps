@@ -11,7 +11,8 @@
 // holding console.people.manage (owner/admin) — the server re-checks every route; the gate here only
 // hides what a role cannot do.
 
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type {
@@ -357,6 +358,21 @@ export function People() {
     );
     setRoleOpen(true);
   };
+  // A link may name one role to edit, `?role=` — the readiness panel on Settings links each role it
+  // lists here (ADR-0158, Rollout). Its editor opens once the roles are read, once per link, and
+  // only for a role that may edit roles.
+  const [params] = useSearchParams<{ role?: string }>();
+  let openedFor = "";
+  createEffect(() => {
+    const wanted = params.role ?? "";
+    const role = roles().find(
+      (row) => row.role_template_id.toUpperCase() === wanted.toUpperCase(),
+    );
+    if (wanted && wanted !== openedFor && role && canManage()) {
+      openedFor = wanted;
+      openEditRole(role);
+    }
+  });
   const togglePermission = (info: PermissionInfo, on: boolean) => {
     setRoleGrants((current) => toggleGrant(current, info, on));
   };

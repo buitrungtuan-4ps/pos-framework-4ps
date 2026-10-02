@@ -8,8 +8,11 @@
 //     tenant-wide kind — and never the top-bar store beside a group;
 //   * every row of the store's list says where its assignment reaches: this store, the group by
 //     name, or every store, so a wider grant is not mistaken for this shop's own;
-//   * removing a wider assignment says it leaves every store it reached.
+//   * removing a wider assignment says it leaves every store it reached;
+//   * a link that names a role — the Settings screen's readiness panel links each role it lists —
+//     opens that role's editor.
 
+import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -90,9 +93,15 @@ vi.mock("../src/api/client", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
-/** Mounts the screen and waits for the store's assignments to arrive. */
-async function mount() {
-  render(() => <People />);
+/** Mounts the screen, inside a router because it reads `?role=`, and waits for the assignments. */
+async function mount(url = "/t/tenant/people") {
+  const history = createMemoryHistory();
+  history.set({ value: url });
+  render(() => (
+    <MemoryRouter history={history}>
+      <Route path="/t/:tenant/people" component={People} />
+    </MemoryRouter>
+  ));
   await waitFor(() => expect(screen.getByText("Cam (C03)")).toBeTruthy());
 }
 
@@ -166,6 +175,15 @@ describe("where an assignment reaches", () => {
 
     await waitFor(() => expect(createAssignment).toHaveBeenCalledTimes(1));
     expect(createAssignment.mock.calls[0]![2]).toEqual({ kind: "tenant" });
+  });
+
+  it("opens a role's editor when a link names the role", async () => {
+    await mount(`/t/tenant/people?role=${CASHIER.role_template_id}`);
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText(messages["people.roleName"]!) as HTMLInputElement).value,
+      ).toBe(CASHIER.name),
+    );
   });
 
   it("says a wider removal leaves every store it reached", async () => {

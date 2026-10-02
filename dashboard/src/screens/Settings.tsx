@@ -31,8 +31,14 @@
 // store's publish did, the store scope here does both again: one action writes the values the store
 // does not set itself, and one publishes the store again.
 //
-// Nothing on this screen is personal data: setting values, store, brand and group names, and the
-// release each store runs.
+// # Before you turn this on (ADR-0158, Rollout)
+//
+// For one store, `permissions.enforced` carries a panel that lists what each role held there does
+// not grant (`components/PermissionsReadiness.tsx`), whatever the switch says. It reads the store's
+// roles, so it needs `console.people.read`; a role without it is told who can see it.
+//
+// Nothing on this screen is personal data: setting values, store, brand and group names, the
+// release each store runs, and role names with a count of the people holding each.
 
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 
@@ -68,6 +74,7 @@ import {
   SwitchField,
 } from "../components/ui";
 import { ConfirmDialog, EmptyState, TechnicalDetails } from "../components/kit";
+import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
 import { toast } from "../components/Toast";
 
 const TENANT: SettingScope = "SETTING_SCOPE_TENANT";
@@ -103,6 +110,12 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
  * publishes. Mirrored so the screen hides what a role cannot do; the server re-checks every route.
  */
 const PUBLISHERS: ReadonlySet<string> = new Set(["owner", "admin", "ops"]);
+
+/** The roles holding `console.people.read`, which the readiness panel's read needs (ADR-0158). */
+const STAFF_READERS: ReadonlySet<string> = new Set(["owner", "admin"]);
+
+/** The setting the readiness panel stands beside. */
+const ENFORCED = "permissions.enforced";
 
 /** How each outcome is drawn. `UNCHANGED` is neutral: the store already ran the value. */
 const OUTCOME: Record<
@@ -294,6 +307,10 @@ export function Settings() {
   const canWrite = () => {
     const role = actingAdmin()?.role;
     return role !== undefined && PUBLISHERS.has(role);
+  };
+  const readsStaff = () => {
+    const role = actingAdmin()?.role;
+    return role !== undefined && STAFF_READERS.has(role);
   };
 
   const catalogue = () => layout.value()?.catalogue ?? [];
@@ -915,6 +932,16 @@ export function Settings() {
             </Show>
           </Show>
           <ReportFor about={setting().setting_key} />
+          <Show when={key() === ENFORCED && kind() === STORE && target()}>
+            {(store) => (
+              <Show
+                when={readsStaff()}
+                fallback={<p class="text-sm text-ink-muted">{t("readiness.restricted")}</p>}
+              >
+                <PermissionsReadinessPanel tenant={tenantId()} store={store()} />
+              </Show>
+            )}
+          </Show>
         </div>
       </Card>
     );

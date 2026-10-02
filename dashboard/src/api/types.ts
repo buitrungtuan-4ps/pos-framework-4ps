@@ -1602,6 +1602,40 @@ export interface PermissionInfo {
   readonly description: string;
 }
 
+/** One catalogue permission a role grants neither directly nor with approval (ADR-0158, Rollout). */
+export interface MissingPermission {
+  readonly id: string;
+  readonly group: string;
+  /** `LOW` — an everyday act — `MEDIUM` or `HIGH`. */
+  readonly risk: string;
+}
+
+/** One active role held at a store, and what it does not grant, everyday permissions first. */
+export interface RoleReadiness {
+  readonly role_template_id: string;
+  readonly name: string;
+  /** How many people on the store's roster hold it, each once. */
+  readonly people: number;
+  readonly missing: readonly MissingPermission[];
+}
+
+/**
+ * `GET /admin/stores/{store_id}/permissions/readiness` (ADR-0158, Rollout): what each role held at
+ * a store does not grant, read before the store enforces each person's own permissions. It names
+ * roles and counts people, and names no person.
+ */
+export interface PermissionsReadiness {
+  readonly store_id: string;
+  /** What the store runs for `permissions.enforced`. */
+  readonly enforced: boolean;
+  /** The level of the value the store runs; absent when it runs the default. */
+  readonly enforced_scope?: SettingScope;
+  readonly enforced_scope_id?: string;
+  readonly roles: readonly RoleReadiness[];
+  /** People at the store who hold no active role there: enforced, they can do nothing. */
+  readonly people_without_role: number;
+}
+
 /** The `201 { id }` body a people create returns (employee / role / assignment). */
 export interface CreatedId {
   readonly id: string;

@@ -73,6 +73,7 @@ import type {
   ModifierGroup,
   PermissionInfo,
   PermissionsPublishReport,
+  PermissionsReadiness,
   RecoveryCodesResponse,
   RecoveryCodesStatus,
   SalesChannel,
@@ -1001,6 +1002,13 @@ export const api = {
       `/admin/assignments/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`,
     ),
 
+  // What each role held at a store does not grant, before the store enforces each person's own
+  // permissions (ADR-0158, Rollout). Needs console.people.read; it names no person.
+  permissionsReadiness: (tenantId: string, storeId: string) =>
+    requestJson<PermissionsReadiness>(
+      "GET",
+      `/admin/stores/${encodeURIComponent(storeId)}/permissions/readiness?${tenantQuery(tenantId)}`,
+    ),
   // The pos-core permission catalogue (§9) the role editor offers, so the console never invents a
   // permission string — it presents these and stores a chosen subset.
   permissionCatalogue: () => requestJson<PermissionInfo[]>("GET", "/admin/people/permissions"),

@@ -146,6 +146,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_effective_settings,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
+        crate::http::admin_permissions_readiness,
         crate::http::admin_list_fees,
         crate::http::admin_create_fee,
         crate::http::admin_put_fee,
@@ -237,6 +238,14 @@ pub(crate) struct ErrorResponse {
                            value that reaches it, and every store a write reaches is republished in \
                            the same request. Documented because a fork's own console draws its \
                            settings screen from the catalogue here."
+        ),
+        (
+            name = "people",
+            description = "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and \
+                           assignment routes are still coverage debt; the readiness read is \
+                           documented because it is new to this surface, and because a fork's own \
+                           console needs it before a store enforces each person's own permissions. \
+                           It names roles and counts people, and names no person."
         ),
         (
             name = "fees",

@@ -709,6 +709,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             SystemClock,
             Arc::clone(&audit),
         ))
+        // Permissions readiness (ADR-0158, Rollout): before a store enforces each person's own
+        // permissions, what each role held there does not grant, beside what the store runs for
+        // `permissions.enforced`. It reads the people store and resolves the setting the way the
+        // settings routes do; it writes nothing.
+        .merge(http::permissions_readiness_router(
+            store.people(),
+            store.settings(),
+            store.registry(),
+            store.store_groups(),
+            store.admin(),
+            SystemClock,
+        ))
         // Floor & kitchen master data (ADR-0072, Track M2): a store's areas + tables and its kitchen
         // stations + item→station routing rules. Reads behind Read; writes behind the new ManageFloor
         // and audited. `store.floor()` is the area, table, station, and routing-rule seam at once.
