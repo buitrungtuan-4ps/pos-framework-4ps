@@ -759,9 +759,15 @@ export interface Supplier {
 /** The authoring fields of a supplier create/update — a `Supplier` without its server-owned id. */
 export type SupplierInput = Omit<Supplier, "id" | "etag">;
 
-/** A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree. */
+/**
+ * A QR ordering guardrail node (`qr`, ADR-0080) as read/published from the config tree.
+ *
+ * `enabled` follows QR ordering's switch, {@link QR_ORDERING_SWITCH}, which the cloud writes into it
+ * with every publish (ADR-0160 decision 5). This console never sends it: a value sent here is
+ * written as the switch, which is for an older console and for a cohort copy made by one.
+ */
 export interface QrGuardrails {
-  readonly enabled: boolean;
+  readonly enabled?: boolean;
   readonly staff_confirmation_required: boolean;
   readonly per_table_limit: number;
   readonly rate_window_secs: number;
@@ -1743,6 +1749,14 @@ export interface CapabilityRule {
   readonly id: string;
   readonly description: string;
 }
+
+/**
+ * QR ordering's one switch (ADR-0160 decision 5): the capability flag the cloud's guest intake and
+ * the edge read, off unless a store's configuration turns it on. `qr.enabled` and the QR sales
+ * channel follow it. It is offered on Channels & payments, beside the QR guardrails, and nowhere
+ * else, so the Config screen's capability form leaves it out.
+ */
+export const QR_ORDERING_SWITCH = "qr_ordering_enabled";
 
 /** The whole capability catalogue `GET /admin/capabilities` serves for the form editor. */
 export interface CapabilityCatalogue {

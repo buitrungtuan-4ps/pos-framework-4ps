@@ -922,6 +922,15 @@ impl PostgresStore {
         crate::settings::PostgresSettings::new(self.pool.clone())
     }
 
+    /// The record of the one-time data changes the cloud has made through its own code, rather
+    /// than in a migration's SQL (`data_migrations`, migration 0073).
+    ///
+    /// A cheap handle sharing the same pool; `pos-cloud` implements its `DataMigrations` seam over it.
+    #[must_use]
+    pub fn data_migrations(&self) -> crate::data_migrations::PostgresDataMigrations {
+        crate::data_migrations::PostgresDataMigrations::new(self.pool.clone())
+    }
+
     /// A tenant's fee rules over this pool
     /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)).
     ///

@@ -231,6 +231,10 @@ fn mint_version_id(now_ms: i64) -> Option<ConfigVersionId> {
 /// Applies one scheduled publish: sets its snapshotted node on the store's Store layer and versions it
 /// through the config tree — the same load→merge→publish→save shape the immediate publishes use.
 /// Returns the new config version id.
+///
+/// A snapshotted `qr` or `channels` node, or a capability flag, is applied as an immediate publish
+/// of it is: with what QR ordering's switch makes follow it, composed on the tree as it stands when
+/// the row comes due ([`crate::qr_ordering::align`]).
 async fn apply_one<Cfg>(
     config_trees: &Cfg,
     publish: &ScheduledPublish,
@@ -254,20 +258,22 @@ where
     if !store_layer.is_object() {
         store_layer = serde_json::Value::Object(serde_json::Map::new());
     }
+    let nodes = crate::qr_ordering::align(
+        state_before.as_ref(),
+        vec![(publish.node_key.clone(), publish.node_value.clone())],
+    );
+    let node_keys: Vec<String> = nodes.iter().map(|(key, _)| key.clone()).collect();
     if let serde_json::Value::Object(map) = &mut store_layer {
-        map.insert(publish.node_key.clone(), publish.node_value.clone());
+        for (key, value) in nodes {
+            map.insert(key, value);
+        }
     }
     let mut tree = match state_before {
         Some(existing) => ConfigTree::from_state(publish.store_id, CapabilityValidator, existing),
         None => ConfigTree::new(publish.store_id, CapabilityValidator),
     };
     let version_id = mint_version_id(now_ms).ok_or_else(|| "OS entropy unavailable".to_owned())?;
-    match tree.publish(
-        ConfigLevel::Store,
-        store_layer,
-        version_id,
-        vec![publish.node_key.clone()],
-    ) {
+    match tree.publish(ConfigLevel::Store, store_layer, version_id, node_keys) {
         Ok(id) => {
             // The activator has no operator and no `If-Match`, but it still composes on what it
             // read, so it takes the same precondition every console write does
@@ -997,6 +1003,52 @@ mod tests {
             0
         );
     }
+
+    /// A scheduled channel list is composed with the store's QR ordering switch when it comes due,
+    /// as an immediate publish of it is (ADR-0160 decision 5).
+    #[tokio::test]
+    async fn a_scheduled_channel_list_follows_the_store_s_qr_switch() {
+        let scheduled = FakeScheduled::default();
+        let config_trees = FakeConfigTrees::default();
+        scheduled
+            .schedule(&NewScheduledPublish {
+                node_key: "channels".to_owned(),
+                node_value: serde_json::json!({
+                    "enabled": ["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_QR"],
+                }),
+                ..new_publish("channels-1", 1_000)
+            })
+            .await
+            .expect("schedule");
+
+        let applied = super::pass(&scheduled, &config_trees, &FakeReleases::default(), 5_000)
+            .await
+            .expect("pass");
+        assert_eq!(applied, 1);
+
+        let state = config_trees
+            .load(tenant(), store())
+            .await
+            .expect("load")
+            .expect("a tree was saved")
+            .record;
+        // The store never turned QR ordering on, so the list it runs leaves QR out, and
+        // `qr.enabled` says so too.
+        assert_eq!(
+            state.layers[2]["channels"]["enabled"],
+            serde_json::json!(["SALES_CHANNEL_DINE_IN"])
+        );
+        assert_eq!(
+            state.layers[2]["qr"],
+            serde_json::json!({ "enabled": false })
+        );
+        assert_eq!(
+            state.history.last().map(|version| version.nodes.clone()),
+            Some(vec!["channels".to_owned(), "qr".to_owned()]),
+            "the version names every node it set"
+        );
+    }
+
     /// A release pair, for the ordering tests. Same instant for every node, which is the case that
     /// makes ordering load-bearing: `due` sorts by effective time and a release gives them all one.
     fn release_row(node: &str, release: Option<&str>, store_seed: u128) -> ScheduledPublish {

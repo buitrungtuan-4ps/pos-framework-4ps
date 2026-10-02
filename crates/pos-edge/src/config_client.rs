@@ -308,6 +308,17 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             document.get(key).and_then(serde_json::Value::as_bool)
         });
     }
+    // And which of the flags this document sets, from the document whole (ADR-0160 decision 5): the
+    // profile above reads an unset flag as its default, which cannot tell "off" from "never chosen".
+    session.published_flags = Capability::ALL
+        .iter()
+        .filter_map(|capability| {
+            document
+                .get(capability.meta().key)
+                .and_then(serde_json::Value::as_bool)
+                .map(|on| (*capability, on))
+        })
+        .collect();
     // The `floor` and `stations` nodes the floor publish writes (ADR-0072): the store's areas/tables
     // and its kitchen stations + item→station routing. Parsed via JSON text like the `menu` node; an
     // absent or unparseable node leaves that plan as the base has it — a bad publish never blanks a
@@ -519,9 +530,12 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     }
     // The `qr` guardrail node (P11b, authored via ADR-0080, Track M7): the edge reads only
     // `staff_confirmation_required` — whether a table-bearing QR order waits for staff before the
-    // kitchen sees it. The cloud reads the same node for its own guardrails (enabled/hours/rate). An
-    // absent field leaves the base value (default `true`, ADR-0057), so a store that never published
-    // the node still holds guest orders for staff.
+    // kitchen sees it. The cloud reads the same node for its own guardrails (hours, rate). Whether
+    // the store takes QR orders at all is not on this node: it is the `qr_ordering_enabled` flag,
+    // read with the capabilities above (ADR-0160 decision 5), with `qr.enabled` below to tell it
+    // from the flag as it was before the switch. An absent field leaves the base value (default
+    // `true`, ADR-0057), so a store that never published the node still holds guest orders for
+    // staff.
     if let Some(required) = document
         .get("qr")
         .and_then(|node| node.get("staff_confirmation_required"))
@@ -529,6 +543,13 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     {
         session.qr_staff_confirmation_required = required;
     }
+    // `qr.enabled` as this document sets it, read only beside QR ordering's switch: a cloud that
+    // knows the switch publishes it equal to the switch, so a `false` switch beside a `qr.enabled`
+    // that is not `false` is the flag from before the switch (`EdgeSession::qr_ordering_switched_off`).
+    session.qr_enabled_published = document
+        .get("qr")
+        .and_then(|node| node.get("enabled"))
+        .and_then(serde_json::Value::as_bool);
     // The `retention` node (ADR-0145): how many days this store keeps a synced event. Outside the
     // range, or absent, leaves the value it had, so a malformed publish never shortens a log.
     if let Some(days) = document
@@ -1678,6 +1699,50 @@ mod tests {
             rebuilt.capabilities.enabled(Capability::Kds),
             "an unnamed flag takes its default once the profile names any flag"
         );
+    }
+
+    #[test]
+    fn qr_ordering_s_switch_is_read_as_published_and_only_its_false_beside_qr_enabled_is_off() {
+        use pos_core::capability::Capability;
+
+        let read =
+            |document: serde_json::Value| session_from_config(&EdgeSession::bootstrap(), &document);
+
+        // Not published: the flag reads as its default in the profile, and as unset here.
+        let unset = read(serde_json::json!({ "qr": { "enabled": true } }));
+        assert_eq!(unset.explicit(Capability::QrOrdering), None);
+        assert!(!unset.qr_ordering_switched_off());
+
+        // Published off, by a cloud that knows the switch: `qr.enabled` is off beside it.
+        let off = read(serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+        }));
+        assert_eq!(off.explicit(Capability::QrOrdering), Some(false));
+        assert!(off.qr_ordering_switched_off());
+
+        // The flag's `false` from before the switch, beside a guest page that was on, or unset.
+        for stale in [
+            serde_json::json!({ "qr_ordering_enabled": false }),
+            serde_json::json!({ "qr_ordering_enabled": false, "qr": { "enabled": true } }),
+        ] {
+            let session = read(stale.clone());
+            assert_eq!(session.explicit(Capability::QrOrdering), Some(false));
+            assert!(
+                !session.qr_ordering_switched_off(),
+                "a flag nothing read is not the switch: {stale}"
+            );
+        }
+
+        let on =
+            read(serde_json::json!({ "qr_ordering_enabled": true, "qr": { "enabled": true } }));
+        assert_eq!(on.explicit(Capability::QrOrdering), Some(true));
+        assert!(!on.qr_ordering_switched_off());
+
+        // Each document is read whole: one that no longer sets the flag sets nothing here.
+        let later = session_from_config(&off, &serde_json::json!({ "tips_enabled": true }));
+        assert_eq!(later.explicit(Capability::QrOrdering), None);
+        assert!(!later.qr_ordering_switched_off());
     }
 
     #[test]

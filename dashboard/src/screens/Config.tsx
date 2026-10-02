@@ -3,13 +3,20 @@
 // validated) config for the tenant/store in context. Right: author one level as JSON and publish;
 // the server composes + validates and either appends a new version or rejects with the violations,
 // keeping the last good version current.
+//
+// The capability form offers every flag in the catalogue but QR ordering's, which is one switch with
+// `qr.enabled` and the QR channel following it (ADR-0160 decision 5) and is offered on Channels &
+// payments, beside its guardrails. Left out of the form, it is also left out of what a preset sets:
+// a preset names no QR flag, so applying one here would have switched a store's QR ordering off.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
 import {
   CONFIG_LEVELS,
+  QR_ORDERING_SWITCH,
   type CapabilityCatalogue,
+  type CapabilityFlag,
   type CapabilityPreset,
   type ConfigLevel,
   type ConfigVersion,
@@ -134,6 +141,9 @@ export function Config() {
   const effective = () => read.value()?.effective ?? null;
   const versions = (): ConfigVersion[] => read.value()?.versions ?? [];
   const catalogue = () => read.value()?.catalogue ?? null;
+  /** The flags the capability form offers: every one but QR ordering's switch. */
+  const formFlags = (): readonly CapabilityFlag[] =>
+    (catalogue()?.flags ?? []).filter((flag) => flag.key !== QR_ORDERING_SWITCH);
 
   /**
    * When the capability flags last reached this store.
@@ -144,7 +154,7 @@ export function Config() {
    */
   const published = usePublishedNodes();
   const capabilitiesPublishedAtMs = (): number | null => {
-    const keys = new Set((catalogue()?.flags ?? []).map((flag) => flag.key));
+    const keys = new Set(formFlags().map((flag) => flag.key));
     let newest: number | null = null;
     for (const row of published.nodes()) {
       if (keys.has(row.node) && row.at_ms !== null && (newest === null || row.at_ms > newest)) {
@@ -180,7 +190,7 @@ export function Config() {
       return;
     }
     const seeded: Record<string, boolean> = {};
-    for (const flag of value.catalogue.flags) {
+    for (const flag of formFlags()) {
       seeded[flag.key] = flagInEffective(flag.key, flag.default_on);
     }
     setFlags(seeded);
@@ -283,7 +293,7 @@ export function Config() {
   const applyPreset = (preset: CapabilityPreset) => {
     const on = new Set(preset.keys);
     const next: Record<string, boolean> = {};
-    for (const flag of catalogue()?.flags ?? []) {
+    for (const flag of formFlags()) {
       next[flag.key] = on.has(flag.key);
     }
     setFlags(next);
@@ -305,7 +315,7 @@ export function Config() {
   // The flags whose working value differs from the store's current effective profile — the
   // diff-before-publish, so the operator sees exactly what a publish will change.
   const flagChanges = () =>
-    (catalogue()?.flags ?? [])
+    formFlags()
       .map((flag) => {
         const before = flagInEffective(flag.key, flag.default_on);
         const after = flags()[flag.key] ?? flag.default_on;
@@ -392,8 +402,9 @@ export function Config() {
               >
                 <div class="flex flex-col gap-4">
                   <p class="text-sm text-ink-muted">{t("config.capabilities.hint")}</p>
+                  <p class="text-sm text-ink-muted">{t("config.capabilities.qrElsewhere")}</p>
                   <div class="grid gap-3 sm:grid-cols-2">
-                    <For each={cat().flags}>
+                    <For each={formFlags()}>
                       {(flag) => (
                         <CheckboxField
                           label={flag.key}
