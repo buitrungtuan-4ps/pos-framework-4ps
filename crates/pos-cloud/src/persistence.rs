@@ -74,6 +74,7 @@ use pos_proto::ids::{
 };
 use pos_proto::inventory::{PublishedIngredient, PublishedRecipe, PublishedSupplier};
 use pos_proto::locale::{TaxComponent, TaxRate};
+use pos_proto::printing::ReceiptLanguage;
 use pos_proto::settings::SettingScope;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -4445,6 +4446,7 @@ fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError
         late_after_seconds: row
             .late_after_seconds
             .and_then(|seconds| u32::try_from(seconds).ok()),
+        ticket_language: row.ticket_language,
         status: EntityStatus::from_db(&row.status),
     };
     Ok(Versioned::new(record, Version::new(row.version)))
@@ -4484,6 +4486,7 @@ impl StationStore for PostgresFloor {
             backup.as_deref(),
             station.is_default,
             late_after_column(station.late_after_seconds)?,
+            station.ticket_language.map(ReceiptLanguage::as_wire),
         )
         .await
         .map(Version::new)
@@ -4527,6 +4530,7 @@ impl StationStore for PostgresFloor {
             backup.as_deref(),
             station.is_default,
             late_after_column(station.late_after_seconds)?,
+            station.ticket_language.map(ReceiptLanguage::as_wire),
             station.status.as_str(),
             expected.as_str(),
         )

@@ -1,7 +1,7 @@
 // Kitchen stations & routing (ADR-0072, Track M2), on the F2 CRUD kit. The operator's place to define
 // a store's kitchen stations — each with an optional backup (printer failover), a catch-all default
-// flag and when its tickets are late (ADR-0160 decision 2) — and the rules that route a fired line to
-// a station by item. All by name, no ULID typed.
+// flag, when its tickets are late and the language its paper tickets print in (ADR-0160 decision 2) —
+// and the rules that route a fired line to a station by item. All by name, no ULID typed.
 // Stations and routing are per-store, so this screen needs a store chosen in the top bar; items come
 // from the tenant's catalog. None of this is PII.
 //
@@ -14,7 +14,7 @@ import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
 import type { RoutingRule, Station } from "../api/types";
-import { t } from "../i18n";
+import { t, tFromServer } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
 import { describePublish } from "../lib/publish-copy";
@@ -58,6 +58,22 @@ export function lateAfterSecondsFrom(minutes: string): number | null | undefined
   return Number.isInteger(whole) && whole >= 1 && whole <= 60 ? whole * 60 : undefined;
 }
 
+/** The language a station that sets none prints its tickets in, and the choice that stands for it. */
+const DISPLAY_LANGUAGE = "RECEIPT_LANGUAGE_DISPLAY";
+
+/** The four languages a station's tickets can print in: the receipt language's own choices. */
+const ticketLanguages = () => [
+  { value: DISPLAY_LANGUAGE, label: t("settings.value.RECEIPT_LANGUAGE_DISPLAY") },
+  { value: "RECEIPT_LANGUAGE_COUNTRY", label: t("settings.value.RECEIPT_LANGUAGE_COUNTRY") },
+  { value: "RECEIPT_LANGUAGE_VI", label: t("settings.value.RECEIPT_LANGUAGE_VI") },
+  { value: "RECEIPT_LANGUAGE_EN", label: t("settings.value.RECEIPT_LANGUAGE_EN") },
+];
+
+/** A station's ticket language in words, the token itself for one a newer cloud knows and this
+ *  console does not. */
+const ticketLanguageName = (token: string | null) =>
+  tFromServer(`settings.value.${token ?? DISPLAY_LANGUAGE}`, token ?? DISPLAY_LANGUAGE);
+
 export function Stations() {
   // The three reads in one state: stations, the rules that name them, and the items the rules point
   // at. Useless apart — a rules table with raw ULIDs where station and item names belong is worse
@@ -100,6 +116,8 @@ export function Stations() {
   const [stationDefault, setStationDefault] = createSignal(false);
   // Minutes as the operator types them; seconds are what the station stores.
   const [stationLateAfter, setStationLateAfter] = createSignal("");
+  // The display language stands for a station that sets none, and is saved as none.
+  const [stationLanguage, setStationLanguage] = createSignal(DISPLAY_LANGUAGE);
   const [pendingStationArchive, setPendingStationArchive] = createSignal<Station | null>(null);
 
   // New routing rule (station + item + sort) and the pending remove.
@@ -137,6 +155,7 @@ export function Stations() {
     setStationBackup("");
     setStationDefault(false);
     setStationLateAfter("");
+    setStationLanguage(DISPLAY_LANGUAGE);
     setStationOpen(true);
   };
   const openEditStation = (station: Station) => {
@@ -148,6 +167,7 @@ export function Stations() {
     setStationLateAfter(
       station.late_after_seconds === null ? "" : String(station.late_after_seconds / 60),
     );
+    setStationLanguage(station.ticket_language ?? DISPLAY_LANGUAGE);
     setStationOpen(true);
   };
 
@@ -162,6 +182,7 @@ export function Stations() {
       setError(t("stations.lateAfterInvalid"));
       return;
     }
+    const ticketLanguage = stationLanguage() === DISPLAY_LANGUAGE ? null : stationLanguage();
     setError("");
     setBusy(true);
     try {
@@ -174,6 +195,7 @@ export function Stations() {
             backupStationId: stationBackup() || null,
             isDefault: stationDefault(),
             lateAfterSeconds,
+            ticketLanguage,
             status: "active",
           },
           stationDraftEtag(),
@@ -185,6 +207,7 @@ export function Stations() {
           backupStationId: stationBackup() || null,
           isDefault: stationDefault(),
           lateAfterSeconds,
+          ticketLanguage,
         });
         toast.ok(t("stations.stationCreated"));
       }
@@ -213,6 +236,7 @@ export function Stations() {
           backupStationId: station.backup_station_id,
           isDefault: station.is_default,
           lateAfterSeconds: station.late_after_seconds,
+          ticketLanguage: station.ticket_language,
           status,
         },
         station.etag,
@@ -328,6 +352,11 @@ export function Stations() {
             : t("stations.lateAfterMinutes", { count: row.late_after_seconds / 60 })}
         </span>
       ),
+    },
+    {
+      key: "ticketLanguage",
+      header: t("stations.ticketLanguage"),
+      cell: (row) => <span class="text-ink-muted">{ticketLanguageName(row.ticket_language)}</span>,
     },
     {
       key: "default",
@@ -576,6 +605,13 @@ export function Stations() {
               value={stationLateAfter()}
               onInput={setStationLateAfter}
               hint={t("stations.lateAfterHint")}
+            />
+            <SelectField
+              label={t("stations.ticketLanguage")}
+              value={stationLanguage()}
+              options={ticketLanguages()}
+              onChange={setStationLanguage}
+              hint={t("stations.ticketLanguageHint")}
             />
             <CheckboxField
               label={t("stations.default")}

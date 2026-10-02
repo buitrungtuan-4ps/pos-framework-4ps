@@ -8,19 +8,22 @@
 //! Every field is a setting in [`crate::settings`], and every default is what the edge did before the
 //! field existed: a receipt in the store's display language alone, printed on every settle. So a
 //! document with no `printing` node, or a node without a field, prints exactly as it printed before.
-//! Kitchen tickets are not here: each station's language belongs to the `stations` node.
+//! Kitchen tickets are not here: each station's language belongs to the `stations` node, as a
+//! [`ReceiptLanguage`] of its own ([`crate::floor::KitchenStation::ticket_language`]).
 
 use serde::{Deserialize, Serialize};
 
 use crate::wire_enum;
-use crate::wire_enum::{Open, WireEnum};
+use crate::wire_enum::{Open, is_absent};
 
 wire_enum! {
-    /// The language a receipt, its copy and a pre-bill print in: their fixed labels, and each
-    /// item's name where the menu translates it.
+    /// The language a receipt, its copy and a pre-bill print in, and a kitchen station's tickets:
+    /// their fixed labels, and each item's name where the menu translates it. The `printing` node's
+    /// `receipt_language` chooses it for the paper a guest is handed, and each station's
+    /// `ticket_language` on the `stations` node for the paper its cooks read.
     ReceiptLanguage, prefix = "RECEIPT_LANGUAGE";
-    /// The store's display language, from the `locale` node: what every receipt printed in before
-    /// the setting existed.
+    /// The store's display language, from the `locale` node: what every receipt and every kitchen
+    /// ticket printed in before the setting existed.
     Display = "DISPLAY",
     /// The language of the store's country, from its country pack (ADR-0105), which the cloud
     /// publishes on the store's `locale` node: Vietnamese in Vietnam. What a new store is given, so
@@ -93,12 +96,6 @@ pub struct PublishedPrinting {
     /// none. Left off the wire while absent, so a node that does not set it is written as before.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub receipt_second_language: Open<ReceiptSecondLanguage>,
-}
-
-/// Whether a field holds no value at all. A token from a newer release is a value, and goes back
-/// out as it came.
-fn is_absent<E: WireEnum>(value: &Open<E>) -> bool {
-    *value == Open::default()
 }
 
 impl PublishedPrinting {

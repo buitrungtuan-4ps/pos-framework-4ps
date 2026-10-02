@@ -389,6 +389,9 @@ pub struct StationRow {
     /// How long a ticket at this station waits, in seconds, before its kitchen display marks it
     /// late, or `None` where nobody has said (migration 0080).
     pub late_after_seconds: Option<i32>,
+    /// The `RECEIPT_LANGUAGE_…` token its kitchen tickets print in, or `None` where nobody has said
+    /// (migration 0081).
+    pub ticket_language: Option<String>,
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -399,7 +402,7 @@ pub struct StationRow {
 
 /// The station columns a read returns, in a stable order matching [`station_row`].
 const STATION_COLUMNS: &str = "id, tenant_id, store_id, name, backup_station_id, is_default, \
-                               status, xmin::text, late_after_seconds";
+                               status, xmin::text, late_after_seconds, ticket_language";
 
 /// A routing rule as listed — identity, its store and target station, the item/course it matches, sort.
 #[derive(Clone, Debug)]
@@ -430,6 +433,11 @@ impl PostgresFloor {
     /// # Errors
     ///
     /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a station row is a flat record of primitive columns; a params struct would only \
+                  re-list them"
+    )]
     pub async fn insert_station(
         &self,
         id: &str,
@@ -439,14 +447,15 @@ impl PostgresFloor {
         backup_station_id: Option<&str>,
         is_default: bool,
         late_after_seconds: Option<i32>,
+        ticket_language: Option<&str>,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_one(
                 "INSERT INTO kitchen_stations \
                  (id, tenant_id, store_id, name, backup_station_id, is_default, \
-                  late_after_seconds) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                  late_after_seconds, ticket_language) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  RETURNING xmin::text",
                 &[
                     &id,
@@ -456,6 +465,7 @@ impl PostgresFloor {
                     &backup_station_id,
                     &is_default,
                     &late_after_seconds,
+                    &ticket_language,
                 ],
             )
             .await
@@ -510,8 +520,8 @@ impl PostgresFloor {
         Ok(row.as_ref().map(station_row))
     }
 
-    /// Updates a station's name, backup, default flag, late threshold, and status. Applies only if
-    /// the row is still at `expected`.
+    /// Updates a station's name, backup, default flag, late threshold, ticket language, and status.
+    /// Applies only if the row is still at `expected`.
     ///
     /// # Errors
     ///
@@ -529,6 +539,7 @@ impl PostgresFloor {
         backup_station_id: Option<&str>,
         is_default: bool,
         late_after_seconds: Option<i32>,
+        ticket_language: Option<&str>,
         status: &str,
         expected: &str,
     ) -> Result<RowUpdate, PortError> {
@@ -537,7 +548,7 @@ impl PostgresFloor {
             .query_opt(
                 "UPDATE kitchen_stations \
                  SET name = $3, backup_station_id = $4, is_default = $5, status = $6, \
-                     late_after_seconds = $8, updated_at = now() \
+                     late_after_seconds = $8, ticket_language = $9, updated_at = now() \
                  WHERE tenant_id = $1 AND id = $2 \
                  AND xmin::text = $7 RETURNING xmin::text",
                 &[
@@ -549,6 +560,7 @@ impl PostgresFloor {
                     &status,
                     &expected,
                     &late_after_seconds,
+                    &ticket_language,
                 ],
             )
             .await
@@ -660,6 +672,7 @@ fn station_row(row: &tokio_postgres::Row) -> StationRow {
         status: row.get(6),
         version: row.get(7),
         late_after_seconds: row.get(8),
+        ticket_language: row.get(9),
     }
 }
 

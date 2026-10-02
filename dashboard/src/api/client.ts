@@ -1124,6 +1124,7 @@ export const api = {
       backupStationId: string | null;
       isDefault: boolean;
       lateAfterSeconds: number | null;
+      ticketLanguage: string | null;
     },
   ) =>
     requestJson<CreatedId>("POST", "/admin/kitchen/stations", {
@@ -1133,6 +1134,7 @@ export const api = {
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
       late_after_seconds: fields.lateAfterSeconds,
+      ticket_language: fields.ticketLanguage,
     }),
   // The station's whole new state: a field left out is cleared, so archiving or restoring a station
   // sends back what it has.
@@ -1144,6 +1146,7 @@ export const api = {
       backupStationId: string | null;
       isDefault: boolean;
       lateAfterSeconds: number | null;
+      ticketLanguage: string | null;
       status: EntityStatus;
     },
     etag: ETag,
@@ -1154,6 +1157,7 @@ export const api = {
       backup_station_id: fields.backupStationId,
       is_default: fields.isDefault,
       late_after_seconds: fields.lateAfterSeconds,
+      ticket_language: fields.ticketLanguage,
       status: fields.status,
     }),
   listRoutingRules: (tenantId: string, storeId: string) =>

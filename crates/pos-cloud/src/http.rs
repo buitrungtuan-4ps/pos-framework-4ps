@@ -111,6 +111,7 @@ use pos_proto::inventory::{
 use pos_proto::locale::{CountryCode, NumberFormat, TaxComponent, TaxRate};
 use pos_proto::money::{CurrencyCode, Money, Ratio};
 use pos_proto::origins::PublishedOrigins;
+use pos_proto::printing::ReceiptLanguage;
 use pos_proto::reason_codes::{
     PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode,
 };
@@ -10991,10 +10992,14 @@ struct CreateStationRequest {
     /// any integer so that one out of bounds is refused naming the field, as one too large is.
     #[serde(default)]
     late_after_seconds: Option<i64>,
+    /// The language its kitchen tickets print in, as a `RECEIPT_LANGUAGE_…` token; absent or `null`
+    /// for the store's display language.
+    #[serde(default)]
+    ticket_language: Option<String>,
 }
 
-/// Update a station's name, backup, default flag, late threshold, and status. Every field is the
-/// station's whole new state, so an absent threshold is the default again.
+/// Update a station's name, backup, default flag, late threshold, ticket language, and status. Every
+/// field is the station's whole new state, so an absent threshold or language is the default again.
 #[derive(Debug, Clone, Deserialize)]
 struct UpdateStationRequest {
     tenant_id: String,
@@ -11005,6 +11010,8 @@ struct UpdateStationRequest {
     is_default: bool,
     #[serde(default)]
     late_after_seconds: Option<i64>,
+    #[serde(default)]
+    ticket_language: Option<String>,
     status: String,
 }
 
@@ -11034,6 +11041,31 @@ fn station_late_after(seconds: Option<i64>) -> Result<Option<u32>, Response> {
                 &[("late_after_seconds", "OUT_OF_RANGE")],
             )
         })
+}
+
+/// A station's ticket language as a request names it: `None` for the store's display language, or
+/// one of the [`ReceiptLanguage`] tokens a receipt's language takes.
+///
+/// # Errors
+///
+/// A `400 INVALID_ENUM_VALUE` naming `ticket_language` for a token this release does not know, and
+/// for `RECEIPT_LANGUAGE_UNSPECIFIED`, which is what an older reader takes a newer language to be
+/// and never a choice.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn station_ticket_language(token: Option<&str>) -> Result<Option<ReceiptLanguage>, Response> {
+    let Some(token) = token else {
+        return Ok(None);
+    };
+    match ReceiptLanguage::from_wire(token) {
+        Some(known) if known != ReceiptLanguage::Unspecified => Ok(Some(known)),
+        _ => Err(enum_refusal(
+            "ticket_language",
+            accepted_tokens::<ReceiptLanguage>(),
+        )),
+    }
 }
 
 /// Create an item→station routing rule.
@@ -11755,6 +11787,10 @@ where
         Ok(seconds) => seconds,
         Err(refusal) => return refusal,
     };
+    let ticket_language = match station_ticket_language(request.ticket_language.as_deref()) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
     let Some(station_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(StationId::new)
     else {
@@ -11768,6 +11804,7 @@ where
         backup_station_id,
         is_default: request.is_default,
         late_after_seconds,
+        ticket_language,
     };
     match StationStore::create(&state.floor, &new_station).await {
         Ok(version) => {
@@ -11776,6 +11813,7 @@ where
                 "name": request.name,
                 "is_default": request.is_default,
                 "late_after_seconds": late_after_seconds,
+                "ticket_language": ticket_language.map(ReceiptLanguage::as_wire),
                 "status": EntityStatus::Active.as_str(),
             });
             audit_action(
@@ -11852,6 +11890,10 @@ where
         Ok(seconds) => seconds,
         Err(refusal) => return refusal,
     };
+    let ticket_language = match station_ticket_language(request.ticket_language.as_deref()) {
+        Ok(language) => language,
+        Err(refusal) => return refusal,
+    };
     let update = StationUpdate {
         station_id,
         tenant_id,
@@ -11859,6 +11901,7 @@ where
         backup_station_id,
         is_default: request.is_default,
         late_after_seconds,
+        ticket_language,
         status,
     };
     let expected = match if_match(&headers) {
@@ -11872,6 +11915,7 @@ where
                 "name": request.name,
                 "is_default": request.is_default,
                 "late_after_seconds": late_after_seconds,
+                "ticket_language": ticket_language.map(ReceiptLanguage::as_wire),
                 "status": status.as_str(),
             });
             audit_action(

@@ -313,6 +313,11 @@ const MIGRATION_0079: &str =
 /// decision 2).
 const MIGRATION_0080: &str = include_str!("../migrations/0080_station_late_after.sql");
 
+/// The language a kitchen station's tickets print in, which the console sets per station
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0081: &str = include_str!("../migrations/0081_station_ticket_language.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -691,6 +696,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0080)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0081)
             .await
             .map_err(unavailable)
     }

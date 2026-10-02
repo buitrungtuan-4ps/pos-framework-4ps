@@ -18284,6 +18284,9 @@ impl StationStore for FakeFloor {
                 backup_station_id: station.backup_station_id,
                 is_default: station.is_default,
                 late_after_seconds: station.late_after_seconds,
+                ticket_language: station
+                    .ticket_language
+                    .map(|language| language.as_wire().to_owned()),
                 status: EntityStatus::Active,
             },
             version.clone(),
@@ -18346,6 +18349,9 @@ impl StationStore for FakeFloor {
         row.record.backup_station_id = update.backup_station_id;
         row.record.is_default = update.is_default;
         row.record.late_after_seconds = update.late_after_seconds;
+        row.record.ticket_language = update
+            .ticket_language
+            .map(|language| language.as_wire().to_owned());
         row.record.status = update.status;
         row.etag = version.clone();
         Ok(UpdateOutcome::Updated(version))
@@ -18418,6 +18424,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
             backup_station_id: Some(bar),
             is_default: true,
             late_after_seconds: Some(240),
+            ticket_language: None,
         },
     )
     .await
@@ -18436,6 +18443,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
                 backup_station_id: None,
                 is_default: false,
                 late_after_seconds: None,
+                ticket_language: None,
                 status: EntityStatus::Active,
             },
             &stations[0].etag,
@@ -19815,6 +19823,188 @@ async fn a_stations_late_threshold_is_checked_guarded_audited_and_published() {
     assert!(
         named("Bar").get("late_after_seconds").is_none(),
         "a station that sets no threshold publishes none"
+    );
+}
+
+/// Each kitchen station says which language its tickets print in
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2), from the receipt language's own tokens: one this release does not know, or
+/// `RECEIPT_LANGUAGE_UNSPECIFIED`, is refused `400 INVALID_ENUM_VALUE` naming the field; a write holds
+/// to the version it read and is audited with the language; and the publish carries a station's
+/// language and leaves it off a station that sets none, so the edge prints there as it always did.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one station's language from the refused writes through the guarded update to the \
+              published node, against the same data"
+)]
+async fn a_stations_ticket_language_is_checked_guarded_audited_and_published() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let station = |name: &str, language: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "name": name,
+            "ticket_language": language,
+        })
+    };
+
+    for refused in ["RECEIPT_LANGUAGE_JA", "RECEIPT_LANGUAGE_UNSPECIFIED", "EN"] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/kitchen/stations",
+                &station("Oven", refused),
+                &cookie,
+            ))
+            .await
+            .expect("route the create");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await.to_string();
+        assert!(
+            body.contains("ticket_language") && body.contains("INVALID_ENUM_VALUE"),
+            "the refusal names the field: {body}"
+        );
+    }
+
+    let oven = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &station("Oven", "RECEIPT_LANGUAGE_EN"),
+            &cookie,
+        ))
+        .await
+        .expect("create the oven");
+    assert_eq!(oven.status(), StatusCode::CREATED);
+    let oven_etag = etag_of(&oven);
+    let oven_id = json_body(oven).await["id"].as_str().expect("id").to_owned();
+    let bar = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Bar" }),
+            &cookie,
+        ))
+        .await
+        .expect("create the bar");
+    assert_eq!(bar.status(), StatusCode::CREATED);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/kitchen/stations/{oven_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the oven");
+    assert_eq!(
+        json_body(read).await["ticket_language"],
+        "RECEIPT_LANGUAGE_EN"
+    );
+
+    let update = |language: &str| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Oven",
+            "ticket_language": language,
+            "status": "active",
+        })
+    };
+    let unknown = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_JA"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+
+    let saved = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_VI"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+
+    // A console still holding the version from before that save is refused, and the save stands.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update("RECEIPT_LANGUAGE_COUNTRY"),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the stale update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let updated = recorded
+        .iter()
+        .find(|entry| entry.action == "kitchen.station.update")
+        .expect("the save is audited");
+    assert_eq!(
+        updated
+            .after
+            .as_ref()
+            .map(|after| after["ticket_language"].clone()),
+        Some(serde_json::json!("RECEIPT_LANGUAGE_VI"))
+    );
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish the floor");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the effective config");
+    let doc = json_body(effective).await;
+    let stations = doc["stations"]["stations"]
+        .as_array()
+        .expect("the stations node");
+    let named = |name: &str| {
+        stations
+            .iter()
+            .find(|station| station["name"] == name)
+            .cloned()
+            .expect("the station is published")
+    };
+    assert_eq!(named("Oven")["ticket_language"], "RECEIPT_LANGUAGE_VI");
+    assert!(
+        named("Bar").get("ticket_language").is_none(),
+        "a station that sets no language publishes none"
     );
 }
 

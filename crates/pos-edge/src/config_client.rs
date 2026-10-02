@@ -1834,6 +1834,7 @@ mod tests {
                 name: DisplayName::new("Oven"),
                 backup_station_id: None,
                 late_after_seconds: None,
+                ticket_language: pos_proto::wire_enum::Open::default(),
             })
             .with_rule(RoutingRule {
                 station_id,

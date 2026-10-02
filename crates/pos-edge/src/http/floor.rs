@@ -125,6 +125,7 @@ mod tests {
     use pos_proto::ids::{MenuItemId, StationId};
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
 
     fn station(seed: u128, late_after_seconds: Option<u32>) -> KitchenStation {
         KitchenStation {
@@ -132,6 +133,7 @@ mod tests {
             name: DisplayName::new("Station"),
             backup_station_id: None,
             late_after_seconds,
+            ticket_language: Open::default(),
         }
     }
 

@@ -8389,7 +8389,7 @@ mod conditional_writes {
                 .await
                 .expect("insert the area");
             let station_version = floor
-                .insert_station(station, tenant, store_id, "Oven", None, true, None)
+                .insert_station(station, tenant, store_id, "Oven", None, true, None, None)
                 .await
                 .expect("insert the station");
 
@@ -8408,7 +8408,9 @@ mod conditional_writes {
             // A stale tag is refused; the current one applies and moves the row.
             assert_eq!(
                 floor
-                    .set_station(tenant, station, "Nope", None, false, None, "active", "1")
+                    .set_station(
+                        tenant, station, "Nope", None, false, None, None, "active", "1"
+                    )
                     .await
                     .expect("the comparison must not raise"),
                 RowUpdate::VersionMismatch
@@ -8420,6 +8422,7 @@ mod conditional_writes {
                     "Pizza oven",
                     Some(station),
                     false,
+                    None,
                     None,
                     "active",
                     &station_version,
@@ -8456,6 +8459,7 @@ mod conditional_writes {
                         None,
                         false,
                         None,
+                        None,
                         "active",
                         &moved,
                     )
@@ -8480,11 +8484,11 @@ mod conditional_writes {
             let bar = "00000000000000STATIONBARLA";
 
             let oven_version = floor
-                .insert_station(oven, tenant, store_id, "Oven", None, true, Some(240))
+                .insert_station(oven, tenant, store_id, "Oven", None, true, Some(240), None)
                 .await
                 .expect("insert the oven");
             floor
-                .insert_station(bar, tenant, store_id, "Bar", None, false, None)
+                .insert_station(bar, tenant, store_id, "Bar", None, false, None, None)
                 .await
                 .expect("insert the bar");
             let read = |rows: &[store_postgres::StationRow], id: &str| {
@@ -8508,6 +8512,7 @@ mod conditional_writes {
                     None,
                     true,
                     Some(900),
+                    None,
                     "active",
                     &oven_version,
                 )
@@ -8531,7 +8536,9 @@ mod conditional_writes {
             );
 
             floor
-                .set_station(tenant, oven, "Oven", None, true, None, "active", &moved)
+                .set_station(
+                    tenant, oven, "Oven", None, true, None, None, "active", &moved,
+                )
                 .await
                 .expect("the update");
             let row = floor
@@ -8543,6 +8550,89 @@ mod conditional_writes {
                 row.late_after_seconds, None,
                 "cleared, it is nobody's again"
             );
+        });
+    }
+
+    /// A station's ticket language (migration 0081, ADR-0160 decision 2) is written on create and on
+    /// update as the token the cloud validated, and read back from the column the mapper expects; a
+    /// station nobody has set reads `None`, which the cloud publishes as nothing, and an update that
+    /// clears it writes null again.
+    #[test]
+    fn a_stations_ticket_language_round_trips_and_a_row_nobody_set_has_none() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let floor = store.floor();
+            let tenant = "000000000TENANTSTATIONLANG";
+            let store_id = "000000000000STORESTATIONLG";
+            let oven = "0000000000000STATIONOVENLG";
+            let bar = "00000000000000STATIONBARLG";
+            let english = Some("RECEIPT_LANGUAGE_EN");
+
+            let oven_version = floor
+                .insert_station(oven, tenant, store_id, "Oven", None, true, None, english)
+                .await
+                .expect("insert the oven");
+            floor
+                .insert_station(bar, tenant, store_id, "Bar", None, false, Some(300), None)
+                .await
+                .expect("insert the bar");
+            let rows = floor
+                .fetch_stations(tenant, store_id)
+                .await
+                .expect("list the stations");
+            let read = |id: &str| {
+                rows.iter()
+                    .find(|row| row.id == id)
+                    .map(|row| (row.ticket_language.clone(), row.late_after_seconds))
+                    .expect("the station is listed")
+            };
+            assert_eq!(read(oven), (english.map(str::to_owned), None));
+            assert_eq!(read(bar), (None, Some(300)), "each column in its own place");
+
+            let vietnamese = Some("RECEIPT_LANGUAGE_VI");
+            let moved = match floor
+                .set_station(
+                    tenant,
+                    oven,
+                    "Oven",
+                    None,
+                    true,
+                    None,
+                    vietnamese,
+                    "active",
+                    &oven_version,
+                )
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.ticket_language.as_deref(), vietnamese);
+            assert_eq!(
+                row.version, moved,
+                "the version still comes from its own column"
+            );
+
+            floor
+                .set_station(
+                    tenant, oven, "Oven", None, true, None, None, "active", &moved,
+                )
+                .await
+                .expect("the update");
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.ticket_language, None, "cleared, it is nobody's again");
         });
     }
 

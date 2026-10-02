@@ -28,6 +28,7 @@ const OVEN: Station = {
   backup_station_id: null,
   is_default: true,
   late_after_seconds: null,
+  ticket_language: null,
   status: "active",
   etag: "7",
 };
@@ -99,6 +100,7 @@ describe("when a station's tickets are late", () => {
           backupStationId: null,
           isDefault: true,
           lateAfterSeconds: 240,
+          ticketLanguage: null,
           status: "active",
         },
         OVEN.etag,
@@ -155,6 +157,7 @@ describe("when a station's tickets are late", () => {
         backupStationId: null,
         isDefault: false,
         lateAfterSeconds: 900,
+        ticketLanguage: null,
       }),
     );
   });

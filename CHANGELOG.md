@@ -456,6 +456,27 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A kitchen station prints its tickets in its own language**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). Every kitchen ticket printed in the store's display language, whoever read it.
+  - A station on the `stations` node gains `ticket_language`, with the receipt language's four
+    choices: `RECEIPT_LANGUAGE_DISPLAY`, `_COUNTRY`, `_VI` or `_EN`. The console's Stations screen
+    sets it on each station as **Ticket language**, in the receipt language setting's words, and
+    lists it. The station routes refuse a language this release does not know, or `_UNSPECIFIED`,
+    `400 INVALID_ENUM_VALUE`, naming `ticket_language`, and keep their `If-Match` and audit entry.
+  - A ticket prints its labels, and each item's and modifier's name where the menu translates it,
+    in the language of the station whose printer prints it: the station it was fired to, or the
+    backup station whose printer it goes to when its own station has none, because the backup's
+    cooks read it. The edge resolves the language as it resolves a receipt's. The kitchen display, a pre-bill and a receipt
+    are unchanged.
+  - **Upgrade note:** `KitchenStation` gains `ticket_language` (`pos-proto`, additive), left off the
+    node while unset, and `ReceiptLanguage` now chooses a station's ticket language too; its tokens
+    are unchanged. A station that sets none prints the ticket it printed before, byte for byte.
+    Nothing changes until a station sets one and its floor is published, and an edge that predates
+    the field ignores it and prints in the display language. Migration
+    `0081_station_ticket_language.sql` adds `kitchen_stations.ticket_language` (`text`, nullable).
+    It is additive and rollback-safe. No event, permission or protocol change.
+
 - **Each kitchen station says when its tickets are late**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). Every kitchen display marked a ticket late after ten minutes, whatever its station
