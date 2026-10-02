@@ -21,7 +21,9 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
-use pos_core::billing::{self, BillInput, BillLine, BillTotals, ClassBase, Payment};
+use pos_core::billing::{
+    self, BillInput, BillLine, BillTotals, ClassBase, FeeWhole, MergedFees, MergingBill, Payment,
+};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::{Capability, CapabilityContext};
@@ -1910,9 +1912,22 @@ struct BillRecord {
     /// split holds the source's, with a fee per bill cut to its share (decision 6). Empty for a
     /// bill opened before the field existed, or with no rule in force, which charges no fee.
     fee_rules: Vec<FrozenFee>,
+    /// The wholes this bill's fees per bill are shares of (ADR-0159 decision 6): its own amounts
+    /// for a bill split from no other, its source's for a part, the largest of each for a merged
+    /// bill. Folded from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
+    /// so a restart rebuilds them, and what lets a merge put a split's shares back together.
+    fee_wholes: Vec<FeeWhole>,
 }
 
 impl BillRecord {
+    /// This bill's side of a merge: the fee rules it holds and the wholes of its fees per bill.
+    fn merging(&self) -> MergingBill<'_> {
+        MergingBill {
+            fee_rules: &self.fee_rules,
+            fee_wholes: &self.fee_wholes,
+        }
+    }
+
     /// Every reduction on this bill, in the store's currency — the two figures
     /// [`billing::BillInput`] takes.
     fn reductions(&self, currency: CurrencyCode) -> (Money, Money) {
@@ -2938,6 +2953,45 @@ impl Projection {
             });
         }
         Ok(())
+    }
+
+    /// Gives each part of a split its source's wholes (ADR-0159 decision 6), after each part's own
+    /// `billing.bill.opened`, so merging the parts back puts their shares together again.
+    fn inherit_fee_wholes(&mut self, source: BillId, parts: &[BillId]) {
+        let Some(wholes) = self.bills.get(&source).map(|bill| bill.fee_wholes.clone()) else {
+            return;
+        };
+        for part in parts {
+            if let Some(record) = self.bills.get_mut(part) {
+                record.fee_wholes.clone_from(&wholes);
+            }
+        }
+    }
+
+    /// The fee rules and wholes `target` holds once `absorbed` are merged into it, in that order
+    /// (ADR-0159 decision 6), from what each holds now; `None` when the target is unknown.
+    fn merged_fees(
+        &self,
+        target: BillId,
+        absorbed: &[BillId],
+    ) -> Result<Option<MergedFees>, DomainError> {
+        let Some(holder) = self.bills.get(&target) else {
+            return Ok(None);
+        };
+        let absorbed: Vec<MergingBill<'_>> = absorbed
+            .iter()
+            .filter_map(|bill_id| self.bills.get(bill_id))
+            .map(BillRecord::merging)
+            .collect();
+        Ok(Some(billing::merge_fee_rules(holder.merging(), &absorbed)?))
+    }
+
+    /// Records what a merged bill now holds.
+    fn set_bill_fees(&mut self, bill_id: BillId, fees: MergedFees) {
+        if let Some(record) = self.bills.get_mut(&bill_id) {
+            record.fee_rules = fees.fee_rules;
+            record.fee_wholes = fees.fee_wholes;
+        }
     }
 
     fn set_bill_state(&mut self, bill_id: BillId, state: BillState) {
@@ -4323,10 +4377,13 @@ impl<S: EventStore> Edge<S> {
                         // Reducing a part is an ordinary discount on an ordinary bill.
                         discount: None,
                         comp: None,
+                        fee_wholes: billing::fee_wholes(&fee_rules),
                         fee_rules,
                     },
                 );
             }
+            // As a replay folds the split after the parts' openings (ADR-0159 decision 6).
+            projection.inherit_fee_wholes(bill_id, &part_ids);
             projection.set_bill_state(bill_id, decided.next_state);
         }
         Ok(part_ids)
@@ -4384,6 +4441,11 @@ impl<S: EventStore> Edge<S> {
             folded.push((*absorbed_id, record, decided.next_state));
         }
 
+        // What the merged bill holds (ADR-0159 decision 6): the target's rules, and each fee per
+        // bill at the sum of the bills' shares of it, capped at its whole. Decided before anything
+        // is written, so a merge whose shares overflow is refused rather than half-recorded.
+        let merged_fees = self.lock_projection().merged_fees(bill_id, &absorbed)?;
+
         let event = BillingBillMerged {
             target_bill_id: bill_id,
             merged_bill_ids: absorbed,
@@ -4404,6 +4466,9 @@ impl<S: EventStore> Edge<S> {
             lines.sort_unstable();
             lines.dedup();
             projection.set_bill_lines(bill_id, lines);
+            if let Some(fees) = merged_fees {
+                projection.set_bill_fees(bill_id, fees);
+            }
         }
         Ok(bill_id)
     }
@@ -6053,6 +6118,7 @@ impl<S: EventStore> Edge<S> {
                     order_line_ids,
                     discount: None,
                     comp: None,
+                    fee_wholes: billing::fee_wholes(&fee_rules),
                     fee_rules,
                 },
             );
@@ -6917,6 +6983,7 @@ impl<S: EventStore> Edge<S> {
                         comp: None,
                         // Empty on a bill opened before the field existed: it charges no fee, which
                         // is what it charged when it was opened.
+                        fee_wholes: billing::fee_wholes(&event.fee_rules),
                         fee_rules: event.fee_rules,
                     },
                 );
@@ -6948,6 +7015,47 @@ impl<S: EventStore> Edge<S> {
             // Unreachable: `fold` delegates only the arms above.
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Folds a split or a merge back onto the projection
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)), with what each does to the
+    /// bills' fees (ADR-0159 decision 6). Extracted from [`fold`](Self::fold) to keep it inside its
+    /// line budget, as [`Self::fold_void`] was.
+    fn fold_regroup(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::BillingBillSplit {
+            let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
+            // Each part's own `billing.bill.opened`, in the same transaction, folded its lines and
+            // its share of each fee; it takes its source's wholes here.
+            projection.inherit_fee_wholes(event.source_bill_id, &event.resulting_bill_ids);
+            projection.set_bill_state(event.source_bill_id, BillState::Split);
+            return Ok(());
+        }
+        let event: BillingBillMerged = envelope.data.decode().map_err(AppError::Encode)?;
+        // The target takes their lines, rebuilt from what each bill already records rather than from
+        // a field on this event: a bill covers lines from the moment it exists, and carrying the
+        // union here too would make the same fact true in two places.
+        let mut lines = projection
+            .bill(event.target_bill_id)
+            .map(|target| target.order_line_ids)
+            .unwrap_or_default();
+        // The fees from what each bill holds, in the event's order, as the merge decided them.
+        if let Some(fees) = projection.merged_fees(event.target_bill_id, &event.merged_bill_ids)? {
+            projection.set_bill_fees(event.target_bill_id, fees);
+        }
+        for absorbed_id in event.merged_bill_ids {
+            if let Some(absorbed) = projection.bill(absorbed_id) {
+                lines.extend(absorbed.order_line_ids);
+            }
+            projection.set_bill_state(absorbed_id, BillState::Merged);
+        }
+        lines.sort_unstable();
+        lines.dedup();
+        projection.set_bill_lines(event.target_bill_id, lines);
         Ok(())
     }
 
@@ -7066,31 +7174,10 @@ impl<S: EventStore> Edge<S> {
             }
             // A split's source and a merge's absorbed bills are terminal, and a store that replayed
             // its log without them would reopen a bill somebody has already been charged for
-            // through its parts (ADR-0128 decision 10). The parts themselves need nothing here:
-            // each has its own `billing.bill.opened` in the same transaction, which the arm above
-            // already folds with the lines it covers.
-            EventType::BillingBillSplit => {
-                let event: BillingBillSplit = envelope.data.decode().map_err(AppError::Encode)?;
-                projection.set_bill_state(event.source_bill_id, BillState::Split);
-            }
-            EventType::BillingBillMerged => {
-                let event: BillingBillMerged = envelope.data.decode().map_err(AppError::Encode)?;
-                // The target takes their lines, rebuilt from what each bill already records rather
-                // than from a field on this event: a bill covers lines from the moment it exists,
-                // and carrying the union here too would make the same fact true in two places.
-                let mut lines = projection
-                    .bill(event.target_bill_id)
-                    .map(|target| target.order_line_ids)
-                    .unwrap_or_default();
-                for absorbed_id in event.merged_bill_ids {
-                    if let Some(absorbed) = projection.bill(absorbed_id) {
-                        lines.extend(absorbed.order_line_ids);
-                    }
-                    projection.set_bill_state(absorbed_id, BillState::Merged);
-                }
-                lines.sort_unstable();
-                lines.dedup();
-                projection.set_bill_lines(event.target_bill_id, lines);
+            // through its parts (ADR-0128 decision 10). Each part's own `billing.bill.opened`, in
+            // the same transaction, folds the lines it covers; the split adds its fees' wholes.
+            EventType::BillingBillSplit | EventType::BillingBillMerged => {
+                Self::fold_regroup(projection, envelope, known)?;
             }
             EventType::CashShiftOpened => {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;

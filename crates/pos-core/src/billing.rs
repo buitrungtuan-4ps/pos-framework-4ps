@@ -963,13 +963,7 @@ pub fn split_fee_rules(
 ) -> Result<Vec<Vec<FrozenFee>>, DomainError> {
     let mut kept: Vec<Vec<FrozenFee>> = vec![Vec::with_capacity(rules.len()); parts.len()];
     for rule in rules {
-        let per_bill = match (rule.kind(), rule.amount) {
-            (Some(FeeKind::AmountPerBill), Some(amount)) if rule.violations().is_empty() => {
-                Some(amount)
-            }
-            _ => None,
-        };
-        let Some(amount) = per_bill else {
+        let Some(amount) = per_bill_amount(rule) else {
             for part in &mut kept {
                 part.push(rule.clone());
             }
@@ -1012,6 +1006,143 @@ pub fn split_fee_rules(
     Ok(kept)
 }
 
+/// A rule's amount when it is a fee per bill this release can apply, and `None` otherwise.
+fn per_bill_amount(rule: &FrozenFee) -> Option<Money> {
+    (rule.kind() == Some(FeeKind::AmountPerBill) && rule.violations().is_empty())
+        .then_some(rule.amount)
+        .flatten()
+}
+
+/// The amount a fee per bill's shares are parts of
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6): what it came to on
+/// the bill they were first split from. A bill split from no other holds each fee per bill whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeWhole {
+    /// The fee per bill.
+    pub fee_id: FeeId,
+    /// What it came to on the bill its shares were first split from.
+    pub amount: Money,
+}
+
+/// The wholes of a bill split from no other: each fee per bill it holds, at its own amount. A part
+/// of a split keeps its source's instead, which is what lets a merge put the parts back together.
+#[must_use]
+pub fn fee_wholes(rules: &[FrozenFee]) -> Vec<FeeWhole> {
+    rules
+        .iter()
+        .filter_map(|rule| {
+            per_bill_amount(rule).map(|amount| FeeWhole {
+                fee_id: rule.fee_id,
+                amount,
+            })
+        })
+        .collect()
+}
+
+/// One bill a merge folds together: the fee rules it holds, and the wholes its fees per bill are
+/// shares of.
+#[derive(Debug, Clone, Copy)]
+pub struct MergingBill<'a> {
+    /// The rules the bill holds, a fee per bill at its share.
+    pub fee_rules: &'a [FrozenFee],
+    /// The wholes of its fees per bill ([`fee_wholes`] for a bill split from no other).
+    pub fee_wholes: &'a [FeeWhole],
+}
+
+/// What a merged bill holds: its fee rules, and the wholes its fees per bill are shares of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergedFees {
+    /// The rules the merged bill is computed from.
+    pub fee_rules: Vec<FrozenFee>,
+    /// The wholes it keeps, so a later split or merge puts the shares together again.
+    pub fee_wholes: Vec<FeeWhole>,
+}
+
+/// The fee rules a bill holds once `absorbed` are merged into it, the `holder` being the bill the
+/// cashier holds ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 6).
+///
+/// The merged bill keeps the holder's rules, so a percentage and a fee per unit are charged as the
+/// holder's say, on every line it now owes. A fee per bill is charged once on the merged bill, at
+/// the sum of the merged bills' shares of it, capped at its whole:
+///
+/// - merging every part of a split back together restores the whole the bill opened with;
+/// - merging some of the parts charges the sum of their shares;
+/// - merging bills split from no common bill charges it once, never once per bill;
+/// - a fee per bill the holder dropped, its share being nothing, is still charged on the lines of
+///   the bills that carry it, which join the holder's rules after its own.
+///
+/// Where bills split from different bills hold different wholes, after a publish between their
+/// openings, the cap is the largest of them. The merged bill keeps every whole any of them held,
+/// at the largest, for the next split or merge.
+///
+/// # Errors
+///
+/// [`DomainError::Money`] if the shares of a fee overflow or are in different currencies.
+pub fn merge_fee_rules(
+    holder: MergingBill<'_>,
+    absorbed: &[MergingBill<'_>],
+) -> Result<MergedFees, DomainError> {
+    let bills: Vec<MergingBill<'_>> = core::iter::once(holder)
+        .chain(absorbed.iter().copied())
+        .collect();
+    let mut fee_rules = holder.fee_rules.to_vec();
+    for bill in absorbed {
+        for rule in bill.fee_rules {
+            if per_bill_amount(rule).is_some()
+                && !fee_rules.iter().any(|kept| kept.fee_id == rule.fee_id)
+            {
+                fee_rules.push(rule.clone());
+            }
+        }
+    }
+    let mut fee_wholes: Vec<FeeWhole> = Vec::new();
+    for whole in bills.iter().flat_map(|bill| bill.fee_wholes) {
+        match fee_wholes
+            .iter_mut()
+            .find(|kept| kept.fee_id == whole.fee_id)
+        {
+            Some(kept) => {
+                if kept.amount.currency_code == whole.amount.currency_code
+                    && whole.amount.amount_minor > kept.amount.amount_minor
+                {
+                    kept.amount = whole.amount;
+                }
+            }
+            None => fee_wholes.push(*whole),
+        }
+    }
+    for rule in &mut fee_rules {
+        let Some(own) = per_bill_amount(rule) else {
+            continue;
+        };
+        let mut shares = Money::zero(own.currency_code);
+        for bill in &bills {
+            if let Some(share) = bill
+                .fee_rules
+                .iter()
+                .find(|held| held.fee_id == rule.fee_id)
+                .and_then(per_bill_amount)
+            {
+                shares = shares.checked_add(share)?;
+            }
+        }
+        let capped = match fee_wholes.iter().find(|whole| whole.fee_id == rule.fee_id) {
+            Some(whole)
+                if whole.amount.currency_code == shares.currency_code
+                    && whole.amount.amount_minor < shares.amount_minor =>
+            {
+                whole.amount
+            }
+            _ => shares,
+        };
+        rule.amount = Some(capped);
+    }
+    Ok(MergedFees {
+        fee_rules,
+        fee_wholes,
+    })
+}
+
 /// Splits a total into `parts` amounts summing **exactly** to it (`pos-spec.md` §14.3).
 ///
 /// A thin domain wrapper over `Money::split_into`, here so the split law is a domain operation with
@@ -1038,8 +1169,9 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
 #[cfg(test)]
 mod tests {
     use super::{
-        BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, Payment, assemble,
-        settle, split_by_weights, split_evenly, split_fee_rules,
+        BillInput, BillLine, BillTotals, ClassBase, FeeClassShare, FeeLine, FeeWhole, MergedFees,
+        MergingBill, Payment, assemble, fee_wholes, merge_fee_rules, settle, split_by_weights,
+        split_evenly, split_fee_rules,
     };
     use crate::error::DomainError;
     use pos_proto::fees::{FeeCode, FeeItems, FeeKind, FeeTax, FrozenFee};
@@ -1973,6 +2105,91 @@ mod tests {
         assert_eq!(ids, vec![vec![1, 2, 4], vec![1, 2, 3, 4]]);
     }
 
+    /// The amount of the fee per bill numbered `id` a merged bill holds, if it holds one.
+    fn per_bill(merged: &MergedFees, id: u128) -> Option<Money> {
+        merged
+            .fee_rules
+            .iter()
+            .find(|rule| rule.fee_id == FeeId::new(Ulid::from_u128(id)))
+            .and_then(|rule| rule.amount)
+    }
+
+    /// Merges bills holding `bills`' rules, the first being the holder, every fee per bill a share
+    /// of the wholes in `wholes`.
+    fn merged(wholes: &[FeeWhole], bills: &[&[FrozenFee]]) -> MergedFees {
+        let mut merging = bills.iter().map(|fee_rules| MergingBill {
+            fee_rules,
+            fee_wholes: wholes,
+        });
+        let holder = merging.next().expect("a holder");
+        let absorbed: Vec<MergingBill<'_>> = merging.collect();
+        merge_fee_rules(holder, &absorbed).expect("merges")
+    }
+
+    #[test]
+    fn a_merge_charges_a_fee_per_bill_once_and_puts_a_split_back_together() {
+        let rules = [
+            untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+        ];
+        let wholes = fee_wholes(&rules);
+        let thirds = [
+            vec![line(0, 1, 100_000, food())],
+            vec![line(0, 1, 100_000, food())],
+            vec![line(0, 1, 100_000, food())],
+        ];
+        let kept = split_fee_rules(&rules, &thirds).expect("splits");
+        let [first, second, third] = kept.as_slice() else {
+            panic!("three parts: {kept:?}");
+        };
+        // 10,000 split three ways is 3,333, 3,333 and 3,334. Every part back together is the
+        // whole again, and some of them the sum of their shares; the percentage is the holder's.
+        let all = merged(&wholes, &[first, second, third]);
+        assert_eq!(per_bill(&all, 1), Some(vnd(10_000)));
+        assert_eq!(all.fee_rules.get(1), rules.get(1));
+        assert_eq!(
+            per_bill(&merged(&wholes, &[third, first]), 1),
+            Some(vnd(6_667))
+        );
+        // Two bills split from no common bill charge it once, not once each.
+        assert_eq!(
+            per_bill(&merged(&wholes, &[&rules, &rules]), 1),
+            Some(vnd(10_000))
+        );
+
+        // A cover on the food alone: the drinks' part drops it, its share being nothing, and
+        // holding that part while absorbing the food's keeps the cover, after the drinks' rules.
+        let food_cover = [
+            untaxed(fee(2, FeeKind::Percent, 1_000)),
+            only(
+                FeeItems::Include,
+                0,
+                untaxed(fee(1, FeeKind::AmountPerBill, 10_000)),
+            ),
+        ];
+        let parts = [
+            vec![line(1, 1, 40_000, alcohol())],
+            vec![line(0, 1, 100_000, food())],
+        ];
+        let kept = split_fee_rules(&food_cover, &parts).expect("splits");
+        let [drinks, dishes] = kept.as_slice() else {
+            panic!("two parts: {kept:?}");
+        };
+        assert_eq!(
+            drinks.len(),
+            1,
+            "the drinks keep the percentage alone: {drinks:?}"
+        );
+        let held = merged(&fee_wholes(&food_cover), &[drinks, dishes]);
+        assert_eq!(per_bill(&held, 1), Some(vnd(10_000)));
+        let order: Vec<u128> = held
+            .fee_rules
+            .iter()
+            .map(|rule| rule.fee_id.as_ulid().to_u128())
+            .collect();
+        assert_eq!(order, [2, 1]);
+    }
+
     /// A rule from a property test's choices of kind, tax treatment, item scope and value.
     fn chosen(id: u128, kind: u8, tax: u8, scope: u8, value: i64) -> FrozenFee {
         let kind = match kind {
@@ -2131,7 +2348,9 @@ mod tests {
 
         /// ADR-0159 decision 6: the parts of a split bill charge a fee per bill together exactly as
         /// the whole would have, and a percentage or a fee per unit on their own lines, so those
-        /// come to the whole within a minor unit per part, each part rounding once.
+        /// come to the whole within a minor unit per part, each part rounding once. Merged back,
+        /// any of the parts charge a fee per bill at the sum of their shares, whichever of them
+        /// holds the rest, and all of them at the whole.
         #[test]
         fn the_parts_of_a_split_bill_charge_what_the_whole_would_have(
             sold in prop::collection::vec(
@@ -2140,6 +2359,8 @@ mod tests {
             ),
             choices in prop::collection::vec((0_u8..3, 0_u8..4, 0_u8..3, 0_i64..=20_000), 0..=4),
             half_even in any::<bool>(),
+            merging in prop::collection::vec(any::<bool>(), 3),
+            holding in 0_usize..3,
         ) {
             let class = |is_food: bool| if is_food { food() } else { alcohol() };
             let mut lines = Vec::new();
@@ -2173,11 +2394,53 @@ mod tests {
             }
             let per_part = i64::try_from(parts.len()).expect("a few parts");
             let wholes = charged_by_rule(&whole, &rules);
-            for ((rule, whole), together) in rules.iter().zip(wholes).zip(together) {
+            for ((rule, whole), together) in rules.iter().zip(&wholes).zip(together) {
                 if rule.kind() == Some(FeeKind::AmountPerBill) {
-                    prop_assert_eq!(together, whole, "a fee per bill is shared, never repeated");
+                    prop_assert_eq!(together, *whole, "a fee per bill is shared, never repeated");
                 } else {
                     prop_assert!((together - whole).abs() <= per_part, "{} for {}", together, whole);
+                }
+            }
+
+            // Some of the parts merged back, or all of them when none is picked.
+            let mut picked: Vec<usize> = (0..parts.len())
+                .filter(|index| merging.get(*index) == Some(&true))
+                .collect();
+            if picked.is_empty() {
+                picked = (0..parts.len()).collect();
+            }
+            let holder = holding % picked.len();
+            picked.rotate_left(holder);
+            let part_wholes = fee_wholes(&rules);
+            let held: Vec<&[FrozenFee]> = picked
+                .iter()
+                .map(|index| kept.get(*index).map_or(&[][..], Vec::as_slice))
+                .collect();
+            let merged_fees = merged(&part_wholes, &held);
+            let merged_lines: Vec<BillLine> = picked
+                .iter()
+                .filter_map(|index| parts.get(*index))
+                .flatten()
+                .copied()
+                .collect();
+            let totals = assemble_with(&merged_lines, &merged_fees.fee_rules, &rates, round)
+                .expect("the merged bill assembles");
+            assert_reconciles(&totals);
+            let charged = charged_by_rule(&totals, &rules);
+            for ((rule, charged), whole) in rules.iter().zip(charged).zip(&wholes) {
+                if rule.kind() != Some(FeeKind::AmountPerBill) {
+                    continue;
+                }
+                let shares: i64 = held
+                    .iter()
+                    .filter_map(|rules| rules.iter().find(|kept| kept.fee_id == rule.fee_id))
+                    .filter_map(|kept| kept.amount)
+                    .map(|amount| amount.amount_minor)
+                    .sum();
+                prop_assert_eq!(charged, shares, "the merged parts' shares");
+                prop_assert!(charged <= *whole, "never more than the whole");
+                if picked.len() == parts.len() {
+                    prop_assert_eq!(charged, *whole, "every part back together is the whole");
                 }
             }
         }
