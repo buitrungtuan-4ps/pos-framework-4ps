@@ -886,6 +886,91 @@ async fn a_shift_opens_counts_blind_and_closes_over_http() {
     assert_eq!(closed["print_shift_report"], true);
 }
 
+/// A store that turns the blind close off (ADR-0160 decision 2) is told what the drawer should
+/// hold on every answer before the close, so the count can be made against it. The variance is still
+/// the close's alone.
+#[tokio::test]
+async fn a_store_whose_count_is_not_blind_sees_the_expectation_before_the_close() {
+    let open_count = PublishedShift {
+        blind_close: Some(false),
+        ..PublishedShift::default()
+    };
+    let (app, token) = app_with_shift(None, PermissionSet::default(), open_count).await;
+
+    let (status, opened) = send(
+        app.clone(),
+        &token,
+        "POST",
+        "/api/shifts",
+        Some(json!({ "opening_float": vnd(500_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(opened["expected_amount"], json!(vnd(500_000)));
+    let shift_id = opened["shift_id"].as_str().expect("a shift id").to_owned();
+
+    // A reason the store lists for a paid out: the framework's default list has "Making change".
+    let (_, listed) = send(app.clone(), &token, "GET", "/api/reason-codes", None).await;
+    let reason = listed["reasons"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|reason| {
+            reason["applies_to"]
+                .as_array()
+                .is_some_and(|acts| acts.iter().any(|act| act == "REASON_ACTION_CASH_PAID_OUT"))
+        })
+        .expect("a reason for a paid out")["reason_code_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let (status, paid_out) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/paid-out"),
+        Some(json!({ "amount_minor": 20_000, "reason_code_id": reason })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{paid_out}");
+    assert_eq!(
+        paid_out["expected_amount"],
+        json!(vnd(480_000)),
+        "a movement moves what is shown"
+    );
+
+    let (_, current) = send(app.clone(), &token, "GET", "/api/shifts/current", None).await;
+    assert_eq!(current["expected_amount"], json!(vnd(480_000)));
+    assert!(current.get("variance").is_none(), "{current}");
+
+    let (status, counted) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/count"),
+        Some(json!({ "counted_minor": 470_000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(counted["expected_amount"], json!(vnd(480_000)));
+    assert!(
+        counted.get("variance").is_none(),
+        "the variance is the close's alone"
+    );
+
+    let (status, closed) = send(
+        app,
+        &token,
+        "POST",
+        &format!("/api/shifts/{shift_id}/close"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(closed["expected_amount"], json!(vnd(480_000)));
+    assert_eq!(closed["variance"], json!(vnd(-10_000)));
+}
+
 #[tokio::test]
 async fn the_open_shift_is_readable_by_a_device_that_reloads() {
     let (app, token) = app().await;
@@ -1160,6 +1245,7 @@ async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
 async fn a_store_that_refuses_selling_without_a_shift_says_so_until_one_opens() {
     let refusing = PublishedShift {
         no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+        ..PublishedShift::default()
     };
     let (app, token) = app_with_shift(None, PermissionSet::default(), refusing).await;
     let seat = format!("/api/tables/{}/seat", TableId::new(Ulid::from_u128(780)));

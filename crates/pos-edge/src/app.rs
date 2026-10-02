@@ -1737,14 +1737,18 @@ pub struct BillCheckView {
 ///
 /// The close is **blind** (§11.1): counting reveals nothing, so `expected_amount` and `variance` are
 /// `None` on an open or counted shift and are populated only once the shift closes — the cashier
-/// counts before the system says what it expected.
+/// counts before the system says what it expected. A store that turns `shift.blind_close` off
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2) is shown `expected_amount` before the close too, so the count can be made against
+/// it; `variance` stays the close's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShiftView {
     /// The shift.
     pub shift_id: ShiftId,
     /// Its state after the command.
     pub state: ShiftState,
-    /// What the system expected in the drawer, revealed only at close.
+    /// What the system expected in the drawer: revealed at close, and before it only where the
+    /// store's count is not blind.
     pub expected_amount: Option<Money>,
     /// What the cashier counted, once counted.
     pub counted_amount: Option<Money>,
@@ -7036,12 +7040,12 @@ impl<S: EventStore> Edge<S> {
         self.commit_and_publish(&ctx, &payload).await?;
 
         let currency = self.session().currency;
-        self.lock_projection()
-            .open_shift_record(shift_id, ShiftRecord::opened(opening_float, currency));
+        let record = ShiftRecord::opened(opening_float, currency);
+        self.lock_projection().open_shift_record(shift_id, record);
         Ok(ShiftView {
             shift_id,
             state: ShiftState::Open,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: None,
             variance: None,
             paid_in: Money::zero(currency),
@@ -7056,15 +7060,19 @@ impl<S: EventStore> Edge<S> {
     ///
     /// Blind (§11.1): neither the expected amount nor the variance is in the view, whatever the
     /// shift's state, because a count entered after reading the expectation is not a blind count.
+    /// The expected amount is there only where the store has turned the blind close off
+    /// ([`Self::expectation_shown`]), and the variance never is.
     #[must_use]
     pub fn current_shift(&self) -> Option<ShiftView> {
-        let projection = self.lock_projection();
-        let shift_id = projection.open_shift?;
-        let record = projection.shift(shift_id)?;
+        let (shift_id, record) = {
+            let projection = self.lock_projection();
+            let shift_id = projection.open_shift?;
+            (shift_id, projection.shift(shift_id)?)
+        };
         Some(ShiftView {
             shift_id,
             state: record.state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: record.counted,
             variance: None,
             paid_in: record.paid_in,
@@ -7077,8 +7085,9 @@ impl<S: EventStore> Edge<S> {
     /// Records the blind count on a shift (`cash.shift.counted`).
     ///
     /// The counted cash is entered **before** the system reveals what it expected, so this returns
-    /// no expectation and no variance — that is what makes the close blind (§11.1). `counted_minor`
-    /// is the physical count in minor units.
+    /// no expectation and no variance — that is what makes the close blind (§11.1). A store that has
+    /// turned the blind close off is shown the expectation ([`Self::expectation_shown`]), never the
+    /// variance. `counted_minor` is the physical count in minor units.
     ///
     /// # Errors
     ///
@@ -7110,7 +7119,7 @@ impl<S: EventStore> Edge<S> {
         Ok(ShiftView {
             shift_id,
             state: decision.next_state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: Some(counted_amount),
             variance: None,
             paid_in: record.paid_in,
@@ -7118,6 +7127,19 @@ impl<S: EventStore> Edge<S> {
             print_shift_report: false,
             report: None,
         })
+    }
+
+    /// What the drawer should hold, for a shift before it closes, where the store shows it: `None`
+    /// while `shift.blind_close` is on, which is the default and what every count was before the
+    /// setting (ADR-0160 decision 2), and the shift's expectation where the store has turned it off.
+    ///
+    /// An expectation that cannot be computed is withheld rather than guessed at: the close computes
+    /// it again and refuses there, where the cashier can act on the refusal.
+    fn expectation_shown(&self, record: &ShiftRecord) -> Option<Money> {
+        if self.session().shift.blind_close() {
+            return None;
+        }
+        record.expected().ok()
     }
 
     /// Closes a counted shift (`cash.shift.closed`), revealing the expected amount and the variance.
@@ -7255,7 +7277,7 @@ impl<S: EventStore> Edge<S> {
         Ok(ShiftView {
             shift_id,
             state: record.state,
-            expected_amount: None,
+            expected_amount: self.expectation_shown(&record),
             counted_amount: record.counted,
             variance: None,
             paid_in: record.paid_in,
@@ -9957,6 +9979,7 @@ mod tests {
             EdgeSession {
                 shift: PublishedShift {
                     no_shift_selling: Open::from_known(NoShiftSelling::Refuse),
+                    ..PublishedShift::default()
                 },
                 ..EdgeSession::bootstrap()
             },

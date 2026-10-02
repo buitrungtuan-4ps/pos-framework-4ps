@@ -9,6 +9,11 @@
 //! counting reveals no expectation or variance. Only the close response does. `expected_amount` and
 //! `variance` are therefore absent from the JSON until the shift closes. What was paid in and out is
 //! in every response, because the cashier entered it: it tells them nothing the close keeps blind.
+//!
+//! A store that turns `shift.blind_close` off
+//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! decision 2) is sent `expected_amount` in every response, so the Shift screen can show it beside
+//! the count. `variance` is still the close's alone.
 
 use std::sync::Arc;
 
@@ -77,7 +82,7 @@ pub(crate) struct ShiftResponse {
     shift_id: String,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
-    /// Revealed only at close (§11.1).
+    /// Revealed at close (§11.1), and before it only where the store's count is not blind.
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_amount: Option<Money>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +142,7 @@ where
 /// state before the first open of the day, not a missing resource.
 ///
 /// Blind like the count: the expectation and the variance are never in this answer, only in the
-/// close's.
+/// close's — except the expectation, where the store has turned the blind close off.
 pub(crate) async fn current<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,

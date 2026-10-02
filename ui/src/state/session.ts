@@ -18,18 +18,20 @@ import { adoptSession, forgetPermissions } from "./permissions";
 const [signedIn, setSignedIn] = createSignal(false);
 const [employeeId, setEmployeeId] = createSignal<string | null>(null);
 const [idleLockSeconds, setIdleLockSeconds] = createSignal(0);
+const [openingFloatMinor, setOpeningFloatMinor] = createSignal(0);
 const [locked, setLocked] = createSignal(false);
 let staffCode: string | null = null;
 
-export { employeeId, idleLockSeconds, locked, signedIn };
+export { employeeId, idleLockSeconds, locked, openingFloatMinor, signedIn };
 
-// Takes what a session read says: who is signed in, the store's idle lock, and what the person may
-// do. An edge too old to send `idle_lock_seconds` never locks, which is what every till did before
-// the setting.
+// Takes what a session read says: who is signed in, the store's idle lock and opening float, and
+// what the person may do. An edge too old to send `idle_lock_seconds` never locks, and one too old
+// to send `opening_float_minor` fills in no float, which is what every till did before the settings.
 export function takeSession(session: SessionState): void {
   setSignedIn(session.signed_in);
   setEmployeeId(session.employee_id ?? null);
   setIdleLockSeconds(session.idle_lock_seconds ?? 0);
+  setOpeningFloatMinor(session.opening_float_minor ?? 0);
   adoptSession(session);
 }
 

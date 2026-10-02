@@ -103,6 +103,7 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_SECONDS: "settings.unit.seconds",
   SETTING_UNIT_MINUTES: "settings.unit.minutes",
   SETTING_UNIT_COUNT: "settings.unit.count",
+  SETTING_UNIT_MINOR_UNITS: "settings.unit.minor_units",
 };
 
 /**

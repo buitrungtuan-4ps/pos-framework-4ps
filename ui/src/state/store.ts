@@ -1728,6 +1728,8 @@ export async function loadShift(): Promise<void> {
       : {
           shiftId: response.shift_id,
           state: response.state,
+          // Only where the store's count is not blind (ADR-0160): a blind store is sent none.
+          expected: response.expected_amount,
           counted: response.counted_amount,
           paidIn: response.paid_in_amount,
           paidOut: response.paid_out_amount,
@@ -2064,6 +2066,7 @@ export async function countShift(shiftId: string, countedMinor: number): Promise
   const response = await api.countShift(shiftId, { counted_minor: countedMinor });
   setState("shift", "state", response.state);
   setState("shift", "counted", response.counted_amount);
+  setState("shift", "expected", response.expected_amount);
 }
 
 export async function closeShift(shiftId: string): Promise<ShiftInfo> {
@@ -2095,6 +2098,8 @@ export async function recordCashMovement(
     direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
   setState("shift", "paidIn", response.paid_in_amount);
   setState("shift", "paidOut", response.paid_out_amount);
+  // A movement moves what the drawer should hold, which a store whose count is not blind is shown.
+  setState("shift", "expected", response.expected_amount);
   return response.drawer_open;
 }
 

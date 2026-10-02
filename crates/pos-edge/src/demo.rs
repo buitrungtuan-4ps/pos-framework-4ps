@@ -117,6 +117,17 @@ fn idle_lock() -> bool {
     std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("idle-lock"))
 }
 
+/// Whether this demo store fills in a float and counts in the open — `POS_DEMO_PROFILE=shift-settings`.
+///
+/// That profile publishes a `shift` node with `opening_float_minor` = 500,000 and `blind_close` off
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2), so the browser gate can drive both. Every other profile publishes no `shift` node,
+/// which is what a store that predates the settings runs: an empty float and a blind count.
+fn shift_settings() -> bool {
+    std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("shift-settings"))
+}
+
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
 ///
 /// That profile publishes no `permissions` node, which is what a store the console has not staffed
@@ -259,6 +270,11 @@ fn demo_menu() -> MenuBook {
 /// `POS_DEMO_PROFILE=idle-lock` publishes the same store with a `session` node whose tills lock
 /// after two minutes without a touch, as a new store's do. See [`idle_lock`].
 ///
+/// # The shift-settings profile
+///
+/// `POS_DEMO_PROFILE=shift-settings` publishes the same store with a `shift` node that fills in a
+/// float of 500,000 đồng and shows the expected cash at the count. See [`shift_settings`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -311,6 +327,16 @@ pub fn config_document() -> Option<serde_json::Value> {
         object.insert(
             "session".to_owned(),
             serde_json::json!({ "idle_lock_seconds": 120 }),
+        );
+    }
+    // Published only on its own profile, so every other flow opens a shift on an empty float and
+    // counts blind, as a store that predates the settings does.
+    if shift_settings()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert(
+            "shift".to_owned(),
+            serde_json::json!({ "opening_float_minor": 500_000, "blind_close": false }),
         );
     }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
