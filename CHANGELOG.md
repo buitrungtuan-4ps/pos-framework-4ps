@@ -425,6 +425,25 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     unchanged. An event without them reads as no fee lines, and as tax lines *not recorded*. No
     migration or permission changes.
 
+- **A new tenant starts with six roles**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md), Rollout). A tenant
+  created with `POST /admin/tenants` gets one editable role for each of `pos-core`'s built-in roles:
+  owner, manager, supervisor, cashier, server and cook. Each grants what the permission catalogue's
+  `default_roles` say. A permission the role is a default for is granted directly, a PIN-flagged one
+  it is not a default for is granted with approval, and nothing else is granted. None has a discount
+  ceiling.
+  - **Names come from the console's language packs**, the keys `people.startingRole.*`. The route
+    takes an optional `language`, which the console sends as the language it is shown in; one the
+    packs do not carry, or none, names the roles in English. Nothing about the tenant records it.
+  - **Audited as one `role.seed` entry** with the role ids and the counts, never a name, beside
+    `tenant.create`.
+  - **Idempotent.** Each starting role's id is derived from the tenant's, so seeding a tenant again
+    writes nothing and never overwrites a role its owner has renamed or changed. A seeding failure
+    is logged and the tenant still answers `201`, with whichever roles were written.
+  - **Upgrade note:** no migration, event or permission change, and no existing tenant is touched.
+    A tenant created after this release starts with six role templates rather than none, and
+    `POST /admin/tenants` records two audit entries where it recorded one.
+
 - **The edge charges a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
   decisions 2, 3 and 6). No store charges one yet: nothing in the cloud publishes a `fees` node.
   - The edge installs the `fees` node. An absent node, or an empty list, is no fee; a node that

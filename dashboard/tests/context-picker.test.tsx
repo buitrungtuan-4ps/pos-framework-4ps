@@ -18,6 +18,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ContextPicker } from "../src/components/ContextPicker";
+import { locale } from "../src/i18n";
 import { setStoreId, setTenantId, tenantId, tenantName } from "../src/state/session";
 
 const TENANT = { tenant_id: "01M22190WCY5PS7KCA7ET7H679", name: "Pizza 4P's Vietnam" };
@@ -31,7 +32,7 @@ vi.mock("../src/api/client", () => ({
   api: {
     listTenants: () => listTenants(),
     listStores: (tenant: string) => listStores(tenant),
-    createTenant: (name: string) => createTenant(name),
+    createTenant: (name: string, language: string) => createTenant(name, language),
   },
   ApiError: class ApiError extends Error {},
 }));
@@ -58,7 +59,8 @@ async function createFirstTenant() {
   await waitFor(() => expect(listTenants).toHaveBeenCalled());
   fireEvent.input(screen.getByLabelText("New tenant name"), { target: { value: TENANT.name } });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
-  await waitFor(() => expect(createTenant).toHaveBeenCalledWith(TENANT.name));
+  // The language the console is shown in names the tenant's six starting roles (ADR-0158).
+  await waitFor(() => expect(createTenant).toHaveBeenCalledWith(TENANT.name, locale()));
 }
 
 beforeEach(() => {

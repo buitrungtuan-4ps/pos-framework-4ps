@@ -95,6 +95,9 @@ use pos_cloud::release_source::{
     FetchedArtifact, FetchedRelease, ReleaseSource, ReleaseSourceError,
 };
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
+use pos_cloud::starting_roles::{
+    RoleSeeder, seed_starting_roles, starting_role_grants, starting_role_name,
+};
 use pos_cloud::store_groups::{
     BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId, StoreGroupStore,
     StoreGroupStoreError,
@@ -109,6 +112,7 @@ use pos_cloud::webhook::{
 use pos_cloud::{Cloud, IngestOutcome, StoreOwner, StoreOwners, http};
 use pos_contract_tests::fixtures;
 use pos_core::activation::{ActivationCode, CodeStatus};
+use pos_core::permission::Role;
 use pos_fakes::vendors::{known_menu_item, unknown_menu_item};
 use pos_fakes::{FakeClock, FakeIntake, FakeStore};
 use pos_ports::PortError;
@@ -7834,6 +7838,17 @@ fn registry_app_with_audit(
     registry: FakeRegistry,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
+    registry_app_over_people(admin, registry, FakePeople::default(), audit)
+}
+
+/// As [`registry_app_with_audit`], over a people store the test keeps a handle on, so it can read
+/// the roles a new tenant starts with (ADR-0158).
+fn registry_app_over_people(
+    admin: FakeAdmin,
+    registry: FakeRegistry,
+    people: FakePeople,
+    audit: Arc<dyn AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -7842,7 +7857,13 @@ fn registry_app_with_audit(
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::registry_router(registry, admin, clock(), audit))
+    http::router(app).merge(http::registry_router(
+        registry,
+        admin,
+        clock(),
+        audit,
+        Arc::new(RoleSeeder::new(people)),
+    ))
 }
 
 // --- Fleet liveness read model (ADR-0068 slice 3) ----------------------------------------------
@@ -9484,7 +9505,11 @@ async fn registry_writes_record_to_the_audit_trail() {
         .to_owned();
 
     let recorded = audit.list(None, 10).await.expect("list audit entries");
-    assert_eq!(recorded.len(), 2, "each successful write records one entry");
+    assert_eq!(
+        recorded.len(),
+        3,
+        "each successful write records one entry, and a new tenant's starting roles one more"
+    );
     let store_entry = recorded
         .iter()
         .find(|entry| entry.action == "store.create")
@@ -9511,6 +9536,182 @@ async fn registry_writes_record_to_the_audit_trail() {
     assert!(
         recorded.iter().any(|entry| entry.action == "tenant.create"),
         "the tenant create was recorded too"
+    );
+}
+
+/// Creates a tenant through the route, the way the console does, and returns its id.
+async fn create_tenant(router: &axum::Router, cookie: &str, body: &serde_json::Value) -> TenantId {
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/tenants", body, cookie))
+        .await
+        .expect("route create tenant");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    json_body(created).await["tenant_id"]
+        .as_str()
+        .expect("a tenant id")
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .expect("a ULID")
+}
+
+/// The roles a people store holds for a tenant.
+async fn roles_of(people: &FakePeople, tenant: TenantId) -> Vec<Versioned<RoleTemplate>> {
+    RoleTemplateStore::list(people, tenant)
+        .await
+        .expect("list roles")
+}
+
+/// A tenant the console creates starts with six roles, one for each of `pos-core`'s built-in roles,
+/// named in the language it was created in and granting what the catalogue's defaults say
+/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)): a default
+/// role holds a permission directly, and every other role holds a PIN-flagged one with approval.
+/// The seeding is audited by ids and counts, never a name.
+#[tokio::test]
+async fn a_new_tenant_starts_with_six_roles_granting_the_catalogue_defaults() {
+    let audit = FakeAudit::default();
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let tenant_id = create_tenant(&router, &cookie, &body).await;
+
+    let roles = roles_of(&people, tenant_id).await;
+    assert_eq!(roles.len(), Role::ALL.len(), "one role per built-in role");
+    for role in Role::ALL {
+        let name = starting_role_name(*role, Some("vi"));
+        let seeded = roles
+            .iter()
+            .find(|seeded| seeded.record.name == name)
+            .unwrap_or_else(|| panic!("{role:?} is seeded as {name}"));
+        let (directly, with_approval) = starting_role_grants(*role);
+        assert_eq!(seeded.record.permissions, directly, "{role:?} directly");
+        assert_eq!(
+            seeded.record.permissions_with_approval, with_approval,
+            "{role:?} with approval"
+        );
+        assert_eq!(seeded.record.discount_ceiling_minor, None);
+        assert_eq!(seeded.record.status, EntityStatus::Active);
+    }
+    let cook = starting_role_name(Role::Cook, Some("vi"));
+    let cook = roles
+        .iter()
+        .find(|seeded| seeded.record.name == cook)
+        .expect("the cook");
+    assert!(
+        cook.record
+            .permissions_with_approval
+            .contains(&"billing.bill.void".to_owned()),
+        "a role the catalogue does not default to a PIN-flagged act holds it with approval"
+    );
+
+    let recorded = audit.list(None, 10).await.expect("list audit entries");
+    let seed = recorded
+        .iter()
+        .find(|entry| entry.action == "role.seed")
+        .expect("the seeding is audited");
+    let after = seed.after.as_ref().expect("an after");
+    assert_eq!(after["created"], 6);
+    assert_eq!(after["kept"], 0);
+    assert_eq!(after["role_template_ids"].as_array().map(Vec::len), Some(6));
+    assert_eq!(seed.entity_id, tenant_id.to_string());
+    let trail = serde_json::to_string(after).expect("serialise");
+    assert!(
+        !trail.contains(&cook.record.name),
+        "ids and counts, never a name: {trail}"
+    );
+}
+
+/// Seeding a tenant again writes nothing: each starting role's id is derived from the tenant's,
+/// so the six are found, and a role the owner has since renamed keeps its new name (ADR-0158).
+#[tokio::test]
+async fn seeding_a_tenant_again_writes_nothing_and_keeps_a_rename() {
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let tenant_id = create_tenant(&router, &cookie, &body).await;
+
+    let cashier_name = starting_role_name(Role::Cashier, Some("vi"));
+    let roles = roles_of(&people, tenant_id).await;
+    let cashier = roles
+        .iter()
+        .find(|seeded| seeded.record.name == cashier_name)
+        .expect("the cashier");
+    let rename = RoleTemplateUpdate {
+        role_template_id: cashier.record.role_template_id,
+        tenant_id,
+        name: "Front of house".to_owned(),
+        permissions: cashier.record.permissions.clone(),
+        permissions_with_approval: cashier.record.permissions_with_approval.clone(),
+        discount_ceiling_minor: None,
+        status: EntityStatus::Active,
+    };
+    RoleTemplateStore::update(&people, &rename, &cashier.etag)
+        .await
+        .expect("rename");
+
+    let again = seed_starting_roles(&people, tenant_id, Some("vi"))
+        .await
+        .expect("seed again");
+    assert!(again.created.is_empty(), "nothing is written twice");
+    assert_eq!(again.kept.len(), 6);
+    let after = roles_of(&people, tenant_id).await;
+    assert_eq!(after.len(), 6);
+    assert!(
+        after
+            .iter()
+            .any(|seeded| seeded.record.name == "Front of house"),
+        "the rename stands"
+    );
+}
+
+/// Without a language, or with one the console's packs do not carry, the starting roles are named
+/// in English; and a tenant created later leaves an earlier one's roles alone (ADR-0158).
+#[tokio::test]
+async fn a_tenant_created_without_a_language_names_its_roles_in_english() {
+    let people = FakePeople::default();
+    let router = registry_app_over_people(
+        provisioned_admin(),
+        FakeRegistry::default(),
+        people.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let first = serde_json::json!({ "name": "Pizza 4P's", "language": "vi" });
+    let first = create_tenant(&router, &cookie, &first).await;
+
+    for body in [
+        serde_json::json!({ "name": "Pizza 4P's Japan" }),
+        serde_json::json!({ "name": "Pizza 4P's India", "language": "hi" }),
+    ] {
+        let tenant_id = create_tenant(&router, &cookie, &body).await;
+        let names: Vec<String> = roles_of(&people, tenant_id)
+            .await
+            .into_iter()
+            .map(|seeded| seeded.record.name)
+            .collect();
+        for role in Role::ALL {
+            assert!(
+                names.contains(&starting_role_name(*role, None)),
+                "{body}: {names:?}"
+            );
+        }
+    }
+    assert_eq!(
+        roles_of(&people, first).await.len(),
+        6,
+        "the first tenant is untouched by the others"
     );
 }
 

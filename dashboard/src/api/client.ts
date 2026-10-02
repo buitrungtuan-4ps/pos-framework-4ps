@@ -1141,7 +1141,10 @@ export const api = {
 
   // --- org registry (ADR-0065): named Tenant/Brand/Store/Device, so a picker never shows a ULID ---
   listTenants: () => requestJson<Tenant[]>("GET", "/admin/tenants"),
-  createTenant: (name: string) => requestJson<Tenant>("POST", "/admin/tenants", { name }),
+  // A new tenant starts with six roles (ADR-0158), which the cloud names in `language`, the
+  // language this console is shown in, and in English where the console carries no such pack.
+  createTenant: (name: string, language: string) =>
+    requestJson<Tenant>("POST", "/admin/tenants", { name, language }),
   // Rename or archive a tenant (ADR-0065, production-readiness O2). `etag` is the version the caller
   // read it at (ADR-0094): a save against a version the registry no longer holds is refused `412`
   // rather than overwriting whoever edited in between.
