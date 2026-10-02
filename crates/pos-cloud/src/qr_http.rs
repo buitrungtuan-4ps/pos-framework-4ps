@@ -14,6 +14,12 @@
 //! # Where the facts come from
 //!
 //! - **token** — verified here, cryptographically binding tenant, store, and table.
+//! - **whether the store takes QR orders at all** — QR ordering's one switch, the capability flag
+//!   `qr_ordering_enabled` ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//!   decision 5, [`crate::qr_ordering`]), read through the same capability reader the edge uses.
+//!   Off unless the store's published version sets it, so a store with no published configuration
+//!   takes none. `qr.enabled`, which this read before the switch, follows the switch and is no
+//!   longer read here.
 //! - **store online, business hours, staff-confirmation default, per-table limit** — the store's
 //!   effective config tree (a `qr` node, and `order_relay.enabled` for the store's participation),
 //!   read the same forgiving way the relay reads its own config: an absent or malformed value falls
@@ -75,6 +81,7 @@ struct BusinessHours {
 
 /// The per-store QR guardrail settings, read from the store's effective config.
 struct QrConfig {
+    /// QR ordering's switch ([`crate::qr_ordering::switch_of`]).
     enabled: bool,
     store_online: bool,
     /// `None` means the store has configured no hours, i.e. always open.
@@ -87,7 +94,9 @@ struct QrConfig {
 impl Default for QrConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            // The switch's declared default: a store whose published version does not turn QR
+            // ordering on takes no QR order.
+            enabled: false,
             store_online: true,
             business_hours: None,
             // On by default — ADR-0057: a guest order waits for a member of staff unless the store
@@ -281,8 +290,9 @@ fn to_inbound_qr_order(
     })
 }
 
-/// Reads the `qr` guardrail node (and `order_relay.enabled` for the store's participation) from a
-/// store's effective config, tolerating any shape: an absent tree or field falls back to the default.
+/// Reads QR ordering's switch, the `qr` guardrail node and `order_relay.enabled` (the store's
+/// participation) from a store's effective config, tolerating any shape: an absent tree or field
+/// falls back to the default, and for the switch that is off.
 async fn qr_config_for<T: ConfigTreeStore>(
     config_trees: &T,
     tenant: TenantId,
@@ -307,10 +317,7 @@ async fn qr_config_for<T: ConfigTreeStore>(
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(default.store_online);
     QrConfig {
-        enabled: qr
-            .and_then(|node| node.get("enabled"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(default.enabled),
+        enabled: crate::qr_ordering::switch_of(effective),
         store_online,
         business_hours: parse_business_hours(qr),
         staff_confirmation_required: qr

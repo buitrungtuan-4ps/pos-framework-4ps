@@ -51,8 +51,12 @@ use pos_cloud::catalog::{
 };
 use pos_cloud::claim::{BindOutcome, ClaimStore, ClaimStoreError, CollectOutcome};
 use pos_cloud::cloud::AdmittedDevice;
-use pos_cloud::config_tree::{ConfigStoreError, ConfigTreeState, ConfigTreeStore};
+use pos_cloud::config_tree::{
+    CapabilityValidator, ConfigLevel, ConfigStoreError, ConfigTree, ConfigTreeState,
+    ConfigTreeStore, PublishedVersion,
+};
 use pos_cloud::dashboard::{RollupError, RollupStore, StoredRollups, project};
+use pos_cloud::data_migrations::{DataMigrations, InMemoryDataMigrations};
 use pos_cloud::devices::{
     DeviceKind, DeviceProposalError, DeviceProposalId, DeviceProposalStatus, DeviceProposalStore,
     DeviceProposalSummary, DeviceWriteOutcome, PersistedDeviceProposal,
@@ -85,6 +89,7 @@ use pos_cloud::people::{
 };
 use pos_cloud::qr::{TableTokenSecret, mint_table_token};
 use pos_cloud::qr_http::qr_router;
+use pos_cloud::qr_ordering;
 use pos_cloud::reason_codes::{ReasonCodeStore, ReasonCodeStoreError};
 use pos_cloud::reconcile::{ReconcileError, ReconcileRun, ReconcileRunStore, ReconcileStore};
 use pos_cloud::registry::{
@@ -7111,7 +7116,15 @@ async fn a_signed_qr_order_is_accepted_and_awaits_staff_confirmation() {
     let secret = TableTokenSecret::new("qr-endpoint-secret");
     let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
     let (known, _price) = known_menu_item();
-    let router = qr_router(secret, FakeIntake::new(), EmptyConfigTrees, clock());
+    // A store that has turned QR ordering on, which is all it publishes (ADR-0160 decision 5).
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        order_store(),
+        &[(NOW_MS, serde_json::json!({ "qr_ordering_enabled": true }))],
+    );
+    let router = qr_router(secret, FakeIntake::new(), trees, clock());
     let response = router
         .oneshot(post_json("/v1/qr/orders", &qr_body(&token, "qr-1", known)))
         .await
@@ -7152,6 +7165,721 @@ async fn an_unsigned_qr_token_is_forbidden_and_never_reaches_intake() {
         response.status(),
         StatusCode::FORBIDDEN,
         "an untrusted table token is refused before intake"
+    );
+}
+
+// --- QR ordering is one switch (ADR-0160 decision 5) -------------------------------------------
+
+/// Gives `store` a tree whose history publishes each document on the Store layer in turn, at the
+/// instant beside it, as a run of console publishes would. Each version's id is minted at its
+/// instant, which is what a rollback reads to tell a version from before the switch.
+fn seed_versions(
+    trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store: StoreId,
+    versions: &[(i64, serde_json::Value)],
+) {
+    let mut tree = ConfigTree::new(store, CapabilityValidator);
+    for (n, (at_ms, document)) in (1_u128..).zip(versions) {
+        let at = u64::try_from(*at_ms).expect("an instant after the epoch");
+        tree.publish(
+            ConfigLevel::Store,
+            document.clone(),
+            ConfigVersionId::new(Ulid::from_parts(at, n)),
+            Vec::new(),
+        )
+        .expect("a document the validator accepts");
+    }
+    let version = trees.mint();
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .insert((tenant_id, store), Versioned::new(tree.state(), version));
+}
+
+/// The document a store runs: its newest version's, which its edge holds and the guest intake reads.
+fn running_document(
+    trees: &FakeConfigTrees,
+    tenant_id: TenantId,
+    store: StoreId,
+) -> serde_json::Value {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant_id, store))
+        .and_then(|row| {
+            row.record
+                .history
+                .last()
+                .map(|version| version.effective.clone())
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// How many versions a store's tree holds.
+fn version_count(trees: &FakeConfigTrees, tenant_id: TenantId, store: StoreId) -> usize {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant_id, store))
+        .map_or(0, |row| row.record.history.len())
+}
+
+/// A guest's order is refused until the store's published configuration turns the switch on.
+/// `qr.enabled`, which the intake read before, decides nothing now: a store that publishes it alone
+/// has not turned QR ordering on.
+#[tokio::test]
+async fn a_guest_qr_order_is_refused_until_the_store_turns_its_switch_on() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
+    let (known, _price) = known_menu_item();
+
+    let refused = |router: axum::Router, reference: &'static str| {
+        let body = qr_body(&token, reference, known);
+        async move {
+            let response = router
+                .oneshot(post_json("/v1/qr/orders", &body))
+                .await
+                .expect("route the QR order");
+            (response.status(), json_body(response).await)
+        }
+    };
+
+    // Nothing published: the switch's default, which is off.
+    let (status, body) = refused(
+        qr_router(secret.clone(), FakeIntake::new(), EmptyConfigTrees, clock()),
+        "qr-none",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(
+        body["error"]["message"], "QR ordering is not enabled for this store",
+        "{body}"
+    );
+
+    for (reference, document) in [
+        (
+            "qr-node-only",
+            serde_json::json!({ "qr": { "enabled": true } }),
+        ),
+        (
+            "qr-switched-off",
+            serde_json::json!({ "qr_ordering_enabled": false }),
+        ),
+    ] {
+        let trees = FakeConfigTrees::default();
+        seed_versions(
+            &trees,
+            tenant(),
+            order_store(),
+            &[(NOW_MS, document.clone())],
+        );
+        let (status, body) = refused(
+            qr_router(secret.clone(), FakeIntake::new(), trees, clock()),
+            reference,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{document}: {body}");
+    }
+}
+
+/// The capability and channel publishes over one tree, so a test can turn the switch and see what
+/// follows it.
+fn qr_switch_app(admin: FakeAdmin, trees: FakeConfigTrees) -> axum::Router {
+    config_capabilities_app(admin.clone(), trees.clone()).merge(http::config_channels_router(
+        trees,
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ))
+}
+
+/// The Store layer of [`store_id`]'s tree, as the last publish left it.
+fn qr_store_layer(trees: &FakeConfigTrees) -> serde_json::Value {
+    trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .map_or(serde_json::Value::Null, |row| row.record.layers[2].clone())
+}
+
+/// Publishes one body to one route as the console would, and expects it accepted.
+async fn publish_ok(router: &axum::Router, cookie: &str, uri: &str, mut body: serde_json::Value) {
+    if let serde_json::Value::Object(map) = &mut body {
+        map.insert(
+            "tenant_id".to_owned(),
+            serde_json::json!(tenant().as_ulid().to_string()),
+        );
+        map.insert(
+            "store_id".to_owned(),
+            serde_json::json!(store_id().as_ulid().to_string()),
+        );
+    }
+    let response = router
+        .clone()
+        .oneshot(put_with_cookie(uri, &body, cookie))
+        .await
+        .expect("route the publish");
+    let status = response.status();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{uri}: {}",
+        json_body(response).await
+    );
+}
+
+/// Turning the switch publishes `qr.enabled` and the QR channel with it, so an edge on an earlier
+/// release, which reads only the channel list, and anything still reading `qr.enabled` agree.
+#[tokio::test]
+async fn turning_the_qr_switch_on_and_off_carries_qr_enabled_and_the_qr_channel_with_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+
+    // A list without the switch: the switch is off, so the list keeps QR out and `qr.enabled`,
+    // which would read as on while absent, is written off.
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_DINE_IN"] }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN"])
+    );
+    assert_eq!(layer["qr"], serde_json::json!({ "enabled": false }));
+    assert!(
+        layer.get("qr_ordering_enabled").is_none(),
+        "the switch was not written"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": true } }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(layer["qr_ordering_enabled"], true);
+    assert_eq!(layer["qr"]["enabled"], true);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_QR"]),
+        "the QR channel joins the store's own list"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": false } }),
+    )
+    .await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(layer["qr_ordering_enabled"], false);
+    assert_eq!(layer["qr"]["enabled"], false);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_DINE_IN"])
+    );
+}
+
+/// A `qr` publish without `enabled` takes the store's switch, and one with it — an older console's
+/// checkbox, or a cohort copy — sets the switch, with what follows it.
+#[tokio::test]
+async fn a_qr_publish_takes_the_switch_and_one_naming_enabled_sets_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let guardrails = serde_json::json!({
+        "staff_confirmation_required": false,
+        "per_table_limit": 5,
+        "rate_window_secs": 60,
+    });
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_TAKEAWAY"] }),
+    )
+    .await;
+    publish_ok(&router, &cookie, "/admin/config/qr", guardrails.clone()).await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["qr"],
+        serde_json::json!({
+            "staff_confirmation_required": false,
+            "per_table_limit": 5,
+            "rate_window_secs": 60,
+            "enabled": false,
+        }),
+        "the guardrails, and `enabled` following the switch, which is off"
+    );
+    assert!(layer.get("qr_ordering_enabled").is_none());
+
+    let mut named = guardrails;
+    if let serde_json::Value::Object(map) = &mut named {
+        map.insert("enabled".to_owned(), serde_json::json!(true));
+    }
+    publish_ok(&router, &cookie, "/admin/config/qr", named).await;
+    let layer = qr_store_layer(&trees);
+    assert_eq!(
+        layer["qr_ordering_enabled"], true,
+        "`enabled` is the switch"
+    );
+    assert_eq!(layer["qr"]["enabled"], true);
+    assert_eq!(
+        layer["channels"]["enabled"],
+        serde_json::json!(["SALES_CHANNEL_TAKEAWAY", "SALES_CHANNEL_QR"])
+    );
+}
+
+/// A channel list the console publishes has its QR channel set by the switch, and keeps what a
+/// list means: an empty list takes no channel and stays empty, and a list of QR alone keeps it.
+#[tokio::test]
+async fn a_published_channel_list_follows_the_switch_and_keeps_what_a_list_means() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = qr_switch_app(admin, trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let list = |trees: &FakeConfigTrees| qr_store_layer(trees)["channels"]["enabled"].clone();
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": true } }),
+    )
+    .await;
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_DELIVERY"] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!(["SALES_CHANNEL_DELIVERY", "SALES_CHANNEL_QR"]),
+        "the switch is on, so the list carries QR"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": [] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!([]),
+        "an empty list takes no channel"
+    );
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/capabilities",
+        serde_json::json!({ "flags": { "qr_ordering_enabled": false } }),
+    )
+    .await;
+    assert_eq!(list(&trees), serde_json::json!([]), "and stays empty");
+
+    publish_ok(
+        &router,
+        &cookie,
+        "/admin/config/channels",
+        serde_json::json!({ "enabled": ["SALES_CHANNEL_QR"] }),
+    )
+    .await;
+    assert_eq!(
+        list(&trees),
+        serde_json::json!(["SALES_CHANNEL_QR"]),
+        "taking QR out of a list of QR alone would empty it and refuse every order"
+    );
+}
+
+/// The preview of a switch publish shows what follows the switch, as the publish would write it.
+#[tokio::test]
+async fn a_preview_of_the_qr_switch_shows_what_follows_it() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        store_id(),
+        &[(
+            NOW_MS,
+            serde_json::json!({
+                "qr_ordering_enabled": true,
+                "channels": { "enabled": ["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_QR"] },
+            }),
+        )],
+    );
+    let router = people_preview_app(admin, FakePeople::default(), trees);
+    let cookie = admin_cookie(&router).await;
+    let previewed = router
+        .oneshot(post_with_cookie(
+            "/admin/config/preview",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "node": "capabilities",
+                "arguments": { "flags": { "qr_ordering_enabled": false } },
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let preview = json_body(previewed).await;
+    assert_eq!(
+        preview["diff"],
+        serde_json::json!({
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+        }),
+        "{preview}"
+    );
+}
+
+/// A tenant with one store per case, in a registry the one-time setting reads.
+async fn registry_with(stores: &[(StoreId, bool)]) -> FakeRegistry {
+    let registry = FakeRegistry::default();
+    registry
+        .create_tenant(&TenantRecord {
+            tenant_id: tenant(),
+            name: "Pizza 4P's".to_owned(),
+            status: EntityStatus::Active,
+        })
+        .await
+        .expect("seed the tenant");
+    for (store, active) in stores {
+        seed_store(&registry, tenant(), *store, *active);
+    }
+    registry
+}
+
+fn numbered_store(n: u128) -> StoreId {
+    StoreId::new(Ulid::from_u128(0x0E5_0000 + n))
+}
+
+/// The stores of [`the_one_time_setting_gives_every_store_the_switch_it_ran_and_runs_once`], one
+/// per way a store could stand before the switch.
+const TOOK_QR: u128 = 1;
+const INTAKE_OFF: u128 = 2;
+const DEAD_FLAG: u128 = 3;
+const QR_BESIDE_DINE_IN: u128 = 4;
+const EMPTY_LIST: u128 = 5;
+const NEVER_PUBLISHED: u128 = 6;
+const ARCHIVED_WITHOUT_QR: u128 = 7;
+const LAYERS_ONLY: u128 = 8;
+
+/// A registry and trees holding those stores, each as a console from before the switch left it.
+async fn a_fleet_from_before_the_switch() -> (FakeRegistry, FakeConfigTrees) {
+    let registry = registry_with(&[
+        (numbered_store(TOOK_QR), true),
+        (numbered_store(INTAKE_OFF), true),
+        (numbered_store(DEAD_FLAG), true),
+        (numbered_store(QR_BESIDE_DINE_IN), true),
+        (numbered_store(EMPTY_LIST), true),
+        (numbered_store(NEVER_PUBLISHED), true),
+        (numbered_store(ARCHIVED_WITHOUT_QR), false),
+        (numbered_store(LAYERS_ONLY), true),
+    ])
+    .await;
+    let trees = FakeConfigTrees::default();
+    for (store, document) in [
+        // No flag, `qr.enabled` absent and no list: the guest intake and the edge both took it.
+        (TOOK_QR, serde_json::json!({ "tips_enabled": true })),
+        // The guest intake refused it; nothing else needs saying, as the switch is off unset.
+        (
+            INTAKE_OFF,
+            serde_json::json!({ "qr": { "enabled": false } }),
+        ),
+        // The console's capability form wrote `false` into the flag while nothing read it.
+        (
+            DEAD_FLAG,
+            serde_json::json!({ "qr_ordering_enabled": false, "qr": { "per_table_limit": 5 } }),
+        ),
+        // The guest page was off, and the list still named QR beside dine-in.
+        (
+            QR_BESIDE_DINE_IN,
+            serde_json::json!({
+                "qr": { "enabled": false },
+                "channels": { "enabled": ["SALES_CHANNEL_QR", "SALES_CHANNEL_DINE_IN"] },
+            }),
+        ),
+        // A dead flag left on beside an empty list: the intake took it and the edge refused it,
+        // as it will under the switch.
+        (
+            EMPTY_LIST,
+            serde_json::json!({ "qr_ordering_enabled": true, "channels": { "enabled": [] } }),
+        ),
+        // The edge refused it: the list leaves QR out.
+        (
+            ARCHIVED_WITHOUT_QR,
+            serde_json::json!({ "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] } }),
+        ),
+    ] {
+        seed_versions(
+            &trees,
+            tenant(),
+            numbered_store(store),
+            &[(NOW_MS - 60_000, document)],
+        );
+    }
+    // Layers and no history: nothing was ever published, so nothing reached the edge.
+    trees.seed_store_layer(
+        tenant(),
+        numbered_store(LAYERS_ONLY),
+        serde_json::json!({ "qr": { "enabled": true } }),
+    );
+    (registry, trees)
+}
+
+/// Every store's switch is set from what it did before the switch, by publishing a new version,
+/// and a store whose switch, `qr.enabled` and channel list agree is left alone. The run is
+/// recorded, and a second one publishes nothing.
+#[tokio::test]
+async fn the_one_time_setting_gives_every_store_the_switch_it_ran_and_runs_once() {
+    let (registry, trees) = a_fleet_from_before_the_switch().await;
+    let took_qr = numbered_store(TOOK_QR);
+    let dead_flag = numbered_store(DEAD_FLAG);
+    let qr_beside_dine_in = numbered_store(QR_BESIDE_DINE_IN);
+    let archived_without_qr = numbered_store(ARCHIVED_WITHOUT_QR);
+    let record = InMemoryDataMigrations::new();
+    let now = Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("an instant");
+
+    let first = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the run completes");
+    assert_eq!(first.since, now, "the change began when the run did");
+    assert_eq!(
+        first.report,
+        Some(qr_ordering::MigrationReport {
+            published: 4,
+            unchanged: 2,
+            unconfigured: 2,
+            failed: Vec::new(),
+        })
+    );
+    assert_eq!(
+        record.recorded_time(qr_ordering::MIGRATION).await,
+        Ok(Some(now)),
+        "the run is recorded"
+    );
+
+    assert_eq!(
+        running_document(&trees, tenant(), took_qr),
+        serde_json::json!({ "tips_enabled": true, "qr_ordering_enabled": true }),
+        "a store taking QR orders with no flag keeps taking them"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), dead_flag),
+        serde_json::json!({ "qr_ordering_enabled": true, "qr": { "per_table_limit": 5 } }),
+        "the flag nothing read is replaced by what the store did"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), qr_beside_dine_in),
+        serde_json::json!({
+            "qr": { "enabled": false },
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+            "qr_ordering_enabled": false,
+        }),
+        "off, and the list follows it"
+    );
+    assert_eq!(
+        running_document(&trees, tenant(), archived_without_qr),
+        serde_json::json!({
+            "channels": { "enabled": ["SALES_CHANNEL_DINE_IN"] },
+            "qr_ordering_enabled": false,
+            "qr": { "enabled": false },
+        }),
+        "an archived store is set too, and `qr.enabled` follows its switch"
+    );
+    for (store, versions) in [
+        (INTAKE_OFF, 1),
+        (EMPTY_LIST, 1),
+        (NEVER_PUBLISHED, 0),
+        (LAYERS_ONLY, 0),
+    ] {
+        assert_eq!(
+            version_count(&trees, tenant(), numbered_store(store)),
+            versions,
+            "left alone: store {store}"
+        );
+    }
+
+    let second = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the second run completes");
+    assert_eq!(second.since, now, "the first run's time is kept");
+    assert_eq!(second.report, None, "a recorded run does not run again");
+    assert_eq!(
+        version_count(&trees, tenant(), took_qr),
+        2,
+        "nothing more is published"
+    );
+}
+
+/// One store the cloud cannot publish to does not stop the others, and is reported by id. The run
+/// is still recorded: run again, it would read stores published to since as stores from before the
+/// switch.
+#[tokio::test]
+async fn a_store_the_one_time_setting_cannot_publish_to_is_reported_and_the_rest_are_set() {
+    let settable = numbered_store(11);
+    let unpublishable = numbered_store(12);
+    let registry = registry_with(&[(settable, true), (unpublishable, true)]).await;
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        settable,
+        &[(NOW_MS - 1_000, serde_json::json!({}))],
+    );
+    // A version the validator would refuse today, so any publish composed on it is refused.
+    let invalid = serde_json::json!({ "pay_first_enabled": true, "tables_enabled": true });
+    trees.rows.lock().expect("lock").insert(
+        (tenant(), unpublishable),
+        Versioned::new(
+            ConfigTreeState {
+                layers: [
+                    serde_json::json!({}),
+                    serde_json::json!({}),
+                    invalid.clone(),
+                    serde_json::json!({}),
+                ],
+                history: vec![PublishedVersion {
+                    id: ConfigVersionId::new(Ulid::from_parts(1_000, 1)),
+                    effective: invalid,
+                    nodes: Vec::new(),
+                }],
+                k: 8,
+            },
+            Version::new("seed"),
+        ),
+    );
+    let record = InMemoryDataMigrations::new();
+
+    let run = qr_ordering::run_once(&registry, &trees, &record, &clock())
+        .await
+        .expect("the run completes");
+    let report = run.report.expect("the run ran");
+    assert_eq!(report.published, 1);
+    assert_eq!(report.failed, vec![(tenant(), unpublishable)]);
+    assert_eq!(
+        running_document(&trees, tenant(), settable)["qr_ordering_enabled"],
+        true
+    );
+    assert!(
+        record
+            .recorded_time(qr_ordering::MIGRATION)
+            .await
+            .expect("the record reads")
+            .is_some(),
+        "recorded, and the failed store is left to an operator"
+    );
+}
+
+/// A rollback to a version from before the switch gives it the switch it ran, while a version
+/// published since is restored as it was, even one that never set the switch.
+#[tokio::test]
+async fn a_rollback_to_a_version_from_before_the_switch_gives_it_the_switch_it_ran() {
+    let since = Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("an instant");
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        store_id(),
+        &[
+            // Before the switch: the dead flag written off, and the store taking QR orders.
+            (
+                NOW_MS - 10_000,
+                serde_json::json!({ "qr_ordering_enabled": false, "qr": { "per_table_limit": 3 } }),
+            ),
+            // Since: a store that never set its switch, so QR ordering is off.
+            (NOW_MS + 10_000, serde_json::json!({ "tips_enabled": true })),
+            (
+                NOW_MS + 20_000,
+                serde_json::json!({ "tips_enabled": false }),
+            ),
+        ],
+    );
+    let ids: Vec<String> = trees
+        .rows
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .map(|row| {
+            row.record
+                .history
+                .iter()
+                .map(|version| version.id.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let router = http::router(
+        app_full(
+            Cloud::new(FakeStore::new()),
+            FakeRollups::default(),
+            FakeKeys::default(),
+            provisioned_admin(),
+            trees.clone(),
+        )
+        .with_qr_switch_since(since),
+    );
+    let cookie = admin_cookie(&router).await;
+    let base = format!("/admin/stores/{}/config", store_id().as_ulid());
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let roll_back_to = |version: String, current: String| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        let uri = format!("{base}/rollback?tenant_id={tenant_ulid}");
+        async move {
+            let response = router
+                .oneshot(post_config_with_etag(
+                    &uri,
+                    &serde_json::json!({ "version_id": version }),
+                    &cookie,
+                    &current,
+                ))
+                .await
+                .expect("route the rollback");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await["config_version_id"]
+                .as_str()
+                .expect("a new version id")
+                .to_owned()
+        }
+    };
+
+    let restored = roll_back_to(ids[0].clone(), ids[2].clone()).await;
+    assert_eq!(
+        running_document(&trees, tenant(), store_id()),
+        serde_json::json!({ "qr_ordering_enabled": true, "qr": { "per_table_limit": 3 } }),
+        "the version from before the switch comes back with the switch it ran"
+    );
+
+    roll_back_to(ids[1].clone(), restored).await;
+    assert_eq!(
+        running_document(&trees, tenant(), store_id()),
+        serde_json::json!({ "tips_enabled": true }),
+        "a version published since is restored as it was, QR ordering off"
     );
 }
 
@@ -21779,7 +22507,7 @@ async fn published_deny_list(
         return Vec::new();
     };
     state
-        .layer(pos_cloud::config_tree::ConfigLevel::Store)
+        .layer(ConfigLevel::Store)
         .get("revoked_devices")
         .and_then(|node| node.get("device_ids"))
         .and_then(serde_json::Value::as_array)

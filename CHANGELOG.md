@@ -107,6 +107,65 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Changed
 
+- **QR ordering is one switch, `qr_ordering_enabled`**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 5). Three values decided whether a store took a guest's QR order: the capability flag
+  `qr_ordering_enabled`, which nothing read; `qr.enabled`, which only the cloud's guest page read,
+  and read as on when absent; and the QR channel in a published `channels` list, without which the
+  edge refused the order. The flag is the switch now, and the other two follow it.
+  - **The guest page and the edge read the switch.** While it is off, `POST /v1/qr/orders` answers
+    `404`, and a store whose configuration does not set it takes no guest order, which is the
+    flag's declared default. The edge refuses an order on the `QR` channel, relayed or sent to
+    `POST /v1/orders`, with `FAILED_PRECONDITION` naming the flag, where the store's configuration
+    switches QR ordering off: the switch published `false` with `qr.enabled` `false` beside it, as
+    the cloud on this release always publishes it. Where the configuration does not carry the
+    switch, the edge decides by the channel list alone, as before. So it does for a `false` beside
+    a `qr.enabled` that is not `false`, which is the flag as the console's capability form wrote it,
+    with every other flag, while nothing read it. The channel list still applies with the switch on.
+  - **`qr.enabled` and the QR channel follow it.** Every publish of the switch, of the `qr` node or
+    of the `channels` list, a cohort's and a scheduled one included, sets `qr.enabled` to the switch
+    and puts the `QR` channel in a published list while the switch is on, and takes it out while it
+    is off, so an edge on an earlier release agrees with it. What a list means does not change: a
+    store with no list is given none, an empty list stays empty, and a list holding only `QR` keeps
+    it. The publish preview shows what follows.
+  - **`PUT /admin/config/qr` no longer needs `enabled`.** Sent, it is written as the switch, so an
+    older console and a cohort copy made by one still do what they did. Left out, the node takes
+    the store's switch.
+  - **The console** offers the switch on Channels & payments, on a card above the QR guardrails,
+    which no longer carry an on and off. The channels card's QR box shows the switch, a cohort's
+    copy of a store's QR guardrails copies the guardrails only, and the Config screen's capability
+    form leaves the switch out, so a preset there cannot switch a store's QR ordering off.
+  - **A rollback** to a version published before this release gives it the switch the store ran
+    then, not the flag's value from when the flag did nothing. A version published since is
+    restored as it is.
+  - **Upgrade note:** the cloud and the stores can be upgraded in either order. An edge treats a
+    missing switch as before, and refuses QR orders only where its configuration switches them off,
+    so an edge that updates first takes what it took. At its first boot, before it serves, the
+    cloud sets every store's switch from what the store did, once, behind the `data_migrations`
+    marker `qr_ordering_one_switch`. A store took QR orders when its `qr.enabled` was not `false`
+    and its published list, if it had one, held `QR`. Each store whose switch, `qr.enabled` and list
+    did not already agree is published a new configuration version, which its edge pulls; no tree
+    row is written by SQL. A store that agreed and a store with nothing published are left alone. A
+    store the cloud cannot publish to is logged by tenant and store id (`could not publish a
+    store's QR ordering switch`): set its switch in Channels & payments. The run is recorded even
+    then, because run again it would read a store created since as one taking QR orders. A store
+    created from now on starts with QR ordering off, where before a store that had published no
+    `qr` node took guest orders once its codes were printed. Two shapes change, neither at the
+    guest page, which already refused them, and both only for a QR-channel order sent to
+    `POST /v1/orders`:
+    - a store whose guest page was off while its list named `QR` beside another channel has `QR`
+      taken out of the list and its switch published off, so such an order is refused at every
+      release;
+    - a store whose guest page was off with no list keeps no list, so an edge on an earlier
+      release still takes such an order. An edge on this release takes it too, unless the store's
+      configuration carries the flag, as it does where the capability form was ever published:
+      the flag is then off beside `qr.enabled` off, as it was or as the cloud publishes it, which
+      this edge reads as the switch off.
+
+    The raw layer editor (`PUT /admin/stores/{id}/config/{level}`) writes what it is given, and
+    nothing follows a switch written there. No route is removed, and no event, permission,
+    protocol or SQL migration changes.
+
 - **A role says which permissions it grants with approval**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 4). A role
   grants each permission either directly, which its holder acts on alone, or with approval, where

@@ -343,6 +343,16 @@ pub struct EdgeSession {
     pub granted: PermissionSet,
     /// The store's capability profile (§10).
     pub capabilities: CapabilityContext,
+    /// The capability flags the store's published configuration sets, each with the value it sets
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 5), read through [`Self::explicit`].
+    ///
+    /// [`Self::capabilities`] reads a flag the document leaves out as its declared default, which
+    /// cannot tell a store that chose a value from one that never chose. This records only what the
+    /// document says, so it is read from each document whole: one that sets no flag leaves it empty,
+    /// even where the profile keeps its last value. At most one entry per flag in
+    /// [`Capability::ALL`].
+    pub published_flags: BTreeMap<Capability, bool>,
     /// The store's display language, from the `locale` node
     /// ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)), or `None` when the store has
     /// set none.
@@ -546,6 +556,12 @@ pub struct EdgeSession {
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
     /// edge reads it from the published `qr` node so an operator can disable the hold.
     pub qr_staff_confirmation_required: bool,
+    /// The `qr` node's `enabled` as the store's published configuration sets it, or `None` where it
+    /// sets none. Not a switch: QR ordering's switch is the `qr_ordering_enabled` flag, and a cloud
+    /// that knows the switch publishes `enabled` equal to it (ADR-0160 decision 5). Read only to
+    /// tell the switch published off from the flag's `false` from before the switch
+    /// ([`Self::qr_ordering_switched_off`]).
+    pub qr_enabled_published: Option<bool>,
     /// The managed reason-code list this store validates a rejection against
     /// ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///
@@ -658,6 +674,7 @@ impl EdgeSession {
         Self {
             granted: Permission::ALL.iter().copied().collect(),
             capabilities: CapabilityContext::full_service(),
+            published_flags: BTreeMap::new(),
             currency: CurrencyCode::VND,
             // Zero, because the bootstrap currency is the đồng and the đồng has no subunit. A
             // *named* fallback for a named currency, not a default standing in for an unknown one:
@@ -706,6 +723,7 @@ impl EdgeSession {
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,
+            qr_enabled_published: None,
             reason_codes: PublishedReasonCodes::framework_default(),
             // No fee until a `fees` node is published: what every bill charged before it existed.
             fees: PublishedFees::default(),
@@ -836,6 +854,29 @@ impl EdgeSession {
         self.enabled_channels
             .as_ref()
             .is_none_or(|set| set.contains(&channel))
+    }
+
+    /// The value the store's published configuration sets for `capability`, or `None` where it sets
+    /// none, which [`Self::capabilities`] reads as the flag's declared default.
+    #[must_use]
+    pub fn explicit(&self, capability: Capability) -> Option<bool> {
+        self.published_flags.get(&capability).copied()
+    }
+
+    /// Whether the store's configuration switches QR ordering off, so that the intake refuses a QR
+    /// order (ADR-0160 decision 5).
+    ///
+    /// Only the switch published `false` does, with `qr.enabled` `false` beside it, which is how a
+    /// cloud that knows the switch always publishes it off. A configuration that does not carry the
+    /// switch decides by the channel list alone ([`Self::channel_enabled`]), as the edge did before
+    /// the switch, so an edge that updates before its cloud refuses nothing it took. Nor does a
+    /// `false` beside a `qr.enabled` that is not `false`: that is the flag as it was before the
+    /// switch, when the console's capability form published every flag, this one included, while
+    /// nothing read it and the store took QR orders.
+    #[must_use]
+    pub fn qr_ordering_switched_off(&self) -> bool {
+        self.explicit(Capability::QrOrdering) == Some(false)
+            && self.qr_enabled_published == Some(false)
     }
 
     /// Whether this store accepts `method` as tender (ADR-0080, M7). Same opt-in rule as

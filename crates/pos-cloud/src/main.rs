@@ -71,6 +71,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
+    // QR ordering's one switch (ADR-0160 decision 5): once, before anything serves, every store's
+    // switch is published from what it did. A store that could not be set is logged by id where it
+    // failed; the run aborts the boot only when the stores cannot be listed or the run recorded.
+    let one_switch = pos_cloud::qr_ordering::run_once(
+        &store.registry(),
+        &store.config_trees(),
+        &store.data_migrations(),
+        &SystemClock,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if let Some(report) = &one_switch.report {
+        tracing::info!(
+            published = report.published,
+            unchanged = report.unchanged,
+            unconfigured = report.unconfigured,
+            failed = report.failed.len(),
+            "set every store's QR ordering switch from what it did"
+        );
+    }
     // One pool, seven views of it: the event-store application layer, the materialised-rollup read
     // model the `/v1` dashboard answers from, the API-key store the `/v1` bearer check consults, the
     // super-admin store the `/admin` login and session guard use, the config-tree store the `/admin`
@@ -120,7 +140,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .with_sync_rate_limit(config.sync_max_requests, config.sync_window_secs)
     .with_trusted_proxy_hops(config.trusted_proxy_hops)
     .with_admin_setup_token(config.admin_setup_token.clone())
-    .with_internal_shared_secret(config.internal_shared_secret.clone());
+    .with_internal_shared_secret(config.internal_shared_secret.clone())
+    .with_qr_switch_since(one_switch.since);
 
     // The production ingest feed, if configured: a durable NATS cursor driving the same
     // `Cloud::ingest` the HTTP re-push target uses. Absent config leaves the cursor off, so the

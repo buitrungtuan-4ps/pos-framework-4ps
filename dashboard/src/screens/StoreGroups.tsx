@@ -181,8 +181,9 @@ async function copyArguments(
     if (!read) {
       return null;
     }
+    // The guardrails only. Whether QR ordering is on is the switch (ADR-0160 decision 5), copied
+    // with the capability switches; sent here as `enabled`, it would switch every member too.
     return {
-      enabled: read.enabled,
       staff_confirmation_required: read.staff_confirmation_required,
       per_table_limit: read.per_table_limit,
       rate_window_secs: read.rate_window_secs,

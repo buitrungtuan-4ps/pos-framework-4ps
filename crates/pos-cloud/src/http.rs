@@ -361,6 +361,9 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     /// The console audit recorder ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). Defaults to a
     /// no-op, so a route can always record unconditionally; the binary wires the real store in.
     audit: Arc<dyn AuditRecorder>,
+    /// When QR ordering got one switch ([`crate::qr_ordering::OneSwitch::since`]): a rollback to a
+    /// version published before then is settled. `None` restores every version as it is.
+    qr_switch_since: Option<pos_proto::Timestamp>,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -400,6 +403,7 @@ where
             orders_rate_limiter: self.orders_rate_limiter.clone(),
             trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
+            qr_switch_since: self.qr_switch_since,
         }
     }
 }
@@ -444,6 +448,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             ),
             trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
             audit: Arc::new(NoopAuditRecorder),
+            qr_switch_since: None,
         }
     }
 
@@ -582,6 +587,16 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub fn with_internal_shared_secret(mut self, secret: Option<InternalSecret>) -> Self {
         self.internal_shared_secret = secret;
+        self
+    }
+
+    /// Sets when QR ordering got one switch, which the binary reads from its one-time setting
+    /// ([`crate::qr_ordering::run_once`]): a rollback to a version published before then gives it
+    /// the switch it ran ([`crate::qr_ordering::settle`]). Left unset, a rollback restores every
+    /// version as it is.
+    #[must_use]
+    pub const fn with_qr_switch_since(mut self, since: pos_proto::Timestamp) -> Self {
+        self.qr_switch_since = Some(since);
         self
     }
 }
@@ -4785,7 +4800,8 @@ impl BatchNode for OriginsBatchNode {
     }
 }
 
-/// The `qr` node: whether QR ordering is on at each member, and the guardrails (ADR-0116).
+/// The `qr` node: the guardrails at each member (ADR-0116), and QR ordering's switch when the
+/// arguments name `enabled`.
 struct QrBatchNode;
 
 impl BatchNode for QrBatchNode {
@@ -10386,14 +10402,21 @@ fn vendor_policies_node(
 /// stripped off — which is precisely what makes this node batchable under ADR-0122 §4.
 #[derive(Debug, Clone, Deserialize)]
 struct QrGuardrailFields {
-    enabled: bool,
+    /// QR ordering's switch, for a caller that still sends it here. Optional: the switch is
+    /// `qr_ordering_enabled` (ADR-0160 decision 5), and `qr.enabled` follows it. A value sent here is
+    /// written as the switch, so an older console's checkbox and a cohort copy of a store's `qr`
+    /// node keep doing what they did; absent, the store's switch is kept.
+    #[serde(default)]
+    enabled: Option<bool>,
     staff_confirmation_required: bool,
     per_table_limit: u32,
     rate_window_secs: u64,
     business_hours: Option<QrBusinessHoursRequest>,
 }
 
-/// Compiles the `qr` node: whether QR ordering is on, and the guardrails around it (ADR-0116).
+/// Compiles the `qr` node: the guardrails around QR ordering (ADR-0116), and `enabled` when the
+/// caller sent one. The publish then sets `enabled` to the store's switch
+/// ([`crate::qr_ordering::align`]), so the node always carries it.
 #[expect(
     clippy::result_large_err,
     reason = "the refusal *is* an axum Response by design — the route's own, factored out so the \
@@ -10401,11 +10424,13 @@ struct QrGuardrailFields {
 )]
 fn qr_guardrail_node(fields: &QrGuardrailFields) -> Result<serde_json::Value, Response> {
     let mut node = serde_json::json!({
-        "enabled": fields.enabled,
         "staff_confirmation_required": fields.staff_confirmation_required,
         "per_table_limit": fields.per_table_limit,
         "rate_window_secs": fields.rate_window_secs,
     });
+    if let (Some(enabled), serde_json::Value::Object(map)) = (fields.enabled, &mut node) {
+        map.insert("enabled".to_owned(), serde_json::Value::Bool(enabled));
+    }
     if let Some(hours) = fields.business_hours.as_ref() {
         let mut out_of_range: Vec<(&str, &str)> = Vec::with_capacity(2);
         if hours.open_hour > 23 {
@@ -10460,7 +10485,10 @@ struct QrBusinessHoursRequest {
 struct PublishQrRequest {
     tenant_id: String,
     store_id: String,
-    enabled: bool,
+    /// QR ordering's switch, as [`QrGuardrailFields::enabled`] takes it: optional, and written as
+    /// the switch when sent.
+    #[serde(default)]
+    enabled: Option<bool>,
     staff_confirmation_required: bool,
     per_table_limit: u32,
     rate_window_secs: u64,
@@ -21174,7 +21202,11 @@ where
 ///
 /// `compose` may refuse: returning `Err` abandons the publish with that response, which is how a
 /// route reports a refusal it can only decide once it has seen the current node.
-async fn publish_config_nodes_with<Cfg, C, F>(
+///
+/// A write to the Store layer that sets QR ordering's switch, the `qr` node or the `channels` list
+/// also carries what the other two need to follow the switch ([`crate::qr_ordering::align`],
+/// ADR-0160 decision 5), composed here on the tree as just read, so a retry composes again.
+pub(crate) async fn publish_config_nodes_with<Cfg, C, F>(
     config_trees: &Cfg,
     clock: &C,
     tenant_id: TenantId,
@@ -21191,6 +21223,11 @@ where
     for _ in 0..CONDITIONAL_WRITE_ATTEMPTS {
         let loaded = load_tree_for_write(config_trees, tenant_id, store_id).await?;
         let nodes = compose(loaded.state.as_ref())?;
+        let nodes = if level == ConfigLevel::Store {
+            crate::qr_ordering::align(loaded.state.as_ref(), nodes)
+        } else {
+            nodes
+        };
         let layer = layer_with_nodes(loaded.state.as_ref(), level, &nodes);
         let mut tree = match loaded.state {
             Some(existing) => ConfigTree::from_state(store_id, CapabilityValidator, existing),
@@ -21757,11 +21794,16 @@ fn preview_config_node(
 /// quietly under-report a plan that writes two. Setting them all on the Store layer before composing
 /// also gives the honest answer for a plan whose nodes interact — the validator sees the candidate
 /// the publish would actually write, not one node of it.
+///
+/// That includes what QR ordering's switch makes follow it: a candidate that sets the switch, the
+/// `qr` node or the `channels` list is previewed with the nodes [`crate::qr_ordering::align`] adds,
+/// exactly as [`publish_config_nodes_with`] would write them.
 fn preview_config_nodes(
     state_before: Option<&ConfigTreeState>,
     nodes: &[(String, serde_json::Value)],
 ) -> Result<ConfigPreview, Vec<String>> {
     use serde_json::Value;
+    let nodes = crate::qr_ordering::align(state_before, nodes.to_vec());
     let empty = || Value::Object(serde_json::Map::new());
     // The four authored layers as stored (all empty when the store has no tree yet).
     let layers: [Value; 4] = state_before.map_or_else(
@@ -21783,7 +21825,7 @@ fn preview_config_nodes(
     }
     if let Value::Object(map) = &mut store_layer {
         for (node_key, node_value) in nodes {
-            map.insert(node_key.clone(), node_value.clone());
+            map.insert(node_key, node_value);
         }
     }
 
@@ -32292,7 +32334,14 @@ where
         tracing::error!("could not read OS entropy to mint a config version id");
         return service_unavailable("configuration");
     };
-    let Some(new_id) = tree.restore(version_id, new_version_id) else {
+    // A version from before QR ordering had one switch comes back with the switch it ran, and
+    // `qr.enabled` and the channel list agreeing with it (ADR-0160 decision 5).
+    let from_before_the_switch = crate::qr_ordering::predates(version_id, app.qr_switch_since);
+    let Some(new_id) = tree.restore_with(version_id, new_version_id, |document| {
+        if from_before_the_switch {
+            crate::qr_ordering::settle(document);
+        }
+    }) else {
         return not_found("config version");
     };
     match app

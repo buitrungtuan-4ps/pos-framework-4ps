@@ -22,6 +22,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use store_postgres::PostgresDataMigrations;
 use store_postgres::{
     AdminInviteRow, AdminLoginRow, AdminSessionRow, AdminUserRow, AlertRow, AreaRow, AssignmentRow,
     AuditLogRow, AuditOrder, BrandRow, CampaignRow, CatalogCourseRow, CatalogItemRow,
@@ -2866,6 +2867,33 @@ impl SettingsStore for PostgresSettings {
         PostgresSettings::delete(self, &tenant_id.to_string(), slot)
             .await
             .map_err(|error| SettingsStoreError::new(error.to_string()))
+    }
+}
+
+impl crate::data_migrations::DataMigrations for PostgresDataMigrations {
+    async fn recorded_time(
+        &self,
+        name: &str,
+    ) -> Result<Option<Timestamp>, crate::data_migrations::DataMigrationError> {
+        let unavailable = |error: String| crate::data_migrations::DataMigrationError::new(error);
+        Self::recorded_time(self, name)
+            .await
+            .map_err(|error| unavailable(error.to_string()))?
+            .map(|ms| {
+                Timestamp::from_milliseconds_since_epoch(ms)
+                    .map_err(|error| unavailable(error.to_string()))
+            })
+            .transpose()
+    }
+
+    async fn record(
+        &self,
+        name: &str,
+        at: Timestamp,
+    ) -> Result<(), crate::data_migrations::DataMigrationError> {
+        Self::record(self, name, at.as_milliseconds_since_epoch())
+            .await
+            .map_err(|error| crate::data_migrations::DataMigrationError::new(error.to_string()))
     }
 }
 
