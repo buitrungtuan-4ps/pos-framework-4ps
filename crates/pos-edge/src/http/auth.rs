@@ -267,6 +267,11 @@ pub(crate) struct SessionState {
     /// signed in. The till keeps the time, because what counts as a touch is what happens on its
     /// screen.
     idle_lock_seconds: u32,
+    /// The float the Shift screen fills in when a shift opens, in the store currency's minor unit,
+    /// from the store's `shift` node (ADR-0160 decision 2); `0` fills in nothing. A store fact like
+    /// the idle lock, sent whoever is signed in. The cashier may change it, and the shift opens with
+    /// what they send.
+    opening_float_minor: i64,
 }
 
 /// The ids of the permissions in `set`, sorted, as the session read reports them.
@@ -396,6 +401,7 @@ where
     let sign_in_ready = session.staff.sign_in_ready();
     let permissions_enforced = session.permissions_enforced;
     let idle_lock_seconds = session.session_settings.idle_lock_seconds();
+    let opening_float_minor = session.shift.opening_float_minor();
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
@@ -413,6 +419,7 @@ where
                 session.staff.permissions_with_approval_for(employee_id),
             ),
             idle_lock_seconds,
+            opening_float_minor,
         },
         None => SessionState {
             signed_in: false,
@@ -423,6 +430,7 @@ where
             permissions: Vec::new(),
             permissions_with_approval: Vec::new(),
             idle_lock_seconds,
+            opening_float_minor,
         },
     };
     Json(state).into_response()

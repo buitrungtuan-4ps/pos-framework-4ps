@@ -456,6 +456,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A store sets its opening float and whether the count is blind**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The Shift screen opened on an empty float field, and every count was blind.
+  - `shift.opening_float_minor` is a new setting: the float the Shift screen fills in when a shift
+    opens, in the store currency's minor unit, from `0` to `1000000000`, at the tenant, a brand, a
+    store group or one store. The cashier can change it before opening, and the shift opens with
+    the float they send. `0`, the default, fills in nothing. A float that is not a whole number of
+    the currency's main unit fills in nothing either, because the till's keypad types whole units.
+  - `shift.blind_close` is a new setting, on by default. Off, the edge also sends
+    `expected_amount` before the close: on opening, on a paid in or out, on
+    `GET /api/shifts/current` and on the count. The Shift screen then shows what the drawer should
+    hold beside the count field, and reads it again each time the screen opens. The variance still
+    appears only at the close.
+  - `GET /api/session` carries `opening_float_minor`. The register gains a unit,
+    `SETTING_UNIT_MINOR_UNITS`, which the console names as minor units.
+  - The console's Settings screen offers both, in English and Vietnamese, to the stores whose edge
+    honours them.
+  - **Upgrade note:** two additive fields on the `shift` node and a new unit, added to
+    `docs/snapshots/settings.txt` and `docs/configuration.md`. Nothing changes until a store sets
+    one: an empty float field and a blind count are the defaults, and an edge older than 0.14.1 is
+    not offered them and ignores them. No event, migration, permission or protocol change. A store
+    that turns the blind close off gives up the blind count as a fraud control
+    (`docs/pos-spec.md` §11 item 1).
+
 - **The console says what paper each printer takes, and whether it cuts it**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2). The edge took every printer to be 80 mm paper, 42 characters a line, with a cutter.

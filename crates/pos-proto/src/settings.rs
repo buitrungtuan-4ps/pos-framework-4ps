@@ -26,7 +26,7 @@ use crate::people::PublishedPermissions;
 use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
-use crate::shift::{NoShiftSelling, PublishedShift};
+use crate::shift::{self, NoShiftSelling, PublishedShift};
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
@@ -72,6 +72,10 @@ wire_enum! {
     Minutes = "MINUTES",
     /// A number of times or of things, which the setting's own name says — attempts, copies.
     Count = "COUNT",
+    /// An amount of money in the store currency's minor unit: đồng for VND, cents for USD
+    /// (`docs/naming-and-api.md` §3.2). A setting at the tenant may reach stores in more than one
+    /// currency, so the number is the store's own currency's, whichever that is.
+    MinorUnits = "MINOR_UNITS",
 }
 
 /// What a setting's value is, and what the register holds it to.
@@ -264,6 +268,40 @@ pub fn register() -> Vec<Setting> {
             summary: "Whether a till may seat a table, start a counter order or take a payment \
                       while no shift is open. `NO_SHIFT_SELLING_REFUSE` refuses each of them with \
                       `OPEN_SHIFT_REQUIRED` until a shift opens.",
+        },
+        Setting {
+            node: PublishedShift::NODE,
+            field: "opening_float_minor",
+            shape: SettingShape::Int {
+                min: *shift::OPENING_FLOAT_MINOR.start(),
+                max: *shift::OPENING_FLOAT_MINOR.end(),
+                unit: SettingUnit::MinorUnits,
+                default: PublishedShift::default().opening_float_minor(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The float the Shift screen fills in when a shift opens, in the store \
+                      currency's minor unit: `500000` is 500,000 đồng at a store in Vietnam. The \
+                      cashier can change it before opening the shift, and the shift opens with \
+                      what they send. `0` fills in nothing, as before. A float that is not a whole \
+                      number of the currency's main unit fills in nothing either, because the \
+                      till's keypad types whole units.",
+        },
+        Setting {
+            node: PublishedShift::NODE,
+            field: "blind_close",
+            shape: SettingShape::Bool {
+                default: PublishedShift::default().blind_close(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "Whether the count at the close of a shift is blind. On, the till says \
+                      nothing about what the drawer should hold until the shift closes, so the \
+                      cashier counts first. Off, the Shift screen shows the cash the drawer \
+                      should hold beside the count, and the variance still appears only at the \
+                      close.",
         },
         Setting {
             node: PublishedSession::NODE,
@@ -592,6 +630,7 @@ fn unit_phrase(unit: SettingUnit) -> &'static str {
         SettingUnit::Seconds => "a whole number of seconds",
         SettingUnit::Minutes => "a whole number of minutes",
         SettingUnit::Count => "a count",
+        SettingUnit::MinorUnits => "an amount in the store currency's minor unit",
     }
 }
 
@@ -929,6 +968,8 @@ mod tests {
                 let shift: PublishedShift = serde_json::from_value(document).ok()?;
                 match field {
                     "no_shift_selling" => Some(json!(shift.no_shift_selling().as_wire())),
+                    "opening_float_minor" => Some(json!(shift.opening_float_minor())),
+                    "blind_close" => Some(json!(shift.blind_close())),
                     _ => None,
                 }
             }

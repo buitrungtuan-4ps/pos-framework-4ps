@@ -105,6 +105,16 @@ session.sign_in_idle_timeout_minutes	scope=SETTING_SCOPE_STORE_GROUP
 session.sign_in_idle_timeout_minutes	scope=SETTING_SCOPE_TENANT
 session.sign_in_idle_timeout_minutes	since=0.14.1
 session.sign_in_idle_timeout_minutes	unit=SETTING_UNIT_MINUTES
+shift.blind_close
+shift.blind_close	default=true
+shift.blind_close	kind=SETTING_KIND_BOOL
+shift.blind_close	scope=SETTING_SCOPE_BRAND
+shift.blind_close	scope=SETTING_SCOPE_STORE
+shift.blind_close	scope=SETTING_SCOPE_STORE_GROUP
+shift.blind_close	scope=SETTING_SCOPE_TENANT
+shift.blind_close	since=0.14.1
+shift.blind_close	value=false
+shift.blind_close	value=true
 shift.no_shift_selling
 shift.no_shift_selling	default=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	kind=SETTING_KIND_CHOICE
@@ -116,3 +126,14 @@ shift.no_shift_selling	scope=SETTING_SCOPE_TENANT
 shift.no_shift_selling	since=0.14.1
 shift.no_shift_selling	value=NO_SHIFT_SELLING_ALLOW
 shift.no_shift_selling	value=NO_SHIFT_SELLING_REFUSE
+shift.opening_float_minor
+shift.opening_float_minor	default=0
+shift.opening_float_minor	kind=SETTING_KIND_INT
+shift.opening_float_minor	max=1000000000
+shift.opening_float_minor	min=0
+shift.opening_float_minor	scope=SETTING_SCOPE_BRAND
+shift.opening_float_minor	scope=SETTING_SCOPE_STORE
+shift.opening_float_minor	scope=SETTING_SCOPE_STORE_GROUP
+shift.opening_float_minor	scope=SETTING_SCOPE_TENANT
+shift.opening_float_minor	since=0.14.1
+shift.opening_float_minor	unit=SETTING_UNIT_MINOR_UNITS

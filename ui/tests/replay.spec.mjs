@@ -2397,6 +2397,70 @@ test("cash paid in and out moves what the close expects, and a reload keeps it",
   }
 });
 
+// A store's shift settings (ADR-0160 decision 2). The `shift-settings` store fills in a float of
+// 500,000₫ and shows what the drawer should hold at the count; every other store fills in nothing
+// and counts blind, as before the settings.
+test("a store's float is filled in, the cashier changes it, and the count shows what the drawer should hold", async ({
+  page,
+}) => {
+  const edge = await startEdge("shift-settings");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await expect(page.locator("#float")).toHaveValue("500000");
+
+    // The drawer holds something else today, so the cashier types what is there.
+    await page.locator("#float").fill("450000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
+
+    // A salad paid in cash (97,900₫ with its tax) moves it, and the Shift screen reads it again
+    // when it opens.
+    await navigateTo(page, "/");
+    await seatTable(page);
+    await addByName(page, "salad");
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 547,900₫.",
+    );
+
+    // The variance is still the close's alone.
+    await page.locator("#count").fill("547900");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed.locator(".text-ok")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a store that sets no float fills in nothing, and its count stays blind", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await expect(page.locator("#float")).toHaveValue("");
+    await page.locator("#float").fill("100000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator("#count")).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Once the bill is open the menu sells nothing, and says how to order more.
 //
 // A bill names the dishes it covers when it opens, so a dish rung onto the table afterwards was on no

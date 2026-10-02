@@ -461,6 +461,39 @@ describe("shared settings", () => {
     );
   });
 
+  // The opening float (ADR-0160 decision 2) counts money, in the store currency's minor unit,
+  // which a tenant-wide value may reach in more than one currency. Named as such, in both languages.
+  it("names the opening float in minor units, in the console's words", async () => {
+    settingsCatalogue.mockResolvedValue([
+      {
+        setting_key: "shift.opening_float_minor",
+        node: "shift",
+        field: "opening_float_minor",
+        kind: "SETTING_KIND_INT",
+        min: 0,
+        max: 1_000_000_000,
+        unit: "SETTING_UNIT_MINOR_UNITS",
+        default: 0,
+        scopes: ["SETTING_SCOPE_TENANT", "SETTING_SCOPE_STORE"],
+        since: "0.14.1",
+      },
+    ]);
+    await mount();
+    expect(await screen.findByText("Opening float")).toBeTruthy();
+    expect(
+      screen.getByText("Default: 0 minor units · Honoured from release 0.14.1"),
+    ).toBeTruthy();
+    expect(screen.getByText("From 0 minor units to 1,000,000,000 minor units.")).toBeTruthy();
+
+    cleanup();
+    setLocale("vi");
+    await mount();
+    expect(await screen.findByText("Tiền đầu ca")).toBeTruthy();
+    expect(
+      screen.getByText("Mặc định: 0 đơn vị nhỏ nhất · Có hiệu lực từ phiên bản 0.14.1"),
+    ).toBeTruthy();
+  });
+
   it("shows a whole number written here in its field, and in Vietnamese in its unit", async () => {
     settingsCatalogue.mockResolvedValue([WAIT_SECONDS]);
     listSettingValues.mockResolvedValue([

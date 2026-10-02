@@ -2049,6 +2049,30 @@ async fn the_session_read_says_when_the_till_locks() {
     assert_eq!(signed_out["idle_lock_seconds"], json!(120));
 }
 
+/// The session read tells the Shift screen what float to fill in (ADR-0160 decision 2): the
+/// store's `shift.opening_float_minor`, whoever is signed in, and `0` — nothing — where the store
+/// publishes none, as every Shift screen opened before.
+#[tokio::test]
+async fn the_session_read_says_what_float_the_shift_screen_fills_in() {
+    let store = a_store_where(|session| session).await;
+    let session = read(&store, "/api/session").await;
+    assert_eq!(
+        session["opening_float_minor"],
+        json!(0),
+        "a store that sets none fills in nothing"
+    );
+
+    let mut floated = (*store.edge.session()).clone();
+    floated.shift = pos_proto::shift::PublishedShift {
+        opening_float_minor: Some(500_000),
+        ..pos_proto::shift::PublishedShift::default()
+    };
+    store.edge.apply_session(floated);
+    let session = read(&store, "/api/session").await;
+    assert_eq!(session["signed_in"], json!(true));
+    assert_eq!(session["opening_float_minor"], json!(500_000));
+}
+
 /// The PIN lockout counts against the store's own numbers from its `session` node
 /// ([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
 /// read from the live configuration at each attempt: a number published while the store trades

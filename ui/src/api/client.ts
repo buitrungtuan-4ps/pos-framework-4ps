@@ -167,6 +167,10 @@ export interface SessionState {
   // `session.idle_lock_seconds` (ADR-0160); `0` never locks. Absent from an edge too old to send
   // it, which never locks either.
   idle_lock_seconds?: number;
+  // The float the Shift screen fills in when a shift opens, in the store currency's minor unit, from
+  // the store's `shift.opening_float_minor` (ADR-0160); `0` fills in nothing. Absent from an edge
+  // too old to send it, which fills in nothing either.
+  opening_float_minor?: number;
   // Whether the store decides with each person's own permissions (ADR-0158 decision 6). Absent or
   // false: every control works as before, whatever the two lists below say.
   permissions_enforced?: boolean;
