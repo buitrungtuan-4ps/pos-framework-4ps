@@ -421,6 +421,10 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     `ASSIGNMENT_SCOPE_STORE_GROUP` or `ASSIGNMENT_SCOPE_TENANT`) beside the `store_id` or
     `store_group_id` it names, and the `assignment.create` and `assignment.remove` audit entries
     record the same.
+  - **The People screen asks Where**: this store, one store group, or every store. Its list shows
+    where each assignment reaches, and removing a wider one says it leaves every store it reached.
+    It says when a store a wider assignment reached could not be published, and offers to publish
+    to it again; **Store groups** says the same after a membership change.
   - **Upgrade note:** migration `0077` adds the table `employee_scope_assignments`, with row-level
     security like `employee_store_assignments`, which it leaves untouched: every existing assignment
     is a one-store assignment and reads as before, and rolling back loses only the wider ones. The API

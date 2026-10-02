@@ -322,15 +322,24 @@ export function StoreGroups() {
     if (!subject) {
       return;
     }
+    // A store that joins or leaves a group some assignment names is published its staff at once
+    // (ADR-0158); one whose publish failed keeps its old roster until it is published again.
+    let failed = 0;
     void membership
-      .run(() =>
-        conditional(() =>
+      .run(async () => {
+        const saved = await conditional(() =>
           api.setStoreGroupMembers(tenantId(), subject.group_id, members(), subject.etag),
-        ),
-      )
+        );
+        failed = (saved.stores ?? []).filter(
+          (row) => row.outcome === "PERMISSIONS_PUBLISH_FAILED",
+        ).length;
+      })
       .then((saved) => {
         if (saved) {
           toast.ok(t("storeGroups.membersSaved", { count: String(members().length) }));
+          if (failed > 0) {
+            toast.error(t("people.publishFailedStores", { count: failed }));
+          }
           void cohorts.refetch();
         }
       });

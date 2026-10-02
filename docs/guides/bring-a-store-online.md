@@ -360,7 +360,9 @@ to assign — owner, manager, supervisor, cashier, server and cook, named in the
 was shown in — each granting what the permission catalogue's defaults say; rename, change or archive
 them there ([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md)). **Store groups** publishes one node to a whole set of shops at
 once ([ADR-0122](../adr/0122-a-store-group-is-a-delivery-cohort.md)), which is how the second and later
-stores of a brand skip most of this step.
+stores of a brand skip most of this step. People work the same way: someone assigned in **People** to
+every store is on a new store's roster from its first people publish, and someone assigned to a store
+group is on it as soon as the store joins the group, with no assignment of the store's own.
 
 **The permissions node is not optional and neither is the menu.** A freshly installed store boots with
 an *empty* roster and an *empty* catalogue. Without the permissions publish, every sign-in answers the

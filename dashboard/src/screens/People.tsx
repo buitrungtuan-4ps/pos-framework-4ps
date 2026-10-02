@@ -1,7 +1,8 @@
 // People & access (ADR-0070, Track M1), on the F2 CRUD kit. The operator's place to onboard a store's
 // employees, set their sign-in PIN, author role templates over the pos-core permission catalogue, and
-// assign people to a store with a role — all by name, no ULID typed. Tenant-scoped to the picker's
-// context; assignments also need a store chosen in the top bar.
+// assign people a role at a store, a store group or every store (ADR-0158 decision 3) — all by name,
+// no ULID typed. Tenant-scoped to the picker's context; assignments also need a store chosen in the
+// top bar, whose staff the card lists.
 //
 // This is the console's first T1 Restricted data (employee name, code, PIN). The PIN is set/reset,
 // never read: it is hashed server-side and this screen only ever learns whether one is set. Reading
@@ -15,11 +16,13 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import type {
   Assignment,
+  AssignmentTarget,
   Employee,
   Page,
   PermissionInfo,
   PermissionsPublishReport,
   RoleTemplate,
+  StoreGroup,
 } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -114,9 +117,13 @@ export function People() {
   // needed today, and they are different things to have said.
   const [roleCeiling, setRoleCeiling] = createSignal("");
 
-  // Assign form (store from the top-bar context).
+  // Assign form. "Where" is the top-bar store, one of the tenant's store groups, or every store
+  // (ADR-0158 decision 3).
   const [assignEmployee, setAssignEmployee] = createSignal("");
   const [assignRole, setAssignRole] = createSignal("");
+  const [assignWhere, setAssignWhere] = createSignal<AssignmentTarget["kind"]>("store");
+  const [assignGroup, setAssignGroup] = createSignal("");
+  const [groups, setGroups] = createSignal<StoreGroup[]>([]);
   // The assign picker searches the roster on the server rather than filtering a loaded copy of it
   // (ADR-0098, B3-4). `assignChoice` holds the whole chosen row, not just the id, so the picker can
   // name who is selected without going back to a list it no longer keeps.
@@ -209,12 +216,14 @@ export function People() {
     setError("");
     setBusy(true);
     try {
-      const [loadedRoles, loadedCatalogue] = await Promise.all([
+      const [loadedRoles, loadedCatalogue, loadedGroups] = await Promise.all([
         api.listRoles(tenantId()),
         api.permissionCatalogue(),
+        api.listStoreGroups(tenantId()),
       ]);
       setRoles(loadedRoles);
       setCatalogue(loadedCatalogue);
+      setGroups(loadedGroups);
       await loadRoster();
       await loadAssignments();
     } catch (caught) {
@@ -236,6 +245,7 @@ export function People() {
   // tenant's stores are not this one's to publish again.
   onScopedContext("tenant", () => {
     setUnpublished([]);
+    setAssignGroup("");
     void load();
   });
   // Reload just the assignments when the store selection changes.
@@ -247,6 +257,17 @@ export function People() {
   const assignmentLabel = (row: Assignment) =>
     row.employee_name ? `${row.employee_name} (${row.employee_code ?? ""})`.trim() : row.employee_id;
   const roleLabel = (id: string) => roles().find((role) => role.role_template_id === id)?.name ?? id;
+  // Where an assignment reaches, as its row shows it: this store, its group by name, or every store.
+  const scopeLabel = (row: Assignment) => {
+    if (row.scope_kind === "ASSIGNMENT_SCOPE_TENANT") {
+      return t("people.scope.tenant");
+    }
+    if (row.scope_kind === "ASSIGNMENT_SCOPE_STORE_GROUP") {
+      const id = row.store_group_id ?? "";
+      return groups().find((group) => group.group_id === id)?.name ?? id;
+    }
+    return t("people.scope.store");
+  };
 
   const createEmployee = async () => {
     const code = newCode().trim();
@@ -477,12 +498,25 @@ export function People() {
       setError(t("people.assignNeedsBoth"));
       return;
     }
+    const where = assignWhere();
+    if (where === "group" && !assignGroup()) {
+      setError(t("people.assignNeedsGroup"));
+      return;
+    }
+    const target: AssignmentTarget =
+      where === "group"
+        ? { kind: "group", groupId: assignGroup() }
+        : where === "tenant"
+          ? { kind: "tenant" }
+          : { kind: "store", storeId: storeId() };
     setBusy(true);
     try {
-      await api.createAssignment(tenantId(), assignEmployee(), storeId(), assignRole());
+      // One to a group or to every store publishes at once, and says how each store's went.
+      const created = await api.createAssignment(tenantId(), assignEmployee(), target, assignRole());
       clearAssignee();
       setAssignRole("");
       toast.ok(t("people.assigned"));
+      reportFailedStores(created.stores ? { stores: created.stores } : null);
       await loadAssignments();
     } catch (caught) {
       await fail(caught);
@@ -545,6 +579,29 @@ export function People() {
       .filter((role) => role.status === "active")
       .map((role) => ({ value: role.role_template_id, label: role.name })),
   );
+  // An archived group takes no new assignments; the server refuses one too.
+  const activeGroupOptions = createMemo(() =>
+    groups()
+      .filter((group) => group.status === "active")
+      .map((group) => ({ value: group.group_id, label: group.name })),
+  );
+  const whereOptions = () => [
+    { value: "store", label: t("people.scope.store") },
+    { value: "group", label: t("people.scope.group") },
+    { value: "tenant", label: t("people.scope.tenant") },
+  ];
+  // Removing a wider assignment offboards the person from every store it reached, so the
+  // confirmation says so.
+  const unassignMessage = () => {
+    const kind = pendingRemove()?.scope_kind;
+    if (kind === "ASSIGNMENT_SCOPE_TENANT") {
+      return t("people.unassignTenantMessage");
+    }
+    if (kind === "ASSIGNMENT_SCOPE_STORE_GROUP") {
+      return t("people.unassignGroupMessage");
+    }
+    return t("people.unassignMessage");
+  };
 
   // `sortField` is the server's token (`EmployeeSort`), `sortValue` the local comparator. Both are
   // given: the table is server-sorted, so only `sortField` is consulted, and `sortValue` is what the
@@ -879,6 +936,21 @@ export function People() {
                       onChange={setAssignRole}
                       placeholder={t("people.choose")}
                     />
+                    <SelectField
+                      label={t("people.where")}
+                      value={assignWhere()}
+                      options={whereOptions()}
+                      onChange={(value) => setAssignWhere(value as AssignmentTarget["kind"])}
+                    />
+                    <Show when={assignWhere() === "group"}>
+                      <SelectField
+                        label={t("people.storeGroup")}
+                        value={assignGroup()}
+                        options={activeGroupOptions()}
+                        onChange={setAssignGroup}
+                        placeholder={t("people.choose")}
+                      />
+                    </Show>
                     <Button disabled={busy()} onClick={() => void createAssignment()}>
                       {t("people.assign")}
                     </Button>
@@ -896,6 +968,13 @@ export function People() {
                       header: t("people.role"),
                       cell: (row: Assignment) => (
                         <span class="text-ink-muted">{roleLabel(row.role_template_id)}</span>
+                      ),
+                    },
+                    {
+                      key: "where",
+                      header: t("people.where"),
+                      cell: (row: Assignment) => (
+                        <span class="text-ink-muted">{scopeLabel(row)}</span>
                       ),
                     },
                   ]}
@@ -1090,7 +1169,7 @@ export function People() {
         <ConfirmDialog
           open={pendingRemove() !== null}
           title={t("people.unassignTitle")}
-          message={t("people.unassignMessage")}
+          message={unassignMessage()}
           confirmLabel={t("people.unassign")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}

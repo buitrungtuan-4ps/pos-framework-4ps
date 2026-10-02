@@ -17,6 +17,7 @@ import type {
   Alert,
   ApiKeySummary,
   Assignment,
+  AssignmentTarget,
   Area,
   AuditEntry,
   AuditFilter,
@@ -37,6 +38,7 @@ import type {
   ConfigNodes,
   ConfigVersion,
   CreateApiKeyResponse,
+  CreatedAssignment,
   CreatedId,
   DailyRevenue,
   DailyRollup,
@@ -386,6 +388,18 @@ async function requestVoidIfMatch(
   });
   if (!response.ok) {
     throw await failure(response);
+  }
+}
+
+// The request fields that name where a new assignment grants its role (ADR-0158 decision 3).
+function assignmentTargetFields(target: AssignmentTarget): Record<string, string> {
+  switch (target.kind) {
+    case "store":
+      return { store_id: target.storeId };
+    case "group":
+      return { store_group_id: target.groupId };
+    case "tenant":
+      return { scope_kind: "ASSIGNMENT_SCOPE_TENANT" };
   }
 }
 
@@ -959,21 +973,25 @@ export const api = {
       status: fields.status,
     }),
 
+  // Everyone who works at a store: its own assignments, its groups' and the tenant's, each with its
+  // scope (ADR-0158 decision 3).
   listAssignmentsByStore: (tenantId: string, storeId: string) =>
     requestJson<Assignment[]>(
       "GET",
       `/admin/assignments?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
+  // One store's assignment reaches the store when someone publishes; one to a group or to every
+  // store publishes at once, and answers how each store's publish went (ADR-0158 decision 7).
   createAssignment: (
     tenantId: string,
     employeeId: string,
-    storeId: string,
+    target: AssignmentTarget,
     roleTemplateId: string,
   ) =>
-    requestJson<CreatedId>("POST", "/admin/assignments", {
+    requestJson<CreatedAssignment>("POST", "/admin/assignments", {
       tenant_id: tenantId,
       employee_id: employeeId,
-      store_id: storeId,
+      ...assignmentTargetFields(target),
       role_template_id: roleTemplateId,
     }),
   // Publishes to the assignment's store at once, and answers how it went (ADR-0158 decision 7).
@@ -1225,14 +1243,19 @@ export const api = {
     ),
   // The whole membership, not a delta: the operator's mental model is a *set* ("these are the
   // airport shops"), and a delta API makes two admins' concurrent edits merge into a cohort neither
-  // of them chose. Under `If-Match` the second one is refused instead.
+  // of them chose. Under `If-Match` the second one is refused instead. `stores` reports each store
+  // that joined or left a group some assignment names, published its staff at once (ADR-0158).
   setStoreGroupMembers: (
     tenantId: string,
     groupId: string,
     storeIds: readonly string[],
     etag: ETag,
   ) =>
-    requestJsonIfMatch<{ store_ids: string[]; etag: ETag }>(
+    requestJsonIfMatch<{
+      store_ids: string[];
+      etag: ETag;
+      stores?: PermissionsPublishReport["stores"];
+    }>(
       "PUT",
       `/admin/store-groups/${encodeURIComponent(groupId)}/members`,
       etag,
