@@ -1604,6 +1604,8 @@
   "settings.fleetUnread": "Không đọc được phiên bản mỗi cửa hàng đang chạy, nên mọi cửa hàng được coi là chưa báo phiên bản: {reason}",
   "settings.group": "Nhóm cửa hàng",
   "settings.hidden": "Đã ẩn “{setting}” đối với {store}: cửa hàng đang chạy phiên bản {installed}, còn cài đặt này có hiệu lực từ phiên bản {since}.",
+  "settings.item.session.idle_lock_seconds.help": "Cài đặt bảo mật: thời gian một máy có thể không được chạm vào trước khi tự đăng xuất người đang dùng và khóa lại, cho đến khi họ nhập mã PIN để tiếp tục đúng màn hình đang dở. 0 là không bao giờ khóa. Màn hình bếp và quầy ra món không bao giờ khóa.",
+  "settings.item.session.idle_lock_seconds.title": "Khóa máy khi không được chạm vào",
   "settings.item.session.lockout_attempts.help": "Cài đặt bảo mật: số lần nhập sai PIN liên tiếp thì một người bị khóa, tính chung khi đăng nhập và khi quản lý duyệt. Không giá trị nào tắt được việc khóa.",
   "settings.item.session.lockout_attempts.title": "Số lần nhập sai PIN trước khi bị khóa",
   "settings.item.session.lockout_minutes.help": "Cài đặt bảo mật: thời gian một người bị khóa sau khi nhập sai PIN quá số lần cho phép. Không giá trị nào tắt được việc khóa.",

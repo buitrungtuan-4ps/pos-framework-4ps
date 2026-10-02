@@ -185,7 +185,7 @@ The framework hardcodes **no retention period** and makes no legal determination
 - **Queue numbers reset daily**, on the store's business date. They are a customer-facing call number for counter service and are a different counter from the store-lifetime, gapless receipt number (§5) — the two must never share an implementation.
 - **Bulk menu import** (CSV/Excel with preview, per-row errors, and column mapping) at brand creation — required for chains migrating from another POS.
 - **Employees belong to a tenant; roles are granted per store.** Working at two stores means two grants, one `employee_id`, one PIN.
-- **Device screen lock** after N idle minutes, unlocked by PIN.
+- **Device screen lock** after `session.idle_lock_seconds` with no touch, unlocked by PIN ([configuration register](configuration.md)). The till signs its person out on the store server and covers the screen, and their PIN opens it again where they were. `0`, the default, never locks, and a new store is given two minutes. The kitchen board and the pass never lock.
 - **Buyer details** on a bill (`buyer_name`, `buyer_tax_code`, `buyer_email`) are optional PII feeding the country module's corporate-invoice flow.
 - **Marketplace order containing a just-86'd item**: configurable per vendor — reject the whole order, or accept without the item and notify.
 - **Menu scheduling (dayparts)**: items and categories may be restricted to time windows and weekdays — this controls *whether an item is sold at all*, unlike happy-hour pricing which only changes the price. Configured per brand, overridable per store.

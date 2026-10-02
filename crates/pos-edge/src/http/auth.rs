@@ -257,6 +257,13 @@ pub(crate) struct SessionState {
     /// The permission ids the signed-in person holds only with approval, sorted: the till asks for
     /// an approver before sending the act.
     permissions_with_approval: Vec<&'static str>,
+    /// How many seconds an attended till may sit untouched before it signs its person out and
+    /// locks, from the store's `session` node
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
+    /// `0` never locks. A fact about the store rather than the person, so it is sent whoever is
+    /// signed in. The till keeps the time, because what counts as a touch is what happens on its
+    /// screen.
+    idle_lock_seconds: u32,
 }
 
 /// The ids of the permissions in `set`, sorted, as the session read reports them.
@@ -385,6 +392,7 @@ where
     let session = deps.edge.session();
     let sign_in_ready = session.staff.sign_in_ready();
     let permissions_enforced = session.permissions_enforced;
+    let idle_lock_seconds = session.session_settings.idle_lock_seconds();
     let state = match deps.sessions.employee_for(device_id, SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
@@ -401,6 +409,7 @@ where
             permissions_with_approval: permission_ids(
                 session.staff.permissions_with_approval_for(employee_id),
             ),
+            idle_lock_seconds,
         },
         None => SessionState {
             signed_in: false,
@@ -410,6 +419,7 @@ where
             permissions_enforced,
             permissions: Vec::new(),
             permissions_with_approval: Vec::new(),
+            idle_lock_seconds,
         },
     };
     Json(state).into_response()

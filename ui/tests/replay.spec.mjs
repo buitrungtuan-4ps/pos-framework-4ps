@@ -2844,6 +2844,104 @@ test("a till hears a new configuration and reads again what the person may do", 
   }
 });
 
+// The idle lock (ADR-0160 decision 2, `docs/pos-spec.md` §16). The `idle-lock` store publishes
+// `session.idle_lock_seconds` = 120, the value a new store is given, and the page's clock is the
+// test's, so two minutes pass in one call rather than in two minutes.
+
+/** Who the store server says is signed in on this device, read the way the till reads it. */
+const sessionRead = () =>
+  fetch("/api/session", {
+    headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+  }).then((response) => response.json());
+
+test("a till left untouched locks, signs its person out, and opens again with their PIN where they were", async ({
+  page,
+}) => {
+  const edge = await startEdge("idle-lock");
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const where = new URL(page.url()).pathname;
+
+    await page.clock.fastForward(119_000);
+    await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
+    await page.clock.fastForward(2_000);
+    await expect(page.locator('[data-outcome="locked"]')).toBeVisible();
+
+    // The store server has let the sign-in go, so the covered screen can do nothing.
+    await expect.poll(async () => (await page.evaluate(sessionRead)).signed_in).toBe(false);
+
+    // The person comes back. Their PIN alone opens the till, on the screen they left.
+    await expect(page.locator("#lock-code")).toHaveCount(0);
+    await page.locator("#lock-pin").fill(edge.staffPin);
+    await page.locator("#lock-submit").click();
+    await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
+    expect(new URL(page.url()).pathname).toBe(where);
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    expect((await page.evaluate(sessionRead)).signed_in).toBe(true);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a touch or a key puts the idle lock off", async ({ page }) => {
+  const edge = await startEdge("idle-lock");
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    await page.clock.fastForward(100_000);
+    await page.keyboard.press("Shift");
+    await page.clock.fastForward(100_000);
+    await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
+    await page.clock.fastForward(21_000);
+    await expect(page.locator('[data-outcome="locked"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("the kitchen board and the pass never lock, however long they are left", async ({ page }) => {
+  const edge = await startEdge("idle-lock");
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    for (const path of ["/kds", "/expo"]) {
+      await navigateTo(page, path);
+      await page.clock.fastForward(10 * 60_000);
+      await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
+      expect((await page.evaluate(sessionRead)).signed_in, `${path} stays signed in`).toBe(true);
+    }
+
+    // It is the screen that never locks, not the device: back on the floor, the lock applies.
+    await navigateTo(page, "/");
+    await page.clock.fastForward(121_000);
+    await expect(page.locator('[data-outcome="locked"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a store that publishes no idle lock never locks", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.clock.install();
+    await pair(page, edge);
+    await signIn(page, edge);
+
+    await page.clock.fastForward(10 * 60_000);
+    await expect(page.locator('[data-outcome="locked"]')).toHaveCount(0);
+    expect((await page.evaluate(sessionRead)).signed_in).toBe(true);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("every flow is replayed except the ones that say why they cannot be", () => {
   expect(skipped.map((declared) => declared.task).sort()).toEqual(
     [

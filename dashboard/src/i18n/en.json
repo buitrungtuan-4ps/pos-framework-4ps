@@ -1604,6 +1604,8 @@
   "settings.fleetUnread": "Could not read which release each store runs, so every store counts as not having reported one: {reason}",
   "settings.group": "Store group",
   "settings.hidden": "{setting} is hidden for {store}: it runs release {installed}, and this setting is honoured from {since}.",
+  "settings.item.session.idle_lock_seconds.help": "A security setting: how long a till may sit with no touch before it signs its person out and locks, until their PIN opens it again on the screen they left. 0 never locks. The kitchen board and the pass never lock.",
+  "settings.item.session.idle_lock_seconds.title": "Lock a till left untouched",
   "settings.item.session.lockout_attempts.help": "A security setting: how many wrong PINs in a row lock a person out, counted across sign-in and a manager's approval together. No value switches the lockout off.",
   "settings.item.session.lockout_attempts.title": "Wrong PINs before a lockout",
   "settings.item.session.lockout_minutes.help": "A security setting: how long a person stays locked out after too many wrong PINs. No value switches the lockout off.",

@@ -2012,6 +2012,42 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
     assert_eq!(signed_out["permissions"], json!([]));
 }
 
+/// The session read tells the till when it locks (ADR-0160): the store's `idle_lock_seconds`,
+/// whoever is signed in, and `0` — never — where the store publishes none, as every till ran before.
+#[tokio::test]
+async fn the_session_read_says_when_the_till_locks() {
+    let store = a_store_where(|session| session).await;
+    let session = read(&store, "/api/session").await;
+    assert_eq!(
+        session["idle_lock_seconds"],
+        json!(0),
+        "a store that sets none never locks"
+    );
+
+    let mut locking = (*store.edge.session()).clone();
+    locking.session_settings = pos_proto::session::PublishedSession {
+        idle_lock_seconds: Some(120),
+        ..pos_proto::session::PublishedSession::default()
+    };
+    store.edge.apply_session(locking);
+    let session = read(&store, "/api/session").await;
+    assert_eq!(session["signed_in"], json!(true));
+    assert_eq!(session["idle_lock_seconds"], json!(120));
+
+    // Signed out, the till still learns it: the lock is the store's, not the person's.
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/session/sign-out",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let signed_out = read(&store, "/api/session").await;
+    assert_eq!(signed_out["signed_in"], json!(false));
+    assert_eq!(signed_out["idle_lock_seconds"], json!(120));
+}
+
 /// The PIN lockout counts against the store's own numbers from its `session` node
 /// ([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
 /// read from the live configuration at each attempt: a number published while the store trades
