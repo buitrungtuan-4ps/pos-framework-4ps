@@ -57,3 +57,8 @@
 **Vulnerability:** Webhook SSRF validation did not check `2001:1::/32`, which holds the PCP (RFC 7723) and TURN (RFC 8155) anycast addresses, so those destinations fell through `classify_v6` as public unicast addresses.
 **Learning:** `2001:1::/32` lies in the IETF Protocol Assignments block `2001::/23` (RFC 2928). Its anycast addresses reach a nearby network service, never a webhook receiver. A range's name and RFC come from the IANA IPv6 special-purpose registry, not from memory.
 **Prevention:** Check `first == 0x2001 && second == 0x0001` (`2001:1::/32`) in `classify_v6`, and cite the registry's name for the range.
+
+## 2026-09-29 - [SSRF IPv6 AMT Anycast Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check `2001:3::/32`, which holds Automatic Multicast Tunneling (AMT) anycast addresses (RFC 7450), allowing non-globally-routable anycast IPv6 destinations to fall through `classify_v6` as public unicast addresses.
+**Learning:** `2001:3::/32` lies in the IETF Protocol Assignments block `2001::/23` (RFC 2928) and carries AMT anycast addresses that reach network infrastructure rather than valid webhook endpoints.
+**Prevention:** Check `first == 0x2001 && second == 0x0003` (`2001:3::/32`) in `classify_v6` alongside other IETF protocol assignment anycast blocks.
