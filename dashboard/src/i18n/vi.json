@@ -1596,6 +1596,7 @@
   "permission.inventory.stocktake.perform": "Kiểm kho",
   "permission.inventory.waste.record": "Ghi nhận hao hụt",
   "permission.menu.item.edit": "Sửa món và giá trên thực đơn",
+  "permission.reports.takings.view": "Xem doanh thu hôm nay của cửa hàng",
   "permission.sales.item.mark_unavailable": "Báo hết món hoặc mở bán lại",
   "permission.sales.item.open": "Thêm món tự nhập tên và giá",
   "permission.sales.line.add": "Thêm món vào đơn",

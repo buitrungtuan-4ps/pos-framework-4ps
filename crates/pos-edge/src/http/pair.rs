@@ -421,8 +421,7 @@ where
 fn may_manage_devices<S>(edge: &Edge<S>, actor: Actor) -> bool {
     edge.session()
         .staff
-        .permissions_for(actor.employee_id)
-        .is_some_and(|granted| granted.contains(Permission::ManageDevices))
+        .grants(actor.employee_id, Permission::ManageDevices)
 }
 
 /// The refusal a signed-in person without the permission gets, saying which act it was.

@@ -1219,6 +1219,46 @@ async fn a_receipt_is_copied_over_http_from_today_s_bills() {
     assert_eq!(listed[0]["copies"], 2);
 }
 
+/// The day's takings (ADR-0160 decision 2): what the bills settled today came to, and how many, to
+/// a person whose own role grants `reports.takings.view`. Nobody else reads them, even at a store
+/// that does not enforce each person's own permissions, which every store here is: takings are
+/// confidential, and there was no takings read for the store-wide set to keep working.
+#[tokio::test]
+async fn the_days_takings_are_read_by_whoever_holds_the_permission_and_nobody_else() {
+    let (app, token) = app_with_permissions(None, PermissionSet::EMPTY).await;
+    let (status, reason) = send_for_reason(app, &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(reason.as_deref(), Some("PERMISSION_DENIED"));
+
+    let (app, token) =
+        app_with_permissions(None, PermissionSet::EMPTY.with(Permission::ViewTakings)).await;
+    let (status, nothing) = send(app.clone(), &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::OK, "{nothing}");
+    assert_eq!(nothing["takings_amount"], json!(vnd(0)));
+    assert_eq!(nothing["bill_count"], 0);
+
+    for (seed, method) in [(781, "PAYMENT_METHOD_CASH"), (782, "PAYMENT_METHOD_CARD")] {
+        settle_a_table_with(&app, &token, TableId::new(Ulid::from_u128(seed)), method).await;
+    }
+    let (status, takings) = send(app, &token, "GET", "/api/reports/takings", None).await;
+    assert_eq!(status, StatusCode::OK, "{takings}");
+    assert_eq!(
+        takings["takings_amount"],
+        json!(vnd(330_000)),
+        "both bills, whatever they were paid with"
+    );
+    assert_eq!(takings["bill_count"], 2);
+    // The store's figure and nothing finer: no person, no till, no shift.
+    let mut fields: Vec<&str> = takings
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    fields.sort_unstable();
+    assert_eq!(fields, ["bill_count", "business_date", "takings_amount"]);
+}
+
 #[tokio::test]
 async fn a_refusal_names_itself_in_a_header_a_till_can_translate() {
     let (app, token) = app().await;

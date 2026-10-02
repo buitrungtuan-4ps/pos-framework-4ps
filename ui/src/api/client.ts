@@ -47,6 +47,7 @@ import type {
   ReprintResponse,
   SettleRequest,
   SettledBill,
+  TakingsResponse,
   ShiftResponse,
   SplitRequest,
   SplitResponse,
@@ -366,6 +367,9 @@ export const api = {
   // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
   // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
   settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),
+  // What the store has taken today (ADR-0160): `403` unless the person's own role grants
+  // `reports.takings.view`, whether or not the store enforces each person's own set.
+  takings: () => request<TakingsResponse>("GET", "/api/reports/takings"),
   reprintReceipt: (billId: string) =>
     request<ReprintResponse>("POST", `/api/bills/${billId}/receipt/reprint`),
 

@@ -953,6 +953,59 @@ mod tests {
         assert_eq!(granted, flagged);
     }
 
+    /// Migration 0079 gave `reports.takings.view` to every role that closes a shift directly and
+    /// grants a PIN-flagged permission directly, from a literal list of the catalogue's PIN-flagged
+    /// permissions as they were then, in byte order and once each (ADR-0160 decision 2). A
+    /// PIN-flagged permission added since is named here with the migration that grants it, and the
+    /// two together are the catalogue's `pin_required` set, so a new one can neither widen 0079's
+    /// rule silently nor leave it reading a list that no longer says who approves.
+    #[test]
+    fn the_takings_grant_lists_exactly_the_pin_flagged_permissions() {
+        const MIGRATION_0079: &str = include_str!(
+            "../../adapters/store-postgres/migrations/0079_approvers_who_close_a_shift_see_takings.sql"
+        );
+        let open = MIGRATION_0079
+            .find("ARRAY[")
+            .expect("the grant's literal list")
+            + "ARRAY[".len();
+        let close = open
+            + MIGRATION_0079[open..]
+                .find(']')
+                .expect("the list is closed");
+        let literal: Vec<&str> = MIGRATION_0079[open..close]
+            .split(',')
+            .map(|item| item.trim().trim_matches('\''))
+            .collect();
+        let mut sorted = literal.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(literal, sorted, "0079's list is in byte order, once each");
+
+        // Each PIN-flagged permission added after 0079, and the migration that grants it. None yet.
+        let later: [(&str, &str); 0] = [];
+        for (id, migration) in later {
+            assert!(
+                migration.contains(&format!("'{id}'")),
+                "the migration that grants {id} names it"
+            );
+            assert!(!literal.contains(&id), "{id} is listed once");
+        }
+        let mut listed: Vec<&str> = literal
+            .iter()
+            .copied()
+            .chain(later.iter().map(|(id, _)| *id))
+            .collect();
+        listed.sort_unstable();
+        let mut flagged: Vec<&str> = Permission::ALL
+            .iter()
+            .map(|permission| permission.meta())
+            .filter(|meta| meta.pin_required)
+            .map(|meta| meta.id)
+            .collect();
+        flagged.sort_unstable();
+        assert_eq!(listed, flagged);
+    }
+
     /// The route's check and the console's catalogue read the same flag.
     #[test]
     fn a_permission_is_pin_flagged_exactly_when_the_catalogue_says_so() {

@@ -2944,6 +2944,51 @@ test("a store that does not enforce each person's own permissions hides nothing"
   }
 });
 
+// What the store has taken today (ADR-0160 decision 2): one figure for the store and how many bills,
+// on the Today screen, to a person whose own role grants `reports.takings.view` — which the demo
+// employee's does, holding every permission — and to nobody else, even where the store does not
+// enforce each person's own permissions, as no store here does.
+test("the Today screen shows the day's takings to a person whose role grants them", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    // A salad paid in cash: 97,900₫ with its tax.
+    await seatTable(page);
+    await addByName(page, "salad");
+    await page.locator('[data-step="takePayment"]').click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/today");
+    const tile = page.locator('[data-outcome="today-takings"]');
+    await expect(tile).toContainText("97,900₫");
+    await expect(tile).toContainText("Takings today");
+    await expect(tile).toContainText("1 bill");
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("the Today screen shows no takings to a person whose role does not grant them", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await aSessionThatSays(page, false, () => []);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="today-shift"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="today-takings"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A role changed in the console reaches an open till with the configuration, without a new sign-in:
 // the edge says `config_applied` on the live link (ADR-0160 decision 7) and the till reads the
 // session again. The frame is given the next position on the stream, so it is heard as itself.

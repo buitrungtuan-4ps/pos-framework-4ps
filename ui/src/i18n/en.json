@@ -392,6 +392,8 @@
   "today.recent_bills": "Recent bills",
   "today.reprint": "Reprint",
   "today.shift": "Shift",
+  "today.takings": "Takings today",
+  "today.takings_bills": "{count, plural, one {# bill} other {# bills}}",
   "today.title": "Today",
   "version.behind_detail": "The app expects {required} or later; this store server is running {running}. Selling carries on as normal — tell whoever looks after the store servers.",
   "version.behind_title": "This till is newer than the store server"

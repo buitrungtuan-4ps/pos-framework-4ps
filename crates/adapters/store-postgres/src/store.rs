@@ -301,6 +301,13 @@ const MIGRATION_0077: &str = include_str!("../migrations/0077_employee_scope_ass
 /// decision 2).
 const MIGRATION_0078: &str = include_str!("../migrations/0078_device_paper.sql");
 
+/// Every role that exists, closes a shift directly and grants a PIN-flagged permission directly is
+/// given, once, `reports.takings.view`, and no other role is: the approvers who close shifts, as a new
+/// tenant's are ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0079: &str =
+    include_str!("../migrations/0079_approvers_who_close_a_shift_see_takings.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -671,6 +678,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0078)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0079)
             .await
             .map_err(unavailable)
     }

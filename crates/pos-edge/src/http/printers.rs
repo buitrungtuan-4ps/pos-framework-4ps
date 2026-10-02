@@ -81,11 +81,10 @@ where
         return bad_request("a printer id is a ULID");
     };
     let session = edge.session();
-    let may_manage = session
+    if !session
         .staff
-        .permissions_for(actor.employee_id)
-        .is_some_and(|granted| granted.contains(Permission::ManageDevices));
-    if !may_manage {
+        .grants(actor.employee_id, Permission::ManageDevices)
+    {
         return (
             StatusCode::FORBIDDEN,
             [(crate::http::ERROR_REASON_HEADER, "PERMISSION_DENIED")],

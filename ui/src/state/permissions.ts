@@ -37,6 +37,7 @@ export type PermissionId =
   | "cash.movement.record"
   | "cash.shift.close"
   | "cash.shift.open"
+  | "reports.takings.view"
   | "sales.item.mark_unavailable"
   | "sales.line.add"
   | "sales.line.fire"
@@ -62,6 +63,8 @@ interface Held {
   enforced: boolean;
   direct: ReadonlySet<string>;
   withApproval: ReadonlySet<string>;
+  // What the person's own roles grant directly, whatever the switch says: what `holdsOwn` reads.
+  own: ReadonlySet<string>;
 }
 
 const NOTHING: ReadonlySet<string> = new Set();
@@ -70,16 +73,20 @@ const [held, setHeld] = createSignal<Held>({
   enforced: false,
   direct: NOTHING,
   withApproval: NOTHING,
+  own: NOTHING,
 });
 
-// Takes what a session read says. Both lists are kept only where the store enforces them: elsewhere
-// they are what the person's roles say, not what the edge decides with.
+// Takes what a session read says. The two lists `can` reads are kept only where the store enforces
+// them: elsewhere they are what the person's roles say, not what the edge decides with. What the
+// roles grant directly is kept whatever the switch, for `holdsOwn`: for those acts it is what the
+// edge decides with in every store.
 export function adoptSession(session: SessionState): void {
   const enforced = session.permissions_enforced === true;
   setHeld({
     enforced,
     direct: enforced ? new Set(session.permissions ?? []) : NOTHING,
     withApproval: enforced ? new Set(session.permissions_with_approval ?? []) : NOTHING,
+    own: new Set(session.permissions ?? []),
   });
 }
 
@@ -92,7 +99,12 @@ export function adoptSession(session: SessionState): void {
 // Nobody is signed in any more, so nobody holds anything: what the edge reports with nobody signed
 // in. The switch stays as the store last said, and a store that does not enforce still hides nothing.
 export function forgetPermissions(): void {
-  setHeld((current) => ({ enforced: current.enforced, direct: NOTHING, withApproval: NOTHING }));
+  setHeld((current) => ({
+    enforced: current.enforced,
+    direct: NOTHING,
+    withApproval: NOTHING,
+    own: NOTHING,
+  }));
 }
 
 // Whether the store decides with each person's own set.
@@ -105,6 +117,15 @@ export function permissionsEnforced(): boolean {
 export function can(id: PermissionId): boolean {
   const { enforced, direct, withApproval } = held();
   return !enforced || direct.has(id) || (withApproval.has(id) && TAKES_APPROVER.has(id));
+}
+
+// Whether the person's own roles grant this directly, whatever the store's switch says: for what the
+// edge decides from the person's own role in every store, and the day's takings is one
+// (ADR-0160 decision 2). Takings are confidential and nobody saw them at a till before, so a store
+// that does not enforce yet has nothing here to keep working, and the till shows them only to whom
+// the edge will serve them. False before the first session read lands.
+export function holdsOwn(id: PermissionId): boolean {
+  return held().own.has(id);
 }
 
 // Whether they may do at least one of these: a screen with several acts is a destination for anybody
