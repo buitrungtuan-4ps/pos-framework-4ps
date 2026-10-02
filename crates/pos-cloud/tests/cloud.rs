@@ -30790,7 +30790,8 @@ async fn a_new_store_is_given_the_owners_values_once() {
             NO_SHIFT_SELLING,
             "session.idle_lock_seconds",
             "permissions.enforced",
-            "printing.receipt_language"
+            "printing.receipt_language",
+            "qr.table_order"
         ])
     );
     assert_eq!(
@@ -30814,6 +30815,11 @@ async fn a_new_store_is_given_the_owners_values_once() {
         tenant_layer_node(&config_trees, third, "printing").await,
         Some(serde_json::json!({ "receipt_language": "RECEIPT_LANGUAGE_COUNTRY" })),
         "a new store prints its receipts in its country's language (the owner, 2026-10-01)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "qr").await,
+        Some(serde_json::json!({ "table_order": "TABLE_ORDER_JOIN" })),
+        "a new store's guest orders join the table's order (the owner, 2026-10-01)"
     );
 
     let again = router
@@ -31044,6 +31050,93 @@ async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_
     assert_eq!(
         tenant_layer_node(&config_trees, first, "printing").await,
         Some(serde_json::json!({ "receipt_printed_on_settle": false }))
+    );
+}
+
+/// `qr.table_order` (ADR-0160 item 2) is a setting on a node the console's QR guardrails also
+/// publish. Written on the Tenant layer, it reaches the store beside the guardrails the Store layer
+/// holds, and leaves them as they are.
+#[tokio::test]
+async fn the_qr_table_order_reaches_the_qr_node_beside_its_guardrails() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    let catalogue = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+            .await
+            .expect("route the catalogue"),
+    )
+    .await;
+    let table_order = catalogue["settings"]
+        .as_array()
+        .expect("a list")
+        .iter()
+        .find(|setting| setting["setting_key"] == "qr.table_order")
+        .cloned()
+        .expect("the setting is listed");
+    assert_eq!(table_order["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(
+        table_order["default"], "TABLE_ORDER_SEPARATE",
+        "a store that sets nothing keeps a guest's order separate, as before"
+    );
+    assert_eq!(table_order["preset"], "TABLE_ORDER_JOIN");
+    assert_eq!(
+        table_order["values"],
+        serde_json::json!(["TABLE_ORDER_SEPARATE", "TABLE_ORDER_JOIN"])
+    );
+    assert_eq!(table_order["since"], "0.14.1");
+
+    let guardrails = serde_json::json!({
+        "enabled": true,
+        "staff_confirmation_required": true,
+        "per_table_limit": 5,
+    });
+    config_trees.seed_store_layer(
+        tenant(),
+        first,
+        serde_json::json!({ "qr": guardrails.clone() }),
+    );
+    let written = router
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "qr.table_order",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": "TABLE_ORDER_JOIN",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+
+    let tree = config_trees
+        .load(tenant(), first)
+        .await
+        .expect("load")
+        .expect("a tree");
+    assert_eq!(
+        tree.record.layers[0]["qr"],
+        serde_json::json!({ "table_order": "TABLE_ORDER_JOIN" })
+    );
+    assert_eq!(
+        tree.record.layers[2]["qr"], guardrails,
+        "the guardrails untouched"
+    );
+    assert_eq!(
+        sent_to(&tree.record)["qr"],
+        serde_json::json!({
+            "enabled": true,
+            "staff_confirmation_required": true,
+            "per_table_limit": 5,
+            "table_order": "TABLE_ORDER_JOIN",
+        }),
+        "the store is sent one `qr` node with both"
     );
 }
 

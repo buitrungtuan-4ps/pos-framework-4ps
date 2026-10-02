@@ -627,6 +627,37 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    // A guest's QR order that joined the table's order (ADR-0160 item 2), as it arrived or when
+    // staff confirmed it: its lines are the table's order's from now on, the table holds that
+    // order, and the guest's own order is off every board — the same fold the edge makes.
+    case "sales.table.merged": {
+      const target = str(payload, "target_order_id");
+      const merged = str(payload, "merged_order_id");
+      if (target !== null && merged !== null && target !== merged) {
+        setState(
+          produce((draft) => {
+            let moved = false;
+            for (const line of Object.values(draft.lines)) {
+              if (line.orderId === merged) {
+                line.orderId = target;
+                moved = true;
+              }
+            }
+            if (moved) {
+              draft.liveOrders[target] = true;
+            }
+            draft.liveOrders[merged] = false;
+            const table = draft.orderTable[merged];
+            if (table !== undefined && draft.tableOrder[table] === merged) {
+              draft.tableOrder[table] = target;
+              draft.orderTable[target] = table;
+            }
+            delete draft.orderTable[merged];
+          }),
+        );
+      }
+      break;
+    }
     case "sales.order_line.added": {
       const line = readLine(payload);
       if (line !== null) {

@@ -456,6 +456,44 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A guest's QR order can join the table's order: the `qr.table_order` setting**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  item 2, confirmed by the owner on 2026-10-01). A guest's QR order was always an order of its own
+  on the table, beside the waiter's, with its own bill.
+  - **`TABLE_ORDER_JOIN`** puts a guest's lines on the table's open order, so the table has one
+    order, one bill and one send to the kitchen, and a joined line is fired, voided, billed and split
+    like a waiter's. It joins as it arrives where nobody has to confirm a guest's order, and when
+    staff confirm it where they do; until then it waits as its own order, and a refused one never
+    joined. **`TABLE_ORDER_SEPARATE`** keeps the guest's order its own, as before.
+  - **A table whose order cannot take a line** keeps the guest's order separate, as before: its
+    bill is open, split or paid. A table nobody seated gets the guest's order as its order, and the
+    next guest's joins it.
+  - **A joined line keeps the guest's price**, from the `QR` book, and the bill taxes it and charges
+    fees at the table's order's channel, the dining room's for a seated table, rather than at the
+    `QR` channel's rates. Where a store's `QR` rates or fees differ from the dining room's, a joined
+    guest pays the dining room's.
+  - **In the log** the guest's order is still opened on the `QR` channel with its lines, and the
+    edge now writes `sales.table.merged` (target: the table's order; merged: the guest's), in the
+    same transaction as the lines or as the staff confirmation. Each line keeps the order it was
+    ordered on, and a submission keeps its own order id, so a retry is answered as before
+    (`created: false`, the same `order_id`). The folded order ends at the merge and never waits
+    for staff, even if the store turns the hold on later. No screen shows a line's channel, so a
+    joined line looks like the waiter's.
+  - **Upgrade note:** a new setting, `qr.table_order` on the `qr` node (`docs/configuration.md`,
+    `docs/snapshots/settings.txt`). Its default is `TABLE_ORDER_SEPARATE`, so an upgrade changes
+    nothing until someone sets it. A store created from now on is given `TABLE_ORDER_JOIN` by the
+    new-store values. It is honoured from release 0.14.1: the console hides it for a store on an
+    earlier release, and counts such stores where it is set more widely, and an earlier edge ignores
+    the field. The `qr` node is typed in `pos-proto` for this field alone
+    (`pos_proto::qr::PublishedQr`), and the guardrails are read as before. `sales.table.merged` was
+    already in the event catalogue (`docs/snapshots/events.txt`), and nothing wrote it: its payload
+    is unchanged, and `PROTOCOL_VERSION` does not change. A consumer that groups
+    `sales.order_line.added` by order should apply it; a bill names the lines it covers, so a bill
+    read from the log needs nothing from it. A till page loaded before its edge updated shows a
+    joined guest's lines apart until it next reloads the open orders. A guest's order that has
+    ended, by a release with nothing sold or by joining, now never waits for staff. No route,
+    permission or migration changes.
+
 - **POS Station asks whether its token is still accepted on a route of its own**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8, step 1).
   The Station checked its pairing with `GET /api/pair/devices`, which hands every paired device the

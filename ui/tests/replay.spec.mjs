@@ -2218,6 +2218,78 @@ test("a guest's QR order shows its table by the floor's label, and the queue ref
   }
 });
 
+// A guest's QR order that joins the table's order (ADR-0160 item 2, `docs/pos-spec.md` §13). The
+// edge writes the guest's line on the guest's own order and then `sales.table.merged`, which puts
+// it on the table's, and the till folds the two as they come. The frames are given the next
+// positions on the stream, so they are heard as themselves, and the edge is asked nothing about
+// them: what is on screen is the till's own fold of the merge, which is what this measures.
+test("a guest's line that joins the table's order is on the table's order as it arrives", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    let link = null;
+    let last = null;
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        link = socket;
+        socket.connectToServer().onMessage((message) => {
+          const { stream_id: streamId, sequence } = JSON.parse(String(message));
+          last = typeof sequence === "number" ? { streamId, sequence } : last;
+          socket.send(message);
+        });
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const lines = page.locator('[data-outcome="line-added"]');
+    await expect(lines).toHaveCount(1);
+    const live = await page.evaluate(() =>
+      fetch("/api/orders/live", {
+        headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+      }).then((response) => response.json()),
+    );
+    const tables = live[0].order_id;
+    const guests = "01J0000000000000000000GUES";
+    const next = (step) =>
+      last === null ? {} : { stream_id: last.streamId, sequence: last.sequence + step };
+
+    link.send(
+      JSON.stringify({
+        type: "event",
+        event_type: "sales.order_line.added",
+        payload: {
+          order_id: guests,
+          order_line_id: "01J0000000000000000000LINE",
+          display_name: "Guest's iced tea",
+          quantity: { milli: 1000 },
+          line_total: { currency_code: "VND", amount_minor: 39_500 },
+          note_present: false,
+        },
+        ...next(1),
+      }),
+    );
+    // On the guest's own order, which this table does not show.
+    await expect(page.getByText("Guest's iced tea")).toHaveCount(0);
+
+    link.send(
+      JSON.stringify({
+        type: "event",
+        event_type: "sales.table.merged",
+        payload: { target_order_id: tables, merged_order_id: guests },
+        ...next(2),
+      }),
+    );
+    await expect(lines).toHaveCount(2);
+    await expect(page.getByText("Guest's iced tea")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A manager voids a bill on a till with no keyboard at all.
 //
 // The void, the fired-line void and the discount each asked for the manager's badge and PIN in
