@@ -151,6 +151,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_delete_fee,
         crate::http::admin_effective_fees,
         crate::http::admin_publish_fees,
+        crate::http::admin_preview_fees,
         crate::http::admin_list_releases,
         crate::http::admin_create_release,
         crate::http::admin_read_release,

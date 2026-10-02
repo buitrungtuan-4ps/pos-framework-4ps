@@ -20,6 +20,8 @@
 //!   published, as the menu is compiled when it is published (ADR-0159 decision 1), so the edge
 //!   needs no category model;
 //! - what a store must hold for a rule to apply there, [`StoreFacts`] and [`faults_at`];
+//! - a sample bill as a store would assemble it with its rules, [`sample_bill`], which the console
+//!   shows before a rule is saved (ADR-0159's accepted consequences);
 //! - the form a rule is stored and read in, [`authored_json`] and [`rule_from_authored`].
 //!
 //! A fee rule is pricing configuration (T2): a code, a name, a rate or an amount, the items and
@@ -32,12 +34,16 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Deserialize;
 
+use pos_core::billing::{BillInput, BillLine, BillTotals, ClassBase, assemble};
+use pos_core::error::DomainError;
+use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_proto::MenuBook;
 use pos_proto::enums::SalesChannel;
 use pos_proto::fees::{FeeItems, FeeKind, FeeTax, PublishedFee, PublishedFees};
 use pos_proto::ids::{FeeId, MenuItemId, TenantId};
 use pos_proto::locale::TaxRateTable;
-use pos_proto::money::CurrencyCode;
+use pos_proto::money::{CurrencyCode, Money, Rounding};
+use pos_proto::quantity::Quantity;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::{Open, WireEnum};
@@ -423,7 +429,8 @@ pub fn for_store(
 // --- What a store must hold for a rule to apply ---------------------------------------------------
 
 /// What a store's configuration says that a fee rule has to agree with: the currency it bills in,
-/// the tax rates it holds, and the items on its menu.
+/// the tax rates it holds, and the items on its menu; and, for a sample bill, how it rounds and
+/// whether its prices include their tax.
 ///
 /// Each is absent while the store has not been published that node, and nothing is checked against
 /// a fact the store does not have: a store with no `tax` node has no menu either, because a menu
@@ -433,6 +440,11 @@ pub struct StoreFacts {
     currency: Option<CurrencyCode>,
     tax_rates: Option<TaxRateTable>,
     menu: Option<MenuBook>,
+    /// The `locale` node's `prices_include_tax`, read as the edge reads it: absent is `false`.
+    prices_include_tax: bool,
+    /// The `locale` node's `cash_rounding_increment`, read as the edge reads it: absent, zero or
+    /// negative is no cash rounding.
+    cash_rounding_increment: Option<i64>,
 }
 
 impl StoreFacts {
@@ -441,14 +453,22 @@ impl StoreFacts {
     /// is no fact, which is how the edge reads it too.
     #[must_use]
     pub fn from_document(document: &serde_json::Value) -> Self {
+        let locale = document.get("locale");
         Self {
-            currency: document
-                .get("locale")
+            currency: locale
                 .and_then(|locale| locale.get("currency_code"))
                 .and_then(serde_json::Value::as_str)
                 .and_then(|code| CurrencyCode::parse(code).ok()),
             tax_rates: parsed(document.get("tax")),
             menu: parsed(document.get("menu")),
+            prices_include_tax: locale
+                .and_then(|locale| locale.get("prices_include_tax"))
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            cash_rounding_increment: locale
+                .and_then(|locale| locale.get("cash_rounding_increment"))
+                .and_then(serde_json::Value::as_i64)
+                .filter(|increment| *increment > 0),
         }
     }
 
@@ -563,6 +583,147 @@ fn charged_on(published: &PublishedFee, rates: &TaxRateTable) -> BTreeSet<SalesC
     } else {
         known_channels(&published.channels).collect()
     }
+}
+
+// --- A sample bill ------------------------------------------------------------------------------
+
+/// The most lines a sample bill takes: a bill a person can read on one screen, and an explicit
+/// bound on what one request can ask the cloud to price.
+pub const MOST_SAMPLE_LINES: usize = 50;
+
+/// One line of a sample bill: an item from the store's menu, and how many.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SampleLine {
+    /// The item, which the store's menu must sell on the bill's channel.
+    pub menu_item_id: MenuItemId,
+    /// How many.
+    pub quantity: Quantity,
+}
+
+/// A sample bill, assembled as the store would assemble it: each line priced from its menu, and the
+/// totals from [`assemble`] with the store's own fee rules, tax table and rounding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SampleBill {
+    /// The lines, priced as an order line is priced at the store ([`reprice_line`]).
+    pub lines: Vec<PricedLine>,
+    /// The bill's totals: the fee lines, the tax per class and the total due.
+    pub totals: BillTotals,
+}
+
+/// Why a sample bill could not be assembled.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SampleBillError {
+    /// The store has not been published the node a bill needs: `locale` for its currency, `tax`
+    /// for its rates, or `menu` for its prices.
+    #[error("the store has no `{0}` node published, so it cannot price a bill yet")]
+    NotPublished(&'static str),
+    /// A line the store cannot price, for the reason the store would refuse it.
+    #[error("{0}")]
+    Line(RepriceError),
+    /// The bill's figures do not assemble.
+    #[error("{0}")]
+    Assemble(DomainError),
+}
+
+/// Assembles a sample bill on `channel` at a store with `facts`, charging the `fees` node it would
+/// be sent ([`for_store`]).
+///
+/// Nothing here is a second implementation of the bill: each line is priced by [`reprice_line`],
+/// the function an inbound order's lines are priced by, and the totals are [`assemble`]'s, given
+/// what the edge gives it. That is the rules in force for a bill opening on the channel
+/// ([`PublishedFees::in_force`]), no bill-level discount or service charge, the store's cash
+/// rounding and tax posture from its `locale` node, and half-up rounding, as the edge's bill does.
+///
+/// # Errors
+///
+/// [`SampleBillError::NotPublished`] for a store with no currency, tax table or menu;
+/// [`SampleBillError::Line`] for a line its menu does not sell on the channel, cannot sell now, or
+/// has no tax rate for; and [`SampleBillError::Assemble`] when the totals do not assemble, which
+/// is what a bill at the store would answer too.
+pub fn sample_bill(
+    facts: &StoreFacts,
+    channel: SalesChannel,
+    lines: &[SampleLine],
+    fees: &PublishedFees,
+) -> Result<SampleBill, SampleBillError> {
+    let currency = facts
+        .currency
+        .ok_or(SampleBillError::NotPublished("locale"))?;
+    let rates = facts
+        .tax_rates
+        .as_ref()
+        .ok_or(SampleBillError::NotPublished("tax"))?;
+    let menu = facts
+        .menu
+        .as_ref()
+        .ok_or(SampleBillError::NotPublished("menu"))?;
+    let catalog = menu.catalog_for(channel);
+    let priced: Vec<PricedLine> = lines
+        .iter()
+        .map(|line| {
+            reprice_line(
+                catalog,
+                rates,
+                channel,
+                &RequestedLine {
+                    menu_item_id: line.menu_item_id,
+                    quantity: line.quantity,
+                    modifier_menu_item_ids: Vec::new(),
+                    quoted_unit_price: None,
+                },
+            )
+        })
+        .collect::<Result<_, _>>()
+        .map_err(SampleBillError::Line)?;
+    let mut class_bases: Vec<ClassBase> = Vec::new();
+    for line in &priced {
+        match class_bases
+            .iter_mut()
+            .find(|base| base.tax_class_id == line.tax_class_id)
+        {
+            Some(base) => {
+                base.amount = base
+                    .amount
+                    .checked_add(line.line_total)
+                    .map_err(|error| SampleBillError::Assemble(DomainError::Money(error)))?;
+            }
+            None => class_bases.push(ClassBase {
+                tax_class_id: line.tax_class_id,
+                amount: line.line_total,
+            }),
+        }
+    }
+    let bill_lines: Vec<BillLine> = priced
+        .iter()
+        .map(|line| BillLine {
+            menu_item_id: line.menu_item_id,
+            quantity: line.quantity,
+            net: line.line_total,
+            tax_class_id: line.tax_class_id,
+        })
+        .collect();
+    let fee_rules = fees.in_force(channel);
+    let totals = assemble(&BillInput {
+        currency_code: currency,
+        class_bases: &class_bases,
+        bill_discount: Money::zero(currency),
+        comps: Money::zero(currency),
+        service_charge: Money::zero(currency),
+        service_charge_taxable: true,
+        service_charge_tax_class: None,
+        rates,
+        sales_channel: channel,
+        cash_rounding_increment: facts.cash_rounding_increment,
+        rounding_mode: Rounding::HalfUp,
+        prices_include_tax: facts.prices_include_tax,
+        fee_rules: &fee_rules,
+        lines: &bill_lines,
+    })
+    .map_err(SampleBillError::Assemble)?;
+    Ok(SampleBill {
+        lines: priced,
+        totals,
+    })
 }
 
 // --- The form a rule is stored and read in --------------------------------------------------------
@@ -1197,5 +1358,175 @@ mod resolving {
         assert!(document.get("item_category_ids").is_none());
         let (_, categories) = rule_from_authored(&document.to_string()).expect("decode the rule");
         assert!(categories.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod sampling {
+    //! A sample bill, as a store with a menu, a tax table and a currency would assemble it.
+
+    use pos_core::menu::RepriceError;
+    use pos_proto::enums::SalesChannel;
+    use pos_proto::fees::{FeeItems, FeeKind, PublishedFees};
+    use pos_proto::ids::{FeeId, MenuItemId, TaxClassId};
+    use pos_proto::locale::{TaxRate, TaxRateTable};
+    use pos_proto::money::{CurrencyCode, Money};
+    use pos_proto::quantity::Quantity;
+    use pos_proto::text::DisplayName;
+    use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
+    use pos_proto::{MenuBook, MenuCatalog, MenuEntry};
+
+    use super::contract::rule;
+    use super::{
+        CategoryItems, FeeScope, SampleBillError, SampleLine, StoreFacts, compile, sample_bill,
+    };
+
+    fn item(n: u128) -> MenuItemId {
+        MenuItemId::new(Ulid::from_u128(0x1000 + n))
+    }
+
+    fn class() -> TaxClassId {
+        TaxClassId::new(Ulid::from_u128(0x2001))
+    }
+
+    fn vnd(amount: i64) -> Money {
+        Money::new(CurrencyCode::VND, amount)
+    }
+
+    fn line(n: u128, units: i64) -> SampleLine {
+        SampleLine {
+            menu_item_id: item(n),
+            quantity: Quantity::from_whole(units).expect("a quantity"),
+        }
+    }
+
+    /// A store billing in đồng at 8 % on dine-in, selling a pizza and a lemonade.
+    fn facts() -> StoreFacts {
+        let menu = MenuBook::new().with(
+            SalesChannel::DineIn,
+            MenuCatalog::new()
+                .with(MenuEntry::new(
+                    item(1),
+                    DisplayName::new("Margherita"),
+                    vnd(95_000),
+                    class(),
+                ))
+                .with(MenuEntry::new(
+                    item(3),
+                    DisplayName::new("Lemonade"),
+                    vnd(30_000),
+                    class(),
+                )),
+        );
+        let tax = TaxRateTable::new().with(
+            class(),
+            SalesChannel::DineIn,
+            TaxRate::from_basis_points(800),
+        );
+        StoreFacts::from_document(&serde_json::json!({
+            "locale": { "currency_code": "VND", "cash_rounding_increment": 0 },
+            "tax": serde_json::to_value(&tax).expect("encode the table"),
+            "menu": serde_json::to_value(&menu).expect("encode the menu"),
+        }))
+    }
+
+    /// The store's `fees` node with a 5 % fee on every line.
+    fn five_percent() -> PublishedFees {
+        let service = rule(
+            FeeScope::Tenant,
+            "tenant",
+            FeeId::new(Ulid::from_u128(1)),
+            "SERVICE",
+        );
+        PublishedFees {
+            fees: vec![compile(&service, &CategoryItems::default())],
+        }
+    }
+
+    #[test]
+    fn a_sample_bill_charges_the_stores_fees_on_its_own_prices_and_tax() {
+        let bill = sample_bill(
+            &facts(),
+            SalesChannel::DineIn,
+            &[line(1, 2), line(3, 1)],
+            &five_percent(),
+        )
+        .expect("a bill");
+        assert_eq!(
+            bill.lines
+                .iter()
+                .map(|line| line.line_total)
+                .collect::<Vec<_>>(),
+            vec![vnd(190_000), vnd(30_000)],
+            "each line priced from the store's menu"
+        );
+        let totals = bill.totals;
+        assert_eq!(totals.subtotal, vnd(220_000));
+        let [fee] = totals.fee_lines.as_slice() else {
+            panic!("one fee line: {:?}", totals.fee_lines);
+        };
+        assert_eq!(fee.amount, vnd(11_000), "5 % of the lines");
+        assert_eq!(
+            totals.tax_total,
+            vnd(18_480),
+            "8 % of the lines and the fee, which follows its lines"
+        );
+        assert_eq!(fee.tax, vnd(880));
+        assert_eq!(totals.service_charge, vnd(11_000));
+        assert_eq!(totals.total_due, vnd(249_480));
+    }
+
+    #[test]
+    fn a_fee_for_another_channel_or_a_paused_fee_is_not_charged() {
+        let mut fees = five_percent();
+        if let Some(fee) = fees.fees.first_mut() {
+            fee.channels = vec![Open::from_known(SalesChannel::Delivery)];
+        }
+        let bill =
+            sample_bill(&facts(), SalesChannel::DineIn, &[line(1, 1)], &fees).expect("a bill");
+        assert!(bill.totals.fee_lines.is_empty());
+
+        let mut paused = five_percent();
+        if let Some(fee) = paused.fees.first_mut() {
+            fee.active = false;
+            fee.kind = Open::from_known(FeeKind::AmountPerUnit);
+            fee.item_scope = Open::from_known(FeeItems::All);
+        }
+        let bill =
+            sample_bill(&facts(), SalesChannel::DineIn, &[line(1, 1)], &paused).expect("a bill");
+        assert!(bill.totals.fee_lines.is_empty());
+        assert_eq!(bill.totals.total_due, vnd(102_600));
+    }
+
+    #[test]
+    fn a_line_the_store_does_not_sell_and_a_store_with_nothing_published_are_refused() {
+        assert_eq!(
+            sample_bill(
+                &facts(),
+                SalesChannel::DineIn,
+                &[line(2, 1)],
+                &five_percent()
+            ),
+            Err(SampleBillError::Line(RepriceError::UnknownItem(item(2))))
+        );
+        assert!(matches!(
+            sample_bill(
+                &facts(),
+                SalesChannel::Takeaway,
+                &[line(1, 1)],
+                &five_percent()
+            ),
+            Err(SampleBillError::Line(RepriceError::UnknownItem(_)))
+        ));
+        assert_eq!(
+            sample_bill(
+                &StoreFacts::default(),
+                SalesChannel::DineIn,
+                &[line(1, 1)],
+                &five_percent()
+            ),
+            Err(SampleBillError::NotPublished("locale"))
+        );
     }
 }
