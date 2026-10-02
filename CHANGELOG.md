@@ -397,6 +397,39 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **An assignment reaches one store, a store group or every store**
+  ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3). A
+  person can be given a role at every store of a store group
+  ([ADR-0122](docs/adr/0122-a-store-group-is-a-delivery-cohort.md)), whichever stores it holds at
+  the time, or at every store of the tenant, one opened later included, as well as at one store. A
+  store's `permissions` node lists everyone whose assignments reach it, once each, with the union of
+  their roles and the highest of their ceilings.
+  - **`POST /admin/assignments` names exactly one place**: `store_id`, `store_group_id`, or
+    `scope_kind` `ASSIGNMENT_SCOPE_TENANT`. Anything else is refused `400`, naming each field at
+    fault. A group the tenant does not have, another tenant's included, is `404`, and one it has
+    archived `409`. A person holds at most one assignment per store, one per group and one
+    tenant-wide.
+  - **A wider assignment publishes at once.** Creating or removing an assignment to a group or to
+    every store publishes `permissions` to every open store it reaches before it answers; the create
+    answers `201` with `stores` beside the `id`. Archiving a person or a role now also reaches the
+    stores their group and tenant-wide assignments reach. `PUT /admin/store-groups/{group_id}/members`
+    publishes to each open store that joins or leaves a group an assignment names, and answers with
+    `stores`. A new assignment to one store still reaches it when someone publishes.
+  - **`GET /admin/assignments?store_id=`** lists every assignment that reaches the store, and the
+    route also lists by `store_group_id`, or every tenant-wide assignment with
+    `scope_kind=ASSIGNMENT_SCOPE_TENANT`. Each row carries `scope_kind` (`ASSIGNMENT_SCOPE_STORE`,
+    `ASSIGNMENT_SCOPE_STORE_GROUP` or `ASSIGNMENT_SCOPE_TENANT`) beside the `store_id` or
+    `store_group_id` it names, and the `assignment.create` and `assignment.remove` audit entries
+    record the same.
+  - **Upgrade note:** migration `0077` adds the table `employee_scope_assignments`, with row-level
+    security like `employee_store_assignments`, which it leaves untouched: every existing assignment
+    is a one-store assignment and reads as before, and rolling back loses only the wider ones. The API
+    change is additive: a one-store row keeps its `store_id` and gains `scope_kind`, and a row of a
+    wider scope has no `store_id`. A listing by store now includes the group and tenant-wide
+    assignments that reach it, so a console tab from before this release lists a wider assignment at
+    each store like a one-store one, and removing it there removes it from every store. No event,
+    permission or protocol change.
+
 - **Reports show each fee under its code** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
   decision 4).
   - The revenue rollup folds each settled bill's `fee_lines` into the day's `by_fee`: per fee

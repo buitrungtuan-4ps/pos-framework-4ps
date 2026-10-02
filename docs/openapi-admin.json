@@ -3163,7 +3163,7 @@
           "store groups"
         ],
         "summary": "A super-admin replaces a group's membership.",
-        "description": "Every id is checked against the tenant's own stores before anything is written. An id that names\nno store of this tenant is a `422` rather than a stored row, because the failure it otherwise\nproduces is invisible: the cohort looks right on screen, and every batch quietly reports one more\n`skipped` store than the operator expects, forever.",
+        "description": "Every id is checked against the tenant's own stores before anything is written. An id that names\nno store of this tenant is a `422` rather than a stored row, because the failure it otherwise\nproduces is invisible: the cohort looks right on screen, and every batch quietly reports one more\n`skipped` store than the operator expects, forever.\n\nA group an assignment names changes who works at each store that joins or leaves it, so each\nsuch store that is open is published its `permissions` node once the membership is saved\n([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)\ndecision 7), and the answer's `stores` says how each went. The membership before the write, and\nwhether an assignment names the group, are read first, so a failed read refuses a write that has\nnot happened.",
         "operationId": "admin_set_store_group_members",
         "parameters": [
           {
@@ -3187,7 +3187,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The membership as stored, deduplicated, with the group's new ETag"
+            "description": "The membership as stored, deduplicated, with the group's new ETag, and `stores`: when an assignment names the group, how the `permissions` publish went at each open store that joined or left it (ADR-0158), and empty otherwise"
           },
           "400": {
             "description": "group_id, tenant_id or a store id is not a ULID",
@@ -3250,7 +3250,7 @@
             }
           },
           "503": {
-            "description": "The store-group store or the registry is unreachable",
+            "description": "The store-group store, the registry or the people store is unreachable",
             "content": {
               "application/json": {
                 "schema": {

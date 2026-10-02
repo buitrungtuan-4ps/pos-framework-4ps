@@ -213,10 +213,11 @@ use crate::ota::{
 };
 use crate::paging::{MAX_PAGE_LIMIT, MAX_PAGE_OFFSET, Page, PageRequest, PageRequestError};
 use crate::people::{
-    Assignment, AssignmentId, AssignmentStore, Employee, EmployeeId, EmployeeListFilter,
-    EmployeeSort, EmployeeStore, EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate,
-    PermissionInfo, RoleTemplate, RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate,
-    is_known_permission, is_pin_flagged_permission, permission_catalogue,
+    Assignment, AssignmentId, AssignmentScope, AssignmentScopeKind, AssignmentStore,
+    AssignmentStoreError, Employee, EmployeeId, EmployeeListFilter, EmployeeSort, EmployeeStore,
+    EmployeeUpdate, NewAssignment, NewEmployee, NewRoleTemplate, PermissionInfo, RoleTemplate,
+    RoleTemplateId, RoleTemplateStore, RoleTemplateUpdate, is_known_permission,
+    is_pin_flagged_permission, permission_catalogue,
 };
 use crate::people_compiler::compile_permissions;
 use crate::qr::{TableTokenSecret, mint_table_token};
@@ -3893,9 +3894,84 @@ struct StoreGroupState<Grp, Reg, Cfg, A, C> {
     config_trees: Cfg,
     /// The node kinds a batch may publish, built once in `main.rs` — see [`batch_nodes`].
     nodes: Arc<Vec<Arc<dyn BatchNode>>>,
+    /// Who works through each group, told when a store joins or leaves one (ADR-0158).
+    staff: Arc<dyn GroupStaff>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+}
+
+/// What a change to a group's membership asks of the people side
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decisions 3 and 7): an assignment that names the group reaches each store it holds, so a store
+/// that joins or leaves the group gains or loses those people, and is told at once.
+///
+/// A trait object for the reason [`GroupMembership`] is one, from the other side: the store-group
+/// handlers would otherwise all carry the people store's type for the one route that reads it.
+trait GroupStaff: Send + Sync {
+    /// Whether any assignment names the group.
+    fn names_group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<bool, AssignmentStoreError>>;
+
+    /// Publishes `permissions` to each store, in turn, with the group as the cause the trail
+    /// records, and reports how each went.
+    fn publish_to<'a>(
+        &'a self,
+        context: &'a AdminContext,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        stores: &'a BTreeSet<StoreId>,
+    ) -> BoxFuture<'a, Vec<PermissionsPublishResult>>;
+}
+
+/// [`GroupStaff`] over the people store, with what a `permissions` publish writes through.
+struct PeopleOfGroups<P, Cfg, C> {
+    people: P,
+    config_trees: Cfg,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+}
+
+impl<P, Cfg, C> GroupStaff for PeopleOfGroups<P, Cfg, C>
+where
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync,
+    Cfg: ConfigTreeStore + Send + Sync,
+    C: ClockSource + Send + Sync,
+{
+    fn names_group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<bool, AssignmentStoreError>> {
+        Box::pin(async move {
+            AssignmentStore::list_for_group(&self.people, tenant_id, group_id)
+                .await
+                .map(|named| !named.is_empty())
+        })
+    }
+
+    fn publish_to<'a>(
+        &'a self,
+        context: &'a AdminContext,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+        stores: &'a BTreeSet<StoreId>,
+    ) -> BoxFuture<'a, Vec<PermissionsPublishResult>> {
+        Box::pin(async move {
+            let cause = group_id.to_string();
+            PermissionsPublisher {
+                people: &self.people,
+                config_trees: &self.config_trees,
+                clock: &self.clock,
+                audit: &self.audit,
+            }
+            .publish_all(context, tenant_id, stores, ("store_group_id", &cause))
+            .await
+        })
+    }
 }
 
 /// A store group on the wire, with its membership.
@@ -3948,11 +4024,16 @@ struct SetStoreGroupMembersRequest {
 ///
 /// Ids are server-minted: a batch names its group forever in `config_batches`, so a client that
 /// could choose one could collide with a cohort's history.
-pub fn store_group_router<Grp, Reg, Cfg, A, C>(
+///
+/// `people` is the roster a membership change reaches: a store that joins or leaves a group some
+/// assignment names is published its `permissions` node at once
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+pub fn store_group_router<Grp, Reg, Cfg, P, A, C>(
     groups: Grp,
     registry: Reg,
     config_trees: Cfg,
     nodes: Vec<Arc<dyn BatchNode>>,
+    people: P,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -3961,9 +4042,16 @@ where
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Reg: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    P: EmployeeStore + RoleTemplateStore + AssignmentStore + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
+    let staff = Arc::new(PeopleOfGroups {
+        people,
+        config_trees: config_trees.clone(),
+        clock: clock.clone(),
+        audit: Arc::clone(&audit),
+    });
     Router::new()
         .route(
             "/admin/store-groups",
@@ -3995,6 +4083,7 @@ where
             registry,
             config_trees,
             nodes: Arc::new(nodes),
+            staff,
             admin,
             clock,
             audit,
@@ -4253,14 +4342,16 @@ where
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
     ),
     responses(
-        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag"),
+        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
+                                      when an assignment names the group, how the `permissions` publish went at each open store \
+                                      that joined or left it (ADR-0158), and empty otherwise"),
         (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "No such group in this tenant", body = crate::openapi_admin::ErrorResponse),
         (status = 412, description = "If-Match is absent, or names a version the group has moved past", body = crate::openapi_admin::ErrorResponse),
         (status = 422, description = "More than 200 stores, or an id that names no store of this tenant", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The store-group store or the registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The store-group store, the registry or the people store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "store groups",
 )]
@@ -4270,6 +4361,13 @@ where
 /// no store of this tenant is a `422` rather than a stored row, because the failure it otherwise
 /// produces is invisible: the cohort looks right on screen, and every batch quietly reports one more
 /// `skipped` store than the operator expects, forever.
+///
+/// A group an assignment names changes who works at each store that joins or leaves it, so each
+/// such store that is open is published its `permissions` node once the membership is saved
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and the answer's `stores` says how each went. The membership before the write, and
+/// whether an assignment names the group, are read first, so a failed read refuses a write that has
+/// not happened.
 async fn admin_set_store_group_members<Grp, Reg, Cfg, A, C>(
     State(state): State<StoreGroupState<Grp, Reg, Cfg, A, C>>,
     headers: HeaderMap,
@@ -4318,19 +4416,23 @@ where
         }
     }
     let known = match state.registry.list_stores(tenant_id).await {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|row| row.record.store_id)
-            .collect::<Vec<_>>(),
+        Ok(rows) => rows,
         Err(error) => return registry_error_response(&error),
     };
-    if let Some(stranger) = members.iter().find(|id| !known.contains(id)) {
+    if let Some(stranger) = members
+        .iter()
+        .find(|id| !known.iter().any(|row| row.record.store_id == **id))
+    {
         return unprocessable_violations(&[format!(
             "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
         )]);
     }
     let expected = match if_match(&headers) {
         Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
+        Ok(moved) => moved,
         Err(refusal) => return refusal,
     };
     match state
@@ -4352,10 +4454,18 @@ where
                 serde_json::to_value(&membership).ok(),
             )
             .await;
+            let stores = state
+                .staff
+                .publish_to(&context, tenant_id, group_id, &moved)
+                .await;
             (
                 StatusCode::OK,
                 [(ETAG, version.as_str().to_owned())],
-                Json(serde_json::json!({ "store_ids": membership, "etag": version.as_str() })),
+                Json(serde_json::json!({
+                    "store_ids": membership,
+                    "etag": version.as_str(),
+                    "stores": stores,
+                })),
             )
                 .into_response()
         }
@@ -4363,6 +4473,40 @@ where
         Ok(UpdateOutcome::NotFound) => not_found("store group"),
         Err(error) => store_group_error_response(&error),
     }
+}
+
+/// The open stores whose staff a membership write changes — each that joins or leaves a group some
+/// assignment names (ADR-0158 decision 3) — read before the write. None when no assignment names
+/// the group.
+async fn staff_moved_by<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    stores: &[Versioned<StoreRecord>],
+    members: &[StoreId],
+) -> Result<BTreeSet<StoreId>, Response>
+where
+    Grp: StoreGroupStore,
+{
+    let before = state
+        .groups
+        .list_members(tenant_id, group_id)
+        .await
+        .map_err(|error| store_group_error_response(&error))?;
+    let named = state
+        .staff
+        .names_group(tenant_id, group_id)
+        .await
+        .map_err(|error| people_error_response(&error))?;
+    if !named {
+        return Ok(BTreeSet::new());
+    }
+    Ok(stores
+        .iter()
+        .filter(|row| row.record.status == EntityStatus::Active)
+        .map(|row| row.record.store_id)
+        .filter(|id| before.contains(id) != members.contains(id))
+        .collect())
 }
 
 // --- Batch publish to a store group (ADR-0122 §3–§7) -------------------------------------------
@@ -5692,21 +5836,133 @@ where
 /// audit recorder every write emits to. Like [`RegistryState`], it carries its own state and is merged
 /// into the main router.
 ///
-/// The registry and the config trees are here for
-/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 7:
-/// an assignment is refused for a store the tenant does not have or has archived, and a removal or
-/// an archive publishes the `permissions` node to every store it affects in the same request.
+/// The registry, the store groups and the config trees are here for
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 3
+/// and 7: an assignment is refused for a store or group the tenant does not have or has archived,
+/// and a removal, an archive or a new assignment to a group or every store publishes the
+/// `permissions` node to every store it affects in the same request.
 #[derive(Clone)]
 struct PeopleState<P, R, Cfg, A, C> {
     people: P,
     registry: R,
+    /// The tenant's store groups, through which a group assignment reaches its stores (ADR-0122).
+    groups: Arc<dyn GroupMembership>,
     config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
 }
 
+/// What the people routes read of a tenant's store groups
+/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md)): whether a group
+/// exists, its status and the stores it holds.
+///
+/// A trait object rather than a sixth type parameter on [`PeopleState`], for the reason
+/// [`BatchNode`] gives: every people handler would carry the store-group store's type for the few
+/// that read it.
+trait GroupMembership: Send + Sync {
+    /// The group's status and members, or `None` when the tenant has no such group — one of
+    /// another tenant included.
+    fn group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<Option<GroupMembers>, StoreGroupStoreError>>;
+}
+
+/// One group as [`GroupMembership`] reads it.
+struct GroupMembers {
+    status: EntityStatus,
+    store_ids: Vec<StoreId>,
+}
+
+impl<G> GroupMembership for G
+where
+    G: StoreGroupStore + Send + Sync,
+{
+    fn group(
+        &self,
+        tenant_id: TenantId,
+        group_id: StoreGroupId,
+    ) -> BoxFuture<'_, Result<Option<GroupMembers>, StoreGroupStoreError>> {
+        Box::pin(async move {
+            let Some(group) = self
+                .list_groups(tenant_id)
+                .await?
+                .into_iter()
+                .find(|group| group.record.group_id == group_id)
+            else {
+                return Ok(None);
+            };
+            let store_ids = self.list_members(tenant_id, group_id).await?;
+            Ok(Some(GroupMembers {
+                status: group.record.status,
+                store_ids,
+            }))
+        })
+    }
+}
+
 impl<P, R, Cfg, A, C> PeopleState<P, R, Cfg, A, C> {
+    /// The stores a set of assignment scopes reaches now, each once and in order: the store a
+    /// one-store scope names, the open stores a group holds, and every open store of the tenant
+    /// (ADR-0158 decision 3).
+    ///
+    /// A one-store scope reaches its store whatever the store's status, as it always has. A wider
+    /// one reaches only the open stores, the ones a group batch publishes to as well: an archived
+    /// store is not published to merely because it is in a group or is the tenant's. An archived
+    /// group still reaches the stores it holds — archiving a delivery cohort does not take anybody's
+    /// access away — and a group that is gone reaches none.
+    async fn stores_reached(
+        &self,
+        tenant_id: TenantId,
+        scopes: impl IntoIterator<Item = AssignmentScope>,
+    ) -> Result<BTreeSet<StoreId>, Response>
+    where
+        R: RegistryStore,
+    {
+        let mut reached = BTreeSet::new();
+        let mut groups = BTreeSet::new();
+        let mut tenant_wide = false;
+        for scope in scopes {
+            match scope {
+                AssignmentScope::Store(store_id) => {
+                    reached.insert(store_id);
+                }
+                AssignmentScope::StoreGroup(group_id) => {
+                    groups.insert(group_id);
+                }
+                AssignmentScope::Tenant => tenant_wide = true,
+            }
+        }
+        if groups.is_empty() && !tenant_wide {
+            return Ok(reached);
+        }
+        let open: BTreeSet<StoreId> = match self.registry.list_stores(tenant_id).await {
+            Ok(stores) => stores
+                .into_iter()
+                .filter(|store| store.record.status == EntityStatus::Active)
+                .map(|store| store.record.store_id)
+                .collect(),
+            Err(error) => return Err(registry_error_response(&error)),
+        };
+        if tenant_wide {
+            reached.extend(open);
+            return Ok(reached);
+        }
+        for group_id in groups {
+            match self.groups.group(tenant_id, group_id).await {
+                Ok(Some(group)) => {
+                    let members = group.store_ids.into_iter();
+                    reached.extend(members.filter(|member| open.contains(member)));
+                }
+                Ok(None) => {}
+                Err(error) => return Err(store_group_error_response(&error)),
+            }
+        }
+        Ok(reached)
+    }
+
     /// The publish `POST /admin/people/publish` makes, over these routes' own collaborators.
     fn publisher(&self) -> PermissionsPublisher<'_, P, Cfg, C> {
         PermissionsPublisher {
@@ -5784,19 +6040,33 @@ struct EmployeeListQuery {
     order: Option<String>,
 }
 
-/// The tenant plus which side to list assignments from: exactly one of `store_id` (everyone at a
-/// store) or `employee_id` (every store a person works at).
+/// The tenant plus which assignments to list: exactly one of `store_id` (everyone who works at a
+/// store, whatever reaches it), `employee_id` (everything a person holds), `store_group_id` (what
+/// names a group) or `scope_kind=ASSIGNMENT_SCOPE_TENANT` (what reaches every store).
 #[derive(Debug, Clone, Deserialize)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the field names are the query-string wire contract"
-)]
 struct AssignmentListQuery {
     tenant_id: String,
     #[serde(default)]
     store_id: Option<String>,
     #[serde(default)]
     employee_id: Option<String>,
+    #[serde(default)]
+    store_group_id: Option<String>,
+    #[serde(default)]
+    scope_kind: Option<String>,
+}
+
+/// Which listing an [`AssignmentListQuery`] asks for, by the one selector it carries.
+#[derive(Debug, Clone, Copy)]
+enum AssignmentListing {
+    /// Everyone who works at a store.
+    Store,
+    /// Everything a person holds.
+    Employee,
+    /// What names a group.
+    Group,
+    /// What reaches every store.
+    TenantWide,
 }
 
 /// Create an employee — identity only; the PIN is set separately.
@@ -5889,16 +6159,22 @@ struct UpdateRoleRequest {
     status: String,
 }
 
-/// Assign an employee to a store with a role.
+/// Assign an employee with a role, at one store, a store group or every store of the tenant
+/// (ADR-0158 decision 3) — see [`requested_scope`] for how the three fields name one.
 #[derive(Debug, Clone, Deserialize)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "the field names are the JSON wire contract"
-)]
 struct CreateAssignmentRequest {
     tenant_id: String,
     employee_id: String,
-    store_id: String,
+    /// The store, for an assignment to one store.
+    #[serde(default)]
+    store_id: Option<String>,
+    /// The group, for an assignment to every store it holds.
+    #[serde(default)]
+    store_group_id: Option<String>,
+    /// An [`AssignmentScopeKind`] token. Absent, or `ASSIGNMENT_SCOPE_UNSPECIFIED`, the scope is
+    /// the one the id sent names.
+    #[serde(default)]
+    scope_kind: Option<String>,
     role_template_id: String,
 }
 
@@ -5951,13 +6227,16 @@ fn people_entropy_unavailable() -> Response {
 ///
 /// What the console authors is what the store enforces
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7). An assignment is refused for an employee, store or role the tenant does not have
-/// (`404`) or has archived (`409`). Removing an assignment, archiving a person and archiving a role
-/// publish the `permissions` node to every store the change reaches before they answer, and answer
-/// with each store's outcome; every other write publishes as before, when someone presses publish.
-pub fn people_router<P, R, Cfg, A, C>(
+/// decisions 3 and 7). An assignment reaches one store, a store group or every store of the tenant,
+/// and is refused for an employee, store, group or role the tenant does not have (`404`) or has
+/// archived (`409`). Removing an assignment, archiving a person, archiving a role and creating an
+/// assignment to a group or every store publish the `permissions` node to every store the change
+/// reaches before they answer, and answer with each store's outcome; every other write publishes as
+/// before, when someone presses publish.
+pub fn people_router<P, R, G, Cfg, A, C>(
     people: P,
     registry: R,
+    groups: G,
     config_trees: Cfg,
     admin: A,
     clock: C,
@@ -5966,6 +6245,7 @@ pub fn people_router<P, R, Cfg, A, C>(
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
+    G: StoreGroupStore + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6009,6 +6289,7 @@ where
         .with_state(PeopleState {
             people,
             registry,
+            groups: Arc::new(groups),
             config_trees,
             admin,
             clock,
@@ -6298,7 +6579,7 @@ async fn admin_update_employee<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6339,16 +6620,24 @@ where
     };
     // When this update archives the person, the stores to tell are read before the write, so a
     // failed read refuses a write that has not happened rather than leaving one done with nobody
-    // told. `None` when it archives nobody.
-    let reached =
-        if existing.record.status != EntityStatus::Archived && status == EntityStatus::Archived {
+    // told: every store any of their assignments reaches, through a group or the tenant as well.
+    // `None` when it archives nobody.
+    let reached = if existing.record.status != EntityStatus::Archived
+        && status == EntityStatus::Archived
+    {
+        let assignments =
             match AssignmentStore::list_for_employee(&state.people, tenant_id, employee_id).await {
-                Ok(assignments) => Some(stores_of(&assignments)),
+                Ok(assignments) => assignments,
                 Err(error) => return people_error_response(&error),
-            }
-        } else {
-            None
-        };
+            };
+        let scopes = assignments.iter().map(|assignment| assignment.scope);
+        match state.stores_reached(tenant_id, scopes).await {
+            Ok(stores) => Some(stores),
+            Err(refusal) => return refusal,
+        }
+    } else {
+        None
+    };
     let update = EmployeeUpdate {
         employee_id,
         tenant_id,
@@ -6714,7 +7003,7 @@ async fn admin_update_role<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -6765,8 +7054,7 @@ where
             &[("discount_ceiling_minor", "OUT_OF_RANGE")],
         );
     }
-    let planned =
-        planned_role_update(&state.people, tenant_id, role_template_id, &request, status).await;
+    let planned = planned_role_update(&state, tenant_id, role_template_id, &request, status).await;
     let (update, reached) = match planned {
         Ok(planned) => planned,
         Err(refusal) => return refusal,
@@ -6808,9 +7096,12 @@ where
     }
 }
 
-/// A super-admin lists assignments — everyone at a store (`?store_id=`) or every store a person works
-/// at (`?employee_id=`), exactly one. Behind [`ConsolePermission::ReadPeople`], the roster's gate:
-/// each row names the person it grants ([`Assignment`]).
+/// A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store
+/// (`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a
+/// person holds (`?employee_id=`), those naming a store group (`?store_group_id=`), or those that
+/// reach every store (`?scope_kind=ASSIGNMENT_SCOPE_TENANT`). Each row says its scope. Behind
+/// [`ConsolePermission::ReadPeople`], the roster's gate: each row names the person it grants
+/// ([`Assignment`]).
 async fn admin_list_assignments<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6837,30 +7128,69 @@ where
         Ok([tenant_id]) => TenantId::new(tenant_id),
         Err(refusal) => return refusal,
     };
-    let result = match (query.store_id.as_deref(), query.employee_id.as_deref()) {
-        (Some(store), None) => {
-            let store_id = match parse_ulid_fields([("store_id", store)]) {
-                Ok([store_id]) => StoreId::new(store_id),
-                Err(refusal) => return refusal,
-            };
-            state.people.list_for_store(tenant_id, store_id).await
-        }
-        (None, Some(employee)) => {
-            let employee_id = match parse_ulid_fields([("employee_id", employee)]) {
-                Ok([employee_id]) => EmployeeId::new(employee_id),
-                Err(refusal) => return refusal,
-            };
-            state.people.list_for_employee(tenant_id, employee_id).await
-        }
-        _ => {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "name exactly one of store_id or employee_id",
-                &[
-                    ("store_id", "MUTUALLY_EXCLUSIVE"),
-                    ("employee_id", "MUTUALLY_EXCLUSIVE"),
-                ],
-            );
+    let selectors = [
+        (
+            "store_id",
+            AssignmentListing::Store,
+            query.store_id.as_deref(),
+        ),
+        (
+            "employee_id",
+            AssignmentListing::Employee,
+            query.employee_id.as_deref(),
+        ),
+        (
+            "store_group_id",
+            AssignmentListing::Group,
+            query.store_group_id.as_deref(),
+        ),
+        (
+            "scope_kind",
+            AssignmentListing::TenantWide,
+            query.scope_kind.as_deref(),
+        ),
+    ];
+    let mut named = selectors
+        .iter()
+        .filter_map(|(field, listing, value)| value.map(|value| (*field, *listing, value)));
+    let (Some((field, listing, value)), None) = (named.next(), named.next()) else {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name exactly one of store_id, employee_id, store_group_id or scope_kind",
+            &selectors.map(|(field, _, _)| (field, "MUTUALLY_EXCLUSIVE")),
+        );
+    };
+    let result = match listing {
+        AssignmentListing::Store => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                state
+                    .people
+                    .list_for_store(tenant_id, StoreId::new(id))
+                    .await
+            }
+            Err(refusal) => return refusal,
+        },
+        AssignmentListing::Employee => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                let employee_id = EmployeeId::new(id);
+                state.people.list_for_employee(tenant_id, employee_id).await
+            }
+            Err(refusal) => return refusal,
+        },
+        AssignmentListing::Group => match parse_ulid_fields([(field, value)]) {
+            Ok([id]) => {
+                let store_group_id = StoreGroupId::new(id);
+                state.people.list_for_group(tenant_id, store_group_id).await
+            }
+            Err(refusal) => return refusal,
+        },
+        // Only the tenant's rows are listed by their kind: a store's and a group's are listed by
+        // the id they name.
+        AssignmentListing::TenantWide => {
+            if AssignmentScopeKind::from_wire(value) != Some(AssignmentScopeKind::Tenant) {
+                return enum_refusal(field, [AssignmentScopeKind::Tenant.as_wire()]);
+            }
+            state.people.list_tenant_wide(tenant_id).await
         }
     };
     match result {
@@ -6869,16 +7199,22 @@ where
     }
 }
 
-/// A super-admin assigns an employee to a store with a role. Audited `assignment.create` with the
-/// three ids.
+/// A super-admin assigns an employee with a role, at one store, a store group or every store of the
+/// tenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the
+/// scope ([`assignment_audit`]).
 ///
 /// Each id is checked before anything is written, because the schema declares no foreign keys
-/// under row-level security and leaves the check to this route (ADR-0070). An employee, store or
-/// role the tenant does not have is `404`, and one it has archived is `409`
-/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7): a grant to a retired person or store would publish nobody, and one with a retired
-/// role would grant nothing, while the console showed it as a grant. Each refusal names the field
-/// that carried the id. A new assignment publishes as before, when someone presses publish.
+/// under row-level security and leaves the check to this route (ADR-0070). An employee, store,
+/// group or role the tenant does not have is `404` — another tenant's group included — and one it
+/// has archived is `409` (decision 7): a grant to a retired person, store or group would publish
+/// nobody, and one with a retired role would grant nothing, while the console showed it as a grant.
+/// Each refusal names the field that carried the id.
+///
+/// An assignment to one store publishes as before, when someone presses publish, and answers `201`
+/// with its id. One to a group or to every store publishes the `permissions` node at once to every
+/// store it reaches — the open stores the group holds, or every open store of the tenant, read
+/// before the write — and answers `201` with its id and each store's outcome (`stores`).
 async fn admin_create_assignment<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6887,7 +7223,7 @@ async fn admin_create_assignment<P, R, Cfg, A, C>(
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
     R: RegistryStore + Clone + Send + Sync + 'static,
-    Cfg: Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -6902,32 +7238,29 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, employee_id, store_id, role_template_id) = match parse_ulid_fields([
-        ("tenant_id", &request.tenant_id),
-        ("employee_id", &request.employee_id),
-        ("store_id", &request.store_id),
-        ("role_template_id", &request.role_template_id),
-    ]) {
-        Ok([tenant_id, employee_id, store_id, role_template_id]) => (
-            TenantId::new(tenant_id),
-            EmployeeId::new(employee_id),
-            StoreId::new(store_id),
-            RoleTemplateId::new(role_template_id),
-        ),
+    let target = match requested_scope(&request) {
+        Ok(target) => target,
         Err(refusal) => return refusal,
     };
-    let checked = refuse_unassignable(
-        &state.people,
-        &state.registry,
-        tenant_id,
-        employee_id,
-        store_id,
-        role_template_id,
-    )
-    .await;
+    let (tenant_id, employee_id, scope, role_template_id) = match assignment_ids(&request, target) {
+        Ok(ids) => ids,
+        Err(refusal) => return refusal,
+    };
+    let checked =
+        refuse_unassignable(&state, tenant_id, employee_id, scope, role_template_id).await;
     if let Err(refusal) = checked {
         return refusal;
     }
+    // A wider assignment changes who works at every store it reaches, and each is told at once.
+    // They are read before the write, for the reason `admin_update_employee` gives.
+    let reached = if let AssignmentScope::Store(_) = scope {
+        None
+    } else {
+        match state.stores_reached(tenant_id, [scope]).await {
+            Ok(stores) => Some(stores),
+            Err(refusal) => return refusal,
+        }
+    };
     let Some(assignment_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AssignmentId::new)
     else {
@@ -6937,17 +7270,11 @@ where
         assignment_id,
         tenant_id,
         employee_id,
-        store_id,
+        scope,
         role_template_id,
     };
     match state.people.assign(&new_assignment).await {
         Ok(()) => {
-            let after = serde_json::json!({
-                "id": assignment_id.to_string(),
-                "employee_id": employee_id.to_string(),
-                "store_id": store_id.to_string(),
-                "role_template_id": role_template_id.to_string(),
-            });
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -6957,25 +7284,219 @@ where
                 "assignment",
                 &assignment_id.to_string(),
                 None,
-                Some(after),
+                Some(assignment_audit(
+                    assignment_id,
+                    employee_id,
+                    scope,
+                    role_template_id,
+                )),
             )
             .await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": assignment_id.to_string() })),
-            )
-                .into_response()
+            let created = match reached {
+                None => serde_json::json!({ "id": assignment_id.to_string() }),
+                Some(reached) => {
+                    let stores = state
+                        .publisher()
+                        .publish_all(
+                            &context,
+                            tenant_id,
+                            &reached,
+                            ("assignment_id", &assignment_id.to_string()),
+                        )
+                        .await;
+                    serde_json::json!({ "id": assignment_id.to_string(), "stores": stores })
+                }
+            };
+            (StatusCode::CREATED, Json(created)).into_response()
         }
         Err(error) => people_error_response(&error),
     }
 }
 
-/// A super-admin removes an assignment — offboarding a person from a store. Audited `assignment.remove`
-/// when a row was actually removed, with the ids it bound; a no-op removal records nothing.
+/// The scope a new assignment's fields name, with the id that names it as sent, before it is
+/// parsed.
+#[derive(Debug, Clone, Copy)]
+enum ScopeTarget<'a> {
+    /// One store, by `store_id`.
+    Store(&'a str),
+    /// A store group, by `store_group_id`.
+    StoreGroup(&'a str),
+    /// Every store of the tenant, by no id.
+    Tenant,
+}
+
+/// A new assignment's ids, parsed in one go so a refusal names each that is not a ULID: the tenant,
+/// the person, the scope with the id `target` sent, and the role.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn assignment_ids(
+    request: &CreateAssignmentRequest,
+    target: ScopeTarget<'_>,
+) -> Result<(TenantId, EmployeeId, AssignmentScope, RoleTemplateId), Response> {
+    let tenant = ("tenant_id", request.tenant_id.as_str());
+    let employee = ("employee_id", request.employee_id.as_str());
+    let role = ("role_template_id", request.role_template_id.as_str());
+    let named = match target {
+        ScopeTarget::Store(id) => ("store_id", id),
+        ScopeTarget::StoreGroup(id) => ("store_group_id", id),
+        ScopeTarget::Tenant => {
+            return parse_ulid_fields([tenant, employee, role]).map(|[tenant, employee, role]| {
+                (
+                    TenantId::new(tenant),
+                    EmployeeId::new(employee),
+                    AssignmentScope::Tenant,
+                    RoleTemplateId::new(role),
+                )
+            });
+        }
+    };
+    parse_ulid_fields([tenant, employee, named, role]).map(|[tenant, employee, id, role]| {
+        let scope = if let ScopeTarget::StoreGroup(_) = target {
+            AssignmentScope::StoreGroup(StoreGroupId::new(id))
+        } else {
+            AssignmentScope::Store(StoreId::new(id))
+        };
+        (
+            TenantId::new(tenant),
+            EmployeeId::new(employee),
+            scope,
+            RoleTemplateId::new(role),
+        )
+    })
+}
+
+/// Which scope a new assignment names, as the request carries it (ADR-0158 decision 3).
 ///
-/// The removal publishes the store's `permissions` node at once, so the person cannot sign in there
-/// a moment longer ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
-/// decision 7), and answers `200` with the store's outcome.
+/// `scope_kind` says which. Absent, or `ASSIGNMENT_SCOPE_UNSPECIFIED`, the id sent says it:
+/// `store_id` alone is one store, as every assignment was, and `store_group_id` alone is a group.
+/// Each scope takes its own id and no other — one store its `store_id`, a group its
+/// `store_group_id`, every store neither — and anything else is a `400` naming each field at fault:
+/// `REQUIRED` for the id the scope needs, `MUTUALLY_EXCLUSIVE` for one it does not take.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn requested_scope(request: &CreateAssignmentRequest) -> Result<ScopeTarget<'_>, Response> {
+    let kind = match request.scope_kind.as_deref() {
+        None => AssignmentScopeKind::Unspecified,
+        Some(token) => match AssignmentScopeKind::from_wire(token) {
+            Some(kind) => kind,
+            None => {
+                return Err(enum_refusal(
+                    "scope_kind",
+                    accepted_tokens::<AssignmentScopeKind>(),
+                ));
+            }
+        },
+    };
+    let store = request.store_id.as_deref();
+    let group = request.store_group_id.as_deref();
+    match (kind, store, group) {
+        (AssignmentScopeKind::Store | AssignmentScopeKind::Unspecified, Some(store), None) => {
+            Ok(ScopeTarget::Store(store))
+        }
+        (AssignmentScopeKind::StoreGroup | AssignmentScopeKind::Unspecified, None, Some(group)) => {
+            Ok(ScopeTarget::StoreGroup(group))
+        }
+        (AssignmentScopeKind::Tenant, None, None) => Ok(ScopeTarget::Tenant),
+        // With no kind to say which, both ids are the mistake together, and neither alone.
+        (AssignmentScopeKind::Unspecified, Some(_), Some(_)) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "name one of store_id or store_group_id, not both",
+            &[
+                ("store_id", "MUTUALLY_EXCLUSIVE"),
+                ("store_group_id", "MUTUALLY_EXCLUSIVE"),
+            ],
+        )),
+        (AssignmentScopeKind::Unspecified, None, None) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "store_id is required: name one store, a store_group_id, or scope_kind \
+             ASSIGNMENT_SCOPE_TENANT for every store",
+            &[("store_id", "REQUIRED")],
+        )),
+        (kind, store, group) => Err(scope_refusal(kind, store.is_some(), group.is_some())),
+    }
+}
+
+/// The `400` an assignment earns when `scope_kind` names a scope its ids do not fit, naming each id
+/// at fault: the one the scope needs and did not get, and the one it does not take.
+fn scope_refusal(kind: AssignmentScopeKind, sent_store: bool, sent_group: bool) -> Response {
+    let (takes_store, takes_group, message) = match kind {
+        AssignmentScopeKind::StoreGroup => (
+            false,
+            true,
+            "an assignment to a store group names its store_group_id, and no store_id",
+        ),
+        AssignmentScopeKind::Tenant => (
+            false,
+            false,
+            "an assignment to every store names neither a store_id nor a store_group_id",
+        ),
+        AssignmentScopeKind::Store | AssignmentScopeKind::Unspecified => (
+            true,
+            false,
+            "an assignment to one store names its store_id, and no store_group_id",
+        ),
+    };
+    let mut details = Vec::with_capacity(2);
+    for (field, sent, takes) in [
+        ("store_id", sent_store, takes_store),
+        ("store_group_id", sent_group, takes_group),
+    ] {
+        if sent != takes {
+            details.push((
+                field,
+                if sent {
+                    "MUTUALLY_EXCLUSIVE"
+                } else {
+                    "REQUIRED"
+                },
+            ));
+        }
+    }
+    api_error_with_details(ErrorStatus::InvalidArgument, message, &details)
+}
+
+/// What the trail records of an assignment: its ids and its scope, the `store_id` or
+/// `store_group_id` it names beside its `scope_kind` — never the name or code a read resolves
+/// beside them (ADR-0070).
+fn assignment_audit(
+    assignment_id: AssignmentId,
+    employee_id: EmployeeId,
+    scope: AssignmentScope,
+    role_template_id: RoleTemplateId,
+) -> serde_json::Value {
+    let mut entry = serde_json::Map::new();
+    entry.insert("id".to_owned(), assignment_id.to_string().into());
+    entry.insert("employee_id".to_owned(), employee_id.to_string().into());
+    entry.insert("scope_kind".to_owned(), scope.kind().as_wire().into());
+    if let Some(store_id) = scope.store_id() {
+        entry.insert("store_id".to_owned(), store_id.to_string().into());
+    }
+    if let Some(store_group_id) = scope.store_group_id() {
+        entry.insert(
+            "store_group_id".to_owned(),
+            store_group_id.to_string().into(),
+        );
+    }
+    entry.insert(
+        "role_template_id".to_owned(),
+        role_template_id.to_string().into(),
+    );
+    serde_json::Value::Object(entry)
+}
+
+/// A super-admin removes an assignment — offboarding a person from where it reached. Audited
+/// `assignment.remove` when a row was actually removed, with the ids and the scope it bound; a no-op
+/// removal records nothing.
+///
+/// The removal publishes the `permissions` node at once to every store the assignment reached — its
+/// store, the open stores its group holds, or every open store of the tenant — so the person cannot
+/// sign in there a moment longer
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+/// decision 7), and answers `200` with each store's outcome.
 async fn admin_remove_assignment<P, R, Cfg, A, C>(
     State(state): State<PeopleState<P, R, Cfg, A, C>>,
     headers: HeaderMap,
@@ -6984,7 +7505,7 @@ async fn admin_remove_assignment<P, R, Cfg, A, C>(
 ) -> Response
 where
     P: EmployeeStore + RoleTemplateStore + AssignmentStore + Clone + Send + Sync + 'static,
-    R: Clone + Send + Sync + 'static,
+    R: RegistryStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
@@ -7009,22 +7530,26 @@ where
         }
         Err(refusal) => return refusal,
     };
-    // Read before the removal: the row names the store that must be told, and it is gone after.
+    // Read before the removal: the row names the stores that must be told, and it is gone after.
     let assignment = match AssignmentStore::get(&state.people, tenant_id, assignment_id).await {
         Ok(Some(assignment)) => assignment,
         Ok(None) => return not_found("assignment"),
         Err(error) => return people_error_response(&error),
     };
+    let reached = match state.stores_reached(tenant_id, [assignment.scope]).await {
+        Ok(stores) => stores,
+        Err(refusal) => return refusal,
+    };
     match state.people.remove(tenant_id, assignment_id).await {
         Ok(true) => {
             // The ids the grant bound, so the trail says who was offboarded from where and under
             // which role — never the name or code the read resolved beside them (ADR-0070).
-            let before = serde_json::json!({
-                "id": assignment_id.to_string(),
-                "employee_id": assignment.employee_id.to_string(),
-                "store_id": assignment.store_id.to_string(),
-                "role_template_id": assignment.role_template_id.to_string(),
-            });
+            let before = assignment_audit(
+                assignment_id,
+                assignment.employee_id,
+                assignment.scope,
+                assignment.role_template_id,
+            );
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -7042,7 +7567,7 @@ where
                 .publish_each(
                     &context,
                     tenant_id,
-                    &BTreeSet::from([assignment.store_id]),
+                    &reached,
                     ("assignment_id", &assignment_id.to_string()),
                 )
                 .await
@@ -7052,24 +7577,16 @@ where
     }
 }
 
-/// The stores a set of assignments reaches, each once and in order.
-fn stores_of(assignments: &[Assignment]) -> BTreeSet<StoreId> {
-    assignments
-        .iter()
-        .map(|assignment| assignment.store_id)
-        .collect()
-}
-
 /// The update `PATCH /admin/roles/{role_id}` writes, and the stores it publishes to at once, from
 /// the request and the role as stored, read once before the write and `404` if there is none.
 ///
 /// The stored role answers two things. A request that leaves `permissions_with_approval` out keeps
 /// what the role grants with approval ([`granted_with_approval`]). And an update that archives the
-/// role reaches every store where someone holds it — read before the write, for the reason
-/// [`admin_update_employee`] gives — while one that leaves it active, or finds it archived
-/// already, reaches none (`None`).
-async fn planned_role_update<P>(
-    people: &P,
+/// role reaches every store an assignment granting it reaches, through a group or the tenant as
+/// well — read before the write, for the reason [`admin_update_employee`] gives — while one that
+/// leaves it active, or finds it archived already, reaches none (`None`).
+async fn planned_role_update<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
     tenant_id: TenantId,
     role_template_id: RoleTemplateId,
     request: &UpdateRoleRequest,
@@ -7077,8 +7594,9 @@ async fn planned_role_update<P>(
 ) -> Result<(RoleTemplateUpdate, Option<BTreeSet<StoreId>>), Response>
 where
     P: RoleTemplateStore + AssignmentStore,
+    R: RegistryStore,
 {
-    let stored = match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+    let stored = match RoleTemplateStore::get(&state.people, tenant_id, role_template_id).await {
         Ok(Some(stored)) => stored.record,
         Ok(None) => return Err(not_found("role")),
         Err(error) => return Err(people_error_response(&error)),
@@ -7089,10 +7607,12 @@ where
         &stored.permissions_with_approval,
     )?;
     let reached = if status == EntityStatus::Archived && stored.status != EntityStatus::Archived {
-        let assignments = AssignmentStore::list_for_role(people, tenant_id, role_template_id)
-            .await
-            .map_err(|error| people_error_response(&error))?;
-        Some(stores_of(&assignments))
+        let assignments =
+            AssignmentStore::list_for_role(&state.people, tenant_id, role_template_id)
+                .await
+                .map_err(|error| people_error_response(&error))?;
+        let scopes = assignments.iter().map(|assignment| assignment.scope);
+        Some(state.stores_reached(tenant_id, scopes).await?)
     } else {
         None
     };
@@ -7108,22 +7628,23 @@ where
     Ok((update, reached))
 }
 
-/// Refuses an assignment to an employee, store or role the tenant does not have (`404`) or has
-/// archived (`409`), each named by the request field that carried its id — the route's half of the
-/// referential check the schema leaves to it (ADR-0070, ADR-0158 decision 7).
-async fn refuse_unassignable<P, R>(
-    people: &P,
-    registry: &R,
+/// Refuses an assignment to an employee, store, group or role the tenant does not have (`404`) or
+/// has archived (`409`), each named by the request field that carried its id — the route's half of
+/// the referential check the schema leaves to it (ADR-0070, ADR-0158 decision 7). A group is looked
+/// up among the tenant's own, so another tenant's is `404` like one that never existed; an
+/// assignment to every store names nothing beyond the person and the role.
+async fn refuse_unassignable<P, R, Cfg, A, C>(
+    state: &PeopleState<P, R, Cfg, A, C>,
     tenant_id: TenantId,
     employee_id: EmployeeId,
-    store_id: StoreId,
+    scope: AssignmentScope,
     role_template_id: RoleTemplateId,
 ) -> Result<(), Response>
 where
     P: EmployeeStore + RoleTemplateStore,
     R: RegistryStore,
 {
-    match EmployeeStore::get(people, tenant_id, employee_id).await {
+    match EmployeeStore::get(&state.people, tenant_id, employee_id).await {
         Ok(Some(employee)) if employee.record.status == EntityStatus::Archived => {
             return Err(unassignable_archived(
                 "employee_id",
@@ -7134,23 +7655,39 @@ where
         Ok(None) => return Err(unassignable_unknown("employee_id", "employee")),
         Err(error) => return Err(people_error_response(&error)),
     }
-    match registry.list_stores(tenant_id).await {
-        Ok(stores) => match stores
-            .into_iter()
-            .find(|store| store.record.store_id == store_id)
-        {
-            Some(store) if store.record.status == EntityStatus::Archived => {
-                return Err(unassignable_archived(
-                    "store_id",
-                    "the store is archived; restore it before assigning anyone to it",
-                ));
-            }
-            Some(_) => {}
-            None => return Err(unassignable_unknown("store_id", "store")),
+    match scope {
+        AssignmentScope::Store(store_id) => match state.registry.list_stores(tenant_id).await {
+            Ok(stores) => match stores
+                .into_iter()
+                .find(|store| store.record.store_id == store_id)
+            {
+                Some(store) if store.record.status == EntityStatus::Archived => {
+                    return Err(unassignable_archived(
+                        "store_id",
+                        "the store is archived; restore it before assigning anyone to it",
+                    ));
+                }
+                Some(_) => {}
+                None => return Err(unassignable_unknown("store_id", "store")),
+            },
+            Err(error) => return Err(registry_error_response(&error)),
         },
-        Err(error) => return Err(registry_error_response(&error)),
+        AssignmentScope::StoreGroup(group_id) => {
+            match state.groups.group(tenant_id, group_id).await {
+                Ok(Some(group)) if group.status == EntityStatus::Archived => {
+                    return Err(unassignable_archived(
+                        "store_group_id",
+                        "the store group is archived; restore it before assigning anyone to it",
+                    ));
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(unassignable_unknown("store_group_id", "store group")),
+                Err(error) => return Err(store_group_error_response(&error)),
+            }
+        }
+        AssignmentScope::Tenant => {}
     }
-    match RoleTemplateStore::get(people, tenant_id, role_template_id).await {
+    match RoleTemplateStore::get(&state.people, tenant_id, role_template_id).await {
         Ok(Some(role)) if role.record.status == EntityStatus::Archived => {
             Err(unassignable_archived(
                 "role_template_id",
@@ -27107,7 +27644,7 @@ where
     ///
     /// The trail records the config version and how many staff the node carries — never a name or
     /// a PIN (ADR-0070) — and, for a publish a write caused, the id that write was about, under its
-    /// own key: `assignment_id`, `employee_id` or `role_template_id`.
+    /// own key: `assignment_id`, `employee_id`, `role_template_id` or `store_group_id`.
     async fn publish(
         &self,
         context: &AdminContext,
@@ -27153,11 +27690,6 @@ where
     /// Publishes to every store a write reached, in turn, and answers with how each went: the `200`
     /// a write that publishes at once returns, `{"stores": [...]}`, the shape a settings write
     /// answers with.
-    ///
-    /// One store failing does not stop the others: each answers for itself, and a failed one is
-    /// published again with `POST /admin/people/publish`. The write that caused this has already
-    /// been saved by then, so a failure here is reported rather than refused — taking the write
-    /// back would be a second change nobody asked for.
     async fn publish_each(
         &self,
         context: &AdminContext,
@@ -27165,6 +27697,28 @@ where
         stores: &BTreeSet<StoreId>,
         cause: (&'static str, &str),
     ) -> Response {
+        let results = self.publish_all(context, tenant_id, stores, cause).await;
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "stores": results })),
+        )
+            .into_response()
+    }
+
+    /// Publishes to every store a write reached, in turn, and reports how each went, for a write
+    /// whose answer carries the report beside its own fields.
+    ///
+    /// One store failing does not stop the others: each answers for itself, and a failed one is
+    /// published again with `POST /admin/people/publish`. The write that caused this has already
+    /// been saved by then, so a failure here is reported rather than refused — taking the write
+    /// back would be a second change nobody asked for.
+    async fn publish_all(
+        &self,
+        context: &AdminContext,
+        tenant_id: TenantId,
+        stores: &BTreeSet<StoreId>,
+        cause: (&'static str, &str),
+    ) -> Vec<PermissionsPublishResult> {
         let mut results = Vec::with_capacity(stores.len());
         for store_id in stores {
             let published = self
@@ -27186,11 +27740,7 @@ where
                 }
             });
         }
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "stores": results })),
-        )
-            .into_response()
+        results
     }
 }
 
