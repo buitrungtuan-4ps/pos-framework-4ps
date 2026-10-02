@@ -15,6 +15,29 @@ permissions.enforced	scope=SETTING_SCOPE_TENANT
 permissions.enforced	since=0.14.1
 permissions.enforced	value=false
 permissions.enforced	value=true
+printing.receipt_language
+printing.receipt_language	default=RECEIPT_LANGUAGE_DISPLAY
+printing.receipt_language	kind=SETTING_KIND_CHOICE
+printing.receipt_language	preset=RECEIPT_LANGUAGE_COUNTRY
+printing.receipt_language	scope=SETTING_SCOPE_BRAND
+printing.receipt_language	scope=SETTING_SCOPE_STORE
+printing.receipt_language	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_language	scope=SETTING_SCOPE_TENANT
+printing.receipt_language	since=0.14.1
+printing.receipt_language	value=RECEIPT_LANGUAGE_COUNTRY
+printing.receipt_language	value=RECEIPT_LANGUAGE_DISPLAY
+printing.receipt_language	value=RECEIPT_LANGUAGE_EN
+printing.receipt_language	value=RECEIPT_LANGUAGE_VI
+printing.receipt_printed_on_settle
+printing.receipt_printed_on_settle	default=true
+printing.receipt_printed_on_settle	kind=SETTING_KIND_BOOL
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_BRAND
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_STORE
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_STORE_GROUP
+printing.receipt_printed_on_settle	scope=SETTING_SCOPE_TENANT
+printing.receipt_printed_on_settle	since=0.14.1
+printing.receipt_printed_on_settle	value=false
+printing.receipt_printed_on_settle	value=true
 session.idle_lock_seconds
 session.idle_lock_seconds	default=0
 session.idle_lock_seconds	kind=SETTING_KIND_INT
