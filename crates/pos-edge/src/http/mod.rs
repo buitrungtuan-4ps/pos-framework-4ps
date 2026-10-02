@@ -187,13 +187,15 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health::healthz))
         .merge(live)
         .merge(pair)
-        // Which devices are paired (ADR-0091), behind the paired-device gate alone: POS Station
-        // reads it as its "is my token still accepted" probe with nobody signed in, and behind the
+        // POS Station's "is my token still accepted" probe, and which devices are paired (ADR-0091),
+        // behind the paired-device gate alone. Station asks with nobody signed in, and behind the
         // signed-in gate every such probe would answer `403`, so the app could no longer tell a live
-        // pairing from a lost one. Retiring a device is a manager's act, on the domain router
-        // (ADR-0158 decision 8).
+        // pairing from a lost one. The probe answers for the calling token alone; the list stays
+        // here while a Station older than the probe still reads it instead (ADR-0158 decision 8).
+        // Retiring a device is a manager's act, on the domain router.
         .merge(
             Router::new()
+                .route("/api/pair/this_device", get(pair::this_device))
                 .route("/api/pair/devices", get(pair::devices))
                 .layer(axum::middleware::from_fn_with_state(
                     Arc::clone(&state_for_devices.pairing),

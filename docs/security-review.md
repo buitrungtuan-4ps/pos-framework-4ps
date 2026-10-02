@@ -64,7 +64,9 @@ anywhere except the two bootstrap exchanges, which are single-use by constructio
 | --- | --- | --- |
 | `/api/*` domain routes | Paired **device token**, then a **signed-in employee** | `http/auth.rs` (`require_paired_device` → `require_signed_in`) |
 | `/ws` | The same device token, over `Sec-WebSocket-Protocol` because a browser cannot set a header on an upgrade | `http/auth.rs` |
-| `/api/pair/devices`, `/api/pair/revoke` | Paired device token | `http/pair.rs` |
+| `GET /api/pair/this_device` | Paired device token alone: POS Station's token probe, asked with nobody signed in. It answers for the calling token only and names no other device | `http/pair.rs` |
+| `GET /api/pair/devices` | Paired device token alone, while a POS Station older than `this_device` still reads it as its probe ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` |
+| `POST /api/pair/codes`, `POST /api/pair/revoke` | Both domain gates, and the signed-in person's own role must grant `admin.device.manage` ([ADR-0158](adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8) | `http/pair.rs` (`manager_routes`) |
 | `POST /api/pair` | The six-digit pairing code — single-use, five-minute TTL, budgeted (see §3) | `pairing.rs` |
 | `POST /api/activate` | The one-time activation code from the setup sheet | [ADR-0050](adr/0050-activation-code-exchange.md) |
 | `/healthz` | None | `http/health.rs` |

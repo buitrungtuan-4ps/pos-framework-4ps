@@ -17,6 +17,7 @@ GET /api/orders/live
 GET /api/orders/open
 GET /api/orders/{id}/check
 GET /api/pair/devices
+GET /api/pair/this_device
 GET /api/print/jobs
 GET /api/printers
 GET /api/reason-codes

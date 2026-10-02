@@ -1802,6 +1802,7 @@ async fn an_unpaired_caller_reaches_no_domain_route_on_the_composed_edge() {
         ("GET", "/api/session".to_owned()),
         ("POST", "/api/shifts".to_owned()),
         ("GET", "/api/pair/devices".to_owned()),
+        ("GET", "/api/pair/this_device".to_owned()),
     ] {
         let (status, _) = send(store.app.clone(), None, method, &uri, None).await;
         assert_eq!(
@@ -2230,5 +2231,146 @@ async fn a_revoked_device_is_refused_by_the_composed_edge() {
         status,
         StatusCode::UNAUTHORIZED,
         "the retired token stops working at once"
+    );
+}
+
+/// Pairs a second device on `store` the way a till is paired — the signed-in manager mints a code
+/// and the new device redeems it — and returns its token. Nobody signs in on it.
+async fn a_second_device(store: &Store) -> String {
+    let (status, minted) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/pair/codes",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the manager mints a code");
+    let code = Some(json!({ "code": minted["code"] }));
+    let (_, paired) = post(store.app.clone(), None, "/api/pair", code).await;
+    paired["device_token"]
+        .as_str()
+        .expect("the code pairs a second device")
+        .to_owned()
+}
+
+/// Asks POS Station's token probe, `GET /api/pair/this_device`, with `token`.
+async fn probe(store: &Store, token: &str) -> (StatusCode, Value) {
+    send(
+        store.app.clone(),
+        Some(token),
+        "GET",
+        "/api/pair/this_device",
+        None,
+    )
+    .await
+}
+
+/// POS Station's token probe answers for the calling token alone, with nobody signed in
+/// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 8,
+/// step 1).
+///
+/// Two devices are paired and nobody signs in on the second. Each probe names its caller and no
+/// other device, which is what lets the list be gated later without taking away a Station's way to
+/// ask about itself. The second device's `200` shows the probe is not behind the signed-in gate on
+/// the composed edge, where it would answer `403`.
+#[tokio::test]
+async fn the_token_probe_answers_for_the_caller_alone_with_nobody_signed_in() {
+    let store = a_store_with_a_manager_signed_in().await;
+    let second_token = a_second_device(&store).await;
+
+    // Each device's id and pairing instant, from the list.
+    let (_, devices) = send(
+        store.app.clone(),
+        Some(&store.token),
+        "GET",
+        "/api/pair/devices",
+        None,
+    )
+    .await;
+    let rows = devices["paired"]
+        .as_array()
+        .expect("the devices are listed");
+    assert_eq!(rows.len(), 2, "two devices are paired");
+    let row = |this_device: bool| {
+        rows.iter()
+            .find(|row| row["this_device"] == this_device)
+            .expect("each device has a row")
+    };
+    let (first_row, second_row) = (row(true), row(false));
+
+    for (token, own, other) in [
+        (store.token.as_str(), first_row, second_row),
+        (second_token.as_str(), second_row, first_row),
+    ] {
+        let (status, answer) = probe(&store, token).await;
+        assert_eq!(status, StatusCode::OK, "accepted, signed in or not");
+        let fields: Vec<&str> = answer
+            .as_object()
+            .expect("a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            fields,
+            ["accepted", "device_id", "pair_time"],
+            "the caller and nothing else"
+        );
+        assert_eq!(answer["accepted"], true);
+        assert_eq!(answer["device_id"], own["device_id"], "the caller's own id");
+        let pair_time: pos_proto::time::Timestamp = answer["pair_time"]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .expect("pair_time is RFC 3339");
+        assert_eq!(
+            Some(pair_time.as_milliseconds_since_epoch()),
+            own["paired_at_ms"].as_i64(),
+            "the instant the list gives for the same device"
+        );
+        let other_id = other["device_id"].as_str().expect("a device id");
+        assert!(
+            !answer.to_string().contains(other_id),
+            "no other device: {answer}"
+        );
+    }
+}
+
+/// The probe refuses `401` a token the edge never issued, well-formed or not, and one it retired —
+/// at once, and without touching the device that retired it.
+#[tokio::test]
+async fn the_token_probe_refuses_an_unknown_or_retired_token() {
+    let store = a_store_with_a_manager_signed_in().await;
+    let second_token = a_second_device(&store).await;
+
+    for unknown in ["0123456789abcdef0123456789abcdef", "not-a-token"] {
+        assert_eq!(
+            probe(&store, unknown).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{unknown} is refused"
+        );
+    }
+
+    let (_, answer) = probe(&store, &second_token).await;
+    let retire = Some(json!({ "device_id": answer["device_id"] }));
+    let (status, _) = post(
+        store.app.clone(),
+        Some(&store.token),
+        "/api/pair/revoke",
+        retire,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "the manager retires the second device"
+    );
+    assert_eq!(
+        probe(&store, &second_token).await.0,
+        StatusCode::UNAUTHORIZED,
+        "a retired token"
+    );
+    assert_eq!(
+        probe(&store, &store.token).await.0,
+        StatusCode::OK,
+        "the device that retired it"
     );
 }
