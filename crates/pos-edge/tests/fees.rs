@@ -10,25 +10,31 @@
 //! source froze, with a fee per bill shared out rather than charged again on every part
 //! (decision 6). A merge keeps the rules of the bill the cashier holds and charges a fee per bill
 //! once, at the sum of the merged bills' shares capped at its whole, so merging a split back
-//! together restores it. A bill opened again after a void freezes what is in force then.
+//! together restores it. A bill opened again after a void freezes what is in force then. A fee
+//! waived on a bill charges nothing on it, through every split, merge and restart (decision 5).
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use pos_core::billing::BillTotals;
 use pos_core::decision::Actor;
+use pos_core::error::DomainError;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
-    Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StaffAuth,
+    AppError, Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StaffAuth,
     StaffRoster, StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::events::{BillFeeLine, BillTaxLine, BillingBillOpened, BillingBillSettled};
+use pos_proto::events::{
+    BillFeeLine, BillTaxLine, BillingBillOpened, BillingBillSettled, BillingFeeWaived,
+    SecurityPermissionOverridden,
+};
 use pos_proto::fees::{FeeCode, FrozenFee, PublishedFees};
 use pos_proto::ids::{
-    BillId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderLineId, StoreId, TableId, TaxClassId,
+    BillId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderLineId, ReasonCodeId, StoreId, TableId,
+    TaxClassId,
 };
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
@@ -114,7 +120,8 @@ fn fees(rules: &[Value]) -> PublishedFees {
     serde_json::from_str(&json!({ "fees": rules }).to_string()).expect("a fees node")
 }
 
-/// A store that prices one dish at 10% and charges `fees`, with one manager who may void a bill.
+/// A store that prices one dish at 10% and charges `fees`, with one manager who may void a bill
+/// and waive a fee.
 fn session(fees: PublishedFees) -> EdgeSession {
     use argon2::Argon2;
     use argon2::password_hash::PasswordHasher as _;
@@ -141,7 +148,9 @@ fn session(fees: PublishedFees) -> EdgeSession {
         "MGR-1",
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
-            permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+            permissions: PermissionSet::EMPTY
+                .with(Permission::VoidBill)
+                .with(Permission::WaiveFee),
             permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(pin_phc),
@@ -685,5 +694,357 @@ fn a_copy_prints_the_fees_and_tax_the_settle_recorded() {
             .collect();
         assert_eq!(rates, [(1_000, vnd(10_500))]);
         assert_eq!(copy.totals.total_due, vnd(115_500));
+    });
+}
+
+/// The service charge of `percent`, which staff may waive on a bill (ADR-0159 decision 5).
+fn waivable_service(percent: i64) -> Value {
+    let mut rule = service(percent);
+    rule["waivable"] = json!(true);
+    rule
+}
+
+/// The framework's reason for putting it right for a guest, which a waive may cite.
+fn putting_it_right() -> ReasonCodeId {
+    PublishedReasonCodes::framework_default()
+        .codes()
+        .iter()
+        .find(|reason| reason.code.as_str() == "SERVICE_RECOVERY")
+        .filter(|reason| reason.is_valid_for(ReasonAction::WaiveFee))
+        .map(|reason| reason.id)
+        .expect("a framework reason for a waive")
+}
+
+/// The manager's badge and PIN, approving a waive as they approve a void.
+fn the_manager() -> Approval {
+    Approval {
+        code: "MGR-1".to_owned(),
+        pin: "4417".to_owned(),
+    }
+}
+
+/// ADR-0159 decision 5: a waived fee charges nothing and is taxed nothing, the cover beside it is
+/// charged as before, and the log holds the waive and the approval that let it through. The
+/// settle records no line for it.
+#[test]
+fn a_waived_fee_is_charged_and_taxed_nothing_and_the_waive_is_on_the_record() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), fees(&[waivable_service(10), cover()]));
+        a_table_of(&edge, table(1), 2).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        // 100,000 of food, 10,000 of service and 10,000 of cover, and 10% on all of it.
+        let before = totals(&edge, bill);
+        assert_eq!(charged(&before), [("SERVICE", 10_000), ("COVER", 10_000)]);
+        assert_eq!(before.total_due, vnd(132_000));
+        let waivable: Vec<bool> = before.fee_lines.iter().map(|fee| fee.waivable).collect();
+        assert_eq!(waivable, [true, false]);
+
+        let after = edge
+            .waive_fee(
+                server(),
+                bill,
+                fee_id(1),
+                putting_it_right(),
+                Some(&the_manager()),
+            )
+            .await
+            .expect("a manager waives the service charge");
+        assert_eq!(charged(&after), [("COVER", 10_000)]);
+        assert_eq!(after.service_charge, vnd(10_000));
+        assert_eq!(after.tax_total, vnd(11_000));
+        assert_eq!(after.total_due, vnd(121_000));
+        assert_eq!(
+            totals(&edge, bill),
+            after,
+            "the bill reads as the waive answered"
+        );
+
+        let waived: Vec<BillingFeeWaived> = logged(&store, "billing.fee.waived").await;
+        assert_eq!(
+            waived,
+            [BillingFeeWaived {
+                bill_id: bill,
+                fee_id: fee_id(1),
+                reason_code_id: putting_it_right(),
+            }]
+        );
+        let approvals: Vec<SecurityPermissionOverridden> =
+            logged(&store, "security.permission.overridden").await;
+        let approved: Vec<&str> = approvals
+            .iter()
+            .map(|approval| approval.permission_key.as_str())
+            .collect();
+        assert_eq!(approved, ["billing.fee.waive"]);
+
+        edge.settle_bill(server(), bill, cash(121_000), None)
+            .await
+            .expect("settles for what the waive left");
+        let settled: Vec<BillingBillSettled> = logged(&store, "billing.bill.settled").await;
+        let codes: Vec<&str> = settled
+            .iter()
+            .flat_map(|settle| &settle.fee_lines)
+            .map(|line| line.code.as_str())
+            .collect();
+        assert_eq!(codes, ["COVER"]);
+    });
+}
+
+/// Only a waivable fee the bill charges is waived, for a reason published for waiving, with an
+/// approver where the store asks for one. Each refusal writes nothing.
+#[test]
+fn a_fee_is_waived_only_where_its_rule_its_reason_and_its_approver_allow() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), fees(&[waivable_service(10), cover()]));
+        a_table_of(&edge, table(1), 2).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let manager = the_manager();
+
+        let not_waivable = edge
+            .waive_fee(
+                server(),
+                bill,
+                fee_id(2),
+                putting_it_right(),
+                Some(&manager),
+            )
+            .await;
+        assert!(
+            matches!(
+                not_waivable,
+                Err(AppError::Domain(DomainError::FeeNotWaivable))
+            ),
+            "{not_waivable:?}"
+        );
+        let not_on_bill = edge
+            .waive_fee(
+                server(),
+                bill,
+                fee_id(9),
+                putting_it_right(),
+                Some(&manager),
+            )
+            .await;
+        assert!(
+            matches!(
+                not_on_bill,
+                Err(AppError::Domain(DomainError::FeeNotOnBill))
+            ),
+            "{not_on_bill:?}"
+        );
+        let for_a_void = PublishedReasonCodes::framework_default()
+            .codes()
+            .iter()
+            .find(|reason| !reason.is_valid_for(ReasonAction::WaiveFee))
+            .map(|reason| reason.id)
+            .expect("a framework reason that is not for a waive");
+        let wrong_reason = edge
+            .waive_fee(server(), bill, fee_id(1), for_a_void, Some(&manager))
+            .await;
+        assert!(
+            matches!(wrong_reason, Err(AppError::ReasonCodeNotValid)),
+            "{wrong_reason:?}"
+        );
+        // A store that does not enforce each person's own set asks a holder's PIN every time.
+        let unapproved = edge
+            .waive_fee(server(), bill, fee_id(1), putting_it_right(), None)
+            .await;
+        assert!(
+            matches!(unapproved, Err(AppError::ApprovalRequired)),
+            "{unapproved:?}"
+        );
+        assert!(
+            logged::<BillingFeeWaived>(&store, "billing.fee.waived")
+                .await
+                .is_empty(),
+            "a refusal writes nothing"
+        );
+    });
+}
+
+/// A fee is waived once, and only while its bill is open: a second waive finds it no longer on
+/// the bill, and a settled bill owes nothing to waive.
+#[test]
+fn a_fee_is_waived_once_and_only_on_an_open_bill() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), fees(&[waivable_service(10), cover()]));
+        a_table_of(&edge, table(1), 2).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let manager = the_manager();
+        edge.waive_fee(
+            server(),
+            bill,
+            fee_id(1),
+            putting_it_right(),
+            Some(&manager),
+        )
+        .await
+        .expect("waives");
+        let twice = edge
+            .waive_fee(
+                server(),
+                bill,
+                fee_id(1),
+                putting_it_right(),
+                Some(&manager),
+            )
+            .await;
+        assert!(
+            matches!(twice, Err(AppError::Domain(DomainError::FeeNotOnBill))),
+            "a waived fee is no longer on the bill: {twice:?}"
+        );
+
+        edge.settle_bill(server(), bill, cash(121_000), None)
+            .await
+            .expect("settles");
+        let settled = edge
+            .waive_fee(
+                server(),
+                bill,
+                fee_id(1),
+                putting_it_right(),
+                Some(&manager),
+            )
+            .await;
+        assert!(
+            matches!(settled, Err(AppError::Domain(DomainError::Transition(_)))),
+            "a settled bill owes nothing to waive: {settled:?}"
+        );
+        assert_eq!(
+            logged::<BillingFeeWaived>(&store, "billing.fee.waived")
+                .await
+                .len(),
+            1
+        );
+    });
+}
+
+/// A waive follows the fee's id (ADR-0159 decision 5): each part of a split of the bill charges
+/// nothing for it while sharing the cover, the parts merged back charge the cover whole and still
+/// nothing for it, and a restart folds the same bill back from the log.
+#[test]
+fn a_waive_follows_the_fee_through_a_split_a_merge_and_a_restart() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let published = fees(&[waivable_service(10), cover()]);
+        let edge = edge_over(store.clone(), published.clone());
+        let lines = a_table_of(&edge, table(1), 2).await;
+        let source = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let waived = edge
+            .waive_fee(
+                server(),
+                source,
+                fee_id(1),
+                putting_it_right(),
+                Some(&the_manager()),
+            )
+            .await
+            .expect("waives");
+
+        let parts = edge
+            .split_bill(server(), source, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+        let [one, two] = parts.as_slice() else {
+            panic!("two parts: {parts:?}");
+        };
+        assert_eq!(charged(&totals(&edge, *one)), [("COVER", 5_000)]);
+        assert_eq!(charged(&totals(&edge, *two)), [("COVER", 5_000)]);
+        let refused = edge
+            .waive_fee(
+                server(),
+                *one,
+                fee_id(1),
+                putting_it_right(),
+                Some(&the_manager()),
+            )
+            .await;
+        assert!(
+            matches!(refused, Err(AppError::Domain(DomainError::FeeNotOnBill))),
+            "a part keeps the bill's waive: {refused:?}"
+        );
+
+        let merged = edge
+            .merge_bills(server(), *one, vec![*two])
+            .await
+            .expect("merges");
+        assert_eq!(
+            totals(&edge, merged),
+            waived,
+            "the bill the waive left, whole again"
+        );
+
+        let restarted = edge_over(store, published);
+        restarted.rebuild().await.expect("rebuilds");
+        assert_eq!(totals(&restarted, merged), waived);
+    });
+}
+
+/// Where the store decides with each person's own set (ADR-0158), a person who holds the waive
+/// directly waives alone, with no approval on the record.
+#[test]
+fn a_person_who_holds_the_waive_directly_waives_alone() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let mut enforced = session(fees(&[waivable_service(10)]));
+        enforced.permissions_enforced = true;
+        let mut staff = StaffRoster::new();
+        staff.insert(
+            "MGR-1",
+            StaffAuth {
+                employee_id: Some(server().employee_id),
+                permissions: PermissionSet::EMPTY
+                    .with(Permission::ManageTables)
+                    .with(Permission::AddLine)
+                    .with(Permission::OpenBill)
+                    .with(Permission::WaiveFee),
+                permissions_with_approval: PermissionSet::EMPTY,
+                discount_ceiling: None,
+                pin_phc: None,
+            },
+        );
+        enforced.staff = staff;
+        let edge = Edge::new(
+            store.clone(),
+            StoreIdentity::for_store(store_id()),
+            enforced,
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator");
+        a_table_of(&edge, table(1), 1).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let after = edge
+            .waive_fee(server(), bill, fee_id(1), putting_it_right(), None)
+            .await
+            .expect("a direct holder needs nobody's PIN");
+        assert!(after.fee_lines.is_empty());
+        assert!(
+            logged::<SecurityPermissionOverridden>(&store, "security.permission.overridden")
+                .await
+                .is_empty(),
+            "acting on a permission you hold is not an override"
+        );
     });
 }

@@ -316,6 +316,19 @@ export const TASKS = [
       "the same missing moment as the two voids above — the amount and the manager's badge and PIN go into fields that exist only once the panel is open, and the harness types only in a precondition, before the first tap",
   },
   {
+    task: "Waive a fee on a bill",
+    budget: 3,
+    note: "Three, at §6's ceiling for a rare action: open the bill, waive the fee, cite a reason — the discount's shape (ADR-0159 decision 5). The manager's badge and PIN are **typed** where the person needs an approver, which `billing.fee.waive` asks for wherever the store does not enforce each person's own set. A fee shows **Waive** only where its rule is published waivable, so a store whose fees all stay on every bill never sees this task.",
+    steps: [
+      { route: "/table/:id", action: "takePayment" },
+      { route: "/table/:id/pay", action: "askWaiveFee" },
+      { route: "/table/:id/pay", action: "waiveFeeReason" },
+    ],
+    outcome: { route: "/table/:id/pay", mark: "fee-waived" },
+    unreplayable:
+      "the example store publishes no fee to waive, and the manager's badge and PIN are typed between the second and third taps, which the harness cannot do",
+  },
+  {
     task: "Bump a ticket on the kitchen display",
     budget: 1,
     note: "A tap anywhere on the card. One, not two: the kitchen has both hands full.",

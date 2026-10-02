@@ -23,14 +23,14 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
-use pos_proto::events::BillFeeLine;
-use pos_proto::ids::{BillId, OrderId, OrderLineId, ReasonCodeId, TableId};
+use pos_proto::ids::{BillId, FeeId, OrderId, OrderLineId, ReasonCodeId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use pos_proto::ids::EventId;
 
-use crate::app::{Approval, BillView, BuyerDetails, Edge, fee_records_in};
+use crate::app::{Approval, BillView, BuyerDetails, Edge};
+use crate::http::check::{CheckFeeLine, CheckResponse, check_fee_lines};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
 
@@ -404,6 +404,64 @@ impl VoidBillRequest {
     }
 }
 
+/// A fee waive as a till asks for it: the reason from the store's managed list, plus the badge
+/// and PIN of somebody who holds `billing.fee.waive` where the person acting needs one
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5).
+#[derive(Debug, Deserialize)]
+pub(crate) struct WaiveFeeRequest {
+    reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+impl WaiveFeeRequest {
+    fn approval(&self) -> Option<Approval> {
+        let code = self.approver_code.clone()?;
+        let pin = self.approver_pin.clone()?;
+        Some(Approval { code, pin })
+    }
+}
+
+/// `POST /api/bills/{id}/fees/{fee_id}/waive` — waive one of an open bill's fees, citing a reason
+/// (ADR-0159 decision 5).
+///
+/// Answers with the bill as it now stands, in the shape of its check, so the till redraws it from
+/// the edge's arithmetic and never subtracts the fee itself: the fee's tax goes with it. A fee
+/// that is not waivable answers `409 FEE_NOT_WAIVABLE`, one the bill does not charge
+/// `409 FEE_NOT_ON_BILL`, and a bill that is not open `409 TRANSITION_REFUSED`.
+pub(crate) async fn waive_fee<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path((id, fee_id)): Path<(String, String)>,
+    Json(request): Json<WaiveFeeRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    let Some(fee_id) = parse_ulid(&fee_id).map(FeeId::new) else {
+        return bad_request("a fee id is a ULID");
+    };
+    let approval = request.approval();
+    match edge
+        .waive_fee(
+            actor,
+            bill_id,
+            fee_id,
+            request.reason_code_id,
+            approval.as_ref(),
+        )
+        .await
+    {
+        Ok(totals) => Json(CheckResponse::of(&totals, &edge.session())).into_response(),
+        Err(error) => error_response(&error),
+    }
+}
+
 /// The state a voided bill came to rest in, so the till can show it rather than re-reading.
 #[derive(Debug, Serialize)]
 pub(crate) struct VoidBillResponse {
@@ -447,9 +505,9 @@ pub(crate) struct DiscountResponse {
     comp_total: Money,
     tax_total: Money,
     total_due: Money,
-    /// Each fee on the bill once the discount is on it, as the check reads name them: a
+    /// Each fee on the bill once the discount is on it, as the check reads list them: a
     /// percentage taken after discounts moves with the discount (ADR-0159).
-    fee_lines: Vec<BillFeeLine>,
+    fee_lines: Vec<CheckFeeLine>,
 }
 
 /// `POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).
@@ -490,7 +548,7 @@ where
                 comp_total: totals.comp_total,
                 tax_total: totals.tax_total,
                 total_due: totals.total_due,
-                fee_lines: fee_records_in(&totals, &session, session.display_language.as_deref()),
+                fee_lines: check_fee_lines(&totals, &session),
             })
             .into_response()
         }

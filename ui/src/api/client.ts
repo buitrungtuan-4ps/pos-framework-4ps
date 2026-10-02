@@ -57,6 +57,7 @@ import type {
   VoidBillResponse,
   VoidRequest,
   WaitingResponse,
+  WaiveFeeRequest,
 } from "./types";
 
 export class ApiError extends Error {
@@ -322,6 +323,11 @@ export const api = {
   // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.
   discountBill: (billId: string, request_: DiscountRequest) =>
     request<DiscountResponse>("POST", `/api/bills/${billId}/discount`, request_),
+
+  // One fee off one bill (ADR-0159 decision 5). The answer is the bill as it now stands, as the
+  // discount's is, so the screen never takes the fee off itself and misses its tax.
+  waiveFee: (billId: string, feeId: string, request_: WaiveFeeRequest) =>
+    request<CheckResponse>("POST", `/api/bills/${billId}/fees/${feeId}/waive`, request_),
 
   // Every counter order still owing money (ADR-0093) — the counter's equivalent of the floor plan.
   // A takeaway order is tableless by design, so without this a cashier would have to be told a ULID

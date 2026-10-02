@@ -1856,6 +1856,17 @@ export async function applyDiscount(
   });
 }
 
+// Waives one of a bill's fees, citing a reason (ADR-0159 decision 5). The answer is the bill as it
+// now stands, which the screen shows in place of what it held.
+export async function waiveFee(
+  billId: string,
+  feeId: string,
+  reasonCodeId: string,
+  approval?: ApproverRequest,
+): Promise<CheckResponse> {
+  return api.waiveFee(billId, feeId, { reason_code_id: reasonCodeId, ...approval });
+}
+
 export async function voidBill(
   billId: string,
   reasonCodeId: string,

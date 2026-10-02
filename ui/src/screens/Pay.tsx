@@ -8,6 +8,7 @@ import type {
   BillResponse,
   BuyerRequest,
   CheckResponse,
+  FeeLine,
   PaymentRequest,
   ReprintResponse,
 } from "../api/types";
@@ -40,6 +41,7 @@ import {
   tenderAccepted,
   tipsEnabled,
   voidBill,
+  waiveFee,
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
@@ -55,6 +57,10 @@ const VOID_BILL = "REASON_ACTION_VOID_BILL";
 // knocking money off and not for cancelling a bill, and the edge refuses a reason published for
 // the wrong one — so a picker that offered both would offer a refusal.
 const DISCOUNT = "REASON_ACTION_DISCOUNT";
+
+// The action waiving a fee cites (ADR-0159 decision 5), its own again: a reason for forgiving a
+// service charge is not necessarily one for taking money off the food.
+const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 
 // The shares of the bill the tip row offers. Three, because the row has four columns and one of
 // them is "none" — a fourth percentage would cost a line break on a phone for a choice a cashier
@@ -171,6 +177,11 @@ export function Pay() {
   // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
   // than becoming a figure the screen then reformats under the operator's fingers.
   const [discountText, setDiscountText] = createSignal("");
+  // The fee whose waive is being reasoned about (ADR-0159 decision 5), and the name of the last one
+  // waived, which the screen says back. The manager fields are the void's and the discount's: only
+  // one panel is ever open.
+  const [waiving, setWaiving] = createSignal<FeeLine | null>(null);
+  const [waivedFee, setWaivedFee] = createSignal<string | null>(null);
 
   // This bill's pre-bill, for the guest who wants to check it on paper before paying — on a split
   // table, their own part (roadmap-v3 B2.1). What came of it, or null before the first press.
@@ -746,6 +757,53 @@ export function Pay() {
       );
   };
 
+  // Waiving a fee (ADR-0159 decision 5): offered on a fee whose rule allows it, on a bill nothing
+  // has been taken against yet, to a person who may waive and where the store publishes a reason to
+  // cite. `billing.fee.waive` asks for an approver where the person holds it with approval, and
+  // where the store does not enforce each person's own set, always.
+  const waiveAsks = () => asksApprover("billing.fee.waive");
+  const readyToWaive = () => !waiveAsks() || approverTyped();
+  const canWaive = (fee: FeeLine) =>
+    fee.waivable === true &&
+    billId() !== null &&
+    taken().length === 0 &&
+    can("billing.fee.waive") &&
+    reasonsFor(WAIVE_FEE).length > 0;
+
+  const closeWaive = () => {
+    setWaiving(null);
+    setApproverCode("");
+    setApproverPin("");
+  };
+
+  // The first tap opens the reasons for this fee; nothing is written until one is chosen. A
+  // discount or a void half begun is put away, as the three share the manager's fields.
+  const askWaiveFee = (fee: FeeLine) => {
+    setError(null);
+    setWaivedFee(null);
+    closeDiscount();
+    closeVoid();
+    setWaiving(fee);
+  };
+
+  // The second tap: waive it, citing this reason. The edge answers with the whole bill as it now
+  // stands and the screen takes that figure, because the fee's tax leaves with it.
+  const waiveFeeReason = (reasonCodeId: string) => {
+    const id = billId();
+    const fee = waiving();
+    if (id === null || fee === null) {
+      return;
+    }
+    setError(null);
+    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approval() : undefined)
+      .then((totals) => {
+        setCheck(totals);
+        setWaivedFee(fee.display_name);
+        closeWaive();
+      })
+      .catch((caught: unknown) => setError(errorMessage(caught)));
+  };
+
   // What the screen becomes once the bill is voided: no money was taken, and the order is still
   // sitting on the table to be charged again. The way back is the order, not the floor — a voided
   // bill usually means the cashier is about to open the right one.
@@ -806,16 +864,32 @@ export function Pay() {
                     </p>
                   </Show>
                   {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
-                      already includes them: the till shows the edge's arithmetic, never its own. */}
+                      already includes them: the till shows the edge's arithmetic, never its own.
+                      A fee its rule lets staff waive carries **Waive** (decision 5). */}
                   <For
                     each={(totals().fee_lines ?? []).filter(
                       (fee) => fee.amount.amount_minor !== 0,
                     )}
                   >
                     {(fee) => (
-                      <p class="flex justify-between text-sm text-ink-muted" data-outcome="bill-fee">
+                      <p
+                        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+                        data-outcome="bill-fee"
+                      >
                         <span>{fee.display_name}</span>
-                        <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                        <span class="flex items-center gap-2">
+                          <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                          <Show when={canWaive(fee) && waiving() === null}>
+                            <button
+                              type="button"
+                              class="min-h-touch rounded-token border border-line px-3 text-sm"
+                              data-step="askWaiveFee"
+                              onClick={() => askWaiveFee(fee)}
+                            >
+                              {t("pay.waive_fee")}
+                            </button>
+                          </Show>
+                        </span>
                       </p>
                     )}
                   </For>
@@ -823,6 +897,61 @@ export function Pay() {
                     {formatAmount(totals().total_due)}
                   </p>
                 </>
+              )}
+            </Show>
+            {/*
+              Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
+              the manager's badge and PIN where the person needs an approver, typed rather than
+              tapped, so the act is three taps from the order screen — pay, waive, reason — as the
+              discount is. The reasons stay disabled until the approver is typed.
+            */}
+            <Show when={waiving()}>
+              {(fee) => (
+                <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                  <h2 class="font-semibold">{t("pay.waive_title", { fee: fee().display_name })}</h2>
+                  <Show when={waiveAsks()}>
+                    <p class="mt-1 text-sm text-ink-muted">{t("pay.waive_manager")}</p>
+                    <ApproverFields
+                      id="waive-fee-approver"
+                      code={approverCode()}
+                      pin={approverPin()}
+                      onCode={setApproverCode}
+                      onPin={setApproverPin}
+                      codeLabel={t("pay.approver_code")}
+                      pinLabel={t("pay.approver_pin")}
+                    />
+                  </Show>
+                  <p class="mt-3 text-sm text-ink-muted">{t("pay.waive_reason")}</p>
+                  <div class="mt-2 grid grid-cols-2 gap-2">
+                    <For each={reasonsFor(WAIVE_FEE)}>
+                      {(reason) => (
+                        <button
+                          type="button"
+                          class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                          disabled={!readyToWaive()}
+                          data-step="waiveFeeReason"
+                          onClick={() => waiveFeeReason(reason.reason_code_id)}
+                        >
+                          {reason.display_name}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                  <button
+                    type="button"
+                    class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                    onClick={() => closeWaive()}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              )}
+            </Show>
+            <Show when={waivedFee()}>
+              {(name) => (
+                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="fee-waived">
+                  {t("pay.fee_waived", { fee: name() })}
+                </p>
               )}
             </Show>
             {/*

@@ -56,6 +56,10 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   TAX_RATE_NOT_CONFIGURED: "error.tax_rate_not_configured",
   // A bill whose lines do not come to its class bases: the edge's own fault, not the cashier's.
   LINES_DO_NOT_MATCH_BASES: "error.internal",
+  // A waive the bill cannot take (ADR-0159 decision 5): a fee its rule keeps on every bill, or
+  // one no longer on this one, waived already on another till.
+  FEE_NOT_WAIVABLE: "error.fee_not_waivable",
+  FEE_NOT_ON_BILL: "error.fee_not_on_bill",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
   // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.

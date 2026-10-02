@@ -54,8 +54,37 @@ pub(crate) struct CheckResponse {
     /// settle records them, except that the name is the store's display language where the
     /// current rule translates it. Part by part for a table whose bill is split, as each part
     /// computes its own. Empty where no fee applies, which is every bill at a store with no
-    /// `fees` node. The till shows each line, and its total is still `total_due`.
-    fee_lines: Vec<BillFeeLine>,
+    /// `fees` node. The till shows each line, and its total is still `total_due`. A fee waived on
+    /// the bill charges nothing and is not listed (decision 5).
+    fee_lines: Vec<CheckFeeLine>,
+}
+
+/// One fee as the till shows it: the line the settle records, and whether staff may waive it.
+#[derive(Debug, Serialize)]
+pub(crate) struct CheckFeeLine {
+    #[serde(flatten)]
+    line: BillFeeLine,
+    /// Whether the fee's rule, as the bill froze it, lets staff waive it on one bill
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
+    /// **Waive** only on an open bill's waivable fee, and the edge refuses any other.
+    waivable: bool,
+}
+
+/// Each fee on `totals` as the till shows it, named in the store's display language.
+pub(crate) fn check_fee_lines(totals: &BillTotals, session: &EdgeSession) -> Vec<CheckFeeLine> {
+    totals
+        .fee_lines
+        .iter()
+        .zip(fee_records_in(
+            totals,
+            session,
+            session.display_language.as_deref(),
+        ))
+        .map(|(fee, line)| CheckFeeLine {
+            line,
+            waivable: fee.waivable,
+        })
+        .collect()
 }
 
 impl CheckResponse {
@@ -67,7 +96,7 @@ impl CheckResponse {
             comp_total: totals.comp_total,
             tax_total: totals.tax_total,
             total_due: totals.total_due,
-            fee_lines: fee_records_in(totals, session, session.display_language.as_deref()),
+            fee_lines: check_fee_lines(totals, session),
         }
     }
 }

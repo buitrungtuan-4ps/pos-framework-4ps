@@ -2950,6 +2950,7 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",
+      "Waive a fee on a bill",
     ].sort(),
   );
   for (const declared of skipped) {

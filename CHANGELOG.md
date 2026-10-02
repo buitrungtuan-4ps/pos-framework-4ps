@@ -382,6 +382,30 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The till waives a fee on one bill** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decision 5).
+  - `POST /api/bills/{id}/fees/{fee_id}/waive` takes the reason, and an approver's code and PIN
+    where the person needs one, and answers with the bill as it now stands, in the shape of its
+    check. It writes `billing.fee.waived`, and `security.permission.overridden` when somebody
+    approved, in one transaction. A fee whose rule is not waivable answers `409
+    FEE_NOT_WAIVABLE`, one the bill does not charge or has waived already `409 FEE_NOT_ON_BILL`,
+    and a bill that is not open `409 TRANSITION_REFUSED`, each before anybody is asked to
+    approve.
+  - The bill charges the fee and its tax nothing from then on. Every part of a split of it keeps
+    the waive, a merge keeps every waive of the bills it puts together, and a restart folds them
+    back from the log.
+  - The check reads and the discount's answer mark each fee line `waivable`. On the pay screen,
+    and on the order screen's check while one bill is open on the table, a waivable fee carries
+    **Waive**: the store's reasons for a waive, with the manager's code and PIN where the person
+    needs an approver, which `billing.fee.waive` asks for wherever the store does not enforce
+    each person's own set. The till names `FEE_NOT_WAIVABLE` and `FEE_NOT_ON_BILL` in words.
+  - **Upgrade note:** a new edge route, in `docs/snapshots/routes.txt` and `ROUTE_PERMISSIONS`
+    under `billing.fee.waive`, and an additive `waivable` on every fee line of the check reads and
+    the discount's answer. A store's fees are waived only where a rule says `waivable`, and an
+    approver must hold `billing.fee.waive`, which a store's roles carry from the next publish of
+    its `permissions` node after migration `0076`. The event, the permission and the migration
+    are the entry below's; no protocol version change.
+
 - **Waiving a fee is an act, with an event, a permission and a reason of its own**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 5). A fee is never waived by editing
   its rule: a rule published `waivable` is removed from one open bill, and every other bill is

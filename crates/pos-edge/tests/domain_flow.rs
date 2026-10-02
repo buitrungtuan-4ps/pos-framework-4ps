@@ -14,7 +14,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use pos_core::permission::PermissionSet;
+use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::pairing::Minter;
 use pos_edge::printing::{Printers, TransportFactory};
 use pos_edge::{
@@ -371,13 +371,15 @@ async fn a_check_shows_each_fee_and_the_settle_takes_its_total() {
     .await;
     assert_eq!(status, StatusCode::OK);
 
-    // 5% of 150,000, and the 10% tax on 157,500, of which 750 is the fee's.
+    // 5% of 150,000, and the 10% tax on 157,500, of which 750 is the fee's. A rule that says
+    // nothing about waiving is not waivable (ADR-0159 decision 5).
     let fee_line = json!([{
         "fee_id": "01JQ0000000000000000000003",
         "code": "SERVICE",
         "display_name": "Service charge",
         "amount": vnd(7_500),
         "tax": vnd(750),
+        "waivable": false,
     }]);
     let (status, check) = send(
         app.clone(),
@@ -1265,7 +1267,7 @@ async fn a_manager_prints_a_test_page_on_a_published_printer() {
     let printers = Arc::new(Printers::over(Arc::new(Recorders(Arc::clone(&recorder)))));
     let (app, token) = app_with_permissions(
         Some((printers, PublishedDevices::new(vec![counter_printer()]))),
-        PermissionSet::default().with(pos_core::permission::Permission::ManageDevices),
+        PermissionSet::default().with(Permission::ManageDevices),
     )
     .await;
 
@@ -1519,4 +1521,170 @@ async fn a_store_with_no_published_connection_lists_none() {
     let (status, listed) = send(app, &token, "GET", "/api/integrations", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed, json!([]));
+}
+
+/// A fee is waived over HTTP (ADR-0159 decision 5): the check marks which fee may be waived, the
+/// waive answers with the bill as it now stands, and each refusal answers under a token of its own.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one bill through every refusal the route makes and the waive that succeeds"
+)]
+async fn a_fee_is_waived_over_http_and_each_refusal_says_why() {
+    let fees: PublishedFees = serde_json::from_str(
+        &json!({ "fees": [
+            {
+                "fee_id": "01JQ0000000000000000000003",
+                "code": "SERVICE",
+                "display_name": "Service charge",
+                "kind": "FEE_KIND_PERCENT",
+                "rate": { "numerator": 5, "denominator": 100 },
+                "waivable": true,
+            },
+            {
+                "fee_id": "01JQ0000000000000000000004",
+                "code": "COVER",
+                "display_name": "Cover charge",
+                "kind": "FEE_KIND_AMOUNT_PER_BILL",
+                "amount": vnd(10_000),
+            },
+        ] })
+        .to_string(),
+    )
+    .expect("a fees node");
+    // The person signed in may waive a fee, so their own code and PIN approve it: a store that does
+    // not enforce each person's own set still asks for a holder's PIN, and takes theirs.
+    let (app, token) = app_with_config(
+        None,
+        PermissionSet::EMPTY.with(Permission::WaiveFee),
+        PublishedShift::default(),
+        fees,
+    )
+    .await;
+    let table = TableId::new(Ulid::from_u128(702));
+    send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/seat"),
+        None,
+    )
+    .await;
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/lines"),
+        Some(a_line_body()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, bill) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &format!("/api/tables/{table}/bill"),
+        None,
+    )
+    .await;
+    let bill_id = bill["bill_id"].as_str().expect("a bill id").to_owned();
+
+    // 5% of 150,000 and a 10,000 cover, and 10% on 167,500. Only the service charge is waivable.
+    let (status, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/bills/{bill_id}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(check["fee_lines"][0]["code"], "SERVICE", "{check}");
+    assert_eq!(check["fee_lines"][0]["waivable"], true, "{check}");
+    assert_eq!(check["fee_lines"][1]["waivable"], false, "{check}");
+    assert_eq!(check["total_due"], json!(vnd(184_250)));
+
+    let reason = pos_proto::reason_codes::PublishedReasonCodes::framework_default()
+        .for_action(pos_proto::reason_codes::ReasonAction::WaiveFee)
+        .next()
+        .expect("a framework reason for a waive")
+        .id
+        .to_string();
+    let waive = |fee: &str| format!("/api/bills/{bill_id}/fees/{fee}/waive");
+    let approved = json!({
+        "reason_code_id": reason,
+        "approver_code": STAFF_CODE,
+        "approver_pin": STAFF_PIN,
+    });
+
+    for (uri, body, status, token_expected) in [
+        (
+            waive("01JQ0000000000000000000003"),
+            json!({ "reason_code_id": reason }),
+            StatusCode::FORBIDDEN,
+            "APPROVAL_REQUIRED",
+        ),
+        (
+            waive("01JQ0000000000000000000004"),
+            approved.clone(),
+            StatusCode::CONFLICT,
+            "FEE_NOT_WAIVABLE",
+        ),
+        (
+            waive("01JQ0000000000000000000009"),
+            approved.clone(),
+            StatusCode::CONFLICT,
+            "FEE_NOT_ON_BILL",
+        ),
+    ] {
+        let (answered, refusal) =
+            send_for_reason(app.clone(), &token, "POST", &uri, Some(body)).await;
+        assert_eq!(answered, status, "{uri}");
+        assert_eq!(refusal.as_deref(), Some(token_expected), "{uri}");
+    }
+    let (status, _) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &waive("not-a-fee"),
+        Some(approved.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The cover alone, and 10% on 160,000.
+    let (status, waived) = send(
+        app.clone(),
+        &token,
+        "POST",
+        &waive("01JQ0000000000000000000003"),
+        Some(approved),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{waived}");
+    assert_eq!(
+        waived["fee_lines"],
+        json!([{
+            "fee_id": "01JQ0000000000000000000004",
+            "code": "COVER",
+            "display_name": "Cover charge",
+            "amount": vnd(10_000),
+            "tax": vnd(1_000),
+            "waivable": false,
+        }])
+    );
+    assert_eq!(waived["total_due"], json!(vnd(176_000)));
+    let (_, check) = send(
+        app.clone(),
+        &token,
+        "GET",
+        &format!("/api/bills/{bill_id}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        check["total_due"],
+        json!(vnd(176_000)),
+        "the bill reads as the waive answered"
+    );
 }
