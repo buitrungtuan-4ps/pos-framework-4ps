@@ -18283,6 +18283,7 @@ impl StationStore for FakeFloor {
                 name: station.name.clone(),
                 backup_station_id: station.backup_station_id,
                 is_default: station.is_default,
+                late_after_seconds: station.late_after_seconds,
                 status: EntityStatus::Active,
             },
             version.clone(),
@@ -18344,6 +18345,7 @@ impl StationStore for FakeFloor {
         row.record.name.clone_from(&update.name);
         row.record.backup_station_id = update.backup_station_id;
         row.record.is_default = update.is_default;
+        row.record.late_after_seconds = update.late_after_seconds;
         row.record.status = update.status;
         row.etag = version.clone();
         Ok(UpdateOutcome::Updated(version))
@@ -18394,6 +18396,11 @@ impl RoutingRuleStore for FakeFloor {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one store's stations and routing rules through create, update, list and remove, \
+              against the same fake"
+)]
 async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     let store = FakeFloor::default();
     let mine = tenant();
@@ -18410,6 +18417,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
             name: "Oven".to_owned(),
             backup_station_id: Some(bar),
             is_default: true,
+            late_after_seconds: Some(240),
         },
     )
     .await
@@ -18427,6 +18435,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
                 name: "Pizza oven".to_owned(),
                 backup_station_id: None,
                 is_default: false,
+                late_after_seconds: None,
                 status: EntityStatus::Active,
             },
             &stations[0].etag,
@@ -18442,6 +18451,7 @@ async fn kitchen_store_creates_lists_stations_and_removes_routing_rules() {
     assert_eq!(oven_view.record.name, "Pizza oven");
     assert_eq!(oven_view.record.backup_station_id, None);
     assert!(!oven_view.record.is_default);
+    assert_eq!(oven_view.record.late_after_seconds, None);
 
     // Two routing rules — one by item, one by course — then remove one (returns false the 2nd time).
     let item_rule = RoutingRuleId::new(Ulid::from_u128(50));
@@ -19622,6 +19632,189 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
     assert!(
         doc["stations"]["default_station_id"].as_str().is_some(),
         "the default station rode into the node"
+    );
+}
+
+/// Each kitchen station says when its tickets are late
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2): a threshold outside a minute to an hour is refused naming the field, a write holds to
+/// the version it read and is audited with the threshold, and the publish carries a station's
+/// threshold and leaves it off a station that sets none, so the edge reads its ten minutes there.
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one station's threshold from the refused writes through the guarded update to the \
+              published node, against the same data"
+)]
+async fn a_stations_late_threshold_is_checked_guarded_audited_and_published() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_publish_app(
+        admin,
+        FakeFloor::default(),
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let store_ulid = store_id().as_ulid().to_string();
+    let station = |name: &str, late: serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_ulid,
+            "name": name,
+            "late_after_seconds": late,
+        })
+    };
+
+    for refused in [
+        serde_json::json!(59),
+        serde_json::json!(3601),
+        serde_json::json!(-60),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/kitchen/stations",
+                &station("Oven", refused.clone()),
+                &cookie,
+            ))
+            .await
+            .expect("route the create");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await;
+        assert!(
+            body.to_string().contains("late_after_seconds"),
+            "the refusal names the field: {body}"
+        );
+    }
+
+    let oven = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &station("Oven", serde_json::json!(240)),
+            &cookie,
+        ))
+        .await
+        .expect("create the oven");
+    assert_eq!(oven.status(), StatusCode::CREATED);
+    let oven_etag = etag_of(&oven);
+    let oven_id = json_body(oven).await["id"].as_str().expect("id").to_owned();
+    let bar = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/stations",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid, "name": "Bar" }),
+            &cookie,
+        ))
+        .await
+        .expect("create the bar");
+    assert_eq!(bar.status(), StatusCode::CREATED);
+
+    let read = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/kitchen/stations/{oven_id}?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the oven");
+    assert_eq!(json_body(read).await["late_after_seconds"], 240);
+
+    // An update out of bounds is refused before anything is compared or written.
+    let update = |late: serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "name": "Oven",
+            "late_after_seconds": late,
+            "status": "active",
+        })
+    };
+    let out_of_bounds = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(3601)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(out_of_bounds.status(), StatusCode::BAD_REQUEST);
+
+    let saved = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(300)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the update");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+
+    // A console still holding the version from before that save is refused, and the save stands.
+    let stale = router
+        .clone()
+        .oneshot(patch_with_etag(
+            &format!("/admin/kitchen/stations/{oven_id}"),
+            &update(serde_json::json!(900)),
+            &cookie,
+            &oven_etag,
+        ))
+        .await
+        .expect("route the stale update");
+    assert_eq!(stale.status(), StatusCode::PRECONDITION_FAILED);
+
+    let recorded = audit.list(None, 20).await.expect("list audit entries");
+    let updated = recorded
+        .iter()
+        .find(|entry| entry.action == "kitchen.station.update")
+        .expect("the save is audited");
+    assert_eq!(
+        updated
+            .after
+            .as_ref()
+            .map(|after| after["late_after_seconds"].clone()),
+        Some(serde_json::json!(300))
+    );
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/floor/publish",
+            &serde_json::json!({ "tenant_id": tenant_ulid, "store_id": store_ulid }),
+            &cookie,
+        ))
+        .await
+        .expect("publish the floor");
+    assert_eq!(published.status(), StatusCode::OK);
+    let effective = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!("/admin/stores/{store_ulid}/config?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("read the effective config");
+    let doc = json_body(effective).await;
+    let stations = doc["stations"]["stations"]
+        .as_array()
+        .expect("the stations node");
+    let named = |name: &str| {
+        stations
+            .iter()
+            .find(|station| station["name"] == name)
+            .cloned()
+            .expect("the station is published")
+    };
+    assert_eq!(named("Oven")["late_after_seconds"], 300);
+    assert!(
+        named("Bar").get("late_after_seconds").is_none(),
+        "a station that sets no threshold publishes none"
     );
 }
 

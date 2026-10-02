@@ -4410,6 +4410,22 @@ impl TableStore for PostgresFloor {
     }
 }
 
+/// A station's late threshold as its `integer` column holds it.
+///
+/// # Errors
+///
+/// [`FloorStoreError`] for a threshold no `integer` holds, which the route's bounds never let
+/// through.
+fn late_after_column(seconds: Option<u32>) -> Result<Option<i32>, FloorStoreError> {
+    seconds
+        .map(|seconds| {
+            i32::try_from(seconds).map_err(|_| {
+                FloorStoreError::new("a station's late threshold does not fit its column")
+            })
+        })
+        .transpose()
+}
+
 /// Reads one queried row into a [`Station`].
 fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError> {
     let backup_station_id = row
@@ -4424,6 +4440,11 @@ fn station_record(row: StationRow) -> Result<Versioned<Station>, FloorStoreError
         name: row.name,
         backup_station_id,
         is_default: row.is_default,
+        // A column the route only ever writes within its bounds; a value that is not a `u32` reads
+        // as unset, the default, rather than refusing the whole list.
+        late_after_seconds: row
+            .late_after_seconds
+            .and_then(|seconds| u32::try_from(seconds).ok()),
         status: EntityStatus::from_db(&row.status),
     };
     Ok(Versioned::new(record, Version::new(row.version)))
@@ -4462,6 +4483,7 @@ impl StationStore for PostgresFloor {
             &station.name,
             backup.as_deref(),
             station.is_default,
+            late_after_column(station.late_after_seconds)?,
         )
         .await
         .map(Version::new)
@@ -4504,6 +4526,7 @@ impl StationStore for PostgresFloor {
             &station.name,
             backup.as_deref(),
             station.is_default,
+            late_after_column(station.late_after_seconds)?,
             station.status.as_str(),
             expected.as_str(),
         )

@@ -1713,6 +1713,9 @@ export interface Station {
   readonly name: string;
   readonly backup_station_id: string | null;
   readonly is_default: boolean;
+  /** How long a ticket waits, in seconds, before the station's kitchen display marks it late, or
+   *  `null` where nobody has said, which the store reads as ten minutes (ADR-0160 decision 2). */
+  readonly late_after_seconds: number | null;
   readonly status: EntityStatus;
   readonly etag: ETag;
 }

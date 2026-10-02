@@ -30,7 +30,9 @@ use std::collections::BTreeMap;
 
 use pos_core::permission::Permission;
 use pos_proto::SalesChannel;
-use pos_proto::ids::{AreaId, CourseId, EmployeeId, MenuItemId, ModifierGroupId, TableId};
+use pos_proto::ids::{
+    AreaId, CourseId, EmployeeId, MenuItemId, ModifierGroupId, StationId, TableId,
+};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuCourse, MenuEntry, MenuModifierGroup};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
@@ -126,6 +128,19 @@ fn idle_lock() -> bool {
 fn shift_settings() -> bool {
     std::env::var("POS_DEMO_PROFILE")
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("shift-settings"))
+}
+
+/// Whether this demo store's kitchen has two stations, each marking its tickets late after its own
+/// threshold — `POS_DEMO_PROFILE=kitchen-stations`.
+///
+/// That profile publishes the `stations` node [`demo_stations`] builds
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2), so the browser gate can watch one ticket turn late at its own station's threshold
+/// while another waits for ten minutes. Every other profile publishes no `stations` node, which is
+/// what a store that has published no kitchen runs: one station, the till's own fallback.
+fn kitchen_stations() -> bool {
+    std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("kitchen-stations"))
 }
 
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
@@ -275,6 +290,11 @@ fn demo_menu() -> MenuBook {
 /// `POS_DEMO_PROFILE=shift-settings` publishes the same store with a `shift` node that fills in a
 /// float of 500,000 đồng and shows the expected cash at the count. See [`shift_settings`].
 ///
+/// # The kitchen-stations profile
+///
+/// `POS_DEMO_PROFILE=kitchen-stations` publishes the same store with a kitchen and a bar, whose
+/// tickets are late after two minutes and ten. See [`kitchen_stations`].
+///
 /// An environment variable rather than a second example binary: the profiles differ by a published
 /// node apiece, and a second `main.rs` would be a second copy of the boot path — which is the thing
 /// that drifts.
@@ -339,6 +359,13 @@ pub fn config_document() -> Option<serde_json::Value> {
             serde_json::json!({ "opening_float_minor": 500_000, "blind_close": false }),
         );
     }
+    // Published only on its own profile, so every other flow fires to the till's fallback station
+    // and marks a ticket late after ten minutes, as a store that has published no kitchen does.
+    if kitchen_stations()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("stations".to_owned(), demo_stations());
+    }
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
     if !staffed()
@@ -347,6 +374,30 @@ pub fn config_document() -> Option<serde_json::Value> {
         object.remove("permissions");
     }
     Some(document)
+}
+
+/// A kitchen and a bar, each marking its tickets late after its own threshold (ADR-0160 decision 2).
+///
+/// The kitchen is the default station and sets two minutes; the bar sets nothing, so its tickets are
+/// late after the ten minutes every board used before. The iced tea is routed to the bar, so one
+/// order sends a ticket to each and the two turn late at different times. Published as JSON, as the
+/// floor is, so it goes through the deserialisation a cloud's node does.
+fn demo_stations() -> serde_json::Value {
+    let kitchen = StationId::new(Ulid::from_u128(301)).to_string();
+    let bar = StationId::new(Ulid::from_u128(302)).to_string();
+    serde_json::json!({
+        "stations": [
+            { "station_id": kitchen, "name": "Kitchen", "late_after_seconds": 120 },
+            { "station_id": bar, "name": "Bar" },
+        ],
+        "routing": [
+            {
+                "station_id": bar,
+                "menu_item_id": MenuItemId::new(Ulid::from_u128(103)).to_string(),
+            },
+        ],
+        "default_station_id": kitchen,
+    })
 }
 
 /// The money settings of a store in a country that rounds its cash (ADR-0105).
@@ -439,7 +490,7 @@ mod tests {
     use pos_proto::ids::MenuItemId;
     use pos_proto::ulid::Ulid;
 
-    use super::{DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document};
+    use super::{DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_stations};
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
 
@@ -565,5 +616,25 @@ mod tests {
                 entry.display_name
             );
         }
+    }
+
+    /// The kitchen-stations profile's node arrives as two stations with their own thresholds: the
+    /// kitchen's two minutes, and the bar's ten, which it sets by setting nothing. The iced tea goes
+    /// to the bar and everything else to the kitchen, so one order puts a ticket on each.
+    #[test]
+    fn the_kitchen_stations_node_gives_each_station_its_own_late_threshold() {
+        let document = serde_json::json!({ "stations": demo_stations() });
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        let thresholds: Vec<(&str, u32)> = session
+            .stations
+            .stations()
+            .iter()
+            .map(|station| (station.name.as_str(), station.late_after_seconds()))
+            .collect();
+        assert_eq!(thresholds, [("Kitchen", 120), ("Bar", 600)]);
+        let kitchen = session.stations.stations()[0].station_id;
+        let bar = session.stations.stations()[1].station_id;
+        assert_eq!(session.resolve_station(menu_item(103), None), Some(bar));
+        assert_eq!(session.resolve_station(menu_item(102), None), Some(kitchen));
     }
 }

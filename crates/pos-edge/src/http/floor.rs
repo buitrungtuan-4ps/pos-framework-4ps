@@ -19,7 +19,7 @@ use serde::Serialize;
 
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
-use pos_proto::floor::{FloorPlan, StationPlan};
+use pos_proto::floor::{FloorPlan, KitchenStation, StationPlan};
 use pos_proto::time::Timestamp;
 
 use crate::app::Edge;
@@ -29,7 +29,8 @@ use crate::app::Edge;
 pub(crate) struct FloorResponse {
     /// The areas and their tables.
     floor: FloorPlan,
-    /// The kitchen stations and item→station routing.
+    /// The kitchen stations and item→station routing, each station with the threshold its board
+    /// marks a ticket late after ([`resolved_thresholds`]).
     stations: StationPlan,
     /// What each table is doing right now, keyed by table id: free, occupied, awaiting payment,
     /// needs cleaning.
@@ -88,10 +89,76 @@ where
         StatusCode::OK,
         Json(FloorResponse {
             floor: session.floor.clone(),
-            stations: session.stations.clone(),
+            stations: resolved_thresholds(&session.stations),
             table_states,
             seated_times,
         }),
     )
         .into_response()
+}
+
+/// The station plan with every station's `late_after_seconds` as its board reads it
+/// ([`KitchenStation::late_after_seconds`], ADR-0160 decision 2): the station's own threshold, or
+/// ten minutes where it sets none or one out of bounds.
+///
+/// Resolved here so the kitchen display applies the bounds and the default exactly as the published
+/// type defines them, rather than keeping a copy of the rule that could drift. Only the read is
+/// resolved: the session keeps the plan as the cloud published it.
+fn resolved_thresholds(plan: &StationPlan) -> StationPlan {
+    StationPlan::from_parts(
+        plan.stations()
+            .iter()
+            .map(|station| KitchenStation {
+                late_after_seconds: Some(station.late_after_seconds()),
+                ..station.clone()
+            })
+            .collect(),
+        plan.routing().to_vec(),
+        plan.default_station_id(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolved_thresholds;
+    use pos_proto::floor::{KitchenStation, RoutingRule, StationPlan};
+    use pos_proto::ids::{MenuItemId, StationId};
+    use pos_proto::text::DisplayName;
+    use pos_proto::ulid::Ulid;
+
+    fn station(seed: u128, late_after_seconds: Option<u32>) -> KitchenStation {
+        KitchenStation {
+            station_id: StationId::new(Ulid::from_u128(seed)),
+            name: DisplayName::new("Station"),
+            backup_station_id: None,
+            late_after_seconds,
+        }
+    }
+
+    #[test]
+    fn each_station_is_read_with_the_threshold_its_board_marks_a_ticket_late_after() {
+        let rule = RoutingRule {
+            station_id: StationId::new(Ulid::from_u128(1)),
+            menu_item_id: Some(MenuItemId::new(Ulid::from_u128(9))),
+            course_id: None,
+        };
+        let published = StationPlan::from_parts(
+            vec![
+                station(1, Some(240)),
+                station(2, None),
+                station(3, Some(30)),
+            ],
+            vec![rule.clone()],
+            Some(StationId::new(Ulid::from_u128(2))),
+        );
+        let read = resolved_thresholds(&published);
+        let thresholds: Vec<Option<u32>> = read
+            .stations()
+            .iter()
+            .map(|station| station.late_after_seconds)
+            .collect();
+        assert_eq!(thresholds, [Some(240), Some(600), Some(600)]);
+        assert_eq!(read.routing(), [rule]);
+        assert_eq!(read.default_station_id(), published.default_station_id());
+    }
 }

@@ -456,6 +456,26 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Each kitchen station says when its tickets are late**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). Every kitchen display marked a ticket late after ten minutes, whatever its station
+  cooked.
+  - A station on the `stations` node gains `late_after_seconds`, from 60 to 3600. The console's
+    Stations screen sets it on each station as **Late after (minutes)**, a whole number from 1 to
+    60, and lists it; an empty field leaves the station on ten minutes. The station routes refuse a
+    threshold outside the bounds `400`, naming `late_after_seconds`, and keep their `If-Match` and
+    audit entry.
+  - The edge sends each station's threshold with the station list the till reads
+    (`GET /api/floor`): a station that sets none, or one outside the bounds, reads as 600 seconds.
+    The kitchen display marks a ticket late after its own station's threshold, on that station's
+    board and on the board for every station. A ticket whose station the store did not publish is
+    late after ten minutes.
+  - **Upgrade note:** `KitchenStation` gains `late_after_seconds` (`pos-proto`, additive), left off
+    the node while unset. Nothing changes until a station sets one and its floor is published, and
+    an edge that predates the field ignores it and marks every ticket late after ten minutes.
+    Migration `0080_station_late_after.sql` adds `kitchen_stations.late_after_seconds` (`integer`,
+    nullable). It is additive and rollback-safe. No event, permission or protocol change.
+
 - **Who sees the day's takings is a permission, `reports.takings.view`**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2, [ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).

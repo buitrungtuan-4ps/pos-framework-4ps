@@ -17,6 +17,8 @@
 //! and rules), for the reason every configuration shape is: a list survives JSON round-tripping
 //! through the tree and a person can read it in a diff ([ADR-0010](../../../docs/adr/0010-naming-standard.md)).
 
+use core::ops::RangeInclusive;
+
 use serde::{Deserialize, Serialize};
 
 use crate::display::GridPosition;
@@ -112,6 +114,16 @@ impl FloorPlan {
     }
 }
 
+/// The thresholds a station may set for when its tickets are late, in seconds, both bounds included:
+/// a minute at the least and an hour at the most, the whole minutes the console offers.
+pub const LATE_AFTER_SECONDS: RangeInclusive<u32> = 60..=3600;
+
+/// How long a ticket waits before the kitchen display marks it late when its station sets nothing:
+/// ten minutes, which every board used before a station could say
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+pub const DEFAULT_LATE_AFTER_SECONDS: u32 = 600;
+
 /// One kitchen station a fired line can route to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -126,6 +138,27 @@ pub struct KitchenStation {
     /// A backup must name a *different* station in the same plan (enforced by `pos_core::floor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_station_id: Option<StationId>,
+    /// How long a ticket at this station waits, in seconds, before the kitchen display marks it
+    /// late. Read it through [`KitchenStation::late_after_seconds`], which reads an absent value, or
+    /// one outside [`LATE_AFTER_SECONDS`], as [`DEFAULT_LATE_AFTER_SECONDS`]. Left off the wire
+    /// while absent, so a station that sets none is written as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_after_seconds: Option<u32>,
+}
+
+impl KitchenStation {
+    /// How long a ticket at this station waits before the kitchen display marks it late, in
+    /// seconds: the station's own threshold when it is within [`LATE_AFTER_SECONDS`], and
+    /// [`DEFAULT_LATE_AFTER_SECONDS`] otherwise.
+    ///
+    /// The cloud refuses a threshold outside the bounds, so one only arrives from a newer release
+    /// that widened them, and this release marks the ticket late when it always did.
+    #[must_use]
+    pub fn late_after_seconds(&self) -> u32 {
+        self.late_after_seconds
+            .filter(|seconds| LATE_AFTER_SECONDS.contains(seconds))
+            .unwrap_or(DEFAULT_LATE_AFTER_SECONDS)
+    }
 }
 
 /// One item→station routing rule: a fired line matching it routes to `station_id`.
@@ -244,7 +277,10 @@ impl StationPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::{FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule, StationPlan};
+    use super::{
+        DEFAULT_LATE_AFTER_SECONDS, FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule,
+        StationPlan,
+    };
     use crate::display::GridPosition;
     use crate::ids::{AreaId, CourseId, MenuItemId, StationId, TableId};
     use crate::text::DisplayName;
@@ -317,11 +353,13 @@ mod tests {
                 station_id: station_id(1),
                 name: DisplayName::new("Oven"),
                 backup_station_id: Some(station_id(2)),
+                late_after_seconds: Some(240),
             })
             .with_station(KitchenStation {
                 station_id: station_id(2),
                 name: DisplayName::new("Bar"),
                 backup_station_id: None,
+                late_after_seconds: None,
             })
             .with_rule(RoutingRule {
                 station_id: station_id(1),
@@ -361,5 +399,55 @@ mod tests {
     fn empty_plans_are_empty() {
         assert!(FloorPlan::new().is_empty());
         assert!(StationPlan::new().is_empty());
+    }
+
+    #[test]
+    fn a_station_that_sets_no_threshold_is_late_after_ten_minutes_and_writes_none() {
+        let id = station_id(1).to_string();
+        let station: KitchenStation =
+            serde_json::from_str(&format!(r#"{{ "station_id": "{id}", "name": "Oven" }}"#))
+                .expect("a station from before the field parses");
+        assert_eq!(station.late_after_seconds, None);
+        assert_eq!(station.late_after_seconds(), DEFAULT_LATE_AFTER_SECONDS);
+        assert_eq!(DEFAULT_LATE_AFTER_SECONDS, 600);
+        assert_eq!(
+            serde_json::to_string(&station).expect("serialise"),
+            format!(r#"{{"station_id":"{id}","name":"Oven"}}"#),
+            "a station that sets nothing is written as before"
+        );
+    }
+
+    #[test]
+    fn a_stations_threshold_round_trips() {
+        let plan = sample_stations();
+        let json = serde_json::to_string(&plan).expect("serialises");
+        assert_eq!(json.matches(r#""late_after_seconds":240"#).count(), 1);
+        let back: StationPlan = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(back, plan);
+        let oven = back.station(station_id(1)).expect("the oven");
+        assert_eq!(oven.late_after_seconds(), 240);
+        let bar = back.station(station_id(2)).expect("the bar");
+        assert_eq!(bar.late_after_seconds(), 600);
+    }
+
+    #[test]
+    fn a_threshold_outside_its_bounds_reads_as_ten_minutes() {
+        for (published, read) in [
+            (0, 600),
+            (59, 600),
+            (60, 60),
+            (240, 240),
+            (3600, 3600),
+            (3601, 600),
+            (u32::MAX, 600),
+        ] {
+            let station = KitchenStation {
+                station_id: station_id(1),
+                name: DisplayName::new("Oven"),
+                backup_station_id: None,
+                late_after_seconds: Some(published),
+            };
+            assert_eq!(station.late_after_seconds(), read, "{published}");
+        }
     }
 }

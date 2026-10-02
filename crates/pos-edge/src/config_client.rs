@@ -1833,6 +1833,7 @@ mod tests {
                 station_id,
                 name: DisplayName::new("Oven"),
                 backup_station_id: None,
+                late_after_seconds: None,
             })
             .with_rule(RoutingRule {
                 station_id,

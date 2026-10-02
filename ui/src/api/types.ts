@@ -155,6 +155,10 @@ export interface KitchenStation {
   station_id: string;
   name: string;
   backup_station_id?: string | null;
+  // How long a ticket at this station waits, in seconds, before the board marks it late. The edge
+  // sends the threshold the station's board uses (ADR-0160 decision 2): the station's own, or ten
+  // minutes where it sets none. Absent from an edge that predates the field.
+  late_after_seconds?: number;
 }
 
 export interface StationRoutingRule {

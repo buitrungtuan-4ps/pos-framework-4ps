@@ -80,6 +80,9 @@ pub fn compile_stations(stations: &[Station], rules: &[RoutingRule]) -> StationP
             backup_station_id: station
                 .backup_station_id
                 .filter(|backup| *backup != station.station_id && active_ids.contains(backup)),
+            // As stored: the route refused a threshold outside its bounds, and an unset one stays
+            // off the node, so the edge reads its default.
+            late_after_seconds: station.late_after_seconds,
         })
         .collect();
     plan_stations.sort_by_key(|station| station.station_id.to_string());
@@ -167,6 +170,7 @@ mod tests {
             name: name.to_owned(),
             backup_station_id: backup.map(|b| StationId::new(Ulid::from_u128(b))),
             is_default,
+            late_after_seconds: None,
             status,
         }
     }
@@ -239,6 +243,32 @@ mod tests {
         assert_eq!(
             plan.default_station_id(),
             Some(StationId::new(Ulid::from_u128(1)))
+        );
+    }
+
+    #[test]
+    fn a_stations_threshold_is_published_as_stored_and_an_unset_one_is_left_off() {
+        let stations = vec![
+            Station {
+                late_after_seconds: Some(240),
+                ..station(1, "Oven", None, true, EntityStatus::Active)
+            },
+            station(2, "Bar", None, false, EntityStatus::Active),
+        ];
+        let plan = compile_stations(&stations, &[]);
+        let oven = plan
+            .station(StationId::new(Ulid::from_u128(1)))
+            .expect("the oven");
+        assert_eq!(oven.late_after_seconds, Some(240));
+        let bar = plan
+            .station(StationId::new(Ulid::from_u128(2)))
+            .expect("the bar");
+        assert_eq!(bar.late_after_seconds, None);
+        let node = serde_json::to_value(&plan).expect("serialise");
+        assert_eq!(node["stations"][0]["late_after_seconds"], 240);
+        assert!(
+            node["stations"][1].get("late_after_seconds").is_none(),
+            "a station that sets no threshold publishes none"
         );
     }
 

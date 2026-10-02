@@ -1,0 +1,22 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0080 — when a kitchen station's tickets are late
+-- ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+-- decision 2).
+--
+-- Every kitchen display marked a ticket late after ten minutes, whatever the station cooked. An
+-- operator now says, per station, how long its tickets may wait:
+--
+--   * `late_after_seconds` — the seconds a ticket waits before its station's board marks it late.
+--                            No check constraint, as for `device_proposals.paper_width` (0078):
+--                            `pos-cloud` refuses a value outside 60 to 3600 before it writes, and
+--                            widening a constraint later would need a destructive statement.
+--
+-- Nullable, and the null is the whole compatibility story. Null is "nobody has said", which is
+-- published as nothing at all, and the edge reads nothing as the ten minutes every board used until
+-- now. A fleet takes this release, every row reads null, and every store's `stations` node and every
+-- board stay as they were.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE kitchen_stations ADD COLUMN IF NOT EXISTS late_after_seconds integer;

@@ -8389,7 +8389,7 @@ mod conditional_writes {
                 .await
                 .expect("insert the area");
             let station_version = floor
-                .insert_station(station, tenant, store_id, "Oven", None, true)
+                .insert_station(station, tenant, store_id, "Oven", None, true, None)
                 .await
                 .expect("insert the station");
 
@@ -8408,7 +8408,7 @@ mod conditional_writes {
             // A stale tag is refused; the current one applies and moves the row.
             assert_eq!(
                 floor
-                    .set_station(tenant, station, "Nope", None, false, "active", "1")
+                    .set_station(tenant, station, "Nope", None, false, None, "active", "1")
                     .await
                     .expect("the comparison must not raise"),
                 RowUpdate::VersionMismatch
@@ -8420,6 +8420,7 @@ mod conditional_writes {
                     "Pizza oven",
                     Some(station),
                     false,
+                    None,
                     "active",
                     &station_version,
                 )
@@ -8454,12 +8455,93 @@ mod conditional_writes {
                         "Ghost",
                         None,
                         false,
+                        None,
                         "active",
                         &moved,
                     )
                     .await
                     .expect("the probe must not raise"),
                 RowUpdate::NotFound
+            );
+        });
+    }
+
+    /// A station's late threshold (migration 0080, ADR-0160 decision 2) is written on create and on
+    /// update and read back from the column the mapper expects; a station nobody has set reads
+    /// `None`, which the cloud publishes as nothing, and an update that clears it writes null again.
+    #[test]
+    fn a_stations_late_threshold_round_trips_and_a_row_nobody_set_has_none() {
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let floor = store.floor();
+            let tenant = "0000000000TENANTSTATIONLATE";
+            let store_id = "000000000000STORESTATIONLA";
+            let oven = "0000000000000STATIONOVENLA";
+            let bar = "00000000000000STATIONBARLA";
+
+            let oven_version = floor
+                .insert_station(oven, tenant, store_id, "Oven", None, true, Some(240))
+                .await
+                .expect("insert the oven");
+            floor
+                .insert_station(bar, tenant, store_id, "Bar", None, false, None)
+                .await
+                .expect("insert the bar");
+            let read = |rows: &[store_postgres::StationRow], id: &str| {
+                rows.iter()
+                    .find(|row| row.id == id)
+                    .map(|row| (row.name.clone(), row.late_after_seconds))
+                    .expect("the station is listed")
+            };
+            let rows = floor
+                .fetch_stations(tenant, store_id)
+                .await
+                .expect("list the stations");
+            assert_eq!(read(&rows, oven), ("Oven".to_owned(), Some(240)));
+            assert_eq!(read(&rows, bar), ("Bar".to_owned(), None));
+
+            let moved = match floor
+                .set_station(
+                    tenant,
+                    oven,
+                    "Oven",
+                    None,
+                    true,
+                    Some(900),
+                    "active",
+                    &oven_version,
+                )
+                .await
+                .expect("the update")
+            {
+                RowUpdate::Updated(version) => version,
+                other @ (RowUpdate::VersionMismatch | RowUpdate::NotFound) => {
+                    panic!("expected the update to apply, got {other:?}")
+                }
+            };
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(row.late_after_seconds, Some(900));
+            assert_eq!(
+                row.version, moved,
+                "the version still comes from its own column"
+            );
+
+            floor
+                .set_station(tenant, oven, "Oven", None, true, None, "active", &moved)
+                .await
+                .expect("the update");
+            let row = floor
+                .fetch_station(tenant, oven)
+                .await
+                .expect("read the oven")
+                .expect("the oven is there");
+            assert_eq!(
+                row.late_after_seconds, None,
+                "cleared, it is nobody's again"
             );
         });
     }

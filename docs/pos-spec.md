@@ -36,7 +36,7 @@ Staff roles ship as editable templates: server, cashier, shift lead, store manag
 ## 4. Kitchen
 
 - Lines route to stations by configured rules (one station per item in v1).
-- **Kitchen display per station**: cards grouped by order and course, an age timer per card, colour change past a configured threshold. **Bump** completes; **recall** brings back the last 60 seconds.
+- **Kitchen display per station**: cards grouped by order and course, an age timer per card, colour change past a configured threshold. **Bump** completes; **recall** brings back the last 60 seconds. *Built so far: the threshold is each station's `late_after_seconds` on the `stations` node ([ADR-0160](adr/0160-everything-a-store-runs-differently-is-published-configuration.md) decision 2), from 60 to 3600 seconds, which the console sets per station in whole minutes. A station that sets none, or one outside those bounds, is late after 600 seconds, the ten minutes every board used before. The edge sends each station's threshold with the station list the till reads (`GET /api/floor`), and a ticket is late after its own station's threshold, on that station's board and on the board for every station; one whose station the store did not publish is late after ten minutes. Recall is not built.*
 - **Expo screen** (optional) aggregates bumped items by table for runners.
 - Printing runs a **queue with retry**. A failed station printer falls back to a configured backup printer or raises a red badge on that station's display. Screens are the fallback for paper, and paper is the fallback for screens.
 
