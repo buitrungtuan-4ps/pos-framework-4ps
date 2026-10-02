@@ -1023,6 +1023,87 @@
         }
       }
     },
+    "/admin/fees/preview": {
+      "post": {
+        "tags": [
+          "fees"
+        ],
+        "summary": "`POST /admin/fees/preview` — a sample bill at one store with rules in place, before they are\nwritten ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md): \"the console previews a\nsample bill before publishing\").",
+        "description": "A read: it writes nothing and publishes nothing, so it stands behind the fee reads' permission.\nIt resolves the store's rules with the ones sent in place, compiles them as a publish would, and\nassembles the bill with [`crate::fees::sample_bill`], which prices each line and adds it up with\n`pos_core`'s own functions, from the store's own published menu, tax table and rounding.",
+        "operationId": "admin_preview_fees",
+        "requestBody": {
+          "description": "The tenant, a store, the sales channel (dine-in when absent), the rules as they would be written — each with its scope and scope_id and the rule as a PUT sends it, its fee_id absent for a fee not created yet — and the sample bill's lines, each a menu_item_id from the store's menu and a quantity of 1 to 999. From 1 to 50 lines, and at most 20 rules",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The sample bill as the store would assemble it with those rules in place: each line priced from its menu, each fee charged with its tax and the parts of it taxed at each class, the tax per class, the cash rounding and the total due. Nothing is written or published"
+          },
+          "400": {
+            "description": "An id is not a ULID, the channel or a scope is not one, a rule is refused as a write would refuse it, or there are no lines, too many lines or rules, or a quantity out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store, brand or store a rule is for",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store could not assemble the bill: it has no locale, tax table or menu published (NOT_PUBLISHED), a line is not on its menu for the channel (NOT_ON_MENU), not available (NOT_AVAILABLE) or has no tax rate (TAX_RATE_NOT_CONFIGURED), or a rule it would run cannot apply there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The fee rule store, the registry, the catalog or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/fees/publish": {
       "post": {
         "tags": [

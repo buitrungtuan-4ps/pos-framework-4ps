@@ -30371,3 +30371,128 @@ async fn the_fee_routes_go_by_role_and_the_trail_keeps_ids_and_counts() {
         "ids and counts only: {recorded}"
     );
 }
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sample bill read four ways against the same store — with the rule, without it, \
+              with a line its menu does not sell, and at a store with nothing published — and by \
+              a role that may not read prices; split, each would rebuild the same fixture"
+)]
+async fn a_sample_bill_shows_a_rule_before_it_is_written_and_writes_nothing() {
+    let (router, config_trees, audit, admin) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, third] = fees_stores();
+    let preview = |store_id: StoreId, rules: &serde_json::Value, lines: &serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_scope_id(),
+            "store_id": store_id.to_string(),
+            "rules": rules,
+            "lines": lines,
+        })
+    };
+    let sample = serde_json::json!([
+        { "menu_item_id": fee_item(1).to_string(), "quantity": 2 },
+        { "menu_item_id": fee_item(3).to_string(), "quantity": 1 },
+    ]);
+    let service = serde_json::json!([{
+        "scope": "FEE_SCOPE_TENANT",
+        "scope_id": tenant_scope_id(),
+        "rule": percent_fee("SERVICE", 5),
+    }]);
+
+    let previewed = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees/preview",
+            &preview(first, &service, &sample),
+            &cookie,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(previewed.status(), StatusCode::OK);
+    let bill = json_body(previewed).await;
+    let minor = |value: &serde_json::Value| value["amount_minor"].as_i64();
+    assert_eq!(minor(&bill["lines"][0]["line_total"]), Some(190_000));
+    assert_eq!(bill["lines"][0]["quantity"], 2);
+    assert_eq!(minor(&bill["subtotal"]), Some(220_000));
+    assert_eq!(bill["fee_lines"][0]["code"], "SERVICE");
+    assert_eq!(minor(&bill["fee_lines"][0]["amount"]), Some(11_000));
+    assert_eq!(minor(&bill["fee_lines"][0]["tax"]), Some(880));
+    assert_eq!(bill["tax_lines"][0]["rate_basis_points"], 800);
+    assert_eq!(minor(&bill["tax_total"]), Some(18_480));
+    assert_eq!(minor(&bill["total_due"]), Some(249_480));
+
+    // A preview writes nothing and publishes nothing.
+    assert!(store_fees(&config_trees, first).await.is_none());
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(get_with_cookie(
+                &format!("/admin/fees?tenant_id={}", tenant().as_ulid()),
+                &cookie,
+            ))
+            .await
+            .expect("route the read"),
+    )
+    .await;
+    assert_eq!(listed["rules"], serde_json::json!([]));
+    assert!(audit.entries.lock().expect("lock").is_empty());
+
+    // Without the rule, the same lines carry no fee.
+    let plain = json_body(
+        router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/fees/preview",
+                &preview(first, &serde_json::json!([]), &sample),
+                &cookie,
+            ))
+            .await
+            .expect("route the preview"),
+    )
+    .await;
+    assert_eq!(plain["fee_lines"], serde_json::json!([]));
+    assert_eq!(minor(&plain["total_due"]), Some(237_600));
+
+    // A line the store's menu does not sell, and a store with nothing published to price from.
+    for (store_id, lines, field, reason) in [
+        (
+            first,
+            serde_json::json!([{ "menu_item_id": fee_item(2).to_string(), "quantity": 1 }]),
+            "lines",
+            "NOT_ON_MENU",
+        ),
+        (third, sample.clone(), "store_id", "NOT_PUBLISHED"),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/fees/preview",
+                &preview(store_id, &service, &lines),
+                &cookie,
+            ))
+            .await
+            .expect("route the preview");
+        assert_eq!(
+            refused.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{reason}"
+        );
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], field);
+        assert_eq!(body["error"]["details"][0]["reason"], reason);
+    }
+
+    // A preview shows prices, so it needs what reading a rule needs.
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .oneshot(post_with_cookie(
+            "/admin/fees/preview",
+            &preview(first, &service, &sample),
+            &ops,
+        ))
+        .await
+        .expect("route the preview");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+}

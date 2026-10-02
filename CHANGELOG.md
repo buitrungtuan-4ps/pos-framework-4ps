@@ -382,6 +382,22 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A fee rule can be tried on a sample bill before it is saved**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md), its accepted consequences: "the console
+  previews a sample bill before publishing").
+  - `POST /admin/fees/preview` takes a store, the rules as they would be written, each at its
+    scope and with no `fee_id` for a fee not created yet, and up to 50 sample lines from the
+    store's menu. It answers with the bill the store would assemble with those rules in place:
+    each line priced from its menu, each fee with its tax and the part of it taxed at each class,
+    the tax per class, the cash rounding and the total due.
+  - Nothing is written or published. The lines are priced by `pos_core::menu::reprice_line` and
+    the totals come from `pos_core::billing::assemble`, given the store's published tax table,
+    tax posture and cash rounding, so the preview is the store's own arithmetic.
+  - A rule is refused as a write would refuse it. A store with no locale, tax table or menu
+    published, and a line its menu does not sell on the channel, answer `422`.
+  - **Upgrade note:** a new route behind `console.reports.revenue`, the fee reads' permission. No
+    migration, permission, event or protocol change.
+
 - **The console can write fees, and the cloud sends each store its own**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1).
   - `/admin/fees` lists a tenant's rules (`GET`), writes a new fee with a minted `fee_id` (`POST`)
