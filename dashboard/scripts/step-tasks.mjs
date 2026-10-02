@@ -105,4 +105,20 @@ export const TASKS = [
     ],
     outcome: { screen: "config", mark: "capabilities-published" },
   },
+  {
+    task: "Add a fee, try it on a sample bill and publish it",
+    budget: 8,
+    note: "Eight, the measured cost, against D7's create ceiling of 4 — and the four over it are the fee itself and the check ADR-0159 asks for. A fee cannot be saved without a code, a name, how it charges and how much: four entries, one of them the kind, because a new fee starts as a percentage (the owner's default shape) and this flow writes an amount per bill. A percentage costs seven, since its rate is typed where the kind was tapped. The seventh tap is the sample bill, which ADR-0159's consequences require before publishing because a fee is part of a price; it is a tap rather than automatic so the bill shown is the one asked for, not one assembled from a half-typed rule. The eighth saves, and is also the publish: every store the rule reaches is republished in the same request and answers in the report this flow ends on, so there is no separate publish to forget — the risk the price flow's seventh tap exists for.",
+    steps: [
+      { nav: "fees" },
+      { screen: "fees", action: "openCreate" },
+      { screen: "fees", action: "setCode" },
+      { screen: "fees", action: "setDisplayName" },
+      { screen: "fees", action: "setKind", value: "FEE_KIND_AMOUNT_PER_BILL" },
+      { screen: "fees", action: "setAmount" },
+      { screen: "fees", action: "previewBill" },
+      { screen: "fees", action: "saveFee" },
+    ],
+    outcome: { screen: "fees", mark: "fee-published" },
+  },
 ];

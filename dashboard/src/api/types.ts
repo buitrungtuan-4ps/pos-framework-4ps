@@ -1893,3 +1893,166 @@ export interface SettingPresetsReport extends SettingPublishReport {
   /** The keys of the settings written at the store's own scope. Empty when it set them all already. */
   readonly applied: readonly string[];
 }
+
+// --- Fees (ADR-0159) ------------------------------------------------------------------------------
+
+/** Where a fee rule is written: every store of the tenant, every store of one brand, or one store. */
+export type FeeScope = "FEE_SCOPE_TENANT" | "FEE_SCOPE_BRAND" | "FEE_SCOPE_STORE";
+
+/** How a fee is charged: a share of its lines, an amount per bill, or an amount per unit. */
+export type FeeKind = "FEE_KIND_PERCENT" | "FEE_KIND_AMOUNT_PER_BILL" | "FEE_KIND_AMOUNT_PER_UNIT";
+
+/** Which lines a fee counts: every line, only those listed, or every line but those listed. */
+export type FeeItems = "FEE_ITEMS_ALL" | "FEE_ITEMS_INCLUDE" | "FEE_ITEMS_EXCLUDE";
+
+/** How a fee is taxed: not at all, the way its lines are, or at one named tax class. */
+export type FeeTax = "FEE_TAX_NOT_TAXABLE" | "FEE_TAX_FOLLOW_LINES" | "FEE_TAX_TAX_CLASS";
+
+/** An exact ratio (`pos-proto` `Ratio`): 5 % is `{ numerator: 5, denominator: 100 }`. Never a float. */
+export interface Ratio {
+  readonly numerator: number;
+  readonly denominator: number;
+}
+
+/**
+ * A fee rule's own fields, as `/admin/fees` reads and writes them: the wire `PublishedFee`, plus
+ * the item categories an include or exclude list names, which the cloud compiles into items when it
+ * publishes a store. A field left out reads as the owner's default.
+ */
+export interface FeeRuleFields {
+  /** Absent on a create, which mints it. */
+  readonly fee_id?: string;
+  readonly code: string;
+  readonly display_name: string;
+  readonly display_name_translations?: Readonly<Record<string, string>>;
+  readonly kind?: FeeKind | string;
+  readonly rate?: Ratio;
+  readonly amount?: Money;
+  /** Empty, or absent, is every channel. */
+  readonly channels?: readonly (SalesChannel | string)[];
+  readonly item_scope?: FeeItems | string;
+  readonly menu_item_ids?: readonly string[];
+  readonly item_category_ids?: readonly string[];
+  readonly base_discounted?: boolean;
+  readonly base_tax_inclusive?: boolean;
+  readonly tax?: FeeTax | string;
+  readonly tax_class_id?: string;
+  readonly waivable?: boolean;
+  readonly active?: boolean;
+}
+
+/** One rule as written, at one scope, from `GET /admin/fees`. */
+export interface FeeRule {
+  readonly scope: FeeScope | string;
+  /** The tenant, brand or store the rule is written for. */
+  readonly scope_id: string;
+  readonly rule: FeeRuleFields & { readonly fee_id: string };
+  /** RFC 3339. */
+  readonly update_time: string;
+  /** The console admin who last wrote it, by id. */
+  readonly updated_by: string;
+}
+
+/** How one store's fee publish went. */
+export type FeePublishOutcome =
+  | "FEE_PUBLISH_APPLIED"
+  | "FEE_PUBLISH_UNCHANGED"
+  | "FEE_PUBLISH_REFUSED"
+  | "FEE_PUBLISH_FAILED";
+
+/** One rule a store cannot apply, as a refused publish reports it: `CURRENCY_MISMATCH` or `TAX_RATE_NOT_CONFIGURED`. */
+export interface FeeFault {
+  readonly fee_id: string;
+  readonly reason: string;
+}
+
+/** One store's row in a fee write or publish. */
+export interface FeePublishResult {
+  readonly store_id: string;
+  readonly outcome: FeePublishOutcome | string;
+  /** The config version the publish produced, for `FEE_PUBLISH_APPLIED`. */
+  readonly config_version_id?: string;
+  /** For `FEE_PUBLISH_REFUSED`: each rule the store cannot apply, and why. */
+  readonly faults?: readonly FeeFault[];
+}
+
+/**
+ * What a fee write, delete or republish did at every store it reached. A `200` is not "every store
+ * charges it": a refused or failed store keeps the fees it had until it is published again.
+ */
+export interface FeePublishReport {
+  /** The fee written; absent for a delete or a republish. */
+  readonly fee_id?: string;
+  readonly stores: readonly FeePublishResult[];
+}
+
+/** One fee as one store runs it, from `GET /admin/fees/effective`. */
+export interface EffectiveFee {
+  readonly fee_id: string;
+  /** The scope the rule in force was written at, and what for. */
+  readonly scope: FeeScope | string;
+  readonly scope_id: string;
+  /** The rule as written. */
+  readonly rule: FeeRuleFields;
+  /** The rule as the store is sent it, its categories compiled into items. */
+  readonly published: FeeRuleFields;
+  /** Why the store cannot apply it, when it cannot. */
+  readonly faults?: readonly string[];
+}
+
+/** What one store runs, and whether it can be published to as it stands. */
+export interface EffectiveFees {
+  readonly store_id: string;
+  readonly fees: readonly EffectiveFee[];
+  readonly publishable: boolean;
+}
+
+/** One rule a preview writes in place, as a `PUT` sends it. */
+export interface PreviewFeeRule {
+  readonly scope: FeeScope;
+  readonly scope_id: string;
+  readonly rule: FeeRuleFields;
+}
+
+/** One line of a sample bill: an item on the store's menu, and how many. */
+export interface SampleLineInput {
+  readonly menu_item_id: string;
+  readonly quantity: number;
+}
+
+/** A sample bill as the store would assemble it, from `POST /admin/fees/preview`. */
+export interface SampleBill {
+  readonly store_id: string;
+  readonly sales_channel: string;
+  readonly lines: readonly {
+    readonly menu_item_id: string;
+    readonly display_name: string;
+    readonly quantity: number;
+    readonly unit_price: Money;
+    readonly line_total: Money;
+    readonly tax_class_id: string;
+  }[];
+  readonly subtotal: Money;
+  readonly fee_lines: readonly {
+    readonly fee_id: string;
+    readonly code: string;
+    readonly display_name: string;
+    readonly amount: Money;
+    readonly tax: Money;
+    readonly class_shares: readonly {
+      readonly tax_class_id: string;
+      readonly amount: Money;
+      readonly tax: Money;
+    }[];
+  }[];
+  readonly service_charge: Money;
+  readonly tax_lines: readonly {
+    readonly tax_class_id: string;
+    readonly taxable_base: Money;
+    readonly rate_basis_points: number;
+    readonly tax: Money;
+  }[];
+  readonly tax_total: Money;
+  readonly rounding_adjustment: Money;
+  readonly total_due: Money;
+}
