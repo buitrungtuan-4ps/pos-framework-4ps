@@ -12,7 +12,7 @@
 use core::fmt;
 use core::future::Future;
 
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::ids::{StationId, StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 
@@ -146,6 +146,14 @@ pub struct DeviceProposalSummary {
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
     /// `false` until somebody does, which is what every store assumed before the mark existed.
     pub drawer_attached: bool,
+    /// The paper an operator says this printer takes, as its wire token (`PAPER_WIDTH_…`,
+    /// [ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every
+    /// store assumed before the field existed.
+    pub paper_width: Option<String>,
+    /// Whether an operator says this printer cuts its paper. `None` until somebody says, which the
+    /// edge reads as `true`.
+    pub cuts_paper: Option<bool>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -155,8 +163,10 @@ pub struct DeviceProposalSummary {
 }
 
 /// What a conditional write to an approved device did: an agent pick
-/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)) or a drawer mark
-/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+/// ([ADR-0112](../../../docs/adr/0112-print-agents.md)), a drawer mark
+/// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md))
+/// or a printer's paper
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceWriteOutcome {
     /// The row was changed, and now sits at this version.
@@ -291,6 +301,26 @@ pub trait DeviceProposalStore {
         tenant: TenantId,
         id: DeviceProposalId,
         drawer_attached: bool,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Says what paper an approved printer takes and whether it cuts it
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// decision 2).
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is, for the same reasons. Like
+    /// [`Self::set_drawer`], this seam does not check that the device is a printer: the console
+    /// offers the choice only there, and nothing but a printer reads it.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
         expected: &str,
     ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
 }

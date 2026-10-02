@@ -8,15 +8,17 @@
 // approved devices in one store, so neither can be shown by the pending queue above; they read
 // through `listStoreDevices` and follow the top bar's store, not the tenant.
 //
-// The printers card also carries the cash drawer mark (ADR-0165) and the publish. Nothing decided on
-// this page reaches a store until its devices are published: not an approval, not an agent, not a
-// drawer. So the page offers the publish rather than leaving it to a route nobody can see.
+// The printers card also carries each printer's paper (ADR-0160), the cash drawer mark (ADR-0165)
+// and the publish. Nothing decided on this page reaches a store until its devices are published: not
+// an approval, not an agent, not a paper, not a drawer. So the page offers the publish rather than
+// leaving it to a route nobody can see.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { DeviceProposalSummary, Station, Store } from "../api/types";
-import { t } from "../i18n";
+import { PAPER_WIDTHS } from "../api/types";
+import type { DeviceProposalSummary, PaperWidth, Station, Store } from "../api/types";
+import { type MessageKey, t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
 import {
@@ -41,6 +43,17 @@ import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { AuditTrail } from "../components/AuditTrail";
 import { apiMessage, withStaleReload } from "../lib/errors";
+
+// What each paper is called on screen (ADR-0160). 80 mm at 42 characters a line is what every
+// printer was taken to be before an operator could say, so it is what a printer nobody set shows.
+const PAPER_LABELS: Record<PaperWidth, MessageKey> = {
+  PAPER_WIDTH_MILLIMETRES_80: "devices.paper.millimetres80",
+  PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48: "devices.paper.millimetres80Columns48",
+  PAPER_WIDTH_MILLIMETRES_58: "devices.paper.millimetres58",
+};
+const UNSET_PAPER: PaperWidth = "PAPER_WIDTH_MILLIMETRES_80";
+const paperLabel = (paper: PaperWidth | null) =>
+  t(PAPER_LABELS[paper ?? UNSET_PAPER] ?? PAPER_LABELS[UNSET_PAPER]);
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
@@ -76,6 +89,11 @@ export function Devices() {
   // (ADR-0165). Offered on a USB printer only, because a drawer opens over nothing else.
   const drawerDraft = useEntityCrud<DeviceProposalSummary>();
   const [drawerChoice, setDrawerChoice] = createSignal(false);
+  // The printer whose paper is being said, under the same conditional write (ADR-0160). The form
+  // opens on what the till takes a printer nobody set to be: 80 mm paper, and a cutter.
+  const paperDraft = useEntityCrud<DeviceProposalSummary>();
+  const [paperChoice, setPaperChoice] = createSignal<PaperWidth>(UNSET_PAPER);
+  const [cutsChoice, setCutsChoice] = createSignal(true);
   const [publishing, setPublishing] = createSignal(false);
 
   // The store's registered name, or the raw ULID if the registry has no row for it (a proposal can
@@ -186,6 +204,25 @@ export function Devices() {
       .then((saved) => {
         if (saved) {
           toast.ok(t("devices.drawerSaved"));
+          void loadFleet();
+        }
+      });
+  };
+
+  const savePaper = () => {
+    const printer = paperDraft.subject();
+    if (!printer) {
+      return;
+    }
+    void paperDraft
+      .run(() =>
+        conditionalFleet(() =>
+          api.setPrinterPaper(tenantId(), printer.id, paperChoice(), cutsChoice(), printer.version),
+        ),
+      )
+      .then((saved) => {
+        if (saved) {
+          toast.ok(t("devices.paperSaved"));
           void loadFleet();
         }
       });
@@ -332,6 +369,17 @@ export function Devices() {
       ),
     },
     {
+      key: "paper",
+      header: t("devices.paper"),
+      cell: (row) => (
+        <span class={row.paper_width ? "text-ink" : "text-ink-muted"}>
+          {row.cuts_paper === false
+            ? t("devices.paperNoCutter", { paper: paperLabel(row.paper_width) })
+            : paperLabel(row.paper_width)}
+        </span>
+      ),
+    },
+    {
       key: "drawer",
       header: t("devices.drawer"),
       cell: (row) => (
@@ -431,6 +479,16 @@ export function Devices() {
                       }}
                     >
                       {t("devices.chooseAgent")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setPaperChoice(row.paper_width ?? UNSET_PAPER);
+                        setCutsChoice(row.cuts_paper ?? true);
+                        paperDraft.edit(row);
+                      }}
+                    >
+                      {t("devices.choosePaper")}
                     </Button>
                     <Button
                       variant="secondary"
@@ -535,6 +593,31 @@ export function Devices() {
             label={t("devices.drawerLabel")}
             checked={drawerChoice()}
             onChange={setDrawerChoice}
+          />
+        </FormPanel>
+
+        <FormPanel
+          crud={paperDraft}
+          createTitle={t("devices.paperTitle")}
+          editTitle={t("devices.paperTitle")}
+          submitLabel={t("action.save")}
+          onSubmit={savePaper}
+          as="modal"
+        >
+          <p class="text-sm text-ink-muted">{t("devices.paperHint")}</p>
+          <SelectField
+            label={t("devices.paperLabel")}
+            value={paperChoice()}
+            options={PAPER_WIDTHS.map((paper) => ({ value: paper, label: paperLabel(paper) }))}
+            onChange={(value) =>
+              setPaperChoice(PAPER_WIDTHS.find((paper) => paper === value) ?? UNSET_PAPER)
+            }
+          />
+          <CheckboxField
+            label={t("devices.cutsPaperLabel")}
+            checked={cutsChoice()}
+            onChange={setCutsChoice}
+            hint={t("devices.cutsPaperHint")}
           />
         </FormPanel>
 

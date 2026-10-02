@@ -7207,7 +7207,7 @@ mod reconcile_query {
 // ---------------------------------------------------------------------------
 
 mod device_proposals {
-    use pos_proto::devices::DeviceConnection;
+    use pos_proto::devices::{DeviceConnection, PaperWidth};
 
     use super::{TENANT_A, block_on, port_err, prepared};
 
@@ -7577,6 +7577,98 @@ mod device_proposals {
             assert!(
                 !read(&devices).await.drawer_attached,
                 "and the clear does too"
+            );
+        });
+    }
+
+    /// A printer's paper and cutter are written and read back through the columns the publish reads
+    /// (ADR-0160 decision 2), under the drawer mark's conditional write.
+    ///
+    /// The default is the claim a fleet upgrade rests on: a row nobody set reads neither, which is
+    /// published as nothing, so no store's receipts change because the columns appeared.
+    #[test]
+    fn a_printers_paper_round_trips_as_its_token_and_a_row_nobody_set_has_none() {
+        async fn read(
+            devices: &store_postgres::PostgresDeviceProposals,
+        ) -> store_postgres::DeviceProposalRow {
+            devices
+                .fetch(TENANT_A, Some("store-1"), "approved")
+                .await
+                .expect("read the approved devices")
+                .into_iter()
+                .find(|row| row.id == "PRN1")
+                .expect("the printer")
+        }
+
+        block_on(async {
+            let (store, _admin) = prepared().await.expect("prepare the database");
+            let devices = store.device_proposals();
+            devices
+                .create(
+                    "PRN1",
+                    TENANT_A,
+                    "store-1",
+                    "printer",
+                    "Counter",
+                    "192.0.2.10:9100",
+                )
+                .await
+                .expect("propose the printer");
+            devices
+                .mark(
+                    TENANT_A,
+                    "PRN1",
+                    "approved",
+                    Some(DeviceConnection::Network),
+                    None,
+                )
+                .await
+                .expect("approve the printer");
+            let printer = read(&devices).await;
+            assert_eq!(
+                (printer.paper_width.as_deref(), printer.cuts_paper),
+                (None, None),
+                "a printer nobody set says nothing about its paper"
+            );
+
+            let moved = devices
+                .set_paper(
+                    TENANT_A,
+                    "PRN1",
+                    PaperWidth::Millimetres58,
+                    false,
+                    &printer.version,
+                )
+                .await
+                .expect("the conditional write")
+                .expect("a matching version writes");
+            let written = read(&devices).await;
+            assert_eq!(
+                (written.paper_width.as_deref(), written.cuts_paper),
+                (Some("PAPER_WIDTH_MILLIMETRES_58"), Some(false)),
+                "the paper is stored as the token the node carries"
+            );
+            assert!(
+                devices
+                    .set_paper(
+                        TENANT_A,
+                        "PRN1",
+                        PaperWidth::Millimetres80,
+                        true,
+                        &printer.version
+                    )
+                    .await
+                    .expect("the stale write")
+                    .is_none(),
+                "a caller holding the old version does not silently undo the paper"
+            );
+            assert!(
+                devices
+                    .set_paper("tenant-b", "PRN1", PaperWidth::Millimetres80, true, &moved)
+                    .await
+                    .expect("cross-tenant write")
+                    .is_none(),
+                "the tenant scope stops one tenant setting another's paper"
             );
         });
     }

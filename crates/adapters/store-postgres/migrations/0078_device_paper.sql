@@ -1,0 +1,24 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0078 — what paper a printer takes, and whether it cuts it
+-- ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+-- decision 2).
+--
+-- Nothing a printer reports says how wide its paper is or whether it has a cutter (ADR-0103), so an
+-- operator says so in the console:
+--
+--   * `paper_width` — the wire token: `PAPER_WIDTH_MILLIMETRES_80`, `_MILLIMETRES_80_COLUMNS_48` or
+--                     `_MILLIMETRES_58`. No check constraint, as for `fee_rules.scope` (0075):
+--                     `pos-cloud` validates the token before it writes, and widening a constraint
+--                     for a paper added later would need a destructive statement.
+--   * `cuts_paper`  — whether the printer cuts its paper.
+--
+-- Both nullable, and the nulls are the whole compatibility story. Null is "nobody has said", which
+-- is published as nothing at all, and the edge reads nothing as the 80 mm printer with a cutter
+-- every store has assumed until now. A fleet takes this release, every row reads null, and every
+-- store's devices node and every receipt stay as they were.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS paper_width text;
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS cuts_paper boolean;

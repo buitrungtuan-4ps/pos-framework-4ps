@@ -63,7 +63,7 @@ use pos_ports::dynamic::BoxFuture;
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::chain::ChainHash;
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -1555,6 +1555,8 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 station_id: row.station_id,
                 agent_device_id: row.agent_device_id,
                 drawer_attached: row.drawer_attached,
+                paper_width: row.paper_width,
+                cuts_paper: row.cuts_paper,
                 status: row.status,
                 version: row.version,
             })
@@ -1615,21 +1617,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             PostgresDeviceProposals::set_agent(self, &tenant, &id, agent.as_deref(), expected)
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        if changed.is_some() {
-            return Ok(DeviceWriteOutcome::Updated);
-        }
-        // Nothing changed, and the two reasons need different answers: the caller is stale, or the
-        // device is not there at all. A second read is the only way to tell, and it is only ever
-        // paid on the failing path.
-        let present = self
-            .version_of(&tenant, &id)
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        Ok(if present.is_some() {
-            DeviceWriteOutcome::VersionMismatch
-        } else {
-            DeviceWriteOutcome::NotFound
-        })
+        device_write_outcome(self, &tenant, &id, changed).await
     }
 
     async fn set_drawer(
@@ -1645,20 +1633,56 @@ impl DeviceProposalStore for PostgresDeviceProposals {
             PostgresDeviceProposals::set_drawer(self, &tenant, &id, drawer_attached, expected)
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        if changed.is_some() {
-            return Ok(DeviceWriteOutcome::Updated);
-        }
-        // The agent pick's second read, for the same two answers: stale, or not there.
-        let present = self
-            .version_of(&tenant, &id)
-            .await
-            .map_err(|error| DeviceProposalError::new(error.to_string()))?;
-        Ok(if present.is_some() {
-            DeviceWriteOutcome::VersionMismatch
-        } else {
-            DeviceWriteOutcome::NotFound
-        })
+        device_write_outcome(self, &tenant, &id, changed).await
     }
+
+    async fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let changed = PostgresDeviceProposals::set_paper(
+            self,
+            &tenant,
+            &id,
+            paper_width,
+            cuts_paper,
+            expected,
+        )
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+}
+
+/// What a conditional write to an approved device did, given the version it `changed` the row to.
+///
+/// Nothing changed has two reasons, and they need different answers: the caller is stale, or the
+/// device is not there at all. A second read is the only way to tell, and it is only ever paid on
+/// the failing path.
+async fn device_write_outcome(
+    devices: &PostgresDeviceProposals,
+    tenant: &str,
+    id: &str,
+    changed: Option<String>,
+) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+    if changed.is_some() {
+        return Ok(DeviceWriteOutcome::Updated);
+    }
+    let present = devices
+        .version_of(tenant, id)
+        .await
+        .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+    Ok(if present.is_some() {
+        DeviceWriteOutcome::VersionMismatch
+    } else {
+        DeviceWriteOutcome::NotFound
+    })
 }
 
 impl TranslationStore for PostgresTranslations {

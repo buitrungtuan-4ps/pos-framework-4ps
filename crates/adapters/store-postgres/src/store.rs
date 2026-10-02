@@ -296,6 +296,11 @@ const MIGRATION_0076: &str = include_str!("../migrations/0076_roles_can_waive_a_
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 3).
 const MIGRATION_0077: &str = include_str!("../migrations/0077_employee_scope_assignments.sql");
 
+/// What paper a printer takes and whether it cuts it, which the console sets and the edge lays a
+/// receipt out for ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+const MIGRATION_0078: &str = include_str!("../migrations/0078_device_paper.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -662,6 +667,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0077)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0078)
             .await
             .map_err(unavailable)
     }

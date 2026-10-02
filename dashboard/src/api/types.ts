@@ -77,6 +77,22 @@ export interface PublishDevicesResponse {
   readonly skipped_count: number;
 }
 
+/**
+ * The paper a printer takes (ADR-0160), as its wire token: 80 mm at 42 characters a line, 80 mm at
+ * 48, or 58 mm at 32. The cloud refuses any other.
+ */
+export type PaperWidth =
+  | "PAPER_WIDTH_MILLIMETRES_80"
+  | "PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48"
+  | "PAPER_WIDTH_MILLIMETRES_58";
+
+/** The papers an operator can pick, in the order the printer form offers them. */
+export const PAPER_WIDTHS: readonly PaperWidth[] = [
+  "PAPER_WIDTH_MILLIMETRES_80",
+  "PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48",
+  "PAPER_WIDTH_MILLIMETRES_58",
+];
+
 /** A pending printer/KDS proposal from `GET /admin/devices/proposals` (ADR-0041). */
 export interface DeviceProposalSummary {
   readonly id: string;
@@ -104,6 +120,13 @@ export interface DeviceProposalSummary {
    * it only over USB, from the store's own box, and only once the devices are published.
    */
   readonly drawer_attached: boolean;
+  /**
+   * The paper an operator says this printer takes, as its `PAPER_WIDTH_…` token (ADR-0160).
+   * `null` until somebody says, which the till prints as 80 mm paper, as every store did before.
+   */
+  readonly paper_width: PaperWidth | null;
+  /** Whether an operator says this printer cuts its paper; `null` until somebody says (a cut). */
+  readonly cuts_paper: boolean | null;
   /** `pending`, `approved` or `rejected`. */
   readonly status: string;
   /**

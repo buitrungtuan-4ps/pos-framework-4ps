@@ -608,6 +608,107 @@
         }
       }
     },
+    "/admin/devices/proposals/{id}/paper": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin says what paper an approved printer takes and whether it cuts it\n([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 2).",
+        "description": "The drawer mark's guards, for the drawer mark's reasons: `ManageDevices`, an `If-Match`, and an\naudit entry. The width decides how a receipt is laid out and how wide a raster is drawn, and the\ncutter whether a printer is sent a cut, so who set them is worth a row. They reach a store on the\nnext devices publish, as every other fact about a device does. `PAPER_WIDTH_UNSPECIFIED` is\nrefused with every token this release does not know: it is what an older reader takes a newer\npaper to be, never a choice.",
+        "operationId": "admin_set_printer_paper",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The approved printer's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the printer was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 characters a line and a 576-dot raster), `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, `false` for a printer with no cutter. A printer nobody has set prints as 80 mm paper with a cutter",
+          "content": {
+            "application/json": {}
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Saved. It reaches the store on the next devices publish, `POST /admin/devices/publish`"
+          },
+          "400": {
+            "description": "`paper_width` is not one of the three, an id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The device changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/fees": {
       "get": {
         "tags": [
@@ -4146,6 +4247,10 @@
     {
       "name": "devices",
       "description": "What a store has actually admitted (ADR-0118). Documented rather than deferred with the rest of the device surface because it is the **only** read that answers it: a store admits tablets locally and offline, and until these events the cloud's picture of a store's tills was zero rows. Note the two identity spaces — the ids here are minted by the edge at pairing, and nothing joins them to the console-minted ids of `/admin/stores/{store_id}/devices`."
+    },
+    {
+      "name": "printers",
+      "description": "What paper each approved printer takes and whether it cuts it (ADR-0160 decision 2). The rest of the device-onboarding surface is still coverage debt; this write is documented because a route new to this surface is, and because a fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a cutter, and that nothing reaches a store until its devices are published."
     },
     {
       "name": "reports",

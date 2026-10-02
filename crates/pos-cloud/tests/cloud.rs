@@ -129,7 +129,7 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BusinessDate;
 use pos_proto::campaign::PublishedCampaign;
 use pos_proto::chain::{ChainHash, ChainLink};
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, SalesChannel};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -145,7 +145,7 @@ use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction, ReasonCode};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
-use pos_proto::wire_enum::Open;
+use pos_proto::wire_enum::{Open, WireEnum as _};
 use sha2::{Digest as _, Sha256};
 
 /// A fixed 16-byte salt, so a hashed fixture is deterministic. Never used in production.
@@ -4364,6 +4364,9 @@ struct DeviceRow {
     agent_device_id: Option<DeviceProposalId>,
     /// Ticked in the console, never discovered (ADR-0165). `false` until somebody does.
     drawer_attached: bool,
+    /// Chosen in the console, never discovered (ADR-0160). `None` until somebody does.
+    paper_width: Option<PaperWidth>,
+    cuts_paper: Option<bool>,
     status: DeviceProposalStatus,
     /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
     /// reason about. Bumped by every write that changes the row.
@@ -4383,6 +4386,29 @@ impl FakeDevices {
         *next += 1;
         Version::new(next.to_string())
     }
+
+    /// Applies `change` to the tenant's **approved** row `id` if it is still at `expected`, as the
+    /// adapter's conditional `UPDATE … WHERE xmin::text = $n` does.
+    fn write_approved(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        expected: &str,
+        change: impl FnOnce(&mut DeviceRow),
+    ) -> DeviceWriteOutcome {
+        let mut rows = self.rows.lock().expect("lock");
+        let Some(row) = rows.iter_mut().find(|row| {
+            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
+        }) else {
+            return DeviceWriteOutcome::NotFound;
+        };
+        if row.version.as_str() != expected {
+            return DeviceWriteOutcome::VersionMismatch;
+        }
+        change(row);
+        row.version = self.mint();
+        DeviceWriteOutcome::Updated
+    }
 }
 
 impl DeviceProposalStore for FakeDevices {
@@ -4400,6 +4426,8 @@ impl DeviceProposalStore for FakeDevices {
             station_id: None,
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
             status: DeviceProposalStatus::Pending,
             version: self.mint(),
         });
@@ -4432,6 +4460,8 @@ impl DeviceProposalStore for FakeDevices {
                 station_id: row.station_id.map(|id| id.to_string()),
                 agent_device_id: row.agent_device_id.map(|id| id.to_string()),
                 drawer_attached: row.drawer_attached,
+                paper_width: row.paper_width.map(|paper| paper.as_wire().to_owned()),
+                cuts_paper: row.cuts_paper,
                 status: row.status.as_wire().to_owned(),
                 version: row.version.to_string(),
             })
@@ -4480,6 +4510,8 @@ impl DeviceProposalStore for FakeDevices {
             station_id: None,
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: None,
+            cuts_paper: None,
             // Created resolved. The console write by a named admin *is* the decision, because
             // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
             status: DeviceProposalStatus::Approved,
@@ -4495,18 +4527,9 @@ impl DeviceProposalStore for FakeDevices {
         agent: Option<DeviceProposalId>,
         expected: &str,
     ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
-        let mut rows = self.rows.lock().expect("lock");
-        let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
-        }) else {
-            return Ok(DeviceWriteOutcome::NotFound);
-        };
-        if row.version.as_str() != expected {
-            return Ok(DeviceWriteOutcome::VersionMismatch);
-        }
-        row.agent_device_id = agent;
-        row.version = self.mint();
-        Ok(DeviceWriteOutcome::Updated)
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.agent_device_id = agent;
+        }))
     }
 
     async fn set_drawer(
@@ -4516,18 +4539,23 @@ impl DeviceProposalStore for FakeDevices {
         drawer_attached: bool,
         expected: &str,
     ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
-        let mut rows = self.rows.lock().expect("lock");
-        let Some(row) = rows.iter_mut().find(|row| {
-            row.tenant == tenant && row.id == id && row.status == DeviceProposalStatus::Approved
-        }) else {
-            return Ok(DeviceWriteOutcome::NotFound);
-        };
-        if row.version.as_str() != expected {
-            return Ok(DeviceWriteOutcome::VersionMismatch);
-        }
-        row.drawer_attached = drawer_attached;
-        row.version = self.mint();
-        Ok(DeviceWriteOutcome::Updated)
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.drawer_attached = drawer_attached;
+        }))
+    }
+
+    async fn set_paper(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.paper_width = Some(paper_width);
+            row.cuts_paper = Some(cuts_paper);
+        }))
     }
 }
 
@@ -5233,6 +5261,117 @@ async fn a_printer_marked_with_a_drawer_publishes_the_mark_and_the_mark_needs_it
     assert_eq!(
         published["drawer_attached"], true,
         "the store hears that a drawer is wired to its counter printer"
+    );
+}
+
+/// A printer is set to 58 mm paper with no cutter, and the published node carries both
+/// (**ADR-0160** decision 2), under the drawer mark's conditional write.
+///
+/// The default is asserted first, because a fleet upgrade rests on it: a printer nobody set
+/// publishes neither field, so its store prints as it always has. And a paper this release does not
+/// know is refused by name before anything is written.
+#[tokio::test]
+async fn a_printers_paper_is_validated_by_name_and_published_as_set() {
+    let keys = FakeKeys::default();
+    let router = device_publish_app(&keys, FakeConfigTrees::default());
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "192.0.2.10:9100").await;
+    let approved = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/devices/proposals/{counter}/approve?tenant_id={tenant_ulid}&connection=network"
+            ),
+            &serde_json::json!({}) as &serde_json::Value,
+            &cookie,
+        ))
+        .await
+        .expect("route the approve");
+    assert_eq!(approved.status(), StatusCode::NO_CONTENT);
+
+    let unset = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert!(
+        unset["paper_width"].is_null() && unset["cuts_paper"].is_null(),
+        "a printer nobody set publishes neither field: {unset}"
+    );
+
+    let path = format!("/admin/devices/proposals/{counter}/paper");
+    let version = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    for refused in [
+        "PAPER_WIDTH_MILLIMETRES_112",
+        "PAPER_WIDTH_UNSPECIFIED",
+        "58",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_config_with_etag(
+                &path,
+                &serde_json::json!({
+                    "tenant_id": tenant_ulid.clone(),
+                    "paper_width": refused,
+                    "cuts_paper": true,
+                }),
+                &cookie,
+                &version,
+            ))
+            .await
+            .expect("route the refused paper");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused}");
+        let body = json_body(response).await;
+        assert_eq!(
+            body["error"]["details"][0]["field"], "paper_width",
+            "{body}"
+        );
+        assert_eq!(
+            body["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE",
+            "{body}"
+        );
+    }
+
+    let body = serde_json::json!({
+        "tenant_id": tenant_ulid.clone(),
+        "paper_width": "PAPER_WIDTH_MILLIMETRES_58",
+        "cuts_paper": false,
+    });
+    let unconditional = router
+        .clone()
+        .oneshot(post_with_cookie(&path, &body, &cookie))
+        .await
+        .expect("route the unconditional write");
+    assert_eq!(
+        unconditional.status(),
+        StatusCode::BAD_REQUEST,
+        "no If-Match is refused, not a silent last-write-wins"
+    );
+    let saved = router
+        .clone()
+        .oneshot(post_config_with_etag(&path, &body, &cookie, &version))
+        .await
+        .expect("route the paper");
+    assert_eq!(saved.status(), StatusCode::NO_CONTENT);
+    let replayed = router
+        .clone()
+        .oneshot(post_config_with_etag(&path, &body, &cookie, &version))
+        .await
+        .expect("route the stale write");
+    assert_eq!(
+        replayed.status(),
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &counter).await;
+    assert_eq!(
+        (&published["paper_width"], &published["cuts_paper"]),
+        (
+            &serde_json::json!("PAPER_WIDTH_MILLIMETRES_58"),
+            &serde_json::json!(false)
+        ),
+        "the store hears its counter printer takes 58 mm paper and has no cutter: {published}"
     );
 }
 
