@@ -1535,14 +1535,35 @@ export interface RoleTemplate {
 }
 
 /**
- * An employee's assignment to a store with a role (ADR-0070). It names the person it grants, so it
- * is T1 like the roster and read only with console.people.read (ADR-0158).
+ * Where an assignment grants its role (ADR-0158 decision 3): one store, a store group (ADR-0122), or
+ * every store of the tenant. A kind this console does not know reads as unspecified.
+ */
+export type AssignmentScopeKind =
+  | "ASSIGNMENT_SCOPE_UNSPECIFIED"
+  | "ASSIGNMENT_SCOPE_STORE"
+  | "ASSIGNMENT_SCOPE_STORE_GROUP"
+  | "ASSIGNMENT_SCOPE_TENANT";
+
+/** Where a new assignment grants its role, as the People screen's "Where" chooses it. */
+export type AssignmentTarget =
+  | { readonly kind: "store"; readonly storeId: string }
+  | { readonly kind: "group"; readonly groupId: string }
+  | { readonly kind: "tenant" };
+
+/**
+ * An employee's assignment with a role, at one store, a store group or every store (ADR-0070,
+ * ADR-0158 decision 3). It names the person it grants, so it is T1 like the roster and read only
+ * with console.people.read (ADR-0158).
  */
 export interface Assignment {
   readonly assignment_id: string;
   readonly tenant_id: string;
   readonly employee_id: string;
-  readonly store_id: string;
+  readonly scope_kind: AssignmentScopeKind;
+  /** The store, for an assignment to one store. */
+  readonly store_id?: string;
+  /** The group, for an assignment to a store group. */
+  readonly store_group_id?: string;
   readonly role_template_id: string;
   /**
    * The assigned person's name, resolved by the server as it reads (ADR-0098, B3-4).
@@ -1584,6 +1605,14 @@ export interface PermissionInfo {
 /** The `201 { id }` body a people create returns (employee / role / assignment). */
 export interface CreatedId {
   readonly id: string;
+}
+
+/**
+ * The `201` a new assignment answers: its id and, for one to a group or to every store, which
+ * publishes at once (ADR-0158 decision 7), how each store's publish went.
+ */
+export interface CreatedAssignment extends CreatedId {
+  readonly stores?: readonly PermissionsPublishResult[];
 }
 
 // --- Floor & kitchen (ADR-0072, Track M2): per-store areas/tables and kitchen stations/routing ---
