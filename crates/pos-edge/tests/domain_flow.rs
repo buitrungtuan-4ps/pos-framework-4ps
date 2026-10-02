@@ -480,6 +480,8 @@ async fn settling_a_bill_puts_the_receipt_on_the_stores_published_printer() {
         // No agent: the edge opens the address itself, which is what this test drives.
         agent_device_id: None,
         drawer_attached: false,
+        paper_width: Open::default(),
+        cuts_paper: None,
     };
     let (app, token) = app_with(Some((
         printers,
@@ -1258,6 +1260,8 @@ fn counter_printer() -> PublishedDevice {
         station_id: None,
         agent_device_id: None,
         drawer_attached: false,
+        paper_width: Open::default(),
+        cuts_paper: None,
     }
 }
 

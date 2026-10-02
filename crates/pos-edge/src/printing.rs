@@ -1521,30 +1521,24 @@ impl TransportFactory for TcpTransports {
 /// decision 7). The count is reported alongside, so a truncation is visible as one.
 const MISSING_GLYPHS_REPORTED: usize = 6;
 
-/// Characters per line this build assumes of a printer it has never talked to.
-///
-/// 42 is the 80mm standard. One thing reads it: a bilingual receipt, to decide whether a label and
-/// its second language share a line (ADR-0160). Every other line is one a printer wraps on its own,
-/// and on a 58mm printer a bilingual label that did not fit is wrapped by the printer too, readable
-/// but split where it fell. Laying out for the real width needs the number to come from the console.
-const ASSUMED_COLUMNS: u16 = 42;
-
-/// Printable dots per line this build assumes of a printer it has never talked to.
-///
-/// 576 is 80 mm at 203 dpi, the same paper `ASSUMED_COLUMNS` assumes, so the two agree about the
-/// printer. A 58 mm printer given this renders a raster wider than its head, which shears — the same
-/// class of wrong answer as the column count, and it needs the same fix: the width coming from the
-/// console with the device (ADR-0102).
-const ASSUMED_DOTS_PER_LINE: u16 = 576;
-
 /// What this build assumes about a published printer.
 ///
 /// A device proposal carries an address, a kind and — since ADR-0100's approval change — a
-/// connection. It does not carry a code page or a paper width, and no discovery protocol reports
-/// them. So every unknown is set to the answer that cannot produce a wrong receipt:
+/// connection, and the console says what paper a printer takes and whether it cuts
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2). It does not carry a code page, and no discovery protocol reports one. So every
+/// unknown is set to the answer that cannot produce a wrong receipt:
 ///
 /// - `code_page: Ascii` — the repertoire every ESC/POS printer has. Claiming more would print
-///   question marks; claiming [`CodePage::Unsupported`] would refuse plain ASCII too.
+///   question marks; claiming [`CodePage::Unsupported`] would refuse plain ASCII too. A code page is
+///   not a choice the console offers, because the adapter sends no other.
+/// - `columns` and `dots_per_line` — the paper the console says the printer takes
+///   ([`PublishedDevice::paper_width`]): how many characters a bilingual receipt lays a label out
+///   against, and how wide a raster is drawn, so a 58 mm printer is not sent an 80 mm image that
+///   shears on its head. Where the console says none, 80 mm's 42 characters and 576 dots, which
+///   every printer was taken to be before it could.
+/// - `cuts_paper` — what the console says, and `true` where it says nothing. A printer with no
+///   cutter is sent no cut ([`Printers::prepare`]).
 /// - `prints_bitmaps` — whether a font is loaded, and nothing about the hardware. `GS v 0` is
 ///   universal on ESC/POS, so the printer is not the constraint; the framework's ability to
 ///   *produce* a raster is, and a box with no font installed can produce none (ADR-0102).
@@ -1558,13 +1552,14 @@ const ASSUMED_DOTS_PER_LINE: u16 = 576;
 /// agent refuse a raster the edge had just drawn for it (ADR-0112).
 #[must_use]
 pub fn assumed_capabilities(device: &PublishedDevice, can_rasterise: bool) -> PrinterCapabilities {
+    let paper = device.paper_width();
     PrinterCapabilities {
         connection: connection_of(device),
         code_page: CodePage::Ascii,
-        columns: NonZeroU16::new(ASSUMED_COLUMNS).unwrap_or(NonZeroU16::MIN),
-        dots_per_line: NonZeroU16::new(ASSUMED_DOTS_PER_LINE).unwrap_or(NonZeroU16::MIN),
+        columns: NonZeroU16::new(paper.columns()).unwrap_or(NonZeroU16::MIN),
+        dots_per_line: NonZeroU16::new(paper.dots_per_line()).unwrap_or(NonZeroU16::MIN),
         prints_bitmaps: can_rasterise,
-        cuts_paper: true,
+        cuts_paper: device.cuts_paper(),
         kicks_drawer: device.drawer_attached,
     }
 }
@@ -1985,7 +1980,8 @@ impl Printers {
         .await
     }
 
-    /// Turns every line the printer's own character set cannot carry into a raster.
+    /// Turns every line the printer's own character set cannot carry into a raster, as wide as its
+    /// paper, and leaves out the cut where the printer has no cutter.
     ///
     /// The framework's half of the port's contract (ADR-0026 §5): the adapter sends `Text` as text,
     /// so deciding a line is sendable is the caller's job, and getting it wrong prints a row of
@@ -2005,6 +2001,10 @@ impl Printers {
         let mut blocks = Vec::with_capacity(document.blocks.len());
         let mut refused = 0_usize;
         for block in document.blocks {
+            // A printer with no cutter is sent no cut (ADR-0160): its operator tears the paper.
+            if matches!(block, PrintBlock::Cut) && !capabilities.cuts_paper {
+                continue;
+            }
             let PrintBlock::Text { line, style } = &block else {
                 blocks.push(block);
                 continue;
@@ -2155,12 +2155,11 @@ impl Printers {
 mod tests {
     use super::TcpTransports;
     use super::{
-        ASSUMED_DOTS_PER_LINE, AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers,
-        SecondLanguage, SecondNames, TicketLine, TicketNote, TransportFactory,
-        assumed_capabilities, connection_of, drawer_printer, pre_bill_document,
-        receipt_copy_document, receipt_document, receipt_language, receipt_lines_in,
-        receipt_printer, receipt_totals_in, shift_report_document, short_reference,
-        station_printer, ticket_document, ticket_line,
+        AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers, SecondLanguage, SecondNames,
+        TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
+        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
+        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
+        shift_report_document, short_reference, station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
@@ -2168,7 +2167,9 @@ mod tests {
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
     use pos_proto::ClockSource as _;
-    use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+    use pos_proto::devices::{
+        DeviceConnection, DeviceKind, PaperWidth, PublishedDevice, PublishedDevices,
+    };
     use pos_proto::fees::{FeeCode, PublishedFees};
     use pos_proto::floor::{KitchenStation, StationPlan};
     use pos_proto::ids::{DeviceId, FeeId, MenuItemId, StationId};
@@ -2240,6 +2241,8 @@ mod tests {
             // store that configures no agent still does (ADR-0112).
             agent_device_id: None,
             drawer_attached: false,
+            paper_width: Open::default(),
+            cuts_paper: None,
         }
     }
 
@@ -4116,10 +4119,135 @@ mod tests {
         let printer = device(1, DeviceKind::Printer, None);
         assert!(!assumed_capabilities(&printer, false).prints_bitmaps);
         assert!(assumed_capabilities(&printer, true).prints_bitmaps);
-        // And the paper width it assumes matches the column count it assumes: 80 mm at 203 dpi.
+        // And a printer the console names no paper for is the 80 mm printer every printer was taken
+        // to be: 42 characters a line and 576 dots at 203 dpi, and a cutter.
+        let assumed = assumed_capabilities(&printer, true);
         assert_eq!(
-            assumed_capabilities(&printer, true).dots_per_line.get(),
-            ASSUMED_DOTS_PER_LINE
+            (
+                assumed.columns.get(),
+                assumed.dots_per_line.get(),
+                assumed.cuts_paper
+            ),
+            (42, 576, true)
+        );
+    }
+
+    /// The receipt printer, on the paper the console says it takes (ADR-0160 decision 2).
+    fn on_paper(paper: PaperWidth, cuts_paper: Option<bool>) -> PublishedDevice {
+        PublishedDevice {
+            paper_width: Open::from_known(paper),
+            cuts_paper,
+            ..device(2, DeviceKind::Printer, None)
+        }
+    }
+
+    #[test]
+    fn a_printer_is_assumed_to_be_as_wide_and_to_cut_as_the_console_says() {
+        let narrow = assumed_capabilities(&on_paper(PaperWidth::Millimetres58, Some(false)), true);
+        assert_eq!(
+            (
+                narrow.columns.get(),
+                narrow.dots_per_line.get(),
+                narrow.cuts_paper
+            ),
+            (32, 384, false)
+        );
+        let laid_out_at_48 =
+            assumed_capabilities(&on_paper(PaperWidth::Millimetres80Columns48, None), true);
+        assert_eq!(
+            (
+                laid_out_at_48.columns.get(),
+                laid_out_at_48.dots_per_line.get(),
+                laid_out_at_48.cuts_paper
+            ),
+            (48, 576, true)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_58_mm_printer_is_sent_a_384_dot_raster_and_a_bilingual_label_wrapped_at_32() {
+        let Some((printers, recorder)) = recorder_with_fonts(true) else {
+            return;
+        };
+        let rules: PublishedFees = serde_json::from_str(
+            r#"{"fees": [{"fee_id": "00000000000000000000000001", "code": "SERVICE",
+                 "display_name": "Phí dịch vụ", "display_name_translations": {"en": "Service charge"}}]}"#,
+        )
+        .expect("a fees node");
+        let (lines, totals) = a_bilingual_bill();
+        let mut printed = Vec::new();
+        for (seed, paper) in [
+            (1, PaperWidth::Millimetres58),
+            (2, PaperWidth::Millimetres80),
+        ] {
+            let session = EdgeSession {
+                devices: PublishedDevices::new(vec![on_paper(paper, None)]),
+                fees: rules.clone(),
+                ..a_bilingual_store(ReceiptSecondLanguage::English, "vi")
+            };
+            let outcome = printers
+                .print_receipt(
+                    &session,
+                    store_id(),
+                    event_id(seed),
+                    7,
+                    &lines,
+                    &totals,
+                    None,
+                )
+                .await;
+            assert_eq!(outcome, PrintOutcome::Printed);
+            let written = recorder.written.lock().expect("the recorder");
+            printed.push(written.last().cloned().expect("a receipt"));
+        }
+        // `GS v 0` names a raster's width in bytes: 384 dots is 48 a row, and 576 is 72.
+        let drawn_at = |bytes: &[u8], width: u8| {
+            bytes
+                .windows(6)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00, width, 0x00])
+        };
+        assert!(drawn_at(&printed[0], 48) && !drawn_at(&printed[0], 72));
+        assert!(drawn_at(&printed[1], 72) && !drawn_at(&printed[1], 48));
+        // The fee and its English share 80 mm paper's line. On 58 mm the English goes under it, and
+        // being ASCII it goes as text.
+        let says =
+            |bytes: &[u8], text: &[u8]| bytes.windows(text.len()).any(|window| window == text);
+        assert!(says(&printed[0], b"  Service charge"));
+        assert!(!says(&printed[1], b"  Service charge"));
+    }
+
+    #[tokio::test]
+    async fn a_printer_with_no_cutter_is_sent_no_cut_and_one_set_as_it_was_prints_as_it_did() {
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [sold("Beef pho", 1_000, vnd(50_000), vnd(50_000))];
+        let totals = totals_of(vnd(50_000));
+        let mut printed = Vec::new();
+        for printer in [
+            device(2, DeviceKind::Printer, None),
+            on_paper(PaperWidth::Millimetres80, Some(true)),
+            on_paper(PaperWidth::Millimetres80, Some(false)),
+        ] {
+            let (printers, recorder) = recorder(true);
+            let session = session_with(PublishedDevices::new(vec![printer]));
+            let outcome = printers
+                .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+                .await;
+            assert_eq!(outcome, PrintOutcome::Printed);
+            printed.push(recorder.written.lock().expect("the recorder").concat());
+        }
+        // `GS V 0`, the full cut.
+        let cuts = |bytes: &[u8]| bytes.windows(3).any(|window| window == [0x1D, 0x56, 0x00]);
+        assert!(
+            cuts(&printed[0]),
+            "a printer nobody set cuts, as every printer did"
+        );
+        assert_eq!(
+            printed[0], printed[1],
+            "and one set to what it was taken to be prints byte for byte as it did"
+        );
+        assert!(
+            !cuts(&printed[2]),
+            "a printer with no cutter is sent no cut"
         );
     }
 

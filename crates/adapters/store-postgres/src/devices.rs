@@ -10,7 +10,8 @@
 use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
-use pos_proto::devices::DeviceConnection;
+use pos_proto::devices::{DeviceConnection, PaperWidth};
+use pos_proto::wire_enum::WireEnum as _;
 
 use crate::store::{pool_unavailable, unavailable};
 
@@ -39,6 +40,10 @@ pub struct DeviceProposalRow {
     /// Whether an operator has marked a cash drawer as wired to this printer (ADR-0165). `false`
     /// for every row nobody has marked, and for every device that is not a printer.
     pub drawer_attached: bool,
+    /// The paper the printer takes, as its wire token (ADR-0160). `None` until an operator says.
+    pub paper_width: Option<String>,
+    /// Whether the printer cuts its paper (ADR-0160). `None` until an operator says.
+    pub cuts_paper: Option<bool>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The row's `xmin`, as a string: the version a conditional write must match (ADR-0094).
@@ -99,7 +104,8 @@ impl PostgresDeviceProposals {
         let rows = connection
             .query(
                 "SELECT id, store_id, kind, name, address, connection, station_id, \
-                        agent_device_id, drawer_attached, status, xmin::text \
+                        agent_device_id, drawer_attached, paper_width, cuts_paper, status, \
+                        xmin::text \
                  FROM device_proposals \
                  WHERE tenant_id = $1 AND ($2::text IS NULL OR store_id = $2) AND status = $3 \
                  ORDER BY created_at DESC",
@@ -119,8 +125,10 @@ impl PostgresDeviceProposals {
                 station_id: row.get(6),
                 agent_device_id: row.get(7),
                 drawer_attached: row.get(8),
-                status: row.get(9),
-                version: row.get(10),
+                paper_width: row.get(9),
+                cuts_paper: row.get(10),
+                status: row.get(11),
+                version: row.get(12),
             })
             .collect())
     }
@@ -210,6 +218,38 @@ impl PostgresDeviceProposals {
                  WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $4 \
                  RETURNING xmin::text",
                 &[&tenant_id, &id, &drawer_attached, &expected],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Says what paper an **approved** row's printer takes and whether it cuts it, only if the row is
+    /// still at `expected` (ADR-0094's conditional write, ADR-0160's paper and cutter).
+    ///
+    /// `paper_width` is typed, and its spelling is chosen here beside the column for the reason
+    /// [`Self::mark`] gives: the column holds the wire token, the one the config node carries.
+    /// Returns what [`Self::set_agent`] returns, for the same reason.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn set_paper(
+        &self,
+        tenant_id: &str,
+        id: &str,
+        paper_width: PaperWidth,
+        cuts_paper: bool,
+        expected: &str,
+    ) -> Result<Option<String>, PortError> {
+        let paper_width = paper_width.as_wire();
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "UPDATE device_proposals SET paper_width = $3, cuts_paper = $4 \
+                 WHERE tenant_id = $1 AND id = $2 AND status = 'approved' AND xmin::text = $5 \
+                 RETURNING xmin::text",
+                &[&tenant_id, &id, &paper_width, &cuts_paper, &expected],
             )
             .await
             .map_err(unavailable)?;

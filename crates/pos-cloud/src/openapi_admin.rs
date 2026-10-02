@@ -129,6 +129,7 @@ pub(crate) struct ErrorResponse {
         crate::http::admin_publish_reason_codes,
         crate::http::admin_admitted_devices,
         crate::http::admin_revoke_device,
+        crate::http::admin_set_printer_paper,
         crate::http::admin_export_revenue_fees,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
@@ -214,6 +215,15 @@ pub(crate) struct ErrorResponse {
                            rows. Note the two identity spaces — the ids here are minted by the \
                            edge at pairing, and nothing joins them to the console-minted ids of \
                            `/admin/stores/{store_id}/devices`."
+        ),
+        (
+            name = "printers",
+            description = "What paper each approved printer takes and whether it cuts it \
+                           (ADR-0160 decision 2). The rest of the device-onboarding surface is \
+                           still coverage debt; this write is documented because a route new to \
+                           this surface is, and because a fork's own console needs to know that a \
+                           printer nobody has set prints as 80 mm paper with a cutter, and that \
+                           nothing reaches a store until its devices are published."
         ),
         (
             name = "reports",

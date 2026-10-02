@@ -456,6 +456,31 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The console says what paper each printer takes, and whether it cuts it**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The edge took every printer to be 80 mm paper, 42 characters a line, with a cutter.
+  A 58 mm printer was sent rasters drawn for 80 mm paper, which shear on its head, and bilingual
+  receipts laid out for 42 characters.
+  - The console's Devices page has **Paper** on each approved printer: **80 mm**, **80 mm, 48
+    characters a line** or **58 mm**, and **Cuts paper**, on by default. It saves under
+    `POST /admin/devices/proposals/{id}/paper` (new, and documented in `docs/openapi-admin.json`),
+    with an `If-Match` and an audit entry. A paper the cloud does not know is refused `400`, naming
+    `paper_width`. Like the drawer mark, it reaches a store when its devices are published.
+  - A receipt, its copy and a pre-bill decide from the printer's paper, 42, 48 or 32 characters a
+    line, whether a bilingual label and its translation share a line. Every line drawn as a bitmap,
+    on any document, is 576 dots wide on 80 mm paper and 384 on 58 mm. A printer with no cutter is
+    sent no cut, whether the edge or a print agent writes to it.
+  - There is no code page to choose. The ESC/POS adapter sends text only in ASCII and draws every
+    other line, so a code page setting would change nothing.
+
+  **Upgrade note:** `PublishedDevice` gains `paper_width` (`PAPER_WIDTH_MILLIMETRES_80`,
+  `_MILLIMETRES_80_COLUMNS_48` or `_MILLIMETRES_58`) and `cuts_paper` (`pos-proto`, additive). Both
+  are left off the node while unset, and absent means 80 mm paper, 42 characters, 576 dots and a
+  cut. Nothing prints differently until an operator sets a printer and publishes, and an edge that
+  predates the fields ignores them and prints as before. Migration `0078_device_paper.sql` adds
+  `device_proposals.paper_width` (`text`) and `cuts_paper` (`boolean`), both nullable. It is
+  additive and rollback-safe. No event, permission or protocol change.
+
 - **A receipt can print in two languages**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2).

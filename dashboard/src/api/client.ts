@@ -46,6 +46,7 @@ import type {
   Device,
   CreateTerminalResponse,
   DeviceProposalSummary,
+  PaperWidth,
   DisplayCategory,
   DisplaySubcategory,
   AdmittedDevice,
@@ -818,8 +819,24 @@ export const api = {
       version,
       { tenant_id: tenantId, drawer_attached: drawerAttached },
     ),
+  // Saying what paper an approved printer takes and whether it cuts it, conditional on the version
+  // the row was read at, as the drawer mark is (ADR-0094, ADR-0160). The store hears it on the next
+  // publish.
+  setPrinterPaper: (
+    tenantId: string,
+    id: string,
+    paperWidth: PaperWidth,
+    cutsPaper: boolean,
+    version: string,
+  ) =>
+    requestVoidIfMatch(
+      "POST",
+      `/admin/devices/proposals/${encodeURIComponent(id)}/paper`,
+      version,
+      { tenant_id: tenantId, paper_width: paperWidth, cuts_paper: cutsPaper },
+    ),
   // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
-  // pick and a drawer mark all wait on this before the store hears about them.
+  // pick, a drawer mark and a printer's paper all wait on this before the store hears about them.
   publishDevices: (tenantId: string, storeId: string) =>
     requestJson<PublishDevicesResponse>("POST", "/admin/devices/publish", {
       tenant_id: tenantId,

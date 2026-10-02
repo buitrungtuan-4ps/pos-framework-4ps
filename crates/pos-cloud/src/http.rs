@@ -93,7 +93,7 @@ use pos_proto::channels::{
     PublishedChannels, PublishedTender, PublishedVendorPolicies, PublishedVendorPolicy,
 };
 use pos_proto::determinism::ClockSource;
-use pos_proto::devices::{DeviceConnection, PublishedDevice, PublishedDevices};
+use pos_proto::devices::{DeviceConnection, PaperWidth, PublishedDevice, PublishedDevices};
 use pos_proto::display::GridPosition;
 use pos_proto::enums::{EdgePlacement, PaymentMethod, SalesChannel, UnitOfMeasure};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
@@ -3152,6 +3152,10 @@ where
             "/admin/devices/proposals/{id}/drawer",
             post(set_drawer_attached::<D, A, K, C>),
         )
+        .route(
+            "/admin/devices/proposals/{id}/paper",
+            post(admin_set_printer_paper::<D, A, K, C>),
+        )
         .with_state(DeviceState {
             devices,
             admin,
@@ -3693,32 +3697,19 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state
+    let written = state
         .devices
         .set_agent(tenant_id, id, agent, expected.as_str())
-        .await
-    {
-        Ok(DeviceWriteOutcome::Updated) => {
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "device_proposal.set_agent",
-                "device_proposal",
-                &id.to_string(),
-                None,
-                Some(serde_json::json!({
-                    "agent_device_id": agent.map(|agent| agent.to_string()),
-                })),
-            )
-            .await;
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Ok(DeviceWriteOutcome::VersionMismatch) => version_mismatch(),
-        Ok(DeviceWriteOutcome::NotFound) => not_found("device"),
-        Err(error) => device_error_response(&error),
-    }
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_agent",
+        serde_json::json!({ "agent_device_id": agent.map(|agent| agent.to_string()) }),
+        written,
+    )
+    .await
 }
 
 /// An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.
@@ -3770,22 +3761,162 @@ where
         Ok(expected) => expected,
         Err(refusal) => return refusal,
     };
-    match state
+    let written = state
         .devices
         .set_drawer(tenant_id, id, request.drawer_attached, expected.as_str())
-        .await
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_drawer",
+        serde_json::json!({ "drawer_attached": request.drawer_attached }),
+        written,
+    )
+    .await
+}
+
+/// An operator says what paper an approved printer takes and whether it cuts it.
+#[derive(Debug, Clone, Deserialize)]
+struct SetPaperRequest {
+    /// The tenant the device belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The paper the printer takes, as its `PAPER_WIDTH_…` token.
+    paper_width: String,
+    /// Whether the printer cuts its paper: `false` for one with no cutter.
+    cuts_paper: bool,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/paper",
+    params(
+        ("id" = String, Path, description = "The approved printer's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the printer was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
+                       characters a line and a 576-dot raster), \
+                       `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and \
+                       `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, \
+                       `false` for a printer with no cutter. A printer nobody has set prints as \
+                       80 mm paper with a cutter",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`"),
+        (status = 400, description = "`paper_width` is not one of the three, an id is not a \
+                                      ULID, or If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The device changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says what paper an approved printer takes and whether it cuts it
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2).
+///
+/// The drawer mark's guards, for the drawer mark's reasons: `ManageDevices`, an `If-Match`, and an
+/// audit entry. The width decides how a receipt is laid out and how wide a raster is drawn, and the
+/// cutter whether a printer is sent a cut, so who set them is worth a row. They reach a store on the
+/// next devices publish, as every other fact about a device does. `PAPER_WIDTH_UNSPECIFIED` is
+/// refused with every token this release does not know: it is what an older reader takes a newer
+/// paper to be, never a choice.
+async fn admin_set_printer_paper<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetPaperRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
     {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let paper_width = match PaperWidth::from_wire(&request.paper_width) {
+        Some(known) if known != PaperWidth::Unspecified => known,
+        _ => return enum_refusal("paper_width", accepted_tokens::<PaperWidth>()),
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let written = state
+        .devices
+        .set_paper(
+            tenant_id,
+            id,
+            paper_width,
+            request.cuts_paper,
+            expected.as_str(),
+        )
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_paper",
+        serde_json::json!({
+            "paper_width": paper_width.as_wire(),
+            "cuts_paper": request.cuts_paper,
+        }),
+        written,
+    )
+    .await
+}
+
+/// The answer to a conditional write on an approved device: an agent pick, a drawer mark or a
+/// printer's paper.
+///
+/// A write that changed the row is audited as `action`, with what the device now says as the
+/// entry's `after`: each of them decides what a store does with real paper or real cash. A stale
+/// version is a `412` and a device that is not there a `404`, as for every conditional write.
+async fn device_write_response<D, A, K, C>(
+    state: &DeviceState<D, A, K, C>,
+    context: &AdminContext,
+    (tenant_id, id): (TenantId, DeviceProposalId),
+    action: &str,
+    after: serde_json::Value,
+    written: Result<DeviceWriteOutcome, crate::devices::DeviceProposalError>,
+) -> Response
+where
+    C: ClockSource,
+{
+    match written {
         Ok(DeviceWriteOutcome::Updated) => {
             audit_action(
                 &state.audit,
                 &state.clock,
-                &context,
+                context,
                 Some(tenant_id),
-                "device_proposal.set_drawer",
+                action,
                 "device_proposal",
                 &id.to_string(),
                 None,
-                Some(serde_json::json!({ "drawer_attached": request.drawer_attached })),
+                Some(after),
             )
             .await;
             StatusCode::NO_CONTENT.into_response()
@@ -12153,6 +12284,14 @@ fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDevices {
                     // only, its own transport only), so a mark on a network printer is published
                     // and inert rather than silently dropped here.
                     drawer_attached: row.drawer_attached,
+                    // Verbatim, and absent where nobody has said: the edge reads absent as the 80 mm
+                    // printer with a cutter every store assumed before the console could say
+                    // (ADR-0160), so a store nobody has set publishes the node it did before.
+                    paper_width: row
+                        .paper_width
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
+                    cuts_paper: row.cuts_paper,
                 })
             })
             .collect(),
