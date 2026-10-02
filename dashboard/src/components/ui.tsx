@@ -1064,7 +1064,9 @@ export function TextArea(props: {
   onInput: (value: string) => void;
   rows?: number;
   placeholder?: string;
+  hint?: string;
 }) {
+  const hintId = createUniqueId();
   return (
     <label class="block">
       <span class="mb-1 block text-sm font-medium text-ink">{props.label}</span>
@@ -1072,9 +1074,17 @@ export function TextArea(props: {
         class="w-full rounded-token border border-line bg-surface-raised p-3 font-mono text-sm text-ink"
         rows={props.rows ?? 10}
         placeholder={props.placeholder}
+        aria-describedby={props.hint ? hintId : undefined}
         value={props.value}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
+      <Show when={props.hint}>
+        {(hint) => (
+          <span id={hintId} class="mt-1 block text-sm text-ink-muted">
+            {hint()}
+          </span>
+        )}
+      </Show>
     </label>
   );
 }
