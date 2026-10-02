@@ -48,6 +48,7 @@ pub mod money;
 pub mod origins;
 pub mod people;
 pub mod pii;
+pub mod printing;
 pub mod protocol;
 pub mod quantity;
 pub mod reason_codes;

@@ -23,6 +23,7 @@
 //! cannot offer a value or claim a default that the edge does not have.
 
 use crate::people::PublishedPermissions;
+use crate::printing::{PublishedPrinting, ReceiptLanguage};
 use crate::session::{self, PublishedSession};
 use crate::shift::{NoShiftSelling, PublishedShift};
 use crate::wire_enum;
@@ -238,6 +239,11 @@ const NEXT_RELEASE: &str = "0.14.1";
 
 /// Every setting, in the order the register lists them.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one flat list in the order `docs/configuration.md` prints it, which grows by a \
+              self-contained entry per setting; splitting it across helpers would only scatter it"
+)]
 pub fn register() -> Vec<Setting> {
     // What the edge reads a `session` node that sets nothing as.
     let unset = PublishedSession::default();
@@ -343,6 +349,38 @@ pub fn register() -> Vec<Setting> {
                       hold with approval needs the PIN of someone who holds it directly, and \
                       anything else is refused. Off, every act works as before. Set each role up \
                       before turning it on.",
+        },
+        Setting {
+            node: PublishedPrinting::NODE,
+            field: "receipt_language",
+            shape: SettingShape::Choice {
+                values: choices::<ReceiptLanguage>(),
+                default: PublishedPrinting::default().receipt_language().as_wire(),
+                // Confirmed by the owner on 2026-10-01: a new store prints in its country's language.
+                // A token rather than a language, because the console gives a store these values
+                // when it creates it, before anyone has said which country the store is in.
+                preset: Some(ReceiptLanguage::Country.as_wire()),
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "The language a receipt, its copy and a pre-bill print their labels and item \
+                      names in. `RECEIPT_LANGUAGE_DISPLAY` follows the store's display language. \
+                      `RECEIPT_LANGUAGE_COUNTRY` is the language of the store's country, or the \
+                      display language while the store's locale names none the edge prints labels \
+                      in. An item the menu does not translate keeps its own name, and a box with \
+                      no fonts prints English labels.",
+        },
+        Setting {
+            node: PublishedPrinting::NODE,
+            field: "receipt_printed_on_settle",
+            shape: SettingShape::Bool {
+                default: PublishedPrinting::default().receipt_printed_on_settle(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "Whether settling a bill prints the guest's receipt. Off, a settle prints \
+                      nothing, and the till's print button prints a copy.",
         },
     ]
 }
@@ -537,6 +575,7 @@ mod tests {
         render_snapshot_of,
     };
     use crate::people::PublishedPermissions;
+    use crate::printing::PublishedPrinting;
     use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
     use crate::shift::PublishedShift;
     use crate::wire_enum::WireEnum;
@@ -868,6 +907,16 @@ mod tests {
                 let permissions: PublishedPermissions = serde_json::from_value(document).ok()?;
                 match field {
                     "enforced" => Some(json!(permissions.enforced)),
+                    _ => None,
+                }
+            }
+            PublishedPrinting::NODE => {
+                let printing: PublishedPrinting = serde_json::from_value(document).ok()?;
+                match field {
+                    "receipt_language" => Some(json!(printing.receipt_language().as_wire())),
+                    "receipt_printed_on_settle" => {
+                        Some(json!(printing.receipt_printed_on_settle()))
+                    }
                     _ => None,
                 }
             }

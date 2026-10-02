@@ -58,6 +58,7 @@ use pos_proto::menu::{ChannelCatalog, MenuBook};
 use pos_proto::money::CurrencyCode;
 use pos_proto::money::Money;
 use pos_proto::people::{PublishedPermissions, PublishedStaffMember};
+use pos_proto::printing::PublishedPrinting;
 use pos_proto::reason_codes::PublishedReasonCodes;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
@@ -109,6 +110,11 @@ struct PublishedLocale {
     /// every surface used before the node could say otherwise.
     #[serde(default)]
     number_format: Option<PublishedNumberFormat>,
+    /// The language of the store's country, from the cloud's pack for it (ADR-0105), which a receipt
+    /// set to `RECEIPT_LANGUAGE_COUNTRY` prints in (ADR-0160). Absent for a cloud that predates the
+    /// field, and such a receipt prints in the display language.
+    #[serde(default)]
+    country_language: Option<String>,
 }
 
 /// A published number format, in the permissive shape the rest of this struct uses.
@@ -396,6 +402,19 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
             }
         }
     }
+    // The `printing` node (ADR-0160), read as the `shift` node is: absent puts the defaults back,
+    // unparseable keeps the last.
+    match document.get(PublishedPrinting::NODE) {
+        None => session.printing = PublishedPrinting::default(),
+        Some(value) => {
+            if let Some(printing) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedPrinting>(&text).ok())
+            {
+                session.printing = printing;
+            }
+        }
+    }
     // The `tax` node the tax publish writes (ADR-0074, Track M4): the per-(tax class × channel) rate
     // table the edge reprices and bills against. Until M4 this was only ever the hardcoded bootstrap
     // default; a store now bills the authored rates. Absent or unparseable leaves the base table
@@ -575,6 +594,12 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
         {
             session.number_format = format;
         }
+        // Applied as stated, absent included: a locale that names no country language leaves a
+        // country receipt nothing to follow but the display language, whatever an earlier one said.
+        session.country_language = locale
+            .country_language
+            .map(|language| language.trim().to_owned())
+            .filter(|language| !language.is_empty());
     }
     // The `fleet_update` node the OTA publish writes (ADR-0048): the rollout every device weighs
     // itself against, and the signing keys revocation has retired. The cloud has published this node
@@ -1326,6 +1351,63 @@ mod tests {
     }
 
     #[test]
+    fn a_printing_node_is_applied_a_malformed_one_keeps_the_last_and_an_absent_one_resets() {
+        use pos_proto::printing::{PublishedPrinting, ReceiptLanguage};
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(
+            base.printing,
+            PublishedPrinting::default(),
+            "prints as it always has"
+        );
+        let english = session_from_config(
+            &base,
+            &serde_json::json!({ "printing": {
+                "receipt_language": "RECEIPT_LANGUAGE_EN",
+                "receipt_printed_on_settle": false,
+            } }),
+        );
+        assert_eq!(
+            english.printing.receipt_language(),
+            ReceiptLanguage::English
+        );
+        assert!(!english.printing.receipt_printed_on_settle());
+
+        let broken = serde_json::json!({ "printing": { "receipt_printed_on_settle": "no" } });
+        assert_eq!(
+            session_from_config(&english, &broken).printing,
+            english.printing
+        );
+
+        let cleared = session_from_config(&english, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.printing, PublishedPrinting::default());
+    }
+
+    #[test]
+    fn the_country_language_is_what_the_locale_node_says_and_nothing_once_it_says_none() {
+        let locale = |language: Option<&str>| {
+            let mut node = serde_json::json!({
+                "currency_code": "VND", "timezone": "Asia/Ho_Chi_Minh", "cutoff_hour": 4,
+            });
+            if let Some(language) = language {
+                node["country_language"] = serde_json::json!(language);
+            }
+            serde_json::json!({ "locale": node })
+        };
+        let vietnam = session_from_config(&EdgeSession::bootstrap(), &locale(Some("vi")));
+        assert_eq!(vietnam.country_language.as_deref(), Some("vi"));
+        // A locale published before the field existed, or for a country the cloud has no pack for.
+        assert_eq!(
+            session_from_config(&vietnam, &locale(None)).country_language,
+            None
+        );
+        assert_eq!(
+            session_from_config(&vietnam, &locale(Some(" "))).country_language,
+            None
+        );
+    }
+
+    #[test]
     fn a_synced_menu_node_becomes_the_sessions_catalog() {
         let base = EdgeSession::bootstrap(); // empty menu, DineIn channel
         assert!(
@@ -2003,6 +2085,7 @@ mod tests {
                     "group_separator": " ",
                     "digits_per_group": 2,
                 },
+                "country_language": "hi",
             }}),
         );
 
@@ -2036,6 +2119,10 @@ mod tests {
         assert_ne!(
             store.number_format, bootstrap.number_format,
             "number_format"
+        );
+        assert_ne!(
+            store.country_language, bootstrap.country_language,
+            "country_language"
         );
     }
 

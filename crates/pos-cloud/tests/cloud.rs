@@ -29053,7 +29053,8 @@ async fn a_new_store_is_given_the_owners_values_once() {
         serde_json::json!([
             NO_SHIFT_SELLING,
             "session.idle_lock_seconds",
-            "permissions.enforced"
+            "permissions.enforced",
+            "printing.receipt_language"
         ])
     );
     assert_eq!(
@@ -29070,6 +29071,13 @@ async fn a_new_store_is_given_the_owners_values_once() {
         tenant_layer_node(&config_trees, third, "permissions").await,
         Some(serde_json::json!({ "enforced": true })),
         "a new store decides with each person's own permissions from its first day (ADR-0158)"
+    );
+    // One token for every country, because the store has no country yet when the console gives it
+    // these values. Its edge reads the language from its `locale` node once that names one.
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "printing").await,
+        Some(serde_json::json!({ "receipt_language": "RECEIPT_LANGUAGE_COUNTRY" })),
+        "a new store prints its receipts in its country's language (the owner, 2026-10-01)"
     );
 
     let again = router
@@ -29249,6 +29257,58 @@ async fn the_catalogue_lists_each_setting_with_its_default_and_new_store_value()
             "a choice carries no `{absent}`"
         );
     }
+}
+
+#[tokio::test]
+async fn the_printing_settings_are_offered_as_the_register_says_and_reach_their_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, _, _] = settings_stores();
+
+    // Offered as the screen draws them: a choice of language, and a switch.
+    let catalogue = router
+        .clone()
+        .oneshot(get_with_cookie("/admin/settings/catalogue", &cookie))
+        .await
+        .expect("route the catalogue");
+    let body = json_body(catalogue).await;
+    let listed = |key: &str| {
+        body["settings"]
+            .as_array()
+            .expect("a list")
+            .iter()
+            .find(|setting| setting["setting_key"] == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("{key} is listed"))
+    };
+    let language = listed("printing.receipt_language");
+    assert_eq!(language["kind"], "SETTING_KIND_CHOICE");
+    assert_eq!(language["default"], "RECEIPT_LANGUAGE_DISPLAY");
+    assert_eq!(language["preset"], "RECEIPT_LANGUAGE_COUNTRY");
+    let on_settle = listed("printing.receipt_printed_on_settle");
+    assert_eq!(on_settle["kind"], "SETTING_KIND_BOOL");
+    assert_eq!(on_settle["default"], true);
+
+    // A store that turns the switch off has it on its `printing` node.
+    let written = router
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "setting_key": "printing.receipt_printed_on_settle",
+                "scope": "SETTING_SCOPE_STORE",
+                "scope_id": first.to_string(),
+                "value": false,
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+    assert_eq!(
+        tenant_layer_node(&config_trees, first, "printing").await,
+        Some(serde_json::json!({ "receipt_printed_on_settle": false }))
+    );
 }
 
 #[tokio::test]

@@ -414,6 +414,28 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     it until the console's fee routes land, so no store is sent a `fees` node yet. No route, event,
     permission or protocol version change.
 
+- **A store chooses the language its receipts print in, and whether a settle prints one**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2). The new `printing` node carries both, as two settings in the register.
+  - `printing.receipt_language` decides what a receipt, its copy and a pre-bill print their labels
+    and item names in. `RECEIPT_LANGUAGE_DISPLAY`, the default, is the store's display language, as
+    before. `RECEIPT_LANGUAGE_COUNTRY`, which a new store is given, is the language of the store's
+    country (Vietnamese in Vietnam), and the display language where the edge has no labels in it.
+    `RECEIPT_LANGUAGE_VI` and `RECEIPT_LANGUAGE_EN` name one. In a language other than the display
+    language, each item and modifier prints the menu's translation for it, or the name it was rung
+    up with where the menu has none. A box with no fonts still prints English labels. The shift
+    report and kitchen tickets keep the display language.
+  - The store's `locale` node gains `country_language`, the country pack's language, which the cloud
+    writes at a locale publish as it writes the number format.
+  - `printing.receipt_printed_on_settle`, `true` by default: off, a settle prints no receipt, and the
+    till's print button prints one, marked as a copy.
+  - **Upgrade note:** additive, and nothing changes until a value is set, because each default is
+    what the edge did before. The console's new-store values gain `RECEIPT_LANGUAGE_COUNTRY`. A
+    store receives `country_language` when its locale node is next published, and until then a
+    `RECEIPT_LANGUAGE_COUNTRY` receipt prints in the display language. `docs/snapshots/settings.txt`
+    and `docs/configuration.md` list the two settings, and `pos-proto` gains the `printing` module,
+    additively. No route, event, migration, permission or protocol version change.
+
 - **A settled bill records each fee and its tax per class**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4, roadmap-v3 B4.1).
   `billing.bill.settled` carries `tax_lines`, one per tax class with its base, rate and tax, and

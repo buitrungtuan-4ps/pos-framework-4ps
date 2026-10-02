@@ -64,6 +64,7 @@ use pos_proto::ids::{
     ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::integrations::PublishedIntegrations;
+use pos_proto::printing::PublishedPrinting;
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::{NoShiftSelling, PublishedShift};
@@ -350,6 +351,10 @@ pub struct EdgeSession {
     /// picker offers, which the framework ships and a publish replaces, and which therefore cannot
     /// be pre-resolved the way a compiled menu is.
     pub display_language: Option<String>,
+    /// The language of the store's country, as its `locale` node states it from the cloud's country
+    /// pack (ADR-0105), or `None` where the node states none. What a receipt prints in under
+    /// `RECEIPT_LANGUAGE_COUNTRY` (ADR-0160).
+    pub country_language: Option<String>,
     /// The store's currency.
     pub currency: CurrencyCode,
     /// How many decimal places that currency has
@@ -509,6 +514,10 @@ pub struct EdgeSession {
     /// wrong PINs lock a person out for five minutes, and the sign-in window is the local file's
     /// or thirty minutes ([`crate::auth::Sessions`]).
     pub session_settings: PublishedSession,
+    /// How the store prints the paper it hands a guest, from the `printing` config node (ADR-0160):
+    /// the receipt's language and whether a settle prints it. The defaults in the bootstrap, which
+    /// are what the edge did before the node existed.
+    pub printing: PublishedPrinting,
     /// The store's authored promotions — the runtime `Campaign`s converted from the `campaigns`
     /// config node ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)), which
     /// `pos_core::campaign::evaluate` prices a bill against. Empty in the bootstrap: a store runs no
@@ -688,11 +697,13 @@ impl EdgeSession {
             profile: StoreProfile::default(),
             shift: PublishedShift::default(),
             session_settings: PublishedSession::default(),
+            printing: PublishedPrinting::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),
             enabled_channels: None,
             accepted_tender: None,
             display_language: None,
+            country_language: None,
             qr_staff_confirmation_required: true,
             reason_codes: PublishedReasonCodes::framework_default(),
             // No fee until a `fees` node is published: what every bill charged before it existed.
@@ -1257,6 +1268,8 @@ pub struct LineView {
 /// Edge-local, like [`BillTotals`] beside it: it crosses no wire and is not part of any response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiptLine {
+    /// The item sold, by which a receipt in another language finds the menu's name for it.
+    pub menu_item_id: MenuItemId,
     /// The item's name as the guest saw it when the line was added.
     pub display_name: DisplayName,
     /// How many — a [`Quantity`], because a split item is half of one and a weighed item is not a
@@ -1272,6 +1285,8 @@ pub struct ReceiptLine {
     /// Empty for a line recorded before `sales.order_line.added` carried them: such a receipt
     /// prints neither an id nor a name looked up today, so an old receipt reprints as it was.
     pub modifier_display_names: Vec<DisplayName>,
+    /// The modifiers chosen, in the order of [`Self::modifier_display_names`].
+    pub modifier_menu_item_ids: Vec<MenuItemId>,
 }
 
 /// What a pre-bill prints: the rows a bill or an open order covers, and what they come to.
@@ -6310,7 +6325,9 @@ impl<S: EventStore> Edge<S> {
             total_due: Some(totals.total_due),
             totals: Some(totals.clone()),
             table_state,
-            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt),
+            // The domain asks for a receipt on every settle; the store may print none (ADR-0160).
+            print_receipt: bill_decision.effects.contains(&Effect::PrintReceipt)
+                && session.printing.receipt_printed_on_settle(),
             open_drawer: cash_taken.amount_minor > 0,
             lines: Self::receipt_lines(&order.lines),
         })
@@ -7348,11 +7365,13 @@ impl<S: EventStore> Edge<S> {
     fn receipt_lines(lines: &[LineRecord]) -> Vec<ReceiptLine> {
         Self::sold_lines(lines)
             .map(|line| ReceiptLine {
+                menu_item_id: line.menu_item_id,
                 display_name: line.display_name.clone(),
                 quantity: line.quantity,
                 unit_price: line.unit_price,
                 line_total: line.line_total,
                 modifier_display_names: line.modifier_display_names.clone(),
+                modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
             })
             .collect()
     }
@@ -9413,6 +9432,39 @@ mod tests {
                 .expect("opens a shift");
             let refused = edge.open_shift(actor(), vnd(500_000)).await;
             assert!(matches!(refused, Err(super::AppError::ShiftAlreadyOpen)));
+        });
+    }
+
+    #[test]
+    fn a_store_that_prints_no_receipt_on_settle_settles_and_numbers_the_bill_without_one() {
+        pos_fakes::executor::run_ready(async {
+            let edge = Edge::new(
+                FakeStore::default(),
+                identity(),
+                EdgeSession {
+                    printing: pos_proto::printing::PublishedPrinting {
+                        receipt_printed_on_settle: Some(false),
+                        ..Default::default()
+                    },
+                    ..EdgeSession::bootstrap()
+                },
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("seeds");
+            let table = TableId::new(Ulid::from_u128(301));
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            edge.add_line(actor(), table, a_line()).await.expect("adds");
+            let opened = edge.open_bill(actor(), table).await.expect("opens a bill");
+            let settled = edge
+                .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles");
+            assert_eq!(
+                settled.receipt_number,
+                Some(1),
+                "the bill is numbered all the same"
+            );
+            assert!(!settled.print_receipt, "and no receipt prints (ADR-0160)");
         });
     }
 

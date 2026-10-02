@@ -8903,6 +8903,11 @@ struct PackedFacts {
     /// of the place, not of the money. Vietnam writes `1.234.567,50` whether the amount is in đồng
     /// or in dollars.
     number_formats: std::collections::BTreeMap<CountryCode, NumberFormat>,
+    /// The language each country's pack starts a store in, as a BCP 47 tag, which a receipt set to
+    /// `RECEIPT_LANGUAGE_COUNTRY` prints in
+    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+    /// Keyed on the country: it is the language of the place, whatever the store trades in.
+    languages: std::collections::BTreeMap<CountryCode, String>,
 }
 
 /// Builds those from the compiled country modules.
@@ -8924,6 +8929,10 @@ fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
         facts
             .number_formats
             .insert(module.country_code(), pack.number_format.clone());
+        facts.languages.insert(
+            module.country_code(),
+            pack.default_language.as_str().to_owned(),
+        );
     }
     facts
 }
@@ -9187,6 +9196,17 @@ fn checked_locale_node(
         && let serde_json::Value::Object(map) = &mut locale_value
     {
         map.insert("number_format".to_owned(), format);
+    }
+    // The language of the store's country (ADR-0160), which a receipt set to
+    // `RECEIPT_LANGUAGE_COUNTRY` prints in. The cloud's to say for the reason the rest of these are:
+    // the edge a store runs carries no country pack of its own.
+    if let Some(language) = facts.languages.get(&country)
+        && let serde_json::Value::Object(map) = &mut locale_value
+    {
+        map.insert(
+            "country_language".to_owned(),
+            serde_json::Value::String(language.clone()),
+        );
     }
     // The display language is optional: include it only when a non-blank code was given, so a store
     // that never sets one keeps a clean node and shows each item's default name (ADR-0074).
@@ -32177,6 +32197,20 @@ mod locale_node_tests {
         );
     }
 
+    #[test]
+    fn the_node_tells_the_store_the_language_of_its_country() {
+        // ADR-0160: a new store's receipts print in its country's language, which the edge has no
+        // pack to look up.
+        let node =
+            checked_locale_node(&request("VN", "VND"), &packed_facts(&countries::registry()))
+                .expect("a valid publish");
+        assert_eq!(
+            node.get("country_language").and_then(Value::as_str),
+            Some("vi"),
+            "{node}"
+        );
+    }
+
     /// The node carries exactly the fields the edge reads, plus the two the cloud keeps for itself.
     ///
     /// Written out rather than derived, because the two sides sit in different crates with nothing
@@ -32214,6 +32248,7 @@ mod locale_node_tests {
             "cash_denominations",
             "default_retention_days",
             "number_format",
+            "country_language",
         ];
         // Deliberately not read by the edge. `country_code` is the fleet console's own comparison
         // against a store's region (ADR-0114); `display_language` is applied when the menu book is

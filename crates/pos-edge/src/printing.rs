@@ -39,6 +39,7 @@
 //! happens to have, and a store with three terminals would print three different tickets from one
 //! order.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU16;
@@ -61,8 +62,10 @@ use pos_proto::floor::StationPlan;
 use pos_proto::ids::{DeviceId, EventId, MenuItemId, StationId, StoreId};
 use pos_proto::locale::NumberFormat;
 use pos_proto::money::Money;
+use pos_proto::printing::ReceiptLanguage;
 use pos_proto::quantity::Quantity;
 use pos_proto::store_profile::StoreProfile;
+use pos_proto::text::DisplayName;
 
 use pos_proto::ClockSource;
 
@@ -723,6 +726,70 @@ fn format_quantity(quantity: Quantity) -> String {
     }
 }
 
+/// The language a receipt, its copy and a pre-bill print in, from the `printing` node (ADR-0160).
+///
+/// `RECEIPT_LANGUAGE_DISPLAY`, the default, is the store's display language, which is what every
+/// receipt printed in before the setting existed. `RECEIPT_LANGUAGE_COUNTRY` is the language of the
+/// store's country where the edge has labels in it, and otherwise the display language: a receipt
+/// whose labels and dish names were in two languages would be worse than either. `None` is a store
+/// with no language at all, whose paper prints English labels as it always did.
+#[must_use]
+pub fn receipt_language(session: &EdgeSession) -> Option<String> {
+    match session.printing.receipt_language() {
+        ReceiptLanguage::Unspecified | ReceiptLanguage::Display => session.display_language.clone(),
+        ReceiptLanguage::Country => session
+            .country_language
+            .clone()
+            .filter(|language| PaperLabels::in_language(language).is_some())
+            .or_else(|| session.display_language.clone()),
+        named @ (ReceiptLanguage::Vietnamese | ReceiptLanguage::English) => {
+            named.tag().map(str::to_owned)
+        }
+    }
+}
+
+/// A guest's rows with each name in the receipt's language where the menu translates the item, and
+/// as the line captured it where it does not.
+///
+/// Only when the receipt's language is not the display language: a line captures its name in the
+/// display language, so a receipt in that language prints exactly the names it always printed —
+/// the snapshot a settled bill keeps whatever the menu says next week (§14.2).
+fn receipt_lines_in<'a>(session: &EdgeSession, lines: &'a [ReceiptLine]) -> Cow<'a, [ReceiptLine]> {
+    let Some(language) = receipt_language(session)
+        .filter(|language| session.display_language.as_deref() != Some(language.as_str()))
+    else {
+        return Cow::Borrowed(lines);
+    };
+    let translated = |item: MenuItemId| -> Option<DisplayName> {
+        session
+            .menu_entry(item)
+            .and_then(|entry| entry.display_name_translations.get(&language).cloned())
+    };
+    lines
+        .iter()
+        .map(|line| {
+            let modifier_display_names = line
+                .modifier_display_names
+                .iter()
+                .enumerate()
+                .map(|(index, captured)| {
+                    line.modifier_menu_item_ids
+                        .get(index)
+                        .and_then(|item| translated(*item))
+                        .unwrap_or_else(|| captured.clone())
+                })
+                .collect();
+            ReceiptLine {
+                display_name: translated(line.menu_item_id)
+                    .unwrap_or_else(|| line.display_name.clone()),
+                modifier_display_names,
+                ..line.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .into()
+}
+
 fn item_name(session: &EdgeSession, item: MenuItemId) -> String {
     session.menu_entry(item).map_or_else(
         || item.to_string(),
@@ -1327,10 +1394,17 @@ impl Printers {
         self.renderer.is_some()
     }
 
-    /// The words this store's paper is printed in: its language when this box can draw it, English
-    /// when it cannot, so a label is never the line that stops a receipt printing.
+    /// The words the store's own paper — a kitchen ticket, a shift report — is printed in: its
+    /// display language when this box can draw it, English when it cannot, so a label is never the
+    /// line that stops a document printing.
     fn labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
         PaperLabels::for_store(session.display_language.as_deref(), self.can_rasterise())
+    }
+
+    /// The words the paper a guest is handed — a receipt, its copy, a pre-bill — is printed in: the
+    /// receipt's language ([`receipt_language`]), with the same fallback to English.
+    fn receipt_labels_for(&self, session: &EdgeSession) -> &'static PaperLabels {
+        PaperLabels::for_store(receipt_language(session).as_deref(), self.can_rasterise())
     }
 
     /// Opens the store's cash drawer through the printer [`drawer_printer`] picks
@@ -1404,9 +1478,9 @@ impl Printers {
         let document = receipt_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.labels_for(session),
+            self.receipt_labels_for(session),
             receipt_number,
-            lines,
+            &receipt_lines_in(session, lines),
             totals,
             buyer,
         );
@@ -1447,11 +1521,11 @@ impl Printers {
         let document = receipt_copy_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.labels_for(session),
+            self.receipt_labels_for(session),
             copy.receipt_number,
             copy.copy_number,
             &reprinted,
-            &copy.lines,
+            &receipt_lines_in(session, &copy.lines),
             &copy.totals,
             buyer,
         );
@@ -1487,9 +1561,9 @@ impl Printers {
         let document = pre_bill_document(
             &session.profile,
             &MoneyStyle::of(session),
-            self.labels_for(session),
+            self.receipt_labels_for(session),
             reference,
-            &pre_bill.lines,
+            &receipt_lines_in(session, &pre_bill.lines),
             &pre_bill.totals,
         );
         self.dispatch(
@@ -1774,11 +1848,11 @@ mod tests {
         ASSUMED_DOTS_PER_LINE, AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers,
         TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
         drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
-        receipt_printer, shift_report_document, short_reference, station_printer, ticket_document,
-        ticket_line,
+        receipt_language, receipt_lines_in, receipt_printer, shift_report_document,
+        short_reference, station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
-    use crate::paper_labels::{ENGLISH, VIETNAMESE};
+    use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
     use pos_core::billing::BillTotals;
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
@@ -1789,10 +1863,12 @@ mod tests {
     use pos_proto::locale::NumberFormat;
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
+    use pos_proto::printing::{PublishedPrinting, ReceiptLanguage};
     use pos_proto::quantity::Quantity;
     use pos_proto::store_profile::StoreProfile;
     use pos_proto::text::DisplayName;
     use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
     use printer_escpos::{Transport, TransportStatus, Unreachable};
     use std::num::NonZeroU16;
     use std::sync::{Arc, Mutex};
@@ -2333,7 +2409,7 @@ mod tests {
     #[test]
     fn a_connection_this_build_does_not_know_degrades_to_the_posture_that_authorises_least() {
         let mut unknown = device(1, DeviceKind::Printer, None);
-        unknown.connection = pos_proto::wire_enum::Open::parse("DEVICE_CONNECTION_INFRARED");
+        unknown.connection = Open::parse("DEVICE_CONNECTION_INFRARED");
         assert_eq!(connection_of(&unknown), PrinterConnection::Network);
         assert!(
             !connection_of(&unknown).may_open_a_drawer(),
@@ -2343,12 +2419,114 @@ mod tests {
 
     fn sold(name: &str, milli: i64, unit: Money, total: Money) -> ReceiptLine {
         ReceiptLine {
+            menu_item_id: MenuItemId::new(Ulid::from_u128(0x17E5)),
             display_name: DisplayName::new(name),
             quantity: Quantity::from_milli(milli),
             unit_price: unit,
             line_total: total,
             modifier_display_names: Vec::new(),
+            modifier_menu_item_ids: Vec::new(),
         }
+    }
+
+    fn printing_in(language: ReceiptLanguage) -> PublishedPrinting {
+        PublishedPrinting {
+            receipt_language: Open::from_known(language),
+            ..PublishedPrinting::default()
+        }
+    }
+
+    #[test]
+    fn a_receipt_follows_the_display_language_until_the_store_chooses_its_own() {
+        let mut session = EdgeSession {
+            display_language: Some("vi".to_owned()),
+            ..EdgeSession::bootstrap()
+        };
+        assert_eq!(receipt_language(&session).as_deref(), Some("vi"));
+        session.printing = printing_in(ReceiptLanguage::English);
+        assert_eq!(receipt_language(&session).as_deref(), Some("en"));
+        session.printing = printing_in(ReceiptLanguage::Country);
+        assert_eq!(
+            receipt_language(&session).as_deref(),
+            Some("vi"),
+            "a store whose locale names no country language prints in its display language"
+        );
+        session.country_language = Some("ja".to_owned());
+        assert_eq!(
+            receipt_language(&session).as_deref(),
+            Some("vi"),
+            "and so does one whose country's language the edge has no labels in"
+        );
+        session.display_language = Some("en".to_owned());
+        session.country_language = Some("vi".to_owned());
+        let language = receipt_language(&session);
+        assert_eq!(language.as_deref(), Some("vi"), "whatever the tills show");
+        assert_eq!(
+            PaperLabels::for_store(language.as_deref(), true),
+            &VIETNAMESE
+        );
+        // No fonts on this box: a label is never the line that stops a receipt printing.
+        assert_eq!(PaperLabels::for_store(language.as_deref(), false), &ENGLISH);
+    }
+
+    #[test]
+    fn a_receipt_in_another_language_names_what_the_menu_translates_and_keeps_the_rest() {
+        let item = |seed: u128| MenuItemId::new(Ulid::from_u128(seed));
+        let entry = |seed: u128, name: &str, english: Option<&str>| {
+            let entry = MenuEntry::new(
+                item(seed),
+                DisplayName::new(name),
+                Money::new(CurrencyCode::VND, 65_000),
+                EdgeSession::standard_tax_class(),
+            );
+            match english {
+                Some(english) => entry
+                    .with_name_translations([("en".to_owned(), DisplayName::new(english))].into()),
+                None => entry,
+            }
+        };
+        // The pho was renamed after it was rung up; the rice has no English name.
+        let session = EdgeSession {
+            display_language: Some("vi".to_owned()),
+            menu: MenuCatalog::new()
+                .with(entry(1, "Phở bò đặc biệt", Some("Beef pho")))
+                .with(entry(2, "Cơm tấm", None))
+                .with(entry(3, "Trứng", Some("Egg"))),
+            printing: printing_in(ReceiptLanguage::English),
+            ..EdgeSession::bootstrap()
+        };
+        let price = Money::new(CurrencyCode::VND, 65_000);
+        let lines = [
+            ReceiptLine {
+                menu_item_id: item(1),
+                modifier_display_names: vec![DisplayName::new("Trứng")],
+                modifier_menu_item_ids: vec![item(3)],
+                ..sold("Phở bò", 1_000, price, price)
+            },
+            ReceiptLine {
+                menu_item_id: item(2),
+                ..sold("Cơm tấm", 1_000, price, price)
+            },
+        ];
+
+        let english = receipt_lines_in(&session, &lines);
+        assert_eq!(english[0].display_name.as_str(), "Beef pho");
+        assert_eq!(english[0].modifier_display_names[0].as_str(), "Egg");
+        assert_eq!(
+            english[1].display_name.as_str(),
+            "Cơm tấm",
+            "the name it was rung up as"
+        );
+
+        // In the display language a receipt prints the names its lines captured, as it always did.
+        let as_before = EdgeSession {
+            printing: PublishedPrinting::default(),
+            ..session
+        };
+        assert!(matches!(
+            receipt_lines_in(&as_before, &lines),
+            std::borrow::Cow::Borrowed(same) if same == lines
+        ));
     }
 
     #[test]
