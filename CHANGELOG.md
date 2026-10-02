@@ -16,6 +16,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+### Added
+
+- **TextArea accessible hint text support.**
+  Added optional `hint?: string` prop to `TextArea` in `dashboard/src/components/ui.tsx` with proper `aria-describedby` association and unique ID generation.
+
 ### Security
 
 - **Retiring a device needs a signed-in manager**
