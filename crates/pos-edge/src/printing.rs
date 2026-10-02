@@ -2629,6 +2629,7 @@ mod tests {
             amount: vnd(minor),
             class_shares: Vec::new(),
             tax: vnd(0),
+            waivable: false,
         }
     }
 

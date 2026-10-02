@@ -87,6 +87,16 @@ pub enum DomainError {
     /// and taxed on another would be a pricing mistake, so the domain refuses instead.
     LinesDoNotMatchBases,
 
+    /// The fee asked to be waived is not one the bill charges: the bill froze no rule under its id,
+    /// or has waived it already ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+    /// decision 5).
+    FeeNotOnBill,
+
+    /// The fee's rule does not let staff waive it. Whether a fee is waivable is the rule's own
+    /// `waivable`, as the bill froze it, so a rule published as not waivable is charged on every
+    /// bill it applies to (ADR-0159 decision 5).
+    FeeNotWaivable,
+
     /// The acting role's [`PermissionSet`](crate::permission::PermissionSet) does not grant the
     /// permission the action needs. Deny by default: every gated action fails this way unless the
     /// set explicitly carries the permission
@@ -140,6 +150,8 @@ impl core::fmt::Display for DomainError {
             Self::LinesDoNotMatchBases => {
                 f.write_str("the bill's lines do not sum to its class bases")
             }
+            Self::FeeNotOnBill => f.write_str("the bill charges no such fee"),
+            Self::FeeNotWaivable => f.write_str("the fee's rule does not let it be waived"),
             Self::PermissionDenied { permission } => {
                 write!(f, "permission denied: {permission}")
             }
@@ -162,6 +174,8 @@ impl core::error::Error for DomainError {
             | Self::TaxRateNotConfigured { .. }
             | Self::Empty { .. }
             | Self::LinesDoNotMatchBases
+            | Self::FeeNotOnBill
+            | Self::FeeNotWaivable
             | Self::PermissionDenied { .. }
             | Self::CapabilityDisabled { .. } => None,
         }

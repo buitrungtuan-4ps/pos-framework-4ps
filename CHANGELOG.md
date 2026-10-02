@@ -382,6 +382,37 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Waiving a fee is an act, with an event, a permission and a reason of its own**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 5). A fee is never waived by editing
+  its rule: a rule published `waivable` is removed from one open bill, and every other bill is
+  charged it as before.
+  - `billing.fee.waived` records the waive: the `bill_id`, the `fee_id` and the `reason_code_id`,
+    ids only.
+  - `billing.fee.waive` is the new permission: high risk, PIN-flagged, and by default the
+    manager's and the owner's, as `billing.discount.override_ceiling` is. A new tenant's starting
+    roles get it on those terms: directly for the owner and the manager, with approval for the
+    rest.
+  - Reasons gain `REASON_ACTION_WAIVE_FEE`. The framework's *Staff error* and *Putting it right
+    for a guest* are valid for it, and the console's Reason codes screen offers it.
+  - In the core, `assemble` leaves a waived fee out (`BillInput::waived_fee_ids`): it charges and
+    taxes nothing, and every other figure is what it would be without the rule. A waive follows
+    the fee's `fee_id`, so `merge_fee_rules` keeps every fee waived on any bill it merges, and a
+    part of a split keeps its source's. `waivable_fee` refuses a fee the bill does not charge
+    (`FeeNotOnBill`) or whose rule is not waivable (`FeeNotWaivable`), and `decide_bill` takes
+    `BillCommand::WaiveFee`: an open bill only, under `billing.fee.waive` and its PIN. Each
+    `FeeLine` says whether its rule is `waivable`.
+  - No till waives a fee yet; the edge's route and the till's control come next.
+  - **Upgrade note:** migration `0076_roles_can_waive_a_fee.sql` grants `billing.fee.waive` once,
+    behind a `data_migrations` marker as `0073` and `0074` do: directly to every role that grants
+    `billing.discount.override_ceiling` directly, and with approval to every other role, archived
+    ones included. Nothing else in either list changes. A store sees the permission on the next
+    publish of its `permissions` node; until then nobody there holds it, so nobody can approve a
+    waive. The event, the permission and the reason action are additive:
+    `docs/snapshots/events.txt`, `docs/snapshots/permissions.txt` and `docs/permissions.md` grow,
+    and an older edge reads a reason tagged only for a waive as valid for nothing. A console tab
+    holding a role open across the upgrade gets a version conflict on its next save and reloads.
+    No route or protocol version change.
+
 - **A receipt shows each fee under its own name**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4).
   - The receipt, its copy and the pre-bill print each fee the bill was charged on its own line,

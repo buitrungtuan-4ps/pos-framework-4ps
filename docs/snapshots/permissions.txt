@@ -58,6 +58,12 @@ billing.discount.override_ceiling	default_role=OWNER
 billing.discount.override_ceiling	group=BILLING
 billing.discount.override_ceiling	pin_required=true
 billing.discount.override_ceiling	risk=HIGH
+billing.fee.waive
+billing.fee.waive	default_role=MANAGER
+billing.fee.waive	default_role=OWNER
+billing.fee.waive	group=BILLING
+billing.fee.waive	pin_required=true
+billing.fee.waive	risk=HIGH
 billing.payment.take
 billing.payment.take	default_role=CASHIER
 billing.payment.take	default_role=MANAGER

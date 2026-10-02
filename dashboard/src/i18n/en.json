@@ -1574,6 +1574,7 @@
   "reasonCodes.action.stockWaste": "Record waste",
   "reasonCodes.action.voidBill": "Void a bill",
   "reasonCodes.action.voidLine": "Void a line",
+  "reasonCodes.action.waiveFee": "Waive a fee",
   "reasonCodes.actionRequired": "Pick at least one action this reason is valid for",
   "reasonCodes.active": "In use",
   "reasonCodes.activeHint": "Clear this to retire the reason: it disappears from every picker and still names itself in past records.",
