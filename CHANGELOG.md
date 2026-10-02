@@ -382,6 +382,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A receipt shows each fee under its own name**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4).
+  - The receipt, its copy and the pre-bill print each fee the bill was charged on its own line,
+    under its name, where they printed the fees' sum on one service-charge line. The name is in
+    the receipt's language: the translation the store's current rule for that `fee_id` carries,
+    and the name the bill froze where the rule has none or the store no longer runs it. A fee that
+    charged nothing prints no line.
+  - A copy prints the fees and the tax per class that `billing.bill.settled` recorded, whatever the
+    rates and the fees in force say now
+    ([ADR-0164](docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    A bill settled before the settle recorded them is copied as before.
+  - The till's check and pay screens list each fee under the subtotal, and the total is still the
+    edge's figure. The check reads name each fee in the store's display language where its rule
+    translates it, and `POST /api/bills/{id}/discount` answers with `fee_lines` too, so the pay
+    screen keeps them after a discount. The till shows `LINES_DO_NOT_MATCH_BASES` as an internal
+    error.
+  - **Upgrade note:** a store with no `fees` node prints every receipt as before. A store that
+    charges fees prints a line per fee where it printed one service-charge line, and a copy of a
+    bill settled on this release prints the tax per class the settle recorded even after a rate
+    changes, where it printed the tax as one total. `fee_lines` on the discount response is
+    additive, and on the check reads `display_name` is now the display-language name. No event,
+    route, migration, permission or protocol version change.
+
 - **The console has a Fees screen** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)), under
   Menu & pricing, for owners and admins.
   - It lists the rules written for every store, one brand or one store. At a brand or a store it
@@ -474,8 +497,9 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - The edge folds it from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
     so a restart charges what the till showed. `pos_core::billing::merge_fee_rules` does the
     arithmetic, and a property test holds it.
-  - **Upgrade note:** no event, route, migration, permission or protocol change. No store charges
-    a fee yet, so no bill changes.
+  - **Upgrade note:** no event, route, migration, permission or protocol change. A store charges
+    fees once a rule is written for it (#592), and only a merge of split bills that carry a fee per
+    bill charges differently.
 
 - **The cloud keeps each tenant's fee rules**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 1). A fee rule is written for the
@@ -487,9 +511,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - A row is pricing configuration and carries no personal data. Who last wrote a rule is recorded
     as a console admin's id.
   - **Upgrade note:** migration `0075` adds `fee_rules`, isolated by tenant with row-level security
-    like the other configuration tables. It is additive, with no backfill. Nothing reads or writes
-    it until the console's fee routes land, so no store is sent a `fees` node yet. No route, event,
-    permission or protocol version change.
+    like the other configuration tables. It is additive, with no backfill. The console's fee routes
+    (above) read and write it. No route, event, permission or protocol version change.
 
 - **A store chooses the language its receipts print in, and whether a settle prints one**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
@@ -544,7 +567,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     `POST /admin/tenants` records two audit entries where it recorded one.
 
 - **The edge charges a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
-  decisions 2, 3 and 6). No store charges one yet: nothing in the cloud publishes a `fees` node.
+  decisions 2, 3 and 6), as the cloud publishes them (above).
   - The edge installs the `fees` node. An absent node, or an empty list, is no fee; a node that
     does not parse leaves the rules the store had, as every node does.
   - Every bill open, at a table or at the counter, freezes the rules in force on its order's
@@ -559,18 +582,18 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     keeps the rules of the bill the cashier holds, and charges a fee per bill once (below).
   - The check reads, `GET /api/tables/{id}/check`, `GET /api/orders/{id}/check` and
     `GET /api/bills/{id}/check`, gain `fee_lines`: each fee's `fee_id`, `code`, `display_name`,
-    `amount` and `tax`. `service_charge` carries the sum of every fee, and the receipt and the
-    pre-bill print that sum on their one service-charge line until they itemise it.
+    `amount` and `tax`. `service_charge` carries the sum of every fee, which the receipt and the
+    pre-bill itemise (above).
   - `FrozenFee` and `BillFeeLine` carry the rule's own `display_name`, so a renamed fee prints as
     it was charged, as an item's name does (ADR-0129). `pos_core::billing::FeeLine` gains `code`
     and `display_name`.
   - A bill whose lines do not come to its class bases is a broken invariant, since the edge reads
     both from one snapshot. It now answers `500` with `LINES_DO_NOT_MATCH_BASES`, not a refusal.
-  - **Upgrade note:** no store charges a fee until the cloud can publish a `fees` node, which is
-    not built yet. Until then every bill owes what it did, a settled bill records its tax per
-    class (above), and the check reads carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain a
-    required `display_name`; no event has carried either yet. No migration, permission or
-    protocol version change.
+  - **Upgrade note:** a store charges no fee until a rule is written for it (above). Until then
+    every bill owes what it did, a settled bill records its tax per class (above), and the check
+    reads carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain
+    a required `display_name`; no event from an earlier release carries either. No migration,
+    permission or protocol version change.
 
 - **A store can be set to decide with each person's own permissions**
   ([ADR-0158](docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) Rollout,

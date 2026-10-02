@@ -653,3 +653,37 @@ fn a_bill_without_fees_records_its_tax_per_class_and_no_fee_line() {
         assert!(frozen_on_open(&store).await.iter().all(Vec::is_empty));
     });
 }
+
+/// A copy of the receipt prints the fees and the tax per class the settle recorded (ADR-0164,
+/// ADR-0159 decision 4): neither a fee published at another rate since nor a rate changed since
+/// moves a figure on it.
+#[test]
+fn a_copy_prints_the_fees_and_tax_the_settle_recorded() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), fees(&[service(5)]));
+        a_table_of(&edge, table(1), 2).await;
+        let bill = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        edge.settle_bill(server(), bill, cash(115_500), None)
+            .await
+            .expect("settles");
+
+        let mut since = session(fees(&[service(10)]));
+        since.tax_rates =
+            TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(8));
+        edge.apply_session(since);
+        let copy = edge.reprint_receipt(server(), bill).await.expect("a copy");
+        assert_eq!(charged(&copy.totals), [("SERVICE", 5_000)]);
+        let rates: Vec<(u32, Money)> = copy
+            .totals
+            .tax_lines
+            .iter()
+            .map(|line| (line.rate_basis_points, line.tax))
+            .collect();
+        assert_eq!(rates, [(1_000, vnd(10_500))]);
+        assert_eq!(copy.totals.total_due, vnd(115_500));
+    });
+}

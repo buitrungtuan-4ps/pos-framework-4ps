@@ -30,7 +30,7 @@ use pos_proto::events::BillFeeLine;
 use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 
-use crate::app::{AppError, Edge, PreBill, fee_records};
+use crate::app::{AppError, Edge, EdgeSession, PreBill, fee_records_in};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, short_reference};
 
@@ -50,22 +50,24 @@ pub(crate) struct CheckResponse {
     /// What the guest owes — the figure the bill will settle against.
     total_due: Money,
     /// Each fee charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
-    /// in rule order: the rule, its code and the name it is charged under, what it charged and
-    /// the tax on it, as the settle records them. Part by part for a table whose bill is split, as
-    /// each part computes its own. Empty where no fee applies, which is every bill at a store with
-    /// no `fees` node.
+    /// in rule order: the rule, its code and its name, what it charged and the tax on it, as the
+    /// settle records them, except that the name is the store's display language where the
+    /// current rule translates it. Part by part for a table whose bill is split, as each part
+    /// computes its own. Empty where no fee applies, which is every bill at a store with no
+    /// `fees` node. The till shows each line, and its total is still `total_due`.
     fee_lines: Vec<BillFeeLine>,
 }
 
-impl From<&BillTotals> for CheckResponse {
-    fn from(totals: &BillTotals) -> Self {
+impl CheckResponse {
+    /// The till's reading of `totals`, its fees named in the store's display language.
+    pub(crate) fn of(totals: &BillTotals, session: &EdgeSession) -> Self {
         Self {
             subtotal: totals.subtotal,
             discount_total: totals.discount_total,
             comp_total: totals.comp_total,
             tax_total: totals.tax_total,
             total_due: totals.total_due,
-            fee_lines: fee_records(totals),
+            fee_lines: fee_records_in(totals, session, session.display_language.as_deref()),
         }
     }
 }
@@ -97,7 +99,11 @@ where
         return bad_request("a table id is a ULID");
     };
     match edge.check_totals(table_id) {
-        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
+        Ok(totals) => (
+            StatusCode::OK,
+            Json(CheckResponse::of(&totals, &edge.session())),
+        )
+            .into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
         // a configuration error, and the till showing it beats the till inventing a number.
         Err(error) => error_response(&error),
@@ -122,7 +128,11 @@ where
         return bad_request("an order id is a ULID");
     };
     match edge.order_totals(order_id) {
-        Ok(totals) => (StatusCode::OK, Json(CheckResponse::from(&totals))).into_response(),
+        Ok(totals) => (
+            StatusCode::OK,
+            Json(CheckResponse::of(&totals, &edge.session())),
+        )
+            .into_response(),
         Err(error) => error_response(&error),
     }
 }
@@ -153,7 +163,7 @@ where
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                totals: CheckResponse::from(&check.totals),
+                totals: CheckResponse::of(&check.totals, &edge.session()),
             }),
         )
             .into_response(),

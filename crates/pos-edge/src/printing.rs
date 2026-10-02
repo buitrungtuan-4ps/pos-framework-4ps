@@ -869,13 +869,7 @@ fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) 
     if !totals.comp_total.is_zero() {
         blocks.push(amount_line(labels.comps, totals.comp_total, money));
     }
-    if !totals.service_charge.is_zero() {
-        blocks.push(amount_line(
-            labels.service_charge,
-            totals.service_charge,
-            money,
-        ));
-    }
+    blocks.extend(fee_blocks(totals, money, labels));
     for line in &totals.tax_lines {
         blocks.extend(tax_block(line, money, labels));
     }
@@ -892,6 +886,65 @@ fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) 
         ));
     }
     blocks
+}
+
+/// The fees a bill was charged, each on its own line under its own name
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4), in the order of its
+/// rules. A bill with no fee line prints its service charge on one line, as every receipt did
+/// before fees were itemised; a bill with fees prints a service charge of its own only for what no
+/// fee accounts for, which is nothing on a bill the edge assembled.
+fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) -> Vec<PrintBlock> {
+    let mut blocks: Vec<PrintBlock> = totals
+        .fee_lines
+        .iter()
+        .filter(|fee| !fee.amount.is_zero())
+        .map(|fee| amount_line(fee.display_name.as_str(), fee.amount, money))
+        .collect();
+    let itemised = totals.fee_lines.iter().try_fold(
+        Money::zero(totals.service_charge.currency_code),
+        |sum, fee| sum.checked_add(fee.amount),
+    );
+    let rest = itemised.and_then(|fees| totals.service_charge.checked_sub(fees));
+    match rest {
+        Ok(rest) if rest.is_zero() => {}
+        Ok(rest) => blocks.push(amount_line(labels.service_charge, rest, money)),
+        // Fees that do not add up in the bill's currency cannot be split from the service charge,
+        // so the paper prints the service charge whole, as it did before fees were itemised.
+        Err(_) => {
+            blocks = vec![amount_line(
+                labels.service_charge,
+                totals.service_charge,
+                money,
+            )];
+        }
+    }
+    blocks
+}
+
+/// A bill's totals with each fee named in the receipt's language
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): the store's current
+/// rule's translation where it has one, and the name the bill froze where it does not.
+///
+/// Unlike an item's, a fee's frozen name is the rule's own rather than one already resolved to the
+/// display language, so it is looked up in whatever language the receipt prints in.
+fn receipt_totals_in<'a>(session: &EdgeSession, totals: &'a BillTotals) -> Cow<'a, BillTotals> {
+    let Some(language) = receipt_language(session) else {
+        return Cow::Borrowed(totals);
+    };
+    if !totals
+        .fee_lines
+        .iter()
+        .any(|fee| session.fee_translation(fee.fee_id, &language).is_some())
+    {
+        return Cow::Borrowed(totals);
+    }
+    let mut named = totals.clone();
+    for fee in &mut named.fee_lines {
+        if let Some(name) = session.fee_translation(fee.fee_id, &language) {
+            fee.display_name = name.clone();
+        }
+    }
+    Cow::Owned(named)
 }
 
 /// One tax rate's line, and the components it is made of beneath it.
@@ -1481,7 +1534,7 @@ impl Printers {
             self.receipt_labels_for(session),
             receipt_number,
             &receipt_lines_in(session, lines),
-            totals,
+            &receipt_totals_in(session, totals),
             buyer,
         );
         self.dispatch(
@@ -1526,7 +1579,7 @@ impl Printers {
             copy.copy_number,
             &reprinted,
             &receipt_lines_in(session, &copy.lines),
-            &copy.totals,
+            &receipt_totals_in(session, &copy.totals),
             buyer,
         );
         self.dispatch(
@@ -1564,7 +1617,7 @@ impl Printers {
             self.receipt_labels_for(session),
             reference,
             &receipt_lines_in(session, &pre_bill.lines),
-            &pre_bill.totals,
+            &receipt_totals_in(session, &pre_bill.totals),
         );
         self.dispatch(
             device,
@@ -1848,18 +1901,19 @@ mod tests {
         ASSUMED_DOTS_PER_LINE, AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers,
         TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
         drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
-        receipt_language, receipt_lines_in, receipt_printer, shift_report_document,
-        short_reference, station_printer, ticket_document, ticket_line,
+        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
+        shift_report_document, short_reference, station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
-    use pos_core::billing::BillTotals;
+    use pos_core::billing::{BillTotals, FeeLine};
     use pos_ports::PortError;
     use pos_ports::printer::{PrintBlock, PrintJob, PrinterConnection};
     use pos_proto::ClockSource as _;
     use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
+    use pos_proto::fees::{FeeCode, PublishedFees};
     use pos_proto::floor::{KitchenStation, StationPlan};
-    use pos_proto::ids::{DeviceId, MenuItemId, StationId};
+    use pos_proto::ids::{DeviceId, FeeId, MenuItemId, StationId};
     use pos_proto::locale::NumberFormat;
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
@@ -2563,6 +2617,118 @@ mod tests {
                 "VND 347,000",
             ]
         );
+    }
+
+    /// A fee as `assemble` reports one, under the name its bill froze.
+    fn a_fee(seed: u128, code: &str, name: &str, minor: i64) -> FeeLine {
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        FeeLine {
+            fee_id: FeeId::new(Ulid::from_u128(seed)),
+            code: FeeCode::new(code),
+            display_name: DisplayName::new(name),
+            amount: vnd(minor),
+            class_shares: Vec::new(),
+            tax: vnd(0),
+        }
+    }
+
+    #[test]
+    fn a_receipt_prints_each_fee_under_its_own_name_and_no_service_charge_line() {
+        // ADR-0159 decision 4. The fees take the place of the one service-charge line their sum
+        // used to print under, in the order of their rules; a fee that charged nothing is not
+        // printed, as a discount of nothing is not.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let totals = BillTotals {
+            subtotal: vnd(100_000),
+            service_charge: vnd(15_000),
+            fee_lines: vec![
+                a_fee(1, "SERVICE", "Service charge", 5_000),
+                a_fee(2, "COVER", "Cover charge", 10_000),
+                a_fee(3, "BAG", "Bag", 0),
+            ],
+            ..totals_of(vnd(115_000))
+        };
+        let document = receipt_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            7,
+            &[],
+            &totals,
+            None,
+        );
+        assert_eq!(
+            lines_of(&document),
+            vec![
+                "#7",
+                "Subtotal  VND 100,000",
+                "Service charge  VND 5,000",
+                "Cover charge  VND 10,000",
+                "VND 115,000",
+            ]
+        );
+
+        // A bill with no fee line prints its service charge as every receipt did.
+        let lump = BillTotals {
+            fee_lines: Vec::new(),
+            ..totals
+        };
+        let document = receipt_document(
+            &StoreProfile::default(),
+            &style(0),
+            &ENGLISH,
+            7,
+            &[],
+            &lump,
+            None,
+        );
+        assert!(lines_of(&document).contains(&"Service charge  VND 15,000"));
+    }
+
+    #[test]
+    fn a_fee_prints_in_the_receipts_language_where_its_rule_translates_it() {
+        let rules: PublishedFees = serde_json::from_str(
+            r#"{"fees": [
+                {"fee_id": "00000000000000000000000001", "code": "SERVICE",
+                 "display_name": "Service fee", "display_name_translations": {"vi": "Phí phục vụ"}},
+                {"fee_id": "00000000000000000000000002", "code": "COVER",
+                 "display_name": "Cover"}
+            ]}"#,
+        )
+        .expect("a fees node");
+        let mut session = EdgeSession {
+            display_language: Some("vi".to_owned()),
+            fees: rules,
+            ..EdgeSession::bootstrap()
+        };
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        // The bill froze the rule's own names; the service fee was renamed since, the cover is not
+        // translated, and a third rule is no longer published.
+        let totals = BillTotals {
+            fee_lines: vec![
+                a_fee(1, "SERVICE", "Service charge", 5_000),
+                a_fee(2, "COVER", "Cover charge", 10_000),
+                a_fee(3, "BAG", "Bag", 2_000),
+            ],
+            ..totals_of(vnd(117_000))
+        };
+        let names = |totals: &BillTotals| -> Vec<String> {
+            totals
+                .fee_lines
+                .iter()
+                .map(|fee| fee.display_name.as_str().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(&receipt_totals_in(&session, &totals)),
+            ["Phí phục vụ", "Cover charge", "Bag"]
+        );
+        // In English nothing is translated, so the receipt prints the names the bill froze.
+        session.printing = printing_in(ReceiptLanguage::English);
+        assert!(matches!(
+            receipt_totals_in(&session, &totals),
+            std::borrow::Cow::Borrowed(same) if same == &totals
+        ));
     }
 
     #[test]

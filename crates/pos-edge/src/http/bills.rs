@@ -23,13 +23,14 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
+use pos_proto::events::BillFeeLine;
 use pos_proto::ids::{BillId, OrderId, OrderLineId, ReasonCodeId, TableId};
 use pos_proto::money::Money;
 use pos_proto::{Open, PaymentMethod, UnknownEnumValue};
 
 use pos_proto::ids::EventId;
 
-use crate::app::{Approval, BillView, BuyerDetails, Edge};
+use crate::app::{Approval, BillView, BuyerDetails, Edge, fee_records_in};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{DrawerOutcome, PrintOutcome, Printers};
 
@@ -446,6 +447,9 @@ pub(crate) struct DiscountResponse {
     comp_total: Money,
     tax_total: Money,
     total_due: Money,
+    /// Each fee on the bill once the discount is on it, as the check reads name them: a
+    /// percentage taken after discounts moves with the discount (ADR-0159).
+    fee_lines: Vec<BillFeeLine>,
 }
 
 /// `POST /api/bills/{id}/discount` — take money off a bill before it settles (roadmap B2.2).
@@ -478,14 +482,18 @@ where
         )
         .await
     {
-        Ok(totals) => Json(DiscountResponse {
-            subtotal: totals.subtotal,
-            discount_total: totals.discount_total,
-            comp_total: totals.comp_total,
-            tax_total: totals.tax_total,
-            total_due: totals.total_due,
-        })
-        .into_response(),
+        Ok(totals) => {
+            let session = edge.session();
+            Json(DiscountResponse {
+                subtotal: totals.subtotal,
+                discount_total: totals.discount_total,
+                comp_total: totals.comp_total,
+                tax_total: totals.tax_total,
+                total_due: totals.total_due,
+                fee_lines: fee_records_in(&totals, &session, session.display_language.as_deref()),
+            })
+            .into_response()
+        }
         Err(error) => error_response(&error),
     }
 }

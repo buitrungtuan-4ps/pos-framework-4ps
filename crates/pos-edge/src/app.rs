@@ -22,7 +22,8 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::billing::{
-    self, BillInput, BillLine, BillTotals, ClassBase, FeeWhole, MergedFees, MergingBill, Payment,
+    self, BillInput, BillLine, BillTotals, ClassBase, FeeLine, FeeWhole, MergedFees, MergingBill,
+    Payment, TaxLine,
 };
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
@@ -60,8 +61,8 @@ use pos_proto::events::{
 use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
-    BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
-    ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
+    BillId, BrandId, CourseId, DeviceId, EmployeeId, FeeId, MenuItemId, OrderId, OrderLineId,
+    PaymentId, ReasonCodeId, ShiftId, StationId, StoreId, SubjectId, TableId, TaxClassId, TenantId,
 };
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::printing::PublishedPrinting;
@@ -780,6 +781,21 @@ impl EdgeSession {
                 .find_map(|row| row.catalog.get(menu_item_id))
                 .or_else(|| self.menu_book.fallback().get(menu_item_id))
         })
+    }
+
+    /// The name the store's current rule for `fee_id` gives the fee in `language`, if it translates
+    /// it ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4).
+    ///
+    /// A bill freezes only the rule's own name, so paper or a screen in another language looks the
+    /// translation up here, as a receipt does an item's in the menu, and keeps the frozen name where
+    /// the rule has none, or is gone.
+    #[must_use]
+    pub fn fee_translation(&self, fee_id: FeeId, language: &str) -> Option<&DisplayName> {
+        self.fees
+            .fees
+            .iter()
+            .find(|rule| rule.fee_id == fee_id)
+            .and_then(|rule| rule.display_name_translations.get(language))
     }
 
     /// Installs a channel-keyed tax table, for a test or the example.
@@ -1833,10 +1849,11 @@ impl From<SalesOrderLineAdded> for LineRecord {
     }
 }
 
-/// A bill's fees as the check reads show them and the settle records them
+/// A bill's fees as the settle records them and the check reads show them
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
 /// in rule order, with the rule, its code and the name the bill froze, what it charged and the tax
-/// on it. One mapping for both, so the till and the log cannot describe a fee differently.
+/// on it. One mapping for both, so the till and the log cannot describe a fee differently; the
+/// till's reads name each fee in the store's display language ([`fee_records_in`]).
 pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
     totals
         .fee_lines
@@ -1849,6 +1866,24 @@ pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
             tax: line.tax,
         })
         .collect()
+}
+
+/// [`fee_records`] for a screen: each fee named in `language` where the store's current rule
+/// translates it ([`EdgeSession::fee_translation`]), and as the bill froze it otherwise.
+pub(crate) fn fee_records_in(
+    totals: &BillTotals,
+    session: &EdgeSession,
+    language: Option<&str>,
+) -> Vec<BillFeeLine> {
+    let mut records = fee_records(totals);
+    if let Some(language) = language {
+        for record in &mut records {
+            if let Some(name) = session.fee_translation(record.fee_id, language) {
+                record.display_name = name.clone();
+            }
+        }
+    }
+    records
 }
 
 /// A bill's tax per class as the settle records it (ADR-0159 decision 4, roadmap-v3 B4.1): each
@@ -2042,7 +2077,7 @@ enum StaffStanding {
 /// The figures are the ones `billing.bill.settled` carried, because a copy never prints a figure
 /// the settle did not record: the rate table can change after a bill is paid, and a copy computed
 /// afresh would then disagree with the paper the guest already holds.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SettledReceipt {
     /// The receipt's gapless number, which every copy prints too.
     receipt_number: u64,
@@ -2058,6 +2093,12 @@ struct SettledReceipt {
     rounding_adjustment: Money,
     /// What the guest paid.
     total_due: Money,
+    /// Each fee the bill was charged, as settled ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)
+    /// decision 4). Empty for a bill settled with no fee, or before the settle recorded them.
+    fee_lines: Vec<BillFeeLine>,
+    /// The tax per class, as settled. Empty for a bill settled before the settle recorded it,
+    /// whose copy recovers the lines by computing them again.
+    tax_lines: Vec<BillTaxLine>,
     /// The corporate buyer, whose details stay in the subject store (ADR-0107).
     buyer_subject_id: Option<SubjectId>,
     /// The business day the bill settled on: a copy is printed only on the same day.
@@ -2078,6 +2119,8 @@ impl SettledReceipt {
             tax_total: event.tax_total,
             rounding_adjustment: event.rounding_adjustment,
             total_due: event.total_due,
+            fee_lines: event.fee_lines.clone(),
+            tax_lines: event.tax_lines.clone(),
             buyer_subject_id: event.buyer_subject_id,
             business_date,
             settle_time,
@@ -2085,12 +2128,38 @@ impl SettledReceipt {
         }
     }
 
-    /// The totals a copy prints: `recomputed` when it agrees with every figure the settle
-    /// recorded, which is every day the rate table has not changed since, and otherwise the
-    /// recorded figures with the tax as one total, because the per-rate lines are not recorded
-    /// yet ([ADR-0162](../../../docs/adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md)
-    /// item 3). Either way the paper adds up to what the guest paid.
+    /// The totals a copy prints
+    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)
+    /// decision 5). Either way the paper adds up to what the guest paid.
+    ///
+    /// A settle that recorded its fees and its tax per class (ADR-0159 decision 4) is printed from
+    /// them, whatever the rate table or the fee rules say now. It records neither how its
+    /// reductions divide between a discount and a comp nor the named parts of a tax line, so
+    /// those two are taken from `recomputed` where they add up to the recorded figure, and
+    /// otherwise printed as one line.
+    ///
+    /// A settle from before those were recorded prints `recomputed` when it agrees with every
+    /// figure the settle recorded, which is every day the rate table has not changed since, and
+    /// otherwise the recorded figures with the tax as one total.
     fn totals(&self, recomputed: Option<&BillTotals>) -> BillTotals {
+        let (discount_total, comp_total) = self.reductions(recomputed);
+        if !self.tax_lines.is_empty() {
+            return BillTotals {
+                subtotal: self.subtotal,
+                discount_total,
+                comp_total,
+                service_charge: self.service_charge,
+                fee_lines: self.fee_lines.iter().map(Self::fee_line).collect(),
+                tax_lines: self
+                    .tax_lines
+                    .iter()
+                    .map(|line| Self::tax_line(line, recomputed))
+                    .collect(),
+                tax_total: self.tax_total,
+                rounding_adjustment: self.rounding_adjustment,
+                total_due: self.total_due,
+            };
+        }
         let agrees = |totals: &BillTotals| {
             totals.subtotal == self.subtotal
                 && totals
@@ -2105,10 +2174,24 @@ impl SettledReceipt {
         if let Some(totals) = recomputed.filter(|totals| agrees(totals)) {
             return totals.clone();
         }
-        // The event records discounts and comps as one figure. The split is taken from the
-        // recomputation when it still adds up to that figure, and otherwise the copy prints one
-        // line for both rather than guessing how it divided.
-        let (discount_total, comp_total) = recomputed
+        BillTotals {
+            subtotal: self.subtotal,
+            discount_total,
+            comp_total,
+            service_charge: self.service_charge,
+            fee_lines: Vec::new(),
+            tax_lines: Vec::new(),
+            tax_total: self.tax_total,
+            rounding_adjustment: self.rounding_adjustment,
+            total_due: self.total_due,
+        }
+    }
+
+    /// The recorded reductions as a discount and a comp. The event records them as one figure, so
+    /// the split is taken from `recomputed` when it still adds up to that figure, and otherwise the
+    /// copy prints one line for both rather than guessing how it divided.
+    fn reductions(&self, recomputed: Option<&BillTotals>) -> (Money, Money) {
+        recomputed
             .filter(|totals| {
                 totals
                     .discount_total
@@ -2121,19 +2204,40 @@ impl SettledReceipt {
                     Money::zero(self.total_due.currency_code),
                 ),
                 |totals| (totals.discount_total, totals.comp_total),
-            );
-        BillTotals {
-            subtotal: self.subtotal,
-            discount_total,
-            comp_total,
-            service_charge: self.service_charge,
-            // The settle records no fee lines yet (ADR-0159 decision 4); its service charge is
-            // their sum.
-            fee_lines: Vec::new(),
-            tax_lines: Vec::new(),
-            tax_total: self.tax_total,
-            rounding_adjustment: self.rounding_adjustment,
-            total_due: self.total_due,
+            )
+    }
+
+    /// A recorded fee as the copy prints it, under the name the bill froze.
+    fn fee_line(recorded: &BillFeeLine) -> FeeLine {
+        FeeLine {
+            fee_id: recorded.fee_id,
+            code: recorded.code.clone(),
+            display_name: recorded.display_name.clone(),
+            amount: recorded.amount,
+            class_shares: Vec::new(),
+            tax: recorded.tax,
+        }
+    }
+
+    /// A recorded tax line as the copy prints it, with its named parts (ADR-0104) from `recomputed`
+    /// where the recomputation charged the class the same tax at the same rate, so they sum to it.
+    fn tax_line(recorded: &BillTaxLine, recomputed: Option<&BillTotals>) -> TaxLine {
+        let components = recomputed
+            .and_then(|totals| {
+                totals.tax_lines.iter().find(|line| {
+                    line.tax_class_id == recorded.tax_class_id
+                        && line.rate_basis_points == recorded.rate_basis_points
+                        && line.tax == recorded.tax
+                })
+            })
+            .map(|line| line.components.clone())
+            .unwrap_or_default();
+        TaxLine {
+            tax_class_id: recorded.tax_class_id,
+            taxable_base: recorded.taxable_base,
+            rate_basis_points: recorded.rate_basis_points,
+            tax: recorded.tax,
+            components,
         }
     }
 }
@@ -2754,7 +2858,7 @@ impl Projection {
             .settled
             .iter()
             .filter(|(_, receipt)| receipt.business_date == business_date)
-            .map(|(bill_id, receipt)| (*bill_id, *receipt))
+            .map(|(bill_id, receipt)| (*bill_id, receipt.clone()))
             .collect();
         receipts.sort_unstable_by(|(_, a), (_, b)| {
             b.settle_time
@@ -6397,7 +6501,7 @@ impl<S: EventStore> Edge<S> {
         let (bill, receipt) = {
             let projection = self.lock_projection();
             let bill = projection.bill(bill_id).ok_or(AppError::UnknownBill)?;
-            let receipt = projection.settled.get(&bill_id).copied();
+            let receipt = projection.settled.get(&bill_id).cloned();
             (bill, receipt)
         };
         let Some(receipt) = receipt.filter(|_| bill.state == BillState::Settled) else {
@@ -10170,6 +10274,8 @@ mod tests {
             tax_total: vnd(13_000),
             rounding_adjustment: vnd(0),
             total_due: vnd(143_000),
+            fee_lines: Vec::new(),
+            tax_lines: Vec::new(),
             buyer_subject_id: None,
             business_date,
             settle_time: Timestamp::from_milliseconds_since_epoch(settle_ms)
@@ -10180,6 +10286,112 @@ mod tests {
 
     fn a_day(day: u8) -> BusinessDate {
         BusinessDate::from_ymd(2026, 9, day).expect("a real date")
+    }
+
+    /// A bill settled before the settle recorded its lines (ADR-0159 decision 4) is copied as it
+    /// was: its per-rate lines computed again while they give what it recorded, and its recorded
+    /// tax as one total once they do not.
+    #[test]
+    fn a_copy_of_a_settle_that_recorded_no_lines_computes_them_again() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge();
+            let bill_id = a_settled_pizza(&edge, TableId::new(Ulid::from_u128(331)), None).await;
+            {
+                // What an older settle event folds to.
+                let mut projection = edge.lock_projection();
+                let receipt = projection.settled.get_mut(&bill_id).expect("recorded");
+                receipt.fee_lines.clear();
+                receipt.tax_lines.clear();
+            }
+            let copy = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("a copy");
+            assert_eq!(copy.totals.tax_lines.len(), 1, "the rates still give it");
+
+            let mut session = (*edge.session()).clone();
+            session.tax_rates = TaxRateTable::new().with(
+                EdgeSession::standard_tax_class(),
+                SalesChannel::DineIn,
+                TaxRate::from_percent(8),
+            );
+            edge.apply_session(session);
+            let copy = edge
+                .reprint_receipt(actor(), bill_id)
+                .await
+                .expect("a copy");
+            assert!(copy.totals.tax_lines.is_empty(), "no line at 8%");
+            assert_eq!(copy.totals.tax_total, vnd(15_000));
+        });
+    }
+
+    /// The till's reads name a fee in the store's display language where the store's current rule
+    /// translates it, and as the bill froze it otherwise (ADR-0159 decision 4). What the settle
+    /// records keeps the frozen name, whatever language a screen is in.
+    #[test]
+    fn a_screen_names_a_fee_in_its_language_and_the_record_keeps_the_frozen_name() {
+        use pos_core::billing::FeeLine;
+        use pos_proto::events::BillFeeLine;
+        use pos_proto::fees::{FeeCode, PublishedFees};
+        use pos_proto::ids::FeeId;
+
+        let rules: PublishedFees = serde_json::from_str(
+            r#"{"fees": [
+                {"fee_id": "00000000000000000000000001", "code": "SERVICE",
+                 "display_name": "Service fee", "display_name_translations": {"vi": "Phí phục vụ"}}
+            ]}"#,
+        )
+        .expect("a fees node");
+        let session = EdgeSession {
+            fees: rules,
+            ..EdgeSession::bootstrap()
+        };
+        let fee = |seed: u128, code: &str, name: &str, minor: i64| FeeLine {
+            fee_id: FeeId::new(Ulid::from_u128(seed)),
+            code: FeeCode::new(code),
+            display_name: DisplayName::new(name),
+            amount: vnd(minor),
+            class_shares: Vec::new(),
+            tax: vnd(0),
+        };
+        // The first rule is still published and translated; the second is no longer published.
+        let totals = BillTotals {
+            subtotal: vnd(100_000),
+            discount_total: vnd(0),
+            comp_total: vnd(0),
+            service_charge: vnd(15_000),
+            fee_lines: vec![
+                fee(1, "SERVICE", "Service charge", 5_000),
+                fee(2, "COVER", "Cover", 10_000),
+            ],
+            tax_lines: Vec::new(),
+            tax_total: vnd(0),
+            rounding_adjustment: vnd(0),
+            total_due: vnd(115_000),
+        };
+        let names = |records: Vec<BillFeeLine>| -> Vec<String> {
+            records
+                .iter()
+                .map(|record| record.display_name.as_str().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, Some("vi"))),
+            ["Phí phục vụ", "Cover"]
+        );
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, Some("en"))),
+            ["Service charge", "Cover"],
+            "a language the rule does not translate into keeps the frozen name"
+        );
+        assert_eq!(
+            names(super::fee_records_in(&totals, &session, None)),
+            ["Service charge", "Cover"]
+        );
+        assert_eq!(
+            names(super::fee_records(&totals)),
+            ["Service charge", "Cover"]
+        );
     }
 
     /// Only today's receipts are copied at the till (ADR-0164 decision 3). One settled on an

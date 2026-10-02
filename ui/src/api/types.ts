@@ -253,6 +253,16 @@ export interface MenuResponse {
   accepted_tender: string[] | null;
 }
 
+// One fee a bill is charged (ADR-0159): which rule, its code, its name in the store's display
+// language, what it charged and the tax on it. The edge computes every figure; the till shows them.
+export interface FeeLine {
+  fee_id: string;
+  code: string;
+  display_name: string;
+  amount: Money;
+  tax: Money;
+}
+
 // What a table owes right now, from `GET /api/tables/{id}/check` (roadmap-v3 E5). Assembled by the
 // edge from the order's live lines against the store's own tax table — the same calculation the bill
 // settles against, so the till displays a figure rather than deriving one.
@@ -264,6 +274,9 @@ export interface CheckResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+  // Each fee, in the order of its rules. Absent from an edge older than fees, and empty where no
+  // fee applies; `total_due` already includes every one.
+  fee_lines?: FeeLine[];
 }
 
 // One bill read back, from `GET /api/bills/{id}/check`: the five figures, where the bill has got to,
@@ -307,6 +320,8 @@ export interface DiscountResponse {
   comp_total: Money;
   tax_total: Money;
   total_due: Money;
+  // As on the check: a fee taken after discounts moves with the discount.
+  fee_lines?: FeeLine[];
 }
 
 // One line of a counter order, as the counter list shows it: what it is and how many, so a cashier
