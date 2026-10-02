@@ -21,8 +21,8 @@
 //! computes nothing: `pos_core::billing::assemble` charges the rules, one fee line per rule applied
 //! and folded into the tax and the total (ADR-0159 decision 2). A bill keeps the rules in force
 //! when it opened, as [`FrozenFee`]s, which is the form `billing.bill.opened` records and the form
-//! the bill is computed from (decision 3). Nothing authors the node yet, and the edge does not
-//! install it.
+//! the bill is computed from (decision 3). The edge installs the node; nothing in the cloud
+//! authors it yet.
 //!
 //! # Defaults, and refusing to guess
 //!
@@ -321,6 +321,7 @@ impl PublishedFee {
         Some(FrozenFee {
             fee_id: self.fee_id,
             code: self.code.clone(),
+            display_name: self.display_name.clone(),
             kind: self.kind.clone(),
             rate: self.rate,
             amount: self.amount,
@@ -427,10 +428,11 @@ impl RuleFields<'_> {
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3).
 /// `billing.bill.opened` records the rules in force for the bill in this form.
 ///
-/// It keeps what the bill is computed from, and nothing else. Whether the rule is active and which
-/// channels it applies on were settled by freezing it ([`PublishedFee::freeze`]), and its name
-/// stays in the `fees` node: the till prints a fee's name from the node by its id, and no event
-/// carries a translation. Every field is as on [`PublishedFee`], and reads with the same defaults.
+/// It keeps what the bill is computed from, and the name it is charged under. Whether the rule is
+/// active and which channels it applies on were settled by freezing it ([`PublishedFee::freeze`]).
+/// The name is the rule's own, frozen as a line's is (ADR-0129, ADR-0144), so a rename after the
+/// bill opened does not change what it prints; its translations stay in the `fees` node, and no
+/// event carries one. Every field is as on [`PublishedFee`], and reads with the same defaults.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FrozenFee {
@@ -438,6 +440,8 @@ pub struct FrozenFee {
     pub fee_id: FeeId,
     /// As [`PublishedFee::code`].
     pub code: FeeCode,
+    /// As [`PublishedFee::display_name`]: the rule's own name, not a translation.
+    pub display_name: DisplayName,
     /// As [`PublishedFee::kind`]. Read it through [`kind`](Self::kind()).
     #[serde(default)]
     pub kind: Open<FeeKind>,
@@ -476,6 +480,7 @@ const _: fn(&FrozenFee) = |rule| {
     let FrozenFee {
         fee_id,
         code,
+        display_name,
         kind,
         rate,
         amount,
@@ -489,6 +494,7 @@ const _: fn(&FrozenFee) = |rule| {
     } = rule;
     crate::pii::assert_field_no_pii(fee_id);
     crate::pii::assert_field_no_pii(code);
+    crate::pii::assert_field_no_pii(display_name);
     crate::pii::assert_field_no_pii(kind);
     crate::pii::assert_field_no_pii(rate);
     crate::pii::assert_field_no_pii(amount);
@@ -1223,6 +1229,7 @@ mod tests {
         FrozenFee {
             fee_id: fee.fee_id,
             code: fee.code.clone(),
+            display_name: fee.display_name.clone(),
             kind: fee.kind.clone(),
             rate: fee.rate,
             amount: fee.amount,
@@ -1284,9 +1291,11 @@ mod tests {
 
     #[test]
     fn a_frozen_rule_reads_with_the_published_defaults() {
+        // Like a published rule, a frozen one needs only its id, its code and its name.
         let json = serde_json::json!({
             "fee_id": FeeId::new(Ulid::from_u128(1)).to_string(),
             "code": "SERVICE",
+            "display_name": "Service charge",
             "added_next_release": true,
         })
         .to_string();

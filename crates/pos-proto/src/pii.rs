@@ -91,7 +91,8 @@ no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
 
 // A fee's code names a charge, as a display name names a product, and a bill records it on each
 // fee it was charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decisions 3
-// and 4). Its name and translations stay in the `fees` node; no event carries them.
+// and 4), beside the fee's own name. Its translations stay in the `fees` node; no event carries
+// them.
 no_pii!(fees::FeeCode);
 
 // The chain hash (ADR-0131), and the argument is worth stating because "a hash" is not

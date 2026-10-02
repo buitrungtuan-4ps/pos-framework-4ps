@@ -446,10 +446,10 @@ event_catalogue! {
         /// these until it settles, so a publish during the meal does not change what its pre-bill
         /// showed.
         ///
-        /// Each rule carries what the bill is computed from and its code, never its name: the till
-        /// prints a fee's name from the store's `fees` node by its id. Left out when empty, and
-        /// absent reads as empty: a bill opened before this field existed, or with no rule in
-        /// force, has no fees.
+        /// Each rule carries what the bill is computed from, its code, and its own name as
+        /// published, frozen as a line's is (ADR-0129), and never a translation. Left out when
+        /// empty, and absent reads as empty: a bill opened before this field existed, or with no
+        /// rule in force, has no fees.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fee_rules: Vec<FrozenFee>,
     },
@@ -928,9 +928,10 @@ event_catalogue! {
 
 /// One fee as a settled bill records it
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): which fee, under
-/// which code, what it charged, and the tax on it.
+/// which code and name, what it charged, and the tax on it.
 ///
-/// No name: the till prints a fee's name from the store's `fees` node by its id, and no event
+/// The name is the rule's own as the bill froze it, so a copy of the receipt prints what the
+/// original did after the fee is renamed, as a line's name does (ADR-0129, ADR-0144). No event
 /// carries a translation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -939,6 +940,8 @@ pub struct BillFeeLine {
     pub fee_id: FeeId,
     /// The rule's code, what a report groups fees by.
     pub code: FeeCode,
+    /// The rule's own name, as the bill froze it.
+    pub display_name: DisplayName,
     /// What it charged.
     pub amount: Money,
     /// The tax on it: its part of the tax of every class it is taxed at. Zero for a fee that is
@@ -951,11 +954,13 @@ const _: fn(&BillFeeLine) = |line| {
     let BillFeeLine {
         fee_id,
         code,
+        display_name,
         amount,
         tax,
     } = line;
     crate::pii::assert_field_no_pii(fee_id);
     crate::pii::assert_field_no_pii(code);
+    crate::pii::assert_field_no_pii(display_name);
     crate::pii::assert_field_no_pii(amount);
     crate::pii::assert_field_no_pii(tax);
 };
@@ -1430,6 +1435,7 @@ mod tests {
         crate::fees::FrozenFee {
             fee_id: crate::ids::FeeId::new(Ulid::from_parts(1, 3)),
             code: crate::fees::FeeCode::new("SERVICE"),
+            display_name: crate::text::DisplayName::new("Service charge"),
             kind: crate::fees::FeeKind::Percent.into(),
             rate: crate::money::Ratio::percent(5).ok(),
             amount: None,
@@ -1447,6 +1453,7 @@ mod tests {
         let fee = super::BillFeeLine {
             fee_id: crate::ids::FeeId::new(Ulid::from_parts(1, 3)),
             code: crate::fees::FeeCode::new("SERVICE"),
+            display_name: crate::text::DisplayName::new("Service charge"),
             amount: vnd(5_000),
             tax: vnd(500),
         };

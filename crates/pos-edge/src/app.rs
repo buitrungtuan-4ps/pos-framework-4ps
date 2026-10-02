@@ -21,7 +21,7 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex, RwLock};
 
-use pos_core::billing::{self, BillInput, BillTotals, ClassBase, Payment};
+use pos_core::billing::{self, BillInput, BillLine, BillTotals, ClassBase, Payment};
 use pos_core::business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::{Capability, CapabilityContext};
@@ -45,15 +45,16 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::envelope::{DecodeError, EventEnvelope, EventPayload, EventTypeRef, RawPayload};
 use pos_proto::events::{
-    BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerOpened,
-    CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
-    DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked, EventType,
-    InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
+    BillFeeLine, BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit,
+    BillingBillVoided, BillingDiscountApplied, BillingPaymentCaptured, BillingReceiptReprinted,
+    CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
+    CashShiftOpened, DeviceActivationCompleted, DeviceAdmissionGranted, DeviceAdmissionRevoked,
+    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
     SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
     SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
     SalesTableOpened, SalesTableTransferred, SecurityPermissionOverridden, StoreChainAnchored,
 };
+use pos_proto::fees::{FrozenFee, PublishedFees};
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{
     BillId, BrandId, CourseId, DeviceId, EmployeeId, MenuItemId, OrderId, OrderLineId, PaymentId,
@@ -541,6 +542,14 @@ pub struct EdgeSession {
     /// the refusal impossible. A published `reason_codes` node replaces this set wholesale
     /// (ADR-0115 slice 4).
     pub reason_codes: PublishedReasonCodes,
+    /// The fee rules a bill may apply, from the `fees` config node
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1).
+    ///
+    /// Empty in the bootstrap and whenever the node is absent, and empty charges no fee, which is
+    /// what every bill charged before the node existed. A bill does not read this as it goes: it
+    /// freezes the rules in force on its channel when it opens and is computed from those
+    /// (decision 3), so a publish during a meal reaches the next bill, not the one on the table.
+    pub fees: PublishedFees,
     /// The rollout the cloud has published for the fleet, from the `fleet_update` config node
     /// ([ADR-0048](../../../docs/adr/0048-ota-rollout-model.md)): the update every device weighs
     /// itself against — target version, lowest eligible ring, canary ramp, signing key, kill switch
@@ -683,6 +692,8 @@ impl EdgeSession {
             display_language: None,
             qr_staff_confirmation_required: true,
             reason_codes: PublishedReasonCodes::framework_default(),
+            // No fee until a `fees` node is published: what every bill charged before it existed.
+            fees: PublishedFees::default(),
             // No rollout published and no placement: a bootstrap store installs nothing, which is
             // the only safe answer before the cloud has said anything about updates.
             fleet_update: None,
@@ -1804,12 +1815,33 @@ impl From<SalesOrderLineAdded> for LineRecord {
     }
 }
 
+/// A bill's fees as the check reads show them and the settle records them
+/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): one per fee charged,
+/// in rule order, with the rule, its code and the name the bill froze, what it charged and the tax
+/// on it. One mapping for both, so the till and the log cannot describe a fee differently.
+pub(crate) fn fee_records(totals: &BillTotals) -> Vec<BillFeeLine> {
+    totals
+        .fee_lines
+        .iter()
+        .map(|line| BillFeeLine {
+            fee_id: line.fee_id,
+            code: line.code.clone(),
+            display_name: line.display_name.clone(),
+            amount: line.amount,
+            tax: line.tax,
+        })
+        .collect()
+}
+
 /// One read of an order: its lines, the pre-tax base per tax class those lines fold into, and the
 /// channel to tax them at. Everything downstream of it — the totals, and the receipt's rows — comes
 /// from this one answer, which is what makes the two agree (see [`Edge::order_snapshot`]).
 struct OrderSnapshot {
     lines: Vec<LineRecord>,
     class_bases: Vec<ClassBase>,
+    /// The sold lines as a fee rule matches them, folded from the same lines as `class_bases`, so
+    /// each class's lines always come to its base.
+    bill_lines: Vec<BillLine>,
     sales_channel: SalesChannel,
 }
 
@@ -1856,6 +1888,12 @@ struct BillRecord {
     /// arrives with the first reduction, on the event's own `amount`.
     discount: Option<Money>,
     comp: Option<Money>,
+    /// The fee rules in force for this bill when it opened, frozen
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 3): what its
+    /// `billing.bill.opened` recorded, and what it is computed from until it settles. A part of a
+    /// split holds the source's, with a fee per bill cut to its share (decision 6). Empty for a
+    /// bill opened before the field existed, or with no rule in force, which charges no fee.
+    fee_rules: Vec<FrozenFee>,
 }
 
 impl BillRecord {
@@ -4161,8 +4199,8 @@ impl<S: EventStore> Edge<S> {
             .reductions(session.currency);
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
             (discount, comp),
         ))?)
     }
@@ -4222,15 +4260,21 @@ impl<S: EventStore> Edge<S> {
             .map(|_| BillId::new(self.next_ulid()))
             .collect();
 
+        // Each part keeps the rules the bill froze when it opened, not what is in force now, so a
+        // publish during the meal reaches no part of it (ADR-0159 decision 3). A fee per bill is
+        // shared across the parts in proportion to the lines it counts on each, rather than
+        // charged again on every part (decision 6).
+        let part_rules =
+            billing::split_fee_rules(&bill.fee_rules, &self.part_lines(bill.order_id, &parts))?;
+
         let mut envelopes = Vec::new();
         let mut messages = Vec::new();
-        for (part_id, lines) in part_ids.iter().zip(parts.iter()) {
+        for ((part_id, lines), fee_rules) in part_ids.iter().zip(parts.iter()).zip(&part_rules) {
             let opened = BillingBillOpened {
                 bill_id: *part_id,
                 order_id: bill.order_id,
                 order_line_ids: lines.clone(),
-                // No rule is in force until the edge installs the `fees` node (ADR-0159).
-                fee_rules: Vec::new(),
+                fee_rules: fee_rules.clone(),
             };
             let (envelope, message) = self.prepare(&ctx, &opened)?;
             envelopes.push(envelope);
@@ -4247,7 +4291,9 @@ impl<S: EventStore> Edge<S> {
 
         {
             let mut projection = self.lock_projection();
-            for (part_id, lines) in part_ids.iter().zip(parts.into_iter()) {
+            for ((part_id, lines), fee_rules) in
+                part_ids.iter().zip(parts.into_iter()).zip(part_rules)
+            {
                 projection.open_bill_record(
                     *part_id,
                     BillRecord {
@@ -4261,6 +4307,7 @@ impl<S: EventStore> Edge<S> {
                         // Reducing a part is an ordinary discount on an ordinary bill.
                         discount: None,
                         comp: None,
+                        fee_rules,
                     },
                 );
             }
@@ -4353,6 +4400,24 @@ impl<S: EventStore> Edge<S> {
     /// guest owes.
     fn covered_lines(&self, bill: &BillRecord) -> Vec<OrderLineId> {
         self.lock_projection().covered_lines(bill)
+    }
+
+    /// Each proposed part's sold lines as a fee rule matches them, read through
+    /// [`Self::bill_lines`] as a bill's are, so a part's share of a fee per bill is weighed on the
+    /// lines it will owe.
+    fn part_lines(&self, order_id: OrderId, parts: &[Vec<OrderLineId>]) -> Vec<Vec<BillLine>> {
+        let lines = self.lock_projection().identified_lines_for_order(order_id);
+        parts
+            .iter()
+            .map(|part| {
+                let covered: Vec<LineRecord> = lines
+                    .iter()
+                    .filter(|(id, _)| part.contains(id))
+                    .map(|(_, line)| line.clone())
+                    .collect();
+                Self::bill_lines(&covered)
+            })
+            .collect()
     }
 
     /// The idempotency record a caller's `(sales_channel, external_reference)` already produced at
@@ -5172,8 +5237,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// Added rather than assembled again over all their lines at once, because each part computes
     /// its own tax and its own rounding (ADR-0128 decision 4): what the table will be asked for is
-    /// the sum of what each guest is asked for. The tax lines are listed part by part rather than
-    /// merged per class, for the same reason — a merged line would be a figure no bill computed.
+    /// the sum of what each guest is asked for. The fee lines and the tax lines are listed part by
+    /// part rather than merged per fee or per class, for the same reason — a merged line would be
+    /// a figure no bill computed.
     fn totals_of_bills(&self, bill_ids: &[BillId]) -> Result<BillTotals, AppError> {
         let mut sum = Self::nothing_owed(self.session().currency);
         for bill_id in bill_ids {
@@ -5206,6 +5272,7 @@ impl<S: EventStore> Edge<S> {
                 .total_due
                 .checked_add(part.total_due)
                 .map_err(DomainError::from)?;
+            sum.fee_lines.extend(part.fee_lines);
             sum.tax_lines.extend(part.tax_lines);
         }
         Ok(sum)
@@ -5332,8 +5399,8 @@ impl<S: EventStore> Edge<S> {
         }
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
             bill.reductions(session.currency),
         ))?)
     }
@@ -5806,10 +5873,13 @@ impl<S: EventStore> Edge<S> {
         // the bill when there is one, which is where the figures differ and where the guest's
         // question is actually being answered.
         let nothing_off = (Money::zero(session.currency), Money::zero(session.currency));
+        // No bill has frozen any rule yet, so the order is priced with the rules a bill opening on
+        // its channel now would freeze (ADR-0159 decision 3): the figure the bill will open at.
+        let in_force = session.fees.in_force(order.sales_channel);
         Ok(billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &in_force,
             nothing_off,
         ))?)
     }
@@ -5932,15 +6002,27 @@ impl<S: EventStore> Edge<S> {
         // Every unvoided line on the order, named rather than implied (ADR-0128 decision 9). This
         // is exactly what opening a bill has always meant; writing it down is what lets a split
         // partition it, and what lets the log say which bill owed what without a live projection.
-        let order_line_ids = self.lock_projection().sold_line_ids(order_id);
+        let (order_line_ids, channel) = {
+            let projection = self.lock_projection();
+            (
+                projection.sold_line_ids(order_id),
+                projection.order_channel(order_id),
+            )
+        };
+        // The fee rules in force for this bill, frozen onto it (ADR-0159 decision 3): those for the
+        // channel it is taxed at, which is the order's, so a publish during the meal does not
+        // change what it owes. Opening one again after a void freezes what is in force then.
+        let session = self.session();
+        let fee_rules = session
+            .fees
+            .in_force(channel.unwrap_or(session.sales_channel));
 
         let bill_id = BillId::new(self.next_ulid());
         let payload = BillingBillOpened {
             bill_id,
             order_id,
             order_line_ids: order_line_ids.clone(),
-            // No rule is in force until the edge installs the `fees` node (ADR-0159).
-            fee_rules: Vec::new(),
+            fee_rules: fee_rules.clone(),
         };
         self.commit_and_publish(&ctx, &payload).await?;
 
@@ -5955,6 +6037,7 @@ impl<S: EventStore> Edge<S> {
                     order_line_ids,
                     discount: None,
                     comp: None,
+                    fee_rules,
                 },
             );
             if let (Some(table_id), Some(decision)) = (table_id, table_decision.as_ref()) {
@@ -6032,8 +6115,8 @@ impl<S: EventStore> Edge<S> {
         let order = self.bill_snapshot(&bill, &session)?;
         let totals = billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
             bill.reductions(session.currency),
         ))?;
 
@@ -6232,8 +6315,8 @@ impl<S: EventStore> Edge<S> {
         // total alone.
         let recomputed = billing::assemble(&Self::bill_input(
             &session,
-            &order.class_bases,
-            order.sales_channel,
+            &order,
+            &bill.fee_rules,
             bill.reductions(session.currency),
         ))
         .ok();
@@ -6816,6 +6899,9 @@ impl<S: EventStore> Edge<S> {
                         order_line_ids: event.order_line_ids,
                         discount: None,
                         comp: None,
+                        // Empty on a bill opened before the field existed: it charges no fee, which
+                        // is what it charged when it was opened.
+                        fee_rules: event.fee_rules,
                     },
                 );
                 if let Some(table_id) = table_id {
@@ -7131,9 +7217,11 @@ impl<S: EventStore> Edge<S> {
             (lines, projection.order_channel(order_id))
         };
         let class_bases = Self::class_bases(&lines)?;
+        let bill_lines = Self::bill_lines(&lines);
         Ok(OrderSnapshot {
             lines,
             class_bases,
+            bill_lines,
             sales_channel: channel.unwrap_or(session.sales_channel),
         })
     }
@@ -7166,6 +7254,25 @@ impl<S: EventStore> Edge<S> {
             .collect()
     }
 
+    /// The sold lines as a fee rule matches them: its item, quantity, net and class
+    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 2). The same lines
+    /// [`Self::class_bases`] sums, through the same filter, so each class's lines come to its base
+    /// and [`billing::assemble`] never finds them another bill's.
+    fn bill_lines(lines: &[LineRecord]) -> Vec<BillLine> {
+        Self::sold_lines(lines).map(Self::bill_line).collect()
+    }
+
+    /// One sold line as a fee rule matches it. Its net is the extended total captured at add time,
+    /// the figure [`Self::class_bases`] sums.
+    fn bill_line(line: &LineRecord) -> BillLine {
+        BillLine {
+            menu_item_id: line.menu_item_id,
+            quantity: line.quantity,
+            net: line.line_total,
+            tax_class_id: line.tax_class_id,
+        }
+    }
+
     /// Groups an order's lines into a pre-tax base per tax class, the input [`billing::assemble`]
     /// takes. A voided line is owed nothing, so it contributes nothing.
     fn class_bases(lines: &[LineRecord]) -> Result<Vec<ClassBase>, AppError> {
@@ -7189,35 +7296,40 @@ impl<S: EventStore> Edge<S> {
         Ok(bases)
     }
 
-    /// Builds the bill-assembly input from the session's tax configuration. The P5 bootstrap runs
-    /// with no bill-level discount, no service charge and no cash rounding; the cloud config tree
-    /// (P7) supplies those, and the shape here is ready for them.
+    /// Builds the bill-assembly input from the session's tax configuration, one read of the lines,
+    /// and the fee rules the bill is computed from. The P5 bootstrap runs with no bill-level
+    /// discount, no service charge and no cash rounding; the cloud config tree (P7) supplies those,
+    /// and the shape here is ready for them.
+    ///
+    /// The class bases and the lines the rules match come from the same [`OrderSnapshot`], so
+    /// they always describe one bill: [`DomainError::LinesDoNotMatchBases`] cannot follow from a
+    /// read, and answers as a server error if it ever does.
     fn bill_input<'a>(
         session: &'a EdgeSession,
-        class_bases: &'a [ClassBase],
-        sales_channel: SalesChannel,
+        order: &'a OrderSnapshot,
+        fee_rules: &'a [FrozenFee],
         reductions: (Money, Money),
     ) -> BillInput<'a> {
         let currency = session.currency;
         let (bill_discount, comps) = reductions;
         BillInput {
             currency_code: currency,
-            class_bases,
+            class_bases: &order.class_bases,
             bill_discount,
             comps,
             service_charge: Money::zero(currency),
             service_charge_taxable: true,
             service_charge_tax_class: None,
             rates: &session.tax_rates,
-            // The order's channel, passed in — not `session.sales_channel`, which is a store-wide
-            // constant and therefore the wrong rate for every order that did not come in on it.
-            sales_channel,
+            // The order's channel, from the snapshot — not `session.sales_channel`, which is a
+            // store-wide constant and therefore the wrong rate for every order that did not come in
+            // on it.
+            sales_channel: order.sales_channel,
             cash_rounding_increment: session.cash_rounding_increment,
             rounding_mode: Rounding::HalfUp,
             prices_include_tax: session.prices_include_tax,
-            // No fee rules until the edge installs the `fees` node (ADR-0159), so no lines either.
-            fee_rules: &[],
-            lines: &[],
+            fee_rules,
+            lines: &order.bill_lines,
         }
     }
 

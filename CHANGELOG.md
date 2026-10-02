@@ -348,6 +348,35 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **The edge charges a bill's fees** ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md)
+  decisions 2, 3 and 6). No store charges one yet: nothing in the cloud publishes a `fees` node.
+  - The edge installs the `fees` node. An absent node, or an empty list, is no fee; a node that
+    does not parse leaves the rules the store had, as every node does.
+  - Every bill open, at a table or at the counter, freezes the rules in force on its order's
+    channel into `billing.bill.opened`'s `fee_rules`, and the bill is computed from those until it
+    settles. A restart folds them back from the log. Until a bill opens, the check is quoted with
+    the rules a bill would freeze then. A bill opened again after a void freezes what is in force
+    then.
+  - A split part keeps its source's rules. A percentage or a fee per unit is charged on each
+    part's own lines. A fee per bill is allocated across the parts in proportion to the nets of
+    the lines it counts on each (`pos_core::billing::split_fee_rules`), so the parts charge
+    together what the whole bill would have, and a part with no share does not keep it. A merge
+    keeps the rules of the bill the cashier holds, a fee per bill at that bill's share.
+  - The check reads, `GET /api/tables/{id}/check`, `GET /api/orders/{id}/check` and
+    `GET /api/bills/{id}/check`, gain `fee_lines`: each fee's `fee_id`, `code`, `display_name`,
+    `amount` and `tax`. `service_charge` carries the sum of every fee, and the receipt and the
+    pre-bill print that sum on their one service-charge line until they itemise it.
+  - `FrozenFee` and `BillFeeLine` carry the rule's own `display_name`, so a renamed fee prints as
+    it was charged, as an item's name does (ADR-0129). `pos_core::billing::FeeLine` gains `code`
+    and `display_name`.
+  - A bill whose lines do not come to its class bases is a broken invariant, since the edge reads
+    both from one snapshot. It now answers `500` with `LINES_DO_NOT_MATCH_BASES`, not a refusal.
+  - **Upgrade note:** no store charges a fee until the cloud can publish a `fees` node, which is
+    not built yet. Until then every bill and every event is what it was, and the check reads
+    carry an empty `fee_lines`, which older tills ignore. `FrozenFee` and `BillFeeLine` gain a
+    required `display_name`; no event has carried either yet. No migration, permission or
+    protocol version change.
+
 - **A till left untouched locks, and opens again with its person's PIN**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   decision 2, `docs/pos-spec.md` §16). A till stayed signed in as its person until the edge's
@@ -416,12 +445,11 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
   - `billing.bill.opened` gains `fee_rules`: the rules in force for the bill when it opens
     (active, clear of every fault, and applying on its channel), frozen, so a publish during the
     meal does not change what the pre-bill showed. A frozen rule (`pos_proto::fees::FrozenFee`)
-    carries every field the bill is computed from and its `code`, and not its name: the till
-    prints a fee's name from the `fees` node by its id. `PublishedFees::in_force` freezes the
-    rules for a channel.
-  - `billing.bill.settled` gains `fee_lines` (`fee_id`, `code`, `amount`, `tax`), one per fee
-    charged, and `tax_lines` (`tax_class_id`, `taxable_base`, `rate_basis_points`, `tax`), one per
-    tax class, summing to `tax_total`. No event carries a fee's name or a translation.
+    carries every field the bill is computed from, its `code` and its own `display_name`, and no
+    translation. `PublishedFees::in_force` freezes the rules for a channel.
+  - `billing.bill.settled` gains `fee_lines` (`fee_id`, `code`, `display_name`, `amount`, `tax`),
+    one per fee charged, and `tax_lines` (`tax_class_id`, `taxable_base`, `rate_basis_points`,
+    `tax`), one per tax class, summing to `tax_total`. No event carries a translation.
   - Each class's tax still rounds once, on its whole base (ADR-0028). It is then shared among the
     parts of that base in proportion, so the parts sum to it exactly: each fee's part, the service
     charge when it is taxed there, and the lines after their reductions. Each share is rounded

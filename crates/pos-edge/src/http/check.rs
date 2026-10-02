@@ -26,10 +26,11 @@ use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
+use pos_proto::events::BillFeeLine;
 use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 
-use crate::app::{AppError, Edge, PreBill};
+use crate::app::{AppError, Edge, PreBill, fee_records};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, short_reference};
 
@@ -48,6 +49,12 @@ pub(crate) struct CheckResponse {
     tax_total: Money,
     /// What the guest owes — the figure the bill will settle against.
     total_due: Money,
+    /// Each fee charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
+    /// in rule order: the rule, its code and the name it is charged under, what it charged and
+    /// the tax on it, as the settle records them. Part by part for a table whose bill is split, as
+    /// each part computes its own. Empty where no fee applies, which is every bill at a store with
+    /// no `fees` node.
+    fee_lines: Vec<BillFeeLine>,
 }
 
 impl From<&BillTotals> for CheckResponse {
@@ -58,6 +65,7 @@ impl From<&BillTotals> for CheckResponse {
             comp_total: totals.comp_total,
             tax_total: totals.tax_total,
             total_due: totals.total_due,
+            fee_lines: fee_records(totals),
         }
     }
 }
@@ -71,8 +79,8 @@ pub(crate) struct BillCheckResponse {
     /// The order lines it covers ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)
     /// decision 1), so a till can show a guest what their part of a split table is for.
     order_line_ids: Vec<String>,
-    /// The same five figures the table and order reads answer with, so a till draws all three the
-    /// same way.
+    /// The same figures and fee lines the table and order reads answer with, so a till draws all
+    /// three the same way.
     #[serde(flatten)]
     totals: CheckResponse,
 }
