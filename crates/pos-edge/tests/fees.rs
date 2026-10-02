@@ -8,8 +8,9 @@
 //! it settles (decision 3), so a publish during a meal reaches the next bill and not the one on the
 //! table, and a restart folds the same rules back from the log. A split part keeps the rules its
 //! source froze, with a fee per bill shared out rather than charged again on every part
-//! (decision 6); a merge keeps the rules of the bill the cashier holds; a bill opened again after a
-//! void freezes what is in force then.
+//! (decision 6). A merge keeps the rules of the bill the cashier holds and charges a fee per bill
+//! once, at the sum of the merged bills' shares capped at its whole, so merging a split back
+//! together restores it. A bill opened again after a void freezes what is in force then.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -18,7 +19,8 @@ use pos_core::billing::BillTotals;
 use pos_core::decision::Actor;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
-    Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, StaffAuth, StaffRoster, StoreIdentity,
+    Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StaffAuth,
+    StaffRoster, StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -94,6 +96,19 @@ fn cover() -> Value {
     })
 }
 
+/// A drink at 10,000, beside the dish.
+fn drink() -> MenuItemId {
+    MenuItemId::new(Ulid::from_u128(501))
+}
+
+/// A cover charge of 10,000 a bill on the dish alone, not on a drink.
+fn food_cover() -> Value {
+    let mut rule = cover();
+    rule["item_scope"] = json!("FEE_ITEMS_INCLUDE");
+    rule["menu_item_ids"] = json!([item().to_string()]);
+    rule
+}
+
 /// A `fees` node of `rules`, parsed as the edge parses a published one.
 fn fees(rules: &[Value]) -> PublishedFees {
     serde_json::from_str(&json!({ "fees": rules }).to_string()).expect("a fees node")
@@ -103,12 +118,19 @@ fn fees(rules: &[Value]) -> PublishedFees {
 fn session(fees: PublishedFees) -> EdgeSession {
     use argon2::Argon2;
     use argon2::password_hash::PasswordHasher as _;
-    let menu = MenuCatalog::new().with(MenuEntry::new(
-        item(),
-        DisplayName::new("Bún chả"),
-        vnd(UNIT_PRICE),
-        class(),
-    ));
+    let menu = MenuCatalog::new()
+        .with(MenuEntry::new(
+            item(),
+            DisplayName::new("Bún chả"),
+            vnd(UNIT_PRICE),
+            class(),
+        ))
+        .with(MenuEntry::new(
+            drink(),
+            DisplayName::new("Trà đá"),
+            vnd(10_000),
+            class(),
+        ));
     let rates = TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
     let pin_phc = Argon2::default()
         .hash_password_with_salt(b"4417", b"a-fixed-test-slt")
@@ -157,6 +179,17 @@ fn a_line() -> LineDraft {
         course_id: None,
         modifier_menu_item_ids: Vec::new(),
         note_present: false,
+    }
+}
+
+/// A drink, as the till drafts one.
+fn a_drink() -> LineDraft {
+    LineDraft {
+        menu_item_id: drink(),
+        display_name: DisplayName::new("Trà đá"),
+        unit_price: vnd(10_000),
+        line_total: vnd(10_000),
+        ..a_line()
     }
 }
 
@@ -282,9 +315,9 @@ fn a_bill_keeps_the_fees_in_force_when_it_opened() {
 
 /// ADR-0159 decision 6: a split part keeps its source's rules, with the cover charge shared 1:2 as
 /// the parts' lines are rather than charged on both, so the parts owe together what the whole bill
-/// did. A merge keeps the rules of the bill the cashier holds, and with them its share.
+/// did. Merged back together they owe the whole bill again, cover and all, after a restart too.
 #[test]
-fn a_split_shares_a_fee_per_bill_and_a_merge_keeps_the_holders_rules() {
+fn a_split_shares_a_fee_per_bill_and_merging_the_parts_back_restores_it() {
     run_ready(async {
         let store = FakeStore::default();
         let edge = edge_over(store.clone(), fees(&[cover(), service(5)]));
@@ -343,16 +376,143 @@ fn a_split_shares_a_fee_per_bill_and_a_merge_keeps_the_holders_rules() {
             "each part rounds its own tax, and here they come to the whole"
         );
 
-        // Folded back together, the bill the cashier holds keeps its own rules: its share of the
-        // cover charge, and the service charge on every line it now owes.
+        // Folded back together, the bill the cashier holds keeps its own rules, and the cover
+        // charge is the sum of the two shares: the whole bill again.
         let survivor = edge
             .merge_bills(server(), *one, vec![*two])
             .await
             .expect("merges");
-        assert_eq!(
-            charged(&totals(&edge, survivor)),
-            [("COVER", 3_333), ("SERVICE", 7_500)]
-        );
+        assert_eq!(totals(&edge, survivor), whole);
+
+        let restarted = edge_over(store, fees(&[cover(), service(5)]));
+        restarted.rebuild().await.expect("rebuilds");
+        assert_eq!(totals(&restarted, survivor), whole);
+    });
+}
+
+/// What the cover charge came to on a bill, if it charged one.
+fn cover_on(edge: &Edge<FakeStore>, bill_id: BillId) -> Option<i64> {
+    totals(edge, bill_id)
+        .fee_lines
+        .iter()
+        .find(|line| line.code.as_str() == "COVER")
+        .map(|line| line.amount.amount_minor)
+}
+
+/// Merging some of a split's parts charges the sum of their shares of a fee per bill, whichever
+/// part the cashier holds, and a restart folds the same answer from the log.
+#[test]
+fn merging_some_parts_charges_the_sum_of_their_shares() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), fees(&[cover()]));
+        let lines = a_table_of(&edge, table(1), 3).await;
+        let source = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let parts = edge
+            .split_bill(
+                server(),
+                source,
+                lines.iter().map(|line| vec![*line]).collect(),
+            )
+            .await
+            .expect("splits three ways");
+        let shares: Vec<Option<i64>> = parts.iter().map(|part| cover_on(&edge, *part)).collect();
+        assert_eq!(shares, [Some(3_333), Some(3_333), Some(3_334)]);
+
+        let survivor = edge
+            .merge_bills(server(), parts[2], vec![parts[0]])
+            .await
+            .expect("merges two of three");
+        assert_eq!(cover_on(&edge, survivor), Some(6_667));
+        assert_eq!(cover_on(&edge, parts[1]), Some(3_333));
+
+        let restarted = edge_over(store, fees(&[cover()]));
+        restarted.rebuild().await.expect("rebuilds");
+        assert_eq!(cover_on(&restarted, survivor), Some(6_667));
+    });
+}
+
+/// Two counter bills that were never one bill each carry the cover; merged, the bill charges it
+/// once.
+#[test]
+fn merging_bills_that_were_never_one_charges_a_fee_per_bill_once() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), fees(&[cover()]));
+        let mut bills = Vec::new();
+        for _ in 0..2 {
+            let order = edge
+                .open_counter_order(server(), SalesChannel::DineIn)
+                .await
+                .expect("the counter opens an order")
+                .order_id;
+            let dish = OrderLineChoice {
+                menu_item_id: item(),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: Vec::new(),
+                seat: None,
+                course_id: None,
+                note_present: false,
+            };
+            edge.add_line_to_order(server(), order, dish)
+                .await
+                .expect("adds a dish");
+            let bill = edge
+                .open_bill_for_order(server(), order)
+                .await
+                .expect("opens its bill")
+                .bill_id;
+            assert_eq!(cover_on(&edge, bill), Some(10_000));
+            bills.push(bill);
+        }
+        let survivor = edge
+            .merge_bills(server(), bills[0], vec![bills[1]])
+            .await
+            .expect("two counter bills merge");
+        assert_eq!(cover_on(&edge, survivor), Some(10_000), "once, not twice");
+    });
+}
+
+/// The cashier holds the drinks' part, which dropped the cover on the food, and absorbs the food's:
+/// the cover is still charged, on the food it was always for.
+#[test]
+fn a_fee_per_bill_survives_a_merge_into_a_part_that_dropped_it() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default(), fees(&[food_cover()]));
+        edge.seat_table(server(), table(1), None)
+            .await
+            .expect("seats");
+        let tea = edge
+            .add_line(server(), table(1), a_drink())
+            .await
+            .expect("adds a drink")
+            .order_line_id;
+        let dish = edge
+            .add_line(server(), table(1), a_line())
+            .await
+            .expect("adds a dish")
+            .order_line_id;
+        let source = edge
+            .open_bill(server(), table(1))
+            .await
+            .expect("opens")
+            .bill_id;
+        let whole = totals(&edge, source);
+        assert_eq!(charged(&whole), [("COVER", 10_000)]);
+
+        let parts = edge
+            .split_bill(server(), source, vec![vec![tea], vec![dish]])
+            .await
+            .expect("splits the drink off");
+        assert_eq!(cover_on(&edge, parts[0]), None, "no food, no cover");
+        let survivor = edge
+            .merge_bills(server(), parts[0], vec![parts[1]])
+            .await
+            .expect("the drinks' part takes the food's back");
+        assert_eq!(totals(&edge, survivor), whole);
     });
 }
 

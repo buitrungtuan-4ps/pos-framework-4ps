@@ -382,6 +382,24 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **Merging a split's parts back charges a fee per bill as the whole bill did**
+  ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 6). A merge kept the holder's share
+  of a cover charge alone, so a bill split in two and merged back charged a third of it, or two
+  thirds, rather than all of it.
+  - A merged bill keeps the rules of the bill the cashier holds, plus any fee per bill another
+    merged bill carries and the holder lacks. Each fee per bill is the sum of the merged bills'
+    shares of it, capped at its whole: the amount on the bill they were first split from.
+    Percentages and fees per unit are the holder's.
+  - So merging every part of a split back restores the fee, merging some charges the sum of their
+    shares, two bills never split from one charge it once, and a fee the holder dropped, its share
+    being nothing, comes back with the parts that carry it. Where bills that were never one froze
+    different amounts, the larger is the cap.
+  - The edge folds it from `billing.bill.opened`, `billing.bill.split` and `billing.bill.merged`,
+    so a restart charges what the till showed. `pos_core::billing::merge_fee_rules` does the
+    arithmetic, and a property test holds it.
+  - **Upgrade note:** no event, route, migration, permission or protocol change. No store charges
+    a fee yet, so no bill changes.
+
 - **A settled bill records each fee and its tax per class**
   ([ADR-0159](docs/adr/0159-a-fee-is-configuration.md) decision 4, roadmap-v3 B4.1).
   `billing.bill.settled` carries `tax_lines`, one per tax class with its base, rate and tax, and
@@ -406,7 +424,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
     part's own lines. A fee per bill is allocated across the parts in proportion to the nets of
     the lines it counts on each (`pos_core::billing::split_fee_rules`), so the parts charge
     together what the whole bill would have, and a part with no share does not keep it. A merge
-    keeps the rules of the bill the cashier holds, a fee per bill at that bill's share.
+    keeps the rules of the bill the cashier holds, and charges a fee per bill once (below).
   - The check reads, `GET /api/tables/{id}/check`, `GET /api/orders/{id}/check` and
     `GET /api/bills/{id}/check`, gain `fee_lines`: each fee's `fee_id`, `code`, `display_name`,
     `amount` and `tax`. `service_charge` carries the sum of every fee, and the receipt and the
