@@ -26,6 +26,7 @@ use pos_cloud::qr_http;
 use pos_cloud::relay::OrderRelay;
 use pos_cloud::release_source::GithubReleases;
 use pos_cloud::retention::{self, RetentionPolicy};
+use pos_cloud::starting_roles::RoleSeeder;
 use pos_cloud::wake;
 use pos_cloud::webhook::{self, TlsWebhookSender};
 use pos_cloud::{
@@ -596,6 +597,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             store.admin(),
             SystemClock,
             Arc::clone(&audit),
+            // A tenant created here starts with six roles (ADR-0158), written into the same people
+            // store the people routes edit.
+            Arc::new(RoleSeeder::new(store.people())),
         ))
         // Store groups (ADR-0122): the named cohorts a tenant publishes to as one, and the batch
         // publish that fans one node out over a cohort's membership. A group holds no configuration

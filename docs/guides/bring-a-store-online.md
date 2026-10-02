@@ -355,7 +355,10 @@ keeping the last-known-good if a version is rejected
 | **Shared settings** | each value a store may run differently ([`configuration.md`](../configuration.md)), written once for every store, a brand, a store group or this store, and published to every store it reaches as it is saved | No — a store runs each default until a value is set, and a store the wizard created already has the owner's new-store values |
 
 Author in that order. Items before Menus (a menu places items that must exist), and tax classes
-before items (an item names one). **Store groups** publishes one node to a whole set of shops at
+before items (an item names one). A tenant the console creates already has six roles in **People**
+to assign — owner, manager, supervisor, cashier, server and cook, named in the language the console
+was shown in — each granting what the permission catalogue's defaults say; rename, change or archive
+them there ([ADR-0158](../adr/0158-the-till-enforces-each-persons-own-permissions.md)). **Store groups** publishes one node to a whole set of shops at
 once ([ADR-0122](../adr/0122-a-store-group-is-a-delivery-cohort.md)), which is how the second and later
 stores of a brand skip most of this step.
 

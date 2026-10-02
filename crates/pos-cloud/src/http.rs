@@ -233,6 +233,7 @@ use crate::scheduling::{
     NewScheduledPublish, ScheduledPublishError, ScheduledPublishStatus, ScheduledPublishStore,
 };
 use crate::settings::SettingsStore;
+use crate::starting_roles::StartingRoles;
 use crate::store_groups::{
     BatchOutcome, BatchResult, ConfigBatch, ConfigBatchId, StoreGroup, StoreGroupId,
     StoreGroupStore, StoreGroupStoreError,
@@ -3788,6 +3789,9 @@ struct RegistryState<Rg, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// Gives a tenant created here its six starting roles
+    /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)).
+    starting_roles: Arc<dyn StartingRoles>,
 }
 
 /// Builds the org-registry sub-router ([ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)).
@@ -3795,12 +3799,15 @@ struct RegistryState<Rg, A, C> {
 /// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
-/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]).
+/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]). A tenant created
+/// here is given its six starting roles through `starting_roles`
+/// ([`crate::starting_roles`]).
 pub fn registry_router<Rg, A, C>(
     registry: Rg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    starting_roles: Arc<dyn StartingRoles>,
 ) -> Router
 where
     Rg: RegistryStore + Clone + Send + Sync + 'static,
@@ -3845,6 +3852,7 @@ where
             admin,
             clock,
             audit,
+            starting_roles,
         })
 }
 
@@ -13118,6 +13126,11 @@ struct MediaListQuery {
 #[derive(Debug, Clone, Deserialize)]
 struct CreateTenantRequest {
     name: String,
+    /// The language the tenant's starting roles are named in, a language tag such as `vi`. The
+    /// console sends the one it is shown in. Absent, or one the console's language packs do not
+    /// carry, names them in English. Nothing about the tenant records it.
+    #[serde(default)]
+    language: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -13222,6 +13235,13 @@ where
 }
 
 /// A super-admin creates a tenant; the id is minted here and returned once in the created record.
+///
+/// The tenant then gets its six starting roles, one for each of `pos-core`'s built-in roles,
+/// granting what the catalogue's defaults say ([`crate::starting_roles`],
+/// [ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). They are
+/// audited as one `role.seed` entry carrying their ids and counts. The tenant exists whatever the
+/// seeding does, so a seeding failure is logged rather than refused: the tenant then starts with
+/// fewer roles, and its owner creates the rest in People.
 async fn admin_create_tenant<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
     headers: HeaderMap,
@@ -13268,9 +13288,51 @@ where
                 after,
             )
             .await;
+            seed_tenant_roles(&state, &context, tenant_id, request.language.as_deref()).await;
             versioned_created(record, &version)
         }
         Err(error) => registry_error_response(&error),
+    }
+}
+
+/// Gives a tenant just created its starting roles, and audits what was written as `role.seed`: the
+/// ids and the counts, nothing else. A failure is logged with the tenant's id; the tenant stands.
+async fn seed_tenant_roles<Rg, A, C>(
+    state: &RegistryState<Rg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    language: Option<&str>,
+) where
+    C: ClockSource,
+{
+    match state.starting_roles.seed(tenant_id, language).await {
+        Ok(seeded) if seeded.created.is_empty() => {}
+        Ok(seeded) => {
+            let after = serde_json::json!({
+                "role_template_ids": seeded
+                    .created
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+                "created": seeded.created.len(),
+                "kept": seeded.kept.len(),
+            });
+            audit_action(
+                &state.audit,
+                &state.clock,
+                context,
+                Some(tenant_id),
+                "role.seed",
+                "tenant",
+                &tenant_id.to_string(),
+                None,
+                Some(after),
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::error!(%error, %tenant_id, "a new tenant's starting roles could not be written");
+        }
     }
 }
 

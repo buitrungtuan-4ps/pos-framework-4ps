@@ -9,7 +9,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
 import type { Store, Tenant } from "../api/types";
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
 import {
@@ -187,7 +187,8 @@ export function ContextPicker() {
   // Create a tenant right here (F0). Before this, an empty registry was a dead end: the picker read
   // "No tenants yet." with nowhere to go, so a fresh install could not start provisioning at all. A
   // newly created tenant is selected and its (empty) store list loaded, so the operator flows
-  // straight on to adding the first store.
+  // straight on to adding the first store. The tenant starts with six roles, named in the language
+  // this console is shown in (ADR-0158).
   const createTenant = async () => {
     const name = newTenant().trim();
     if (!name) {
@@ -196,7 +197,7 @@ export function ContextPicker() {
     setFailed(false);
     setBusy(true);
     try {
-      const created = await api.createTenant(name);
+      const created = await api.createTenant(name, locale());
       setNewTenant("");
       await loadTenants();
       selectTenant(created.tenant_id, created.name);
