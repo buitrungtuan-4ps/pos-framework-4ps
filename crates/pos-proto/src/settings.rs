@@ -23,7 +23,7 @@
 //! cannot offer a value or claim a default that the edge does not have.
 
 use crate::people::PublishedPermissions;
-use crate::printing::{PublishedPrinting, ReceiptLanguage};
+use crate::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::session::{self, PublishedSession};
 use crate::shift::{NoShiftSelling, PublishedShift};
@@ -370,6 +370,28 @@ pub fn register() -> Vec<Setting> {
                       display language while the store's locale names none the edge prints labels \
                       in. An item the menu does not translate keeps its own name, and a box with \
                       no fonts prints English labels.",
+        },
+        Setting {
+            node: PublishedPrinting::NODE,
+            field: "receipt_second_language",
+            shape: SettingShape::Choice {
+                values: choices::<ReceiptSecondLanguage>(),
+                default: PublishedPrinting::default()
+                    .receipt_second_language()
+                    .as_wire(),
+                // The owner, 2026-10-01: a bilingual receipt is a choice each store makes, so a new
+                // store is given none.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            summary: "A second language a receipt, its copy and a pre-bill print in, after the \
+                      first. Each label prints in both, as `Tạm tính / Subtotal`, or with the \
+                      second under the first where the two do not fit on one line. An item, a \
+                      modifier or a fee prints its name in the second language under its own \
+                      where the menu or the fee's rule translates it. `RECEIPT_SECOND_LANGUAGE_NONE` \
+                      prints one language, and so does a second language the receipt already \
+                      prints in, or one a box with no fonts cannot print.",
         },
         Setting {
             node: PublishedPrinting::NODE,
@@ -937,6 +959,9 @@ mod tests {
                 let printing: PublishedPrinting = serde_json::from_value(document).ok()?;
                 match field {
                     "receipt_language" => Some(json!(printing.receipt_language().as_wire())),
+                    "receipt_second_language" => {
+                        Some(json!(printing.receipt_second_language().as_wire()))
+                    }
                     "receipt_printed_on_settle" => {
                         Some(json!(printing.receipt_printed_on_settle()))
                     }

@@ -456,6 +456,29 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ### Added
 
+- **A receipt can print in two languages**
+  ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+  decision 2).
+  - `printing.receipt_second_language` is a new setting: `RECEIPT_SECOND_LANGUAGE_NONE`, the
+    default, or `_VI` or `_EN`, at the tenant, a brand, a store group or one store. A new store is
+    given none, because a bilingual receipt is each store's choice (the owner, 2026-10-01).
+  - With one set, the receipt, its copy and the pre-bill print each label in the receipt's language
+    and then the second, as `Tạm tính / Subtotal`, on one line where the two fit the printer's width
+    and with the second under the first, indented two spaces, where they do not. A heading centres
+    the second under the first. An item, a modifier and a fee print their name in the second
+    language on the next line where the menu or the fee's rule translates it and the name differs
+    from the one above.
+  - A second language that the labels already print in, or one a store PC with no fonts cannot
+    draw, prints the receipt in one language, as before. Kitchen tickets and the shift report are
+    unchanged.
+  - The console's Settings screen offers it, in English and Vietnamese, to the stores whose edge
+    honours it.
+  - **Upgrade note:** an additive field on the `printing` node, added to
+    `docs/snapshots/settings.txt` and `docs/configuration.md`. No receipt changes until a store
+    sets it, and an edge older than 0.14.1 is not offered it and ignores it. The edge decides
+    whether a label and its translation share a line from the 42 characters it already takes a
+    receipt printer to be. No event, migration, permission or protocol change.
+
 - **A guest's QR order can join the table's order: the `qr.table_order` setting**
   ([ADR-0160](docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
   item 2, confirmed by the owner on 2026-10-01). A guest's QR order was always an order of its own

@@ -265,6 +265,196 @@ fn percent(basis_points: u32) -> String {
     format!("{}.{:02}%", basis_points / 100, basis_points % 100)
 }
 
+/// A left-aligned line in the printer's ordinary style.
+fn plain(line: String) -> PrintBlock {
+    PrintBlock::Text {
+        line,
+        style: TextStyle::default(),
+    }
+}
+
+/// A receipt's second language
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// decision 2): what a bilingual receipt, its copy and a pre-bill print after each of their labels,
+/// and under each name the menu or a fee's rule translates into it.
+///
+/// Worked out from the session before a document is laid out, so the document stays a function of
+/// its arguments. A document given none prints one language, exactly as before the setting existed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecondLanguage {
+    /// Its labels.
+    labels: &'static PaperLabels,
+    /// How many characters the printer fits on a line, which decides whether a label and its second
+    /// language share one.
+    columns: usize,
+    /// Each row's names in it, in the rows' order.
+    rows: Vec<SecondNames>,
+    /// Each fee line's name in it, in the order of the bill's fee lines.
+    fees: Vec<Option<DisplayName>>,
+}
+
+/// One row's names in the second language: its item's, then each of its modifiers'. `None` where
+/// the menu has no name in it, or the name is the one the row already prints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SecondNames {
+    item: Option<DisplayName>,
+    modifiers: Vec<Option<DisplayName>>,
+}
+
+impl SecondLanguage {
+    /// The second language `session` prints a guest's paper in on a printer `columns` wide, or
+    /// `None` for one language: none is set, the receipt's labels are in it already, or this box
+    /// has no fonts to draw it with ([`PaperLabels::for_store`]).
+    ///
+    /// `captured` are the rows as the bill holds them and `printed` the same rows named in the
+    /// receipt's language; `totals` names the fees as the receipt prints them.
+    fn for_receipt(
+        session: &EdgeSession,
+        first: &PaperLabels,
+        can_rasterise: bool,
+        columns: u16,
+        captured: &[ReceiptLine],
+        printed: &[ReceiptLine],
+        totals: &BillTotals,
+    ) -> Option<Self> {
+        let tag = session.printing.receipt_second_language().tag()?;
+        let labels = PaperLabels::for_store(Some(tag), can_rasterise);
+        if labels == first {
+            return None;
+        }
+        // A row captures its names in the display language, so where that is the second language
+        // the captured names are the ones to print; otherwise the menu's translations are.
+        let captured_in_it = session
+            .display_language
+            .as_deref()
+            .is_some_and(|display| same_language(display, tag));
+        let name_in = |item: Option<MenuItemId>, captured: &DisplayName| {
+            if captured_in_it {
+                return Some(captured.clone());
+            }
+            let entry = session.menu_entry(item?)?;
+            entry.display_name_translations.get(tag).cloned()
+        };
+        let unless_shown = |name: Option<DisplayName>, shown: Option<&DisplayName>| {
+            name.filter(|name| Some(name) != shown)
+        };
+        let rows = captured
+            .iter()
+            .zip(printed)
+            .map(|(row, shown)| SecondNames {
+                item: unless_shown(
+                    name_in(Some(row.menu_item_id), &row.display_name),
+                    Some(&shown.display_name),
+                ),
+                modifiers: row
+                    .modifier_display_names
+                    .iter()
+                    .enumerate()
+                    .map(|(index, modifier)| {
+                        unless_shown(
+                            name_in(row.modifier_menu_item_ids.get(index).copied(), modifier),
+                            shown.modifier_display_names.get(index),
+                        )
+                    })
+                    .collect(),
+            })
+            .collect();
+        let fees = totals
+            .fee_lines
+            .iter()
+            .map(|fee| {
+                unless_shown(
+                    session.fee_translation(fee.fee_id, tag).cloned(),
+                    Some(&fee.display_name),
+                )
+            })
+            .collect();
+        Some(Self {
+            labels,
+            columns: usize::from(columns),
+            rows,
+            fees,
+        })
+    }
+}
+
+/// Whether two language tags name one language, as `vi` and `vi-VN` do.
+fn same_language(left: &str, right: &str) -> bool {
+    let primary = |tag: &str| {
+        tag.split(['-', '_'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+    };
+    primary(left) == primary(right)
+}
+
+/// One of a table's labels, as `|labels| labels.subtotal` picks it.
+type Label = fn(&PaperLabels) -> &'static str;
+
+/// The words a bill document prints: its labels in the receipt's language and, on a bilingual
+/// receipt, in its second.
+#[derive(Debug, Clone, Copy)]
+struct Words<'a> {
+    labels: &'a PaperLabels,
+    second: Option<&'a SecondLanguage>,
+}
+
+impl Words<'_> {
+    /// `first` and the rest of its line, with `second` beside `first` where they fit
+    /// ([`bilingual`]).
+    fn pair(self, first: &str, second: Option<&str>, rest: &str) -> (String, Option<String>) {
+        match (self.second, second) {
+            (Some(language), Some(second)) => bilingual(first, second, rest, language.columns),
+            _ => (format!("{first}{rest}"), None),
+        }
+    }
+
+    /// A label of each language and the rest of its line.
+    fn label(self, label: Label, rest: &str) -> (String, Option<String>) {
+        let second = self.second.map(|language| label(language.labels));
+        self.pair(label(self.labels), second, rest)
+    }
+
+    /// A left-aligned line, its second language under it, indented two spaces, where the two do not
+    /// share it.
+    fn lines(line: (String, Option<String>)) -> Vec<PrintBlock> {
+        let (first, under) = line;
+        let mut blocks = vec![plain(first)];
+        blocks.extend(under.map(|second| plain(format!("  {second}"))));
+        blocks
+    }
+
+    /// A `label  amount` line, as [`amount_line`] prints it in one language.
+    fn amount(self, label: Label, amount: Money, money: &MoneyStyle) -> Vec<PrintBlock> {
+        Self::lines(self.label(label, &format!("  {}", format_money(amount, money))))
+    }
+
+    /// A centred label; a second language that does not fit beside it is centred under it.
+    fn centred(self, label: Label, rest: &str, emphasised: bool) -> Vec<PrintBlock> {
+        let (first, under) = self.label(label, rest);
+        let mut blocks = vec![centred(first, emphasised)];
+        blocks.extend(under.map(|second| centred(second, emphasised)));
+        blocks
+    }
+}
+
+/// `first / second` and `rest` on one line where it fits `columns` characters, as `Tạm tính /
+/// Subtotal  VND 10.000`. Otherwise the line a receipt in one language prints, `first` and `rest`,
+/// and `second` to print on a line of its own. A second that reads as the first prints once.
+fn bilingual(first: &str, second: &str, rest: &str, columns: usize) -> (String, Option<String>) {
+    let single = format!("{first}{rest}");
+    if second == first {
+        return (single, None);
+    }
+    let joined = format!("{first} / {second}{rest}");
+    if joined.chars().count() <= columns {
+        (joined, None)
+    } else {
+        (single, Some(second.to_owned()))
+    }
+}
+
 /// The customer's receipt for a settled bill — and, where a country's law is satisfied by it, its
 /// tax invoice ([ADR-0106](../../../docs/adr/0106-the-store-is-a-legal-person.md)).
 ///
@@ -307,6 +497,12 @@ fn percent(basis_points: u32) -> String {
 /// Which is what a Japanese qualified invoice (8 % and 10 % separately) and an Indian tax invoice
 /// (CGST and SGST separately) both ask for, what `BillTotals::tax_lines` already computes, and what
 /// keeps a long bill's receipt short.
+///
+/// # A second language
+///
+/// With `second` (ADR-0160 decision 2), each label prints in both languages, as `Tạm tính /
+/// Subtotal` where the two fit on one line and with the second under the first, indented, where
+/// they do not; and each name the second language has prints under its row's, indented.
 #[must_use]
 pub fn receipt_document(
     profile: &StoreProfile,
@@ -316,12 +512,13 @@ pub fn receipt_document(
     lines: &[ReceiptLine],
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
+    second: Option<&SecondLanguage>,
 ) -> PrintDocument {
     bill_document(
         BillDocument::Receipt { receipt_number },
         profile,
         money,
-        labels,
+        Words { labels, second },
         lines,
         totals,
         buyer,
@@ -332,7 +529,7 @@ pub fn receipt_document(
 /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
 /// the receipt as it printed, under the same number, with **COPY** and which copy it is, and when
 /// it was printed, under that number. `reprinted` is the store's local time, as the caller formats
-/// it.
+/// it. In a second language as [`receipt_document`] is.
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -349,6 +546,7 @@ pub fn receipt_copy_document(
     lines: &[ReceiptLine],
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
+    second: Option<&SecondLanguage>,
 ) -> PrintDocument {
     bill_document(
         BillDocument::ReceiptCopy {
@@ -358,7 +556,7 @@ pub fn receipt_copy_document(
         },
         profile,
         money,
-        labels,
+        Words { labels, second },
         lines,
         totals,
         buyer,
@@ -375,7 +573,8 @@ pub fn receipt_copy_document(
 /// the paper and a cook holding a ticket are talking about the same table.
 ///
 /// "Not a receipt" is printed under the total because a pre-bill left on the table looks like one to
-/// a guest who is not looking closely, and the difference is whether anything was paid.
+/// a guest who is not looking closely, and the difference is whether anything was paid. In a second
+/// language as [`receipt_document`] is.
 #[must_use]
 pub fn pre_bill_document(
     profile: &StoreProfile,
@@ -384,12 +583,13 @@ pub fn pre_bill_document(
     reference: &str,
     lines: &[ReceiptLine],
     totals: &BillTotals,
+    second: Option<&SecondLanguage>,
 ) -> PrintDocument {
     bill_document(
         BillDocument::PreBill { reference },
         profile,
         money,
-        labels,
+        Words { labels, second },
         lines,
         totals,
         None,
@@ -477,7 +677,7 @@ fn bill_document(
     kind: BillDocument<'_>,
     profile: &StoreProfile,
     money: &MoneyStyle,
-    labels: &PaperLabels,
+    words: Words<'_>,
     lines: &[ReceiptLine],
     totals: &BillTotals,
     buyer: Option<&BuyerDetails>,
@@ -512,14 +712,15 @@ fn bill_document(
             reprinted,
         } => {
             blocks.push(centred(format!("#{receipt_number}"), false));
-            blocks.push(centred(labels.copy, true));
-            blocks.push(centred(
-                format!("{} {copy_number} - {reprinted}", labels.reprint),
+            blocks.extend(words.centred(|labels| labels.copy, "", true));
+            blocks.extend(words.centred(
+                |labels| labels.reprint,
+                &format!(" {copy_number} - {reprinted}"),
                 false,
             ));
         }
         BillDocument::PreBill { reference } => {
-            blocks.push(centred(labels.pre_bill, true));
+            blocks.extend(words.centred(|labels| labels.pre_bill, "", true));
             blocks.push(centred(reference, false));
         }
     }
@@ -527,10 +728,9 @@ fn bill_document(
     // Who bought, on a B2B invoice. Left-aligned rather than centred: this is a party to the
     // document, not a letterhead, and the two must not read as one block.
     if let Some(buyer) = buyer {
-        blocks.push(PrintBlock::Text {
-            line: format!("{}: {}", labels.bill_to, buyer.name),
-            style: TextStyle::default(),
-        });
+        blocks.extend(Words::lines(
+            words.label(|labels| labels.bill_to, &format!(": {}", buyer.name)),
+        ));
         for line in [buyer.tax_code.as_ref(), buyer.address.as_ref()]
             .into_iter()
             .flatten()
@@ -547,33 +747,9 @@ fn bill_document(
     // allocate across and `assemble` refuses it — so this is not a "some receipts are itemised"
     // branch; passing none is how the cases below hold the rest of the document still while they
     // check one block of it.
-    for line in lines {
-        blocks.push(PrintBlock::Text {
-            line: line.display_name.as_str().to_owned(),
-            style: TextStyle::default(),
-        });
-        // What the line was made with, as the kitchen ticket prints it (ADR-0144): after the name and
-        // before the amount, because the unit price already includes every modifier's.
-        blocks.extend(
-            line.modifier_display_names
-                .iter()
-                .map(|modifier| PrintBlock::Text {
-                    line: format!("  + {}", modifier.as_str()),
-                    style: TextStyle::default(),
-                }),
-        );
-        blocks.push(amount_line(
-            &format!(
-                "  {} x {}",
-                format_quantity(line.quantity),
-                format_money(line.unit_price, money)
-            ),
-            line.line_total,
-            money,
-        ));
-    }
+    blocks.extend(row_blocks(lines, money, words.second));
 
-    blocks.extend(totals_blocks(totals, money, labels));
+    blocks.extend(totals_blocks(totals, money, words));
 
     blocks.push(PrintBlock::Text {
         line: format_money(totals.total_due, money),
@@ -584,7 +760,7 @@ fn bill_document(
         },
     });
     if matches!(kind, BillDocument::PreBill { .. }) {
-        blocks.push(centred(labels.not_a_receipt, false));
+        blocks.extend(words.centred(|labels| labels.not_a_receipt, "", false));
     }
 
     blocks.extend(
@@ -855,35 +1031,71 @@ fn format_money(amount: Money, money: &MoneyStyle) -> String {
     )
 }
 
+/// What was sold, one row per line: its name, then the quantity at the unit price with the extended
+/// amount beside it.
+///
+/// What the line was made with comes between, as the kitchen ticket prints it (ADR-0144): after the
+/// name and before the amount, because the unit price already includes every modifier's. On a
+/// bilingual receipt each name the second language has prints under the first, indented.
+fn row_blocks(
+    lines: &[ReceiptLine],
+    money: &MoneyStyle,
+    second: Option<&SecondLanguage>,
+) -> Vec<PrintBlock> {
+    let mut blocks = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let names = second.and_then(|second| second.rows.get(index));
+        blocks.push(plain(line.display_name.as_str().to_owned()));
+        if let Some(name) = names.and_then(|names| names.item.as_ref()) {
+            blocks.push(plain(format!("  {name}")));
+        }
+        for (position, modifier) in line.modifier_display_names.iter().enumerate() {
+            blocks.push(plain(format!("  + {}", modifier.as_str())));
+            if let Some(name) = names
+                .and_then(|names| names.modifiers.get(position))
+                .and_then(Option::as_ref)
+            {
+                blocks.push(plain(format!("    {name}")));
+            }
+        }
+        blocks.push(amount_line(
+            &format!(
+                "  {} x {}",
+                format_quantity(line.quantity),
+                format_money(line.unit_price, money)
+            ),
+            line.line_total,
+            money,
+        ));
+    }
+    blocks
+}
+
 /// What a bill was charged, above its total: the subtotal, whatever came off or was added, each tax
 /// rate, and the rounding.
 ///
 /// `subtotal` reads net of tax under the inclusive posture (ADR-0104), so the column adds up on paper
 /// in both postures — which is what makes the document check out when somebody totals it by hand.
 /// Its own function so the document around it stays readable; the rows it prints are the same.
-fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) -> Vec<PrintBlock> {
-    let mut blocks = vec![amount_line(labels.subtotal, totals.subtotal, money)];
+fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, words: Words<'_>) -> Vec<PrintBlock> {
+    let mut blocks = words.amount(|labels| labels.subtotal, totals.subtotal, money);
     if !totals.discount_total.is_zero() {
-        blocks.push(amount_line(labels.discount, totals.discount_total, money));
+        blocks.extend(words.amount(|labels| labels.discount, totals.discount_total, money));
     }
     if !totals.comp_total.is_zero() {
-        blocks.push(amount_line(labels.comps, totals.comp_total, money));
+        blocks.extend(words.amount(|labels| labels.comps, totals.comp_total, money));
     }
-    blocks.extend(fee_blocks(totals, money, labels));
+    blocks.extend(fee_blocks(totals, money, words));
     for line in &totals.tax_lines {
-        blocks.extend(tax_block(line, money, labels));
+        blocks.extend(tax_block(line, money, words));
     }
     // A copy whose per-rate lines could not be recovered prints the tax the settle recorded as one
     // figure (ADR-0164 decision 5). `assemble` always fills the lines, so no other document gets here.
     if totals.tax_lines.is_empty() && !totals.tax_total.is_zero() {
-        blocks.push(amount_line(labels.tax, totals.tax_total, money));
+        blocks.extend(words.amount(|labels| labels.tax, totals.tax_total, money));
     }
     if !totals.rounding_adjustment.is_zero() {
-        blocks.push(amount_line(
-            labels.rounding,
-            totals.rounding_adjustment,
-            money,
-        ));
+        blocks.extend(words.amount(|labels| labels.rounding, totals.rounding_adjustment, money));
     }
     blocks
 }
@@ -892,13 +1104,25 @@ fn totals_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) 
 /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4), in the order of its
 /// rules. A bill with no fee line prints its service charge on one line, as every receipt did
 /// before fees were itemised; a bill with fees prints a service charge of its own only for what no
-/// fee accounts for, which is nothing on a bill the edge assembled.
-fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) -> Vec<PrintBlock> {
+/// fee accounts for, which is nothing on a bill the edge assembled. On a bilingual receipt a fee
+/// whose rule names it in the second language prints that name as a label's second language prints.
+fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, words: Words<'_>) -> Vec<PrintBlock> {
     let mut blocks: Vec<PrintBlock> = totals
         .fee_lines
         .iter()
-        .filter(|fee| !fee.amount.is_zero())
-        .map(|fee| amount_line(fee.display_name.as_str(), fee.amount, money))
+        .enumerate()
+        .filter(|(_, fee)| !fee.amount.is_zero())
+        .flat_map(|(index, fee)| {
+            let second = words
+                .second
+                .and_then(|second| second.fees.get(index))
+                .and_then(Option::as_ref);
+            Words::lines(words.pair(
+                fee.display_name.as_str(),
+                second.map(DisplayName::as_str),
+                &format!("  {}", format_money(fee.amount, money)),
+            ))
+        })
         .collect();
     let itemised = totals.fee_lines.iter().try_fold(
         Money::zero(totals.service_charge.currency_code),
@@ -907,15 +1131,11 @@ fn fee_blocks(totals: &BillTotals, money: &MoneyStyle, labels: &PaperLabels) -> 
     let rest = itemised.and_then(|fees| totals.service_charge.checked_sub(fees));
     match rest {
         Ok(rest) if rest.is_zero() => {}
-        Ok(rest) => blocks.push(amount_line(labels.service_charge, rest, money)),
+        Ok(rest) => blocks.extend(words.amount(|labels| labels.service_charge, rest, money)),
         // Fees that do not add up in the bill's currency cannot be split from the service charge,
         // so the paper prints the service charge whole, as it did before fees were itemised.
         Err(_) => {
-            blocks = vec![amount_line(
-                labels.service_charge,
-                totals.service_charge,
-                money,
-            )];
+            blocks = words.amount(|labels| labels.service_charge, totals.service_charge, money);
         }
     }
     blocks
@@ -957,13 +1177,14 @@ fn receipt_totals_in<'a>(session: &EdgeSession, totals: &'a BillTotals) -> Cow<'
 fn tax_block(
     line: &pos_core::billing::TaxLine,
     money: &MoneyStyle,
-    labels: &PaperLabels,
+    words: Words<'_>,
 ) -> Vec<PrintBlock> {
-    let mut blocks = vec![amount_line(
-        &format!("{} {}", labels.tax, percent(line.rate_basis_points)),
-        line.tax,
-        money,
-    )];
+    let rest = format!(
+        " {}  {}",
+        percent(line.rate_basis_points),
+        format_money(line.tax, money)
+    );
+    let mut blocks = Words::lines(words.label(|labels| labels.tax, &rest));
     blocks.extend(line.components.iter().map(|component| {
         amount_line(
             &format!(
@@ -1302,9 +1523,10 @@ const MISSING_GLYPHS_REPORTED: usize = 6;
 
 /// Characters per line this build assumes of a printer it has never talked to.
 ///
-/// 42 is the 80mm standard. Nothing reads it yet — the documents here are single lines that a printer
-/// wraps on its own — so a 58mm printer is not mis-served by it today; a column-aware receipt layout
-/// is what would need the real figure, and that needs the number to come from the console.
+/// 42 is the 80mm standard. One thing reads it: a bilingual receipt, to decide whether a label and
+/// its second language share a line (ADR-0160). Every other line is one a printer wraps on its own,
+/// and on a 58mm printer a bilingual label that did not fit is wrapped by the printer too, readable
+/// but split where it fell. Laying out for the real width needs the number to come from the console.
 const ASSUMED_COLUMNS: u16 = 42;
 
 /// Printable dots per line this build assumes of a printer it has never talked to.
@@ -1460,6 +1682,29 @@ impl Printers {
         PaperLabels::for_store(receipt_language(session).as_deref(), self.can_rasterise())
     }
 
+    /// The second language a guest's paper prints in on `device` ([`SecondLanguage::for_receipt`]),
+    /// as wide as this build takes the printer to be.
+    fn second_language_for(
+        &self,
+        session: &EdgeSession,
+        device: &PublishedDevice,
+        captured: &[ReceiptLine],
+        printed: &[ReceiptLine],
+        totals: &BillTotals,
+    ) -> Option<SecondLanguage> {
+        SecondLanguage::for_receipt(
+            session,
+            self.receipt_labels_for(session),
+            self.can_rasterise(),
+            assumed_capabilities(device, self.can_rasterise())
+                .columns
+                .get(),
+            captured,
+            printed,
+            totals,
+        )
+    }
+
     /// Opens the store's cash drawer through the printer [`drawer_printer`] picks
     /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md) decision 4).
     ///
@@ -1528,14 +1773,18 @@ impl Printers {
         };
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
+        let printed = receipt_lines_in(session, lines);
+        let totals = receipt_totals_in(session, totals);
+        let second = self.second_language_for(session, device, lines, &printed, &totals);
         let document = receipt_document(
             &session.profile,
             &MoneyStyle::of(session),
             self.receipt_labels_for(session),
             receipt_number,
-            &receipt_lines_in(session, lines),
-            &receipt_totals_in(session, totals),
+            &printed,
+            &totals,
             buyer,
+            second.as_ref(),
         );
         self.dispatch(
             device,
@@ -1571,6 +1820,9 @@ impl Printers {
         let reprinted = local_time(copy.reprinted_time, &session.timezone)
             .map(|time| time.to_string())
             .unwrap_or_default();
+        let printed = receipt_lines_in(session, &copy.lines);
+        let totals = receipt_totals_in(session, &copy.totals);
+        let second = self.second_language_for(session, device, &copy.lines, &printed, &totals);
         let document = receipt_copy_document(
             &session.profile,
             &MoneyStyle::of(session),
@@ -1578,9 +1830,10 @@ impl Printers {
             copy.receipt_number,
             copy.copy_number,
             &reprinted,
-            &receipt_lines_in(session, &copy.lines),
-            &receipt_totals_in(session, &copy.totals),
+            &printed,
+            &totals,
             buyer,
+            second.as_ref(),
         );
         self.dispatch(
             device,
@@ -1611,13 +1864,17 @@ impl Printers {
             tracing::info!("no receipt printer is published for this store; nothing to print");
             return PrintOutcome::NoPrinter;
         };
+        let printed = receipt_lines_in(session, &pre_bill.lines);
+        let totals = receipt_totals_in(session, &pre_bill.totals);
+        let second = self.second_language_for(session, device, &pre_bill.lines, &printed, &totals);
         let document = pre_bill_document(
             &session.profile,
             &MoneyStyle::of(session),
             self.receipt_labels_for(session),
             reference,
-            &receipt_lines_in(session, &pre_bill.lines),
-            &receipt_totals_in(session, &pre_bill.totals),
+            &printed,
+            &totals,
+            second.as_ref(),
         );
         self.dispatch(
             device,
@@ -1899,10 +2156,11 @@ mod tests {
     use super::TcpTransports;
     use super::{
         ASSUMED_DOTS_PER_LINE, AgentLane, DrawerOutcome, MoneyStyle, PrintOutcome, Printers,
-        TicketLine, TicketNote, TransportFactory, assumed_capabilities, connection_of,
-        drawer_printer, pre_bill_document, receipt_copy_document, receipt_document,
-        receipt_language, receipt_lines_in, receipt_printer, receipt_totals_in,
-        shift_report_document, short_reference, station_printer, ticket_document, ticket_line,
+        SecondLanguage, SecondNames, TicketLine, TicketNote, TransportFactory,
+        assumed_capabilities, connection_of, drawer_printer, pre_bill_document,
+        receipt_copy_document, receipt_document, receipt_language, receipt_lines_in,
+        receipt_printer, receipt_totals_in, shift_report_document, short_reference,
+        station_printer, ticket_document, ticket_line,
     };
     use crate::app::{BuyerDetails, EdgeSession, FiredLine, ReceiptLine, ShiftReport};
     use crate::paper_labels::{ENGLISH, PaperLabels, VIETNAMESE};
@@ -1917,7 +2175,7 @@ mod tests {
     use pos_proto::locale::NumberFormat;
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
-    use pos_proto::printing::{PublishedPrinting, ReceiptLanguage};
+    use pos_proto::printing::{PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
     use pos_proto::quantity::Quantity;
     use pos_proto::store_profile::StoreProfile;
     use pos_proto::text::DisplayName;
@@ -2603,6 +2861,7 @@ mod tests {
             &lines,
             &totals_of(vnd(347_000)),
             None,
+            None,
         );
 
         assert_eq!(
@@ -2657,6 +2916,7 @@ mod tests {
             &[],
             &totals,
             None,
+            None,
         );
         assert_eq!(
             lines_of(&document),
@@ -2681,6 +2941,7 @@ mod tests {
             7,
             &[],
             &lump,
+            None,
             None,
         );
         assert!(lines_of(&document).contains(&"Service charge  VND 15,000"));
@@ -2751,6 +3012,7 @@ mod tests {
             "3K9Q2Z",
             &lines,
             &totals_of(vnd(347_000)),
+            None,
         );
 
         assert_eq!(
@@ -2793,6 +3055,7 @@ mod tests {
                 &lines,
                 &totals,
                 None,
+                None,
             )
         };
 
@@ -2823,6 +3086,7 @@ mod tests {
             42,
             &lines,
             &totals,
+            None,
             None,
         );
         let mut unmarked = lines_of(&english);
@@ -2863,6 +3127,7 @@ mod tests {
             "2026-09-30 19:05",
             &lines,
             &totals,
+            None,
             None,
         );
         assert_eq!(
@@ -2993,6 +3258,7 @@ mod tests {
             "3K9Q2Z",
             &lines,
             &totals_of(vnd(99_000)),
+            None,
         );
         assert_eq!(
             lines_of(&pre_bill),
@@ -3025,6 +3291,270 @@ mod tests {
         assert!(drawn.contains(&"Chênh lệch  VND -20,000"));
     }
 
+    /// The bill the bilingual cases print: a pho with an egg, which the menu names in English, an
+    /// iced tea it does not, a service fee whose rule names it in English, and 8 % tax.
+    fn a_bilingual_bill() -> ([ReceiptLine; 2], BillTotals) {
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [
+            ReceiptLine {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(1)),
+                modifier_display_names: vec![DisplayName::new("Thêm trứng")],
+                modifier_menu_item_ids: vec![MenuItemId::new(Ulid::from_u128(3))],
+                ..sold("Phở bò", 2_000, vnd(50_000), vnd(100_000))
+            },
+            ReceiptLine {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(2)),
+                ..sold("Trà đá", 1_000, vnd(10_000), vnd(10_000))
+            },
+        ];
+        let totals = BillTotals {
+            subtotal: vnd(110_000),
+            service_charge: vnd(5_500),
+            fee_lines: vec![a_fee(1, "SERVICE", "Phí dịch vụ", 5_500)],
+            tax_lines: vec![pos_core::billing::TaxLine {
+                tax_class_id: EdgeSession::standard_tax_class(),
+                taxable_base: vnd(115_500),
+                rate_basis_points: 800,
+                tax: vnd(9_240),
+                components: Vec::new(),
+            }],
+            tax_total: vnd(9_240),
+            ..totals_of(vnd(124_740))
+        };
+        (lines, totals)
+    }
+
+    /// English as [`a_bilingual_bill`]'s second language, on paper `columns` characters wide.
+    fn in_english(columns: usize) -> SecondLanguage {
+        SecondLanguage {
+            labels: &ENGLISH,
+            columns,
+            rows: vec![
+                SecondNames {
+                    item: Some(DisplayName::new("Beef pho")),
+                    modifiers: vec![Some(DisplayName::new("Extra egg"))],
+                },
+                // The iced tea has no English name, so nothing prints under it.
+                SecondNames::default(),
+            ],
+            fees: vec![Some(DisplayName::new("Service charge"))],
+        }
+    }
+
+    #[test]
+    fn a_bilingual_receipt_pairs_a_label_where_it_fits_and_puts_it_under_where_not() {
+        // ADR-0160 decision 2, on the three widths a receipt printer is: 58 mm paper's 32
+        // characters, and 80 mm paper's 42 and 48.
+        let (lines, totals) = a_bilingual_bill();
+        let receipt = |columns| -> Vec<String> {
+            let second = in_english(columns);
+            let document = receipt_document(
+                &StoreProfile::default(),
+                &style(0),
+                &VIETNAMESE,
+                7,
+                &lines,
+                &totals,
+                None,
+                Some(&second),
+            );
+            lines_of(&document).into_iter().map(str::to_owned).collect()
+        };
+        let rows = [
+            "#7",
+            "Phở bò",
+            "  Beef pho",
+            "  + Thêm trứng",
+            "    Extra egg",
+            "  2 x VND 50,000  VND 100,000",
+            "Trà đá",
+            "  1 x VND 10,000  VND 10,000",
+            // Thirty-two characters, so it fits even the narrowest paper, exactly.
+            "Tạm tính / Subtotal  VND 110,000",
+        ];
+        let wide: Vec<&str> = rows
+            .into_iter()
+            .chain([
+                "Phí dịch vụ / Service charge  VND 5,500",
+                "Thuế / Tax 8.00%  VND 9,240",
+                "VND 124,740",
+            ])
+            .collect();
+        assert_eq!(receipt(48), wide);
+        assert_eq!(receipt(42), wide);
+        // On 58 mm paper the fee and its English name do not fit on one line, so the English goes
+        // under it, and the line above is the one a Vietnamese receipt prints.
+        let narrow: Vec<&str> = rows
+            .into_iter()
+            .chain([
+                "Phí dịch vụ  VND 5,500",
+                "  Service charge",
+                "Thuế / Tax 8.00%  VND 9,240",
+                "VND 124,740",
+            ])
+            .collect();
+        assert_eq!(receipt(32), narrow);
+    }
+
+    #[test]
+    fn a_bilingual_pre_bill_and_copy_head_themselves_in_both_languages() {
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let headings_only = |columns| SecondLanguage {
+            rows: Vec::new(),
+            fees: Vec::new(),
+            ..in_english(columns)
+        };
+        let pre_bill = |columns| -> Vec<String> {
+            let second = headings_only(columns);
+            let document = pre_bill_document(
+                &StoreProfile::default(),
+                &style(0),
+                &VIETNAMESE,
+                "3K9Q2Z",
+                &[],
+                &totals_of(vnd(99_000)),
+                Some(&second),
+            );
+            lines_of(&document).into_iter().map(str::to_owned).collect()
+        };
+        assert_eq!(
+            pre_bill(48),
+            [
+                "PHIẾU TẠM TÍNH / PRE-BILL",
+                "3K9Q2Z",
+                "Tạm tính / Subtotal  VND 99,000",
+                "VND 99,000",
+                "Không phải hóa đơn thanh toán / Not a receipt",
+            ]
+        );
+        // Forty-five characters: on 80 mm paper's 42 the English is centred under the Vietnamese.
+        assert_eq!(
+            pre_bill(42)[4..],
+            ["Không phải hóa đơn thanh toán", "Not a receipt"]
+        );
+
+        let second = headings_only(32);
+        let copy = receipt_copy_document(
+            &StoreProfile::default(),
+            &style(0),
+            &VIETNAMESE,
+            7,
+            2,
+            "09:15",
+            &[],
+            &totals_of(vnd(99_000)),
+            None,
+            Some(&second),
+        );
+        assert_eq!(
+            lines_of(&copy)[..3],
+            ["#7", "BẢN SAO / COPY", "In lại lần / Reprint 2 - 09:15"]
+        );
+    }
+
+    #[test]
+    fn a_second_language_names_what_the_menu_and_the_fees_rule_translate_and_nothing_else() {
+        let entry = |seed: u128, name: &str, english: Option<&str>| {
+            let entry = MenuEntry::new(
+                MenuItemId::new(Ulid::from_u128(seed)),
+                DisplayName::new(name),
+                Money::new(CurrencyCode::VND, 50_000),
+                EdgeSession::standard_tax_class(),
+            );
+            match english {
+                Some(english) => entry
+                    .with_name_translations([("en".to_owned(), DisplayName::new(english))].into()),
+                None => entry,
+            }
+        };
+        let rules: PublishedFees = serde_json::from_str(
+            r#"{"fees": [{"fee_id": "00000000000000000000000001", "code": "SERVICE",
+                 "display_name": "Phí dịch vụ", "display_name_translations": {"en": "Service charge"}}]}"#,
+        )
+        .expect("a fees node");
+        let second_in = |language| PublishedPrinting {
+            receipt_second_language: Open::from_known(language),
+            ..PublishedPrinting::default()
+        };
+        let session = EdgeSession {
+            display_language: Some("vi".to_owned()),
+            menu: MenuCatalog::new()
+                .with(entry(1, "Phở bò", Some("Beef pho")))
+                .with(entry(2, "Trà đá", None))
+                .with(entry(3, "Thêm trứng", Some("Egg"))),
+            fees: rules,
+            printing: second_in(ReceiptSecondLanguage::English),
+            ..EdgeSession::bootstrap()
+        };
+        let (lines, totals) = a_bilingual_bill();
+        let english =
+            SecondLanguage::for_receipt(&session, &VIETNAMESE, true, 42, &lines, &lines, &totals)
+                .expect("a bilingual receipt");
+        assert_eq!(english.labels, &ENGLISH);
+        assert_eq!(
+            english.rows,
+            [
+                SecondNames {
+                    item: Some(DisplayName::new("Beef pho")),
+                    modifiers: vec![Some(DisplayName::new("Egg"))],
+                },
+                SecondNames::default(),
+            ]
+        );
+        assert_eq!(english.fees, [Some(DisplayName::new("Service charge"))]);
+
+        // A receipt in English with Vietnamese under it: the rows were rung up in Vietnamese, so
+        // those are its Vietnamese names, printed where the English differs from them.
+        let session = EdgeSession {
+            printing: PublishedPrinting {
+                receipt_language: Open::from_known(ReceiptLanguage::English),
+                ..second_in(ReceiptSecondLanguage::Vietnamese)
+            },
+            ..session
+        };
+        let printed = receipt_lines_in(&session, &lines);
+        let vietnamese =
+            SecondLanguage::for_receipt(&session, &ENGLISH, true, 42, &lines, &printed, &totals)
+                .expect("a bilingual receipt");
+        assert_eq!(
+            vietnamese.rows,
+            [
+                SecondNames {
+                    item: Some(DisplayName::new("Phở bò")),
+                    modifiers: vec![Some(DisplayName::new("Thêm trứng"))],
+                },
+                // Rung up as "Trà đá" and printed as that, so it prints once.
+                SecondNames {
+                    item: None,
+                    modifiers: Vec::new(),
+                },
+            ]
+        );
+
+        // One language: on a box with no fonts, which cannot draw Vietnamese labels; where the
+        // second language is the receipt's own; and where none is set.
+        assert_eq!(
+            SecondLanguage::for_receipt(&session, &ENGLISH, false, 42, &lines, &printed, &totals),
+            None
+        );
+        let same = EdgeSession {
+            printing: second_in(ReceiptSecondLanguage::Vietnamese),
+            ..session.clone()
+        };
+        assert_eq!(
+            SecondLanguage::for_receipt(&same, &VIETNAMESE, true, 42, &lines, &lines, &totals),
+            None
+        );
+        let none = EdgeSession {
+            printing: PublishedPrinting::default(),
+            ..session
+        };
+        assert_eq!(
+            SecondLanguage::for_receipt(&none, &VIETNAMESE, true, 42, &lines, &lines, &totals),
+            None
+        );
+    }
+
     #[test]
     fn a_receipt_prints_what_each_line_was_made_with() {
         // ADR-0144: the names the line recorded, under the item and above its amount, whose unit
@@ -3043,6 +3573,7 @@ mod tests {
             9,
             &lines,
             &totals_of(vnd(288_000)),
+            None,
             None,
         );
 
@@ -3079,6 +3610,7 @@ mod tests {
             &lines,
             &totals_of(jpy(2_000)),
             None,
+            None,
         );
 
         assert!(
@@ -3100,6 +3632,7 @@ mod tests {
             7,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
+            None,
             None,
         );
         assert_eq!(
@@ -3127,6 +3660,7 @@ mod tests {
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+            None,
             None,
         );
         assert_eq!(
@@ -3176,6 +3710,7 @@ mod tests {
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
             Some(&buyer),
+            None,
         );
         let lines = lines_of(&document);
         assert!(
@@ -3202,6 +3737,7 @@ mod tests {
             12,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 50_000)),
+            None,
             None,
         );
         assert!(
@@ -3263,7 +3799,7 @@ mod tests {
         // The rounding line is the other half of why the exponent is not the same fact as the
         // increment: the invoice still rounds to the whole rupee, which is what `-1.00` is, while
         // the figures it rounds are quoted in paise.
-        let document = receipt_document(&profile, &style(2), &ENGLISH, 9, &[], &totals, None);
+        let document = receipt_document(&profile, &style(2), &ENGLISH, 9, &[], &totals, None, None);
         assert_eq!(
             lines_of(&document),
             vec![
@@ -3310,6 +3846,7 @@ mod tests {
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 1_234_567)),
             None,
+            None,
         );
         assert!(
             lines_of(&document).contains(&"VND 1.234.567"),
@@ -3339,6 +3876,7 @@ mod tests {
             &[],
             &totals_of(Money::new(CurrencyCode::USD, 123_456)),
             None,
+            None,
         );
         assert!(
             lines_of(&document).contains(&"USD 1.234,56"),
@@ -3364,6 +3902,7 @@ mod tests {
             3,
             &[],
             &totals_of(Money::new(CurrencyCode::JPY, 1_100)),
+            None,
             None,
         );
         assert!(
@@ -3494,6 +4033,79 @@ mod tests {
                 .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
             "an ASCII receipt needs no raster"
         );
+    }
+
+    /// A receipt printer and a store printing English under its Vietnamese (ADR-0160 decision 2),
+    /// whose menu names the pho in English.
+    fn a_bilingual_store(second: ReceiptSecondLanguage, display: &str) -> EdgeSession {
+        let pho = MenuEntry::new(
+            MenuItemId::new(Ulid::from_u128(1)),
+            DisplayName::new("Phở bò"),
+            Money::new(CurrencyCode::VND, 50_000),
+            EdgeSession::standard_tax_class(),
+        )
+        .with_name_translations([("en".to_owned(), DisplayName::new("Beef pho"))].into());
+        EdgeSession {
+            display_language: Some(display.to_owned()),
+            menu: MenuCatalog::new().with(pho),
+            printing: PublishedPrinting {
+                receipt_second_language: Open::from_known(second),
+                ..PublishedPrinting::default()
+            },
+            ..session_with(PublishedDevices::new(vec![device(
+                2,
+                DeviceKind::Printer,
+                None,
+            )]))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bilingual_receipt_draws_what_its_printer_cannot_spell_and_sends_the_rest_as_text() {
+        let Some((printers, recorder)) = recorder_with_fonts(true) else {
+            return;
+        };
+        let session = a_bilingual_store(ReceiptSecondLanguage::English, "vi");
+        let (lines, totals) = a_bilingual_bill();
+        let outcome = printers
+            .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+            .await;
+
+        assert_eq!(outcome, PrintOutcome::Printed);
+        let written = recorder.written.lock().expect("the recorder");
+        let bytes = written.first().expect("a receipt");
+        // The Vietnamese lines, each label's English beside it included, go out as rasters...
+        assert!(
+            bytes
+                .windows(4)
+                .any(|window| window == [0x1D, 0x76, 0x30, 0x00]),
+            "a bilingual receipt carries a raster"
+        );
+        // ...and the English the menu gave the pho, which the printer can spell, as text.
+        assert!(bytes.windows(8).any(|window| window == b"Beef pho"));
+    }
+
+    #[tokio::test]
+    async fn a_box_with_no_fonts_prints_a_bilingual_store_s_receipt_in_one_language_as_before() {
+        // Vietnamese labels need fonts this box does not have, so the receipt it prints is the one
+        // it printed before the store chose a second language, byte for byte.
+        let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+        let lines = [sold("Beef pho", 1_000, vnd(50_000), vnd(50_000))];
+        let totals = totals_of(vnd(50_000));
+        let mut written = Vec::new();
+        for second in [
+            ReceiptSecondLanguage::Vietnamese,
+            ReceiptSecondLanguage::None,
+        ] {
+            let (printers, recorder) = recorder(true);
+            let session = a_bilingual_store(second, "en");
+            let outcome = printers
+                .print_receipt(&session, store_id(), event_id(1), 7, &lines, &totals, None)
+                .await;
+            assert_eq!(outcome, PrintOutcome::Printed);
+            written.push(recorder.written.lock().expect("the recorder").concat());
+        }
+        assert_eq!(written[0], written[1]);
     }
 
     #[test]
