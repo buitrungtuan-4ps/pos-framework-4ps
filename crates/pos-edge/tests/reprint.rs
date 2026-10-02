@@ -311,8 +311,8 @@ fn today_s_settled_bills_are_listed_newest_first() {
 }
 
 /// **A copy never prints a figure the settle did not record.** The store's rate moves from 10% to
-/// 8% after the bill was paid; the copy keeps the 10% the guest paid, and, since the per-rate lines
-/// the settle did not record would now come out at 8%, prints the tax as the one recorded total.
+/// 8% after the bill was paid; the copy prints the 10% line the settle recorded (ADR-0159
+/// decision 4), not one the table would give now.
 #[test]
 fn a_copy_after_a_rate_change_prints_what_the_settle_recorded() {
     run_ready(async {
@@ -323,9 +323,12 @@ fn a_copy_after_a_rate_change_prints_what_the_settle_recorded() {
         let copy = edge.reprint_receipt(cashier(), bill).await.expect("a copy");
         assert_eq!(copy.totals.tax_total, vnd(15_000), "the 10% the guest paid");
         assert_eq!(copy.totals.total_due, vnd(165_000));
-        assert!(
-            copy.totals.tax_lines.is_empty(),
-            "no per-rate line at a rate that did not apply"
-        );
+        let rates: Vec<(u32, Money)> = copy
+            .totals
+            .tax_lines
+            .iter()
+            .map(|line| (line.rate_basis_points, line.tax))
+            .collect();
+        assert_eq!(rates, [(1_000, vnd(15_000))], "the rate that applied");
     });
 }

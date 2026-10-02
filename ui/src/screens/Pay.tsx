@@ -805,6 +805,20 @@ export function Pay() {
                       </span>
                     </p>
                   </Show>
+                  {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
+                      already includes them: the till shows the edge's arithmetic, never its own. */}
+                  <For
+                    each={(totals().fee_lines ?? []).filter(
+                      (fee) => fee.amount.amount_minor !== 0,
+                    )}
+                  >
+                    {(fee) => (
+                      <p class="flex justify-between text-sm text-ink-muted" data-outcome="bill-fee">
+                        <span>{fee.display_name}</span>
+                        <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                      </p>
+                    )}
+                  </For>
                   <p class="text-2xl font-semibold tabular-nums">
                     {formatAmount(totals().total_due)}
                   </p>

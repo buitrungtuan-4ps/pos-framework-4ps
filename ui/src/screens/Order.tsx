@@ -1084,6 +1084,23 @@ export function Order() {
                     <span>{t("order.subtotal")}</span>
                     <span class="tabular-nums">{formatAmount(totals().subtotal)}</span>
                   </div>
+                  {/* Each fee under its own name, as the receipt prints it (ADR-0159): one that
+                      charged nothing is left off, as it is on paper. */}
+                  <For
+                    each={(totals().fee_lines ?? []).filter(
+                      (fee) => fee.amount.amount_minor !== 0,
+                    )}
+                  >
+                    {(fee) => (
+                      <div
+                        class="flex justify-between text-sm text-ink-muted"
+                        data-outcome="check-fee"
+                      >
+                        <span>{fee.display_name}</span>
+                        <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                      </div>
+                    )}
+                  </For>
                   <div class="flex justify-between text-sm text-ink-muted">
                     <span>{t("order.tax")}</span>
                     <span class="tabular-nums">{formatAmount(totals().tax_total)}</span>

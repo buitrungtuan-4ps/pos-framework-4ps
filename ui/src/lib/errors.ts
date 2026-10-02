@@ -54,6 +54,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   REDUCTION_EXCEEDS_BILL: "error.reduction_exceeds_bill",
   SPLIT_NOT_A_PARTITION: "error.split_not_a_partition",
   TAX_RATE_NOT_CONFIGURED: "error.tax_rate_not_configured",
+  // A bill whose lines do not come to its class bases: the edge's own fault, not the cashier's.
+  LINES_DO_NOT_MATCH_BASES: "error.internal",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
   // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.
