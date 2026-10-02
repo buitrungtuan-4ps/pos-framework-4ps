@@ -96,6 +96,7 @@
   "error.order_not_empty": "Something is sold on this table. Take payment, or void the lines first.",
   "error.nothing_to_bill": "Nothing is sold on this order, so there is nothing to bill.",
   "error.bills_on_different_tables": "Bills on different tables cannot be merged.",
+  "error.bills_on_different_orders": "Bills on different orders cannot be merged. Take payment for each order on its own.",
   "error.capability_disabled": "This store does not use that feature.",
   "error.channel_not_accepted": "This store does not take orders on that channel. Check the channels published for it in the console.",
   "error.empty": "Nothing to do yet — add an item or a payment first.",

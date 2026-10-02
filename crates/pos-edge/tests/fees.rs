@@ -21,8 +21,8 @@ use pos_core::decision::Actor;
 use pos_core::error::DomainError;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
-    AppError, Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StaffAuth,
-    StaffRoster, StoreIdentity,
+    AppError, Approval, Edge, EdgeSession, InMemoryReceipts, LineDraft, StaffAuth, StaffRoster,
+    StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
@@ -442,46 +442,6 @@ fn merging_some_parts_charges_the_sum_of_their_shares() {
         let restarted = edge_over(store, fees(&[cover()]));
         restarted.rebuild().await.expect("rebuilds");
         assert_eq!(cover_on(&restarted, survivor), Some(6_667));
-    });
-}
-
-/// Two counter bills that were never one bill each carry the cover; merged, the bill charges it
-/// once.
-#[test]
-fn merging_bills_that_were_never_one_charges_a_fee_per_bill_once() {
-    run_ready(async {
-        let edge = edge_over(FakeStore::default(), fees(&[cover()]));
-        let mut bills = Vec::new();
-        for _ in 0..2 {
-            let order = edge
-                .open_counter_order(server(), SalesChannel::DineIn)
-                .await
-                .expect("the counter opens an order")
-                .order_id;
-            let dish = OrderLineChoice {
-                menu_item_id: item(),
-                quantity: Quantity::ONE,
-                modifier_menu_item_ids: Vec::new(),
-                seat: None,
-                course_id: None,
-                note_present: false,
-            };
-            edge.add_line_to_order(server(), order, dish)
-                .await
-                .expect("adds a dish");
-            let bill = edge
-                .open_bill_for_order(server(), order)
-                .await
-                .expect("opens its bill")
-                .bill_id;
-            assert_eq!(cover_on(&edge, bill), Some(10_000));
-            bills.push(bill);
-        }
-        let survivor = edge
-            .merge_bills(server(), bills[0], vec![bills[1]])
-            .await
-            .expect("two counter bills merge");
-        assert_eq!(cover_on(&edge, survivor), Some(10_000), "once, not twice");
     });
 }
 

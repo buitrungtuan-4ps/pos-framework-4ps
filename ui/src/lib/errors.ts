@@ -31,6 +31,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   RECEIPT_FROM_ANOTHER_DAY: "error.receipt_from_another_day",
   NOTHING_TO_PRINT: "error.nothing_to_print",
   BILLS_ON_DIFFERENT_TABLES: "error.bills_on_different_tables",
+  // The till merges only to undo a split, so it never asks for this; a direct caller can.
+  BILLS_ON_DIFFERENT_ORDERS: "error.bills_on_different_orders",
   UNROUTABLE_LINE: "error.unroutable_line",
   AWAITING_STAFF_CONFIRMATION: "error.awaiting_staff_confirmation",
   NOT_AWAITING_STAFF_CONFIRMATION: "error.not_awaiting_staff_confirmation",

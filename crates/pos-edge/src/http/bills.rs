@@ -613,7 +613,9 @@ pub(crate) struct MergeResponse {
 /// The path names the **target**: it is the bill the cashier is standing in front of, and it keeps
 /// its identity. Every absorbed bill must be open and on the same table, which is a floor
 /// restriction rather than a model one — settling moves a table, and a bill over two tables makes
-/// "which table moved?" a question with two answers.
+/// "which table moved?" a question with two answers — and of the same order, which two counter
+/// bills, sharing no table, need too: a settle charges a bill's lines from its own order, so
+/// another order's would be charged nothing. Each is refused `409` before anything is written.
 pub(crate) async fn merge<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,

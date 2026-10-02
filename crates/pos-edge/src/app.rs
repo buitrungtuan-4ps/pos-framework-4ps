@@ -998,6 +998,16 @@ pub enum AppError {
     /// exists to make impossible.
     #[error("bills on different tables cannot be merged")]
     BillsOnDifferentTables,
+    /// A merge named a bill of another order than the target's
+    /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
+    ///
+    /// Nothing in the model stops one bill covering two orders' lines, but nothing settles such a
+    /// bill: a settle reads a bill's lines from its own order, so the other order's would be charged
+    /// nothing, and the bill that held them, merged, is terminal, so that order would never be paid.
+    /// Two counter bills share a table, none, so this is what refuses them. Checked after the table,
+    /// so bills on two tables keep [`Self::BillsOnDifferentTables`].
+    #[error("bills on different orders cannot be merged")]
+    BillsOnDifferentOrders,
     /// A command named a shift the edge does not know.
     #[error("no such shift")]
     UnknownShift,
@@ -4619,16 +4629,21 @@ impl<S: EventStore> Edge<S> {
     /// a merge is not a split in reverse and does not need to be. Every absorbed bill must be open,
     /// and each moves to `MERGED`, which is terminal.
     ///
-    /// **Restricted to bills on the same table**, which the model does not require and the floor
-    /// does: settling a bill moves its table from `AwaitingPayment` to `NeedsCleaning`, and a bill
-    /// spanning two tables makes *"which table moved?"* a question with two answers. Two tableless
-    /// counter bills merge freely, having no floor move to disagree about.
+    /// **Restricted to bills of the target's order**, which the model does not require. The floor
+    /// requires the same table: settling a bill moves its table from `AwaitingPayment` to
+    /// `NeedsCleaning`, and a bill spanning two tables makes *"which table moved?"* a question with
+    /// two answers. The money requires the same order: a settle reads a bill's lines from its own
+    /// order, so another order's lines would be charged nothing, and the bill that held them, merged,
+    /// could never be paid. So two tableless counter bills merge only within one order, as the parts
+    /// of a split do. Both are checked before anything is written.
     ///
     /// # Errors
     ///
     /// [`AppError::UnknownBill`] if the target or any absorbed bill is unknown;
-    /// [`AppError::BillsOnDifferentTables`] if they do not share a table; [`AppError::Domain`] if
-    /// the target or an absorbed bill is not open, or the actor lacks `billing.bill.split`.
+    /// [`AppError::BillsOnDifferentTables`] if they do not share a table, or the target is among the
+    /// absorbed; [`AppError::BillsOnDifferentOrders`] if they share a table but not an order;
+    /// [`AppError::Domain`] if the target or an absorbed bill is not open, or the actor lacks
+    /// `billing.bill.split`.
     pub async fn merge_bills(
         &self,
         actor: Actor,
@@ -4659,6 +4674,11 @@ impl<S: EventStore> Edge<S> {
                 .ok_or(AppError::UnknownBill)?;
             if record.table_id != target.table_id {
                 return Err(AppError::BillsOnDifferentTables);
+            }
+            // Two counter bills share a table — none — and are still two orders. Merged, the
+            // absorbed order's lines would ride on a bill that charges only the target's.
+            if record.order_id != target.order_id {
+                return Err(AppError::BillsOnDifferentOrders);
             }
             let decided = decide_bill(record.state, BillCommand::Merge, &ctx)?;
             folded.push((*absorbed_id, record, decided.next_state));
